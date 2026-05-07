@@ -474,8 +474,37 @@ The first release is `0.1.0`. The repo lands with:
 - `.github/workflows/ci.yml` and `release.yml`
 - `.goreleaser.yaml`
 - `Dockerfile`
+- `CLAUDE.md` (see next section)
 
 Cutting `0.1.0` is just the first time `main` advances past the initial scaffold and triggers the release workflow.
+
+## CLAUDE.md
+
+A `CLAUDE.md` at the repo root captures the conventions a future Claude Code session (or a human) needs to work in this repo without re-deriving them. It is a v1 deliverable, not an afterthought — the whole *point* of this MCP server is to fight agent drift, so its own repo must be self-explanatory to an agent.
+
+Required sections, in order:
+
+1. **Project Overview** — one paragraph: what `anti-tangent-mcp` is, what the three tools do, why the reviewer LLM is intentionally a different model from the implementer. Ends with a pointer to `docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md` as the authoritative design.
+2. **Common Commands** — copy-pasteable Go invocations:
+   - `go build ./...`
+   - `go run ./cmd/anti-tangent-mcp` (with note that it speaks MCP stdio, so usually you launch it via an MCP host's config)
+   - `go test -race ./...` (mainline test command)
+   - `go test -tags=e2e ./...` (opt-in real-API tests; requires provider keys)
+   - `go test ./internal/prompts/...` (single-package example)
+   - `goreleaser release --snapshot --clean` (local dry-run of release artifacts)
+3. **Architecture** — short version of the spec's architecture diagram + the package layout under `internal/`. Each package gets one line on its responsibility. Explicitly says "this is a summary; the design doc is authoritative."
+4. **Branch & version conventions** — the rule that ships work:
+   - Feature work goes on `version/X.Y.Z` branches.
+   - The branch name's `X.Y.Z` **must match** a `## [X.Y.Z] - YYYY-MM-DD` entry in `CHANGELOG.md`.
+   - Pick `X.Y.Z` by what the change is: bugfix-only → bump patch; backward-compatible feature → bump minor; breaking change → bump major.
+   - The merge commit message into `main` carries `[major]` or `[minor]` to drive the same bump in the release workflow; default is patch. Branch name and merge-commit bump must agree.
+5. **Changelog handling** — Keep-a-Changelog format with `### Added / Changed / Fixed / Removed / Deprecated / Security` subsections. When in doubt, add the entry as you write the code, not at the end. The CHANGELOG entry body is what users see on the GitHub Release.
+6. **Adding a new provider or model** — practical recipe: implement the `Reviewer` interface in `internal/providers/<name>.go`, add the model id to the allowlist, add an `httptest`-based unit test, document the env var for the API key.
+7. **Testing conventions** — `-race` always on; unit tests must not hit the network; integration tests use `httptest.Server`; e2e tests behind `-tags=e2e`; prompt rendering uses golden files in `internal/prompts/testdata/`.
+8. **Logging conventions** — structured JSON to **stderr only** (stdout is reserved for MCP stdio). One line per hook call with the documented fields. `ANTI_TANGENT_LOG_LEVEL=debug` for prompt/response debugging.
+9. **What this repo is *not***  — explicit non-goals lifted from the spec, so an agent doesn't propose features the v1 design has already ruled out (no persistence, no plugins, no static analysis, no metrics endpoint).
+
+CLAUDE.md is short and direct — target ~150 lines. It is **not** a duplicate of the spec; it's a quick-reference index that points at the spec for anything substantive.
 
 ### What's deliberately missing
 
@@ -536,6 +565,7 @@ anti-tangent-mcp/
 ├── Dockerfile
 ├── VERSION
 ├── CHANGELOG.md
+├── CLAUDE.md
 ├── go.mod
 └── README.md
 ```
