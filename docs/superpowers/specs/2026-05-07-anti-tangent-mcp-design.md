@@ -365,6 +365,124 @@ Sample `.mcp.json` snippet shipped in the README:
 }
 ```
 
+## Versioning, changelog, and release automation
+
+Modeled on the convention used in the `powow` repo: a `VERSION` file holds the current released version, `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and the GitHub Actions release workflow does the bumping, tagging, and artifact publishing.
+
+### Version source of truth
+
+A single `VERSION` file at the repo root contains the current version, e.g.:
+```
+0.1.0
+```
+This is the only place the version lives. The Go build embeds it via `-ldflags "-X main.version=$(cat VERSION)"` so `anti-tangent-mcp --version` reports it.
+
+### Branch convention
+
+Feature work happens on branches named `version/X.Y.Z`, where `X.Y.Z` is the version that branch will become when merged. The branch name **must** match a `## [X.Y.Z] - YYYY-MM-DD` entry in `CHANGELOG.md` — CI enforces this on every push to a `version/*` branch.
+
+Other branches (e.g., `dependabot/*`, `docs/*`, anything that isn't shipping a release) skip the changelog check entirely. This keeps the rule cheap and unambiguous.
+
+### Commit-message-driven version bumps
+
+When a `version/X.Y.Z` branch is merged into `main`, the release workflow bumps `VERSION` based on the merge commit message:
+
+| Commit message contains | Bump |
+|---|---|
+| `[major]` | major: `X+1.0.0` |
+| `[minor]` | minor: `X.Y+1.0` |
+| neither | patch: `X.Y.Z+1` |
+
+The branch name and the merge bump together must produce the same version that `CHANGELOG.md` declares — release fails if they diverge.
+
+### CHANGELOG.md format
+
+```
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] - 2026-05-07
+
+### Added
+- Initial release: three MCP tools (`validate_task_spec`, `check_progress`,
+  `validate_completion`) backed by Anthropic / OpenAI / Google reviewers.
+```
+
+Each release section uses standard Keep-a-Changelog subsections (`### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Deprecated`, `### Security`). The release workflow extracts the body of the matching `## [X.Y.Z]` block and uses it verbatim as the GitHub Release notes.
+
+### CI workflow — `.github/workflows/ci.yml`
+
+Runs on every push and pull request. `workflow_call`-able so the release workflow can reuse it.
+
+Jobs:
+
+1. **`changelog`** — only enforces on `version/X.Y.Z` branches. Greps `CHANGELOG.md` for `^## [X.Y.Z]`. Fails with a clear message if missing.
+2. **`build-test`** — sets up Go (`actions/setup-go@v6`, version pinned in `go.mod` toolchain directive), runs `go mod download`, `go build ./...`, `go test -race ./...`. Uses `gotest.tools/gotestsum@latest` for readable output and uploads `test-results.xml` as an artifact. No external services required (unit tests use `httptest`; the e2e `-tags=e2e` job is **not** part of mainline CI).
+
+### Release workflow — `.github/workflows/release.yml`
+
+Trigger: `push` to `main`. Reuses `ci.yml` first; downstream jobs are gated on it passing.
+
+Jobs (in order, each `needs:` the previous):
+
+1. **`ci`** — `uses: ./.github/workflows/ci.yml`. Same checks every PR runs.
+2. **`version`** — checks out the repo with full history, computes `new_version` from `VERSION` + the merge commit message tag (`[major]` / `[minor]` / patch default), **validates that `CHANGELOG.md` contains `## [<new_version>]`**, and extracts the changelog body for that version into a `release_notes` step output (via `awk`, same approach as powow). Outputs `current_version`, `new_version`, `release_notes` for downstream jobs.
+3. **`tag`** — bot-commits the new `VERSION` with `[skip ci]` to keep the loop closed, then creates and pushes the `vX.Y.Z` tag. Does **not** create a GitHub Release yet — that's GoReleaser's job so we don't fight over the release object.
+4. **`goreleaser`** — checks out at the new tag, writes the `release_notes` from the `version` job to a temp file, runs `goreleaser release --release-notes=<file>`. GoReleaser creates the GitHub Release using our extracted changelog as the body (its own changelog generation is disabled in `.goreleaser.yaml`), builds binaries for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, and attaches them with checksums. No code-signing in v1.
+5. **`docker`** — checks out at the new tag, logs in to `ghcr.io` with `GITHUB_TOKEN`, builds and pushes the image to `ghcr.io/<owner>/anti-tangent-mcp:X.Y.Z` and `:latest` using `docker/build-push-action@v7`.
+
+Permissions: `tag` and `goreleaser` need `contents: write`; `docker` needs `packages: write`. Each job declares only the permissions it needs.
+
+### `.goreleaser.yaml` outline
+
+```yaml
+version: 2
+project_name: anti-tangent-mcp
+builds:
+  - main: ./cmd/anti-tangent-mcp
+    binary: anti-tangent-mcp
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags: ["-s -w -X main.version={{.Version}}"]
+archives:
+  - format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+checksum:
+  name_template: "checksums.txt"
+changelog:
+  disable: true   # we supply our own notes via --release-notes
+release:
+  github:
+    owner: <user>
+    name: anti-tangent-mcp
+```
+
+GoReleaser is the single owner of the GitHub Release object. The `tag` job only pushes the tag; GoReleaser creates the release at that tag and uses our hand-written `CHANGELOG.md` section as the release body (passed via `--release-notes`). Disabling GoReleaser's own changelog generation prevents it from appending an auto-generated commit list to our curated notes.
+
+### Initial release
+
+The first release is `0.1.0`. The repo lands with:
+- `VERSION` containing `0.1.0`
+- `CHANGELOG.md` with a single `## [0.1.0] - 2026-05-07` entry summarizing the v1 surface
+- `.github/workflows/ci.yml` and `release.yml`
+- `.goreleaser.yaml`
+- `Dockerfile`
+
+Cutting `0.1.0` is just the first time `main` advances past the initial scaffold and triggers the release workflow.
+
+### What's deliberately missing
+
+- No release-please, no semantic-release, no auto-generated changelog. The `[major]`/`[minor]` commit tag is the entire automation surface — easy to read, easy to override, no third-party tool to keep up with.
+- No prerelease channel (`alpha`/`rc` tags) in v1. If we need one later, it slots in as a separate workflow keyed on tag pattern.
+- No code-signing, no notarization, no Homebrew tap. All deferable; `go install` and the GHCR image are sufficient distribution for v1.
+
 ## Logging & observability
 
 Structured JSON logs to stderr (stdout is reserved for MCP stdio traffic). One log line per hook call: `session_id`, `hook`, `model`, `verdict`, `findings_count`, `input_tokens`, `output_tokens`, `review_ms`. `ANTI_TANGENT_LOG_LEVEL=debug` also logs prompts and provider responses.
@@ -410,9 +528,14 @@ anti-tangent-mcp/
 │   │   ├── openai.go
 │   │   └── google.go
 │   └── config/
+├── .github/workflows/
+│   ├── ci.yml
+│   └── release.yml
 ├── docs/superpowers/specs/         # this design doc
 ├── .goreleaser.yaml
 ├── Dockerfile
+├── VERSION
+├── CHANGELOG.md
 ├── go.mod
 └── README.md
 ```
