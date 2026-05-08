@@ -287,4 +287,53 @@ The implementer adds the benchmark, re-runs `validate_completion` with the new t
 
 ---
 
-<!-- Sections 4–5 added in subsequent commits -->
+## 4. For controllers — optional dispatch addendum
+
+If you orchestrate implementer subagents — superpowers' `subagent-driven-development`, hone-ai's equivalent, or a hand-rolled dispatch loop — paste the §3.2 clause into every dispatch prompt. The controller itself does **not** call the MCP tools; it just makes sure each subagent knows to.
+
+> **Append the §3.2 clause to your implementer-subagent prompt template, right before the "Report Format" section.**
+
+Per-skill-system pointers:
+
+- **superpowers:** open `subagent-driven-development/implementer-prompt.md` and paste before the "Report Format" heading.
+- **hone-ai:** the equivalent dispatch template file.
+- **Vanilla harness:** wherever your dispatch prompt lives (a CLAUDE.md, a system-prompt template, etc.).
+
+### 4.1 DONE-gate (recommended)
+
+After the subagent reports DONE, you may want to require evidence that `validate_completion` was called and returned `pass` (or `warn` with all findings addressed). The simplest way: ask for the verdict + findings JSON in the subagent's DONE report. The MCP server does not enforce this; the prompt does.
+
+### 4.2 Anti-pattern: don't double-validate from the controller
+
+Do NOT have the controller call `validate_completion` itself after the subagent reports DONE. Sessions are scoped to the subagent's lifetime, and the post-hook the subagent already called IS the gate. Calling it again from the controller produces a `session_not_found` finding and adds noise.
+
+---
+
+## 5. FAQ / failure modes
+
+**What if the reviewer is wrong?**
+Findings are advisory. If a finding misreads the code, document the disagreement in the next call's `working_on` field so the next reviewer call sees your reasoning, then re-validate. Don't silently ignore.
+
+**My implementer is also Claude Sonnet — does this still help?**
+Less than if they were different models. Same model + same training data ≈ same blind spots. If you can't run a different provider, at least pick a different family (Sonnet implementer, Opus reviewer; or Sonnet implementer, Haiku for cheap mid-checks plus Opus for post). Different provider is best.
+
+**How do I know my session expired?**
+You'll get a finding with `category: session_not_found`. Default TTL is 4h. Re-call `validate_task_spec` to start a new session and continue with the new ID.
+
+**My payload is too big.**
+The MCP returns a finding with `category: payload_too_large`. Default cap is 200 KB across `changed_files` / `final_files`. Send a unified diff against the prior state, or split the call.
+
+**`validate_task_spec` is asking for ACs my plan doesn't have.**
+That's the spec quality gate working as designed. Either (a) add the missing ACs to the plan and re-validate, or (b) acknowledge the gap in the next `working_on` description so the reviewer knows to expect implementer-discretion choices.
+
+**What if the implementer skips the post-hook?**
+Two defenses: the §3.2 prompt clause marks post REQUIRED, and the controller can require the post-hook envelope in the subagent's DONE report (see §4.1).
+
+**Does `check_progress` catch failing tests?**
+No — the reviewer LLM reasons over text, not execution. Use mid-checks for drift detection (scope creep, untouched ACs, unaddressed prior findings), not for debugging. Run tests separately.
+
+**Cost / latency overhead.**
+Roughly 1–2 s and $0.001–$0.02 per call, depending on payload size and model choice. Two mandatory calls per task minimum (pre + post). Use a cheap-fast model for mid-checks and a stronger model for post.
+
+**Where do I file bugs?**
+[`https://github.com/patiently/anti-tangent-mcp/issues`](https://github.com/patiently/anti-tangent-mcp/issues).

@@ -79,6 +79,10 @@ All return the same envelope:
 }
 ```
 
+## Integration
+
+For wiring this MCP into your LLM-driven implementation workflow (superpowers, hone-ai, vanilla Claude Code, or any harness with MCP support), see [`INTEGRATION.md`](INTEGRATION.md).
+
 ## Design
 
 Authoritative design: [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md).
