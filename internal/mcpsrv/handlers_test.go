@@ -154,3 +154,38 @@ func TestCheckProgress_PayloadTooLarge(t *testing.T) {
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, "payload_too_large", string(env.Findings[0].Category))
 }
+
+func TestValidateCompletion_HappyPath(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "implemented X",
+		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, pre.SessionID, env.SessionID)
+	assert.Equal(t, "pass", env.Verdict)
+
+	got, _ := d.Sessions.Get(pre.SessionID)
+	assert.NotNil(t, got.PostFindings)
+}
+
+func TestValidateCompletion_UnknownSession(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: "missing", Summary: "x",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "fail", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	assert.Equal(t, "session_not_found", string(env.Findings[0].Category))
+}

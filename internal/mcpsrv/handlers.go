@@ -287,11 +287,66 @@ func tooLargeEnvelope(id string, model config.ModelRef, size, limit int) Envelop
 	}
 }
 
-// stub for tool defined in a later task; let the build pass.
-func validateCompletionTool() *mcp.Tool { return &mcp.Tool{Name: "validate_completion"} }
+func validateCompletionTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name: "validate_completion",
+		Description: "Final validation before declaring a task complete. " +
+			"The reviewer checks the full implementation against every acceptance criterion " +
+			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done.",
+	}
+}
 
-type ValidateCompletionArgs struct{}
+type ValidateCompletionArgs struct {
+	SessionID     string    `json:"session_id"  jsonschema:"required"`
+	Summary       string    `json:"summary"     jsonschema:"required"`
+	FinalFiles    []FileArg `json:"final_files,omitempty"`
+	TestEvidence  string    `json:"test_evidence,omitempty"`
+	ModelOverride string    `json:"model_override,omitempty"`
+}
 
-func (h *handlers) ValidateCompletion(_ context.Context, _ *mcp.CallToolRequest, _ ValidateCompletionArgs) (*mcp.CallToolResult, Envelope, error) {
-	return nil, Envelope{}, errors.New("not implemented yet (Task 14)")
+func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolRequest, args ValidateCompletionArgs) (*mcp.CallToolResult, Envelope, error) {
+	if args.SessionID == "" || args.Summary == "" {
+		return nil, Envelope{}, errors.New("session_id and summary are required")
+	}
+
+	sess, ok := h.deps.Sessions.Get(args.SessionID)
+	if !ok {
+		return envelopeResult(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel))
+	}
+
+	if size := totalBytes(args.FinalFiles); size > h.deps.Cfg.MaxPayloadBytes {
+		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes))
+	}
+
+	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PostModel)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+
+	rendered, err := prompts.RenderPost(prompts.PostInput{
+		Spec:         sess.Spec,
+		Summary:      args.Summary,
+		Files:        toPromptFiles(args.FinalFiles),
+		TestEvidence: args.TestEvidence,
+	})
+	if err != nil {
+		return nil, Envelope{}, fmt.Errorf("render post prompt: %w", err)
+	}
+
+	result, modelUsed, ms, err := h.review(ctx, model, rendered)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+
+	h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
+
+	env := Envelope{
+		SessionID:  sess.ID,
+		Verdict:    string(result.Verdict),
+		Findings:   result.Findings,
+		NextAction: result.NextAction,
+		ModelUsed:  modelUsed,
+		ReviewMS:   ms,
+	}
+	return envelopeResult(env)
 }
