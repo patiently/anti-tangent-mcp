@@ -96,3 +96,61 @@ func TestValidateTaskSpec_MissingFields(t *testing.T) {
 	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{Goal: "Y"})
 	require.Error(t, err)
 }
+
+func TestCheckProgress_HappyPath(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	// Pre-create a session so check_progress has something to thread.
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+
+	out, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID:    pre.SessionID,
+		WorkingOn:    "writing handler",
+		ChangedFiles: []FileArg{{Path: "h.go", Content: "package h\n"}},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, pre.SessionID, env.SessionID)
+	assert.Equal(t, "pass", env.Verdict)
+
+	// A checkpoint was appended.
+	got, _ := d.Sessions.Get(env.SessionID)
+	require.Len(t, got.Checkpoints, 1)
+}
+
+func TestCheckProgress_UnknownSession(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5")}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID: "does-not-exist", WorkingOn: "x",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "fail", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	assert.Equal(t, "session_not_found", string(env.Findings[0].Category))
+}
+
+func TestCheckProgress_PayloadTooLarge(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5")}
+	d := newDeps(t, rv)
+	d.Cfg.MaxPayloadBytes = 10
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+
+	_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID:    pre.SessionID,
+		WorkingOn:    "x",
+		ChangedFiles: []FileArg{{Path: "f", Content: "this is way too much"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "fail", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	assert.Equal(t, "payload_too_large", string(env.Findings[0].Category))
+}

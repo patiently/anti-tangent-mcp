@@ -155,16 +155,143 @@ func envelopeResult(env Envelope) (*mcp.CallToolResult, Envelope, error) {
 	}, env, nil
 }
 
-// stubs for tools defined in later tasks; let the build pass.
-func checkProgressTool() *mcp.Tool      { return &mcp.Tool{Name: "check_progress"} }
+func checkProgressTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name: "check_progress",
+		Description: "Check that your in-progress work is staying aligned with the task spec. " +
+			"Call this at natural checkpoints — after a meaningful chunk of code is written, " +
+			"before moving to a new sub-area, or whenever you're unsure whether you're drifting.",
+	}
+}
+
+type FileArg struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+type CheckProgressArgs struct {
+	SessionID     string    `json:"session_id"     jsonschema:"required"`
+	WorkingOn     string    `json:"working_on"     jsonschema:"required"`
+	ChangedFiles  []FileArg `json:"changed_files,omitempty"`
+	Questions     []string  `json:"questions,omitempty"`
+	ModelOverride string    `json:"model_override,omitempty"`
+}
+
+func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, args CheckProgressArgs) (*mcp.CallToolResult, Envelope, error) {
+	if args.SessionID == "" || args.WorkingOn == "" {
+		return nil, Envelope{}, errors.New("session_id and working_on are required")
+	}
+
+	sess, ok := h.deps.Sessions.Get(args.SessionID)
+	if !ok {
+		return envelopeResult(notFoundEnvelope(args.SessionID, h.deps.Cfg.MidModel))
+	}
+
+	if size := totalBytes(args.ChangedFiles); size > h.deps.Cfg.MaxPayloadBytes {
+		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes))
+	}
+
+	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.MidModel)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+
+	rendered, err := prompts.RenderMid(prompts.MidInput{
+		Spec:          sess.Spec,
+		PriorFindings: priorFindings(sess),
+		WorkingOn:     args.WorkingOn,
+		Files:         toPromptFiles(args.ChangedFiles),
+		Questions:     args.Questions,
+	})
+	if err != nil {
+		return nil, Envelope{}, fmt.Errorf("render mid prompt: %w", err)
+	}
+
+	result, modelUsed, ms, err := h.review(ctx, model, rendered)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+
+	h.deps.Sessions.AppendCheckpoint(sess.ID, session.Checkpoint{
+		At:        time.Now(),
+		WorkingOn: args.WorkingOn,
+		FileCount: len(args.ChangedFiles),
+		Verdict:   result.Verdict,
+		Findings:  result.Findings,
+	})
+
+	env := Envelope{
+		SessionID:  sess.ID,
+		Verdict:    string(result.Verdict),
+		Findings:   result.Findings,
+		NextAction: result.NextAction,
+		ModelUsed:  modelUsed,
+		ReviewMS:   ms,
+	}
+	return envelopeResult(env)
+}
+
+func totalBytes(files []FileArg) int {
+	n := 0
+	for _, f := range files {
+		n += len(f.Content) + len(f.Path)
+	}
+	return n
+}
+
+func toPromptFiles(files []FileArg) []prompts.File {
+	out := make([]prompts.File, len(files))
+	for i, f := range files {
+		out[i] = prompts.File{Path: f.Path, Content: f.Content}
+	}
+	return out
+}
+
+func priorFindings(s *session.Session) []verdict.Finding {
+	out := append([]verdict.Finding{}, s.PreFindings...)
+	for _, cp := range s.Checkpoints {
+		out = append(out, cp.Findings...)
+	}
+	return out
+}
+
+func notFoundEnvelope(id string, model config.ModelRef) Envelope {
+	return Envelope{
+		SessionID: id,
+		Verdict:   string(verdict.VerdictFail),
+		Findings: []verdict.Finding{{
+			Severity:   verdict.SeverityCritical,
+			Category:   verdict.CategorySessionMissing,
+			Criterion:  "session",
+			Evidence:   "session_id " + id + " not found or expired",
+			Suggestion: "Call validate_task_spec first and use the returned session_id.",
+		}},
+		NextAction: "Call validate_task_spec first.",
+		ModelUsed:  model.String(),
+	}
+}
+
+func tooLargeEnvelope(id string, model config.ModelRef, size, limit int) Envelope {
+	return Envelope{
+		SessionID: id,
+		Verdict:   string(verdict.VerdictFail),
+		Findings: []verdict.Finding{{
+			Severity:   verdict.SeverityMajor,
+			Category:   verdict.CategoryTooLarge,
+			Criterion:  "payload",
+			Evidence:   fmt.Sprintf("payload %d bytes exceeds cap %d", size, limit),
+			Suggestion: "Send a unified diff instead of full files, or split the call.",
+		}},
+		NextAction: "Reduce the payload and retry.",
+		ModelUsed:  model.String(),
+	}
+}
+
+// stub for tool defined in a later task; let the build pass.
 func validateCompletionTool() *mcp.Tool { return &mcp.Tool{Name: "validate_completion"} }
 
-type CheckProgressArgs struct{}
 type ValidateCompletionArgs struct{}
 
-func (h *handlers) CheckProgress(_ context.Context, _ *mcp.CallToolRequest, _ CheckProgressArgs) (*mcp.CallToolResult, Envelope, error) {
-	return nil, Envelope{}, errors.New("not implemented yet (Task 13)")
-}
 func (h *handlers) ValidateCompletion(_ context.Context, _ *mcp.CallToolRequest, _ ValidateCompletionArgs) (*mcp.CallToolResult, Envelope, error) {
 	return nil, Envelope{}, errors.New("not implemented yet (Task 14)")
 }
