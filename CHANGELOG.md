@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-05-07
 
 ### Added
-- Initial release scaffold. Tools, providers, and release workflow are
-  filled in by subsequent tasks; this entry is rewritten in Task 27 once
-  the implementation is complete.
+- Initial release. MCP server (`anti-tangent-mcp`) exposing three tools that
+  review implementing-subagent work at the start, middle, and end of a task:
+  - `validate_task_spec` — checks structural completeness, AC quality, and
+    unstated assumptions before coding begins.
+  - `check_progress` — flags scope drift, untouched ACs, and unaddressed
+    prior findings during implementation.
+  - `validate_completion` — walks every AC and non-goal in a final review.
+- Multi-provider reviewer support: Anthropic Messages API (tool_use),
+  OpenAI Chat Completions (json_schema), Google Gemini generateContent
+  (responseSchema). Per-hook model defaults overridable per call.
+- In-memory session store with configurable TTL (default 4h).
+- Cross-platform binaries via GoReleaser (linux/darwin/windows × amd64/arm64).
+- Distroless static container image published to ghcr.io.
+- GitHub Actions CI (changelog enforcement, `go test -race`) and release
+  workflow (commit-tag-driven semver bump, tag, GoReleaser, GHCR push).
