@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -17,8 +16,9 @@ import (
 func TestGoogle_Review_OK(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "POST", r.Method)
-		assert.True(t, strings.HasPrefix(r.URL.Path, "/v1beta/models/gemini-2.5-pro:generateContent"))
-		assert.Equal(t, "test-key", r.URL.Query().Get("key"))
+		assert.Equal(t, "/v1beta/models/gemini-2.5-pro:generateContent", r.URL.Path)
+		assert.Equal(t, "test-key", r.Header.Get("x-goog-api-key"))
+		assert.Empty(t, r.URL.Query().Get("key"))
 
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]any

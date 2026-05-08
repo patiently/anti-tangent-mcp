@@ -55,14 +55,15 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 	if err != nil {
 		return Response{}, fmt.Errorf("google: marshal request body: %w", err)
 	}
-	endpoint := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s",
-		r.baseURL, url.PathEscape(req.Model), url.QueryEscape(r.apiKey))
+	endpoint := fmt.Sprintf("%s/v1beta/models/%s:generateContent",
+		r.baseURL, url.PathEscape(req.Model))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(buf))
 	if err != nil {
 		return Response{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-goog-api-key", r.apiKey)
 
 	resp, err := r.client.Do(httpReq)
 	if err != nil {
