@@ -52,7 +52,7 @@ func TestGoogle_Review_OK(t *testing.T) {
 
 func TestGoogle_Review_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"error":{"message":"bad"}}`, 400)
+		http.Error(w, `{"error":{"message":"bad"}}`, http.StatusBadRequest)
 	}))
 	defer srv.Close()
 	rv := NewGoogle("k", srv.URL, 5*time.Second)

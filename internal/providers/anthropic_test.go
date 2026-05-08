@@ -59,7 +59,7 @@ func TestAnthropic_Review_OK(t *testing.T) {
 
 func TestAnthropic_Review_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"error":{"message":"rate limited"}}`, 429)
+		http.Error(w, `{"error":{"message":"rate limited"}}`, http.StatusTooManyRequests)
 	}))
 	defer srv.Close()
 

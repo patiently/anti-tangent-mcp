@@ -52,7 +52,7 @@ func TestOpenAI_Review_OK(t *testing.T) {
 
 func TestOpenAI_Review_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"error":"nope"}`, 401)
+		http.Error(w, `{"error":"nope"}`, http.StatusUnauthorized)
 	}))
 	defer srv.Close()
 	rv := NewOpenAI("k", srv.URL, 5*time.Second)
