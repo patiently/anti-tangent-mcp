@@ -77,6 +77,9 @@ func Load(env func(string) string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("ANTI_TANGENT_SESSION_TTL: %w", err)
 		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_SESSION_TTL: must be positive, got %s", d)
+		}
 		cfg.SessionTTL = d
 	}
 	if v := env("ANTI_TANGENT_MAX_PAYLOAD_BYTES"); v != "" {
@@ -84,12 +87,18 @@ func Load(env func(string) string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("ANTI_TANGENT_MAX_PAYLOAD_BYTES: %w", err)
 		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_MAX_PAYLOAD_BYTES: must be positive, got %d", n)
+		}
 		cfg.MaxPayloadBytes = n
 	}
 	if v := env("ANTI_TANGENT_REQUEST_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return Config{}, fmt.Errorf("ANTI_TANGENT_REQUEST_TIMEOUT: %w", err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_REQUEST_TIMEOUT: must be positive, got %s", d)
 		}
 		cfg.RequestTimeout = d
 	}

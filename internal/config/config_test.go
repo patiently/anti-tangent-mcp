@@ -54,6 +54,22 @@ func TestLoad_BadModelRef(t *testing.T) {
 	assert.Contains(t, err.Error(), "expected provider:model")
 }
 
+func TestLoad_NonPositiveTunables(t *testing.T) {
+	cases := []map[string]string{
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_SESSION_TTL": "0s"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_SESSION_TTL": "-1m"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_MAX_PAYLOAD_BYTES": "0"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_MAX_PAYLOAD_BYTES": "-1024"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_REQUEST_TIMEOUT": "0s"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_REQUEST_TIMEOUT": "-5s"},
+	}
+	for _, tc := range cases {
+		_, err := Load(env(tc))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "must be positive")
+	}
+}
+
 func TestParseModelRef(t *testing.T) {
 	mr, err := ParseModelRef("anthropic:claude-opus-4-7")
 	require.NoError(t, err)
