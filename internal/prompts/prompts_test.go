@@ -48,7 +48,7 @@ func TestRenderPre(t *testing.T) {
 
 func TestRenderMid(t *testing.T) {
 	out, err := RenderMid(MidInput{
-		Spec:        sampleSpec(),
+		Spec: sampleSpec(),
 		PriorFindings: []verdict.Finding{{
 			Severity:   verdict.SeverityMajor,
 			Category:   verdict.CategoryAmbiguousSpec,

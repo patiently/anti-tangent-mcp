@@ -28,9 +28,9 @@ func TestLoad_Defaults(t *testing.T) {
 
 func TestLoad_Overrides(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
-		"OPENAI_API_KEY":               "sk-test",
-		"ANTI_TANGENT_PRE_MODEL":       "openai:gpt-5",
-		"ANTI_TANGENT_SESSION_TTL":     "30m",
+		"OPENAI_API_KEY":                 "sk-test",
+		"ANTI_TANGENT_PRE_MODEL":         "openai:gpt-5",
+		"ANTI_TANGENT_SESSION_TTL":       "30m",
 		"ANTI_TANGENT_MAX_PAYLOAD_BYTES": "1024",
 	}))
 	require.NoError(t, err)
