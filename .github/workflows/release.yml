@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
 
@@ -83,14 +87,23 @@ jobs:
       - name: Update VERSION file
         run: |
           echo "${{ needs.version.outputs.new_version }}" > VERSION
-          git add VERSION
-          git commit -m "chore: release v${{ needs.version.outputs.new_version }} [skip ci]"
-          git push
+          if git diff --quiet VERSION; then
+            echo "VERSION already at ${{ needs.version.outputs.new_version }}; skipping commit"
+          else
+            git add VERSION
+            git commit -m "chore: release v${{ needs.version.outputs.new_version }} [skip ci]"
+            git push
+          fi
 
       - name: Create and push tag
         run: |
-          git tag "v${{ needs.version.outputs.new_version }}"
-          git push origin "v${{ needs.version.outputs.new_version }}"
+          TAG="v${{ needs.version.outputs.new_version }}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; then
+            echo "Tag ${TAG} already exists on origin; skipping"
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
+          fi
 
   goreleaser:
     name: GoReleaser
