@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -81,6 +82,10 @@ func main() {
 	}()
 
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {
+		if errors.Is(err, context.Canceled) {
+			logger.Info("mcp run cancelled")
+			return
+		}
 		logger.Error("mcp run failed", "err", err)
 		os.Exit(1)
 	}
