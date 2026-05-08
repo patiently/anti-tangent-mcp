@@ -30,7 +30,7 @@ The server is **advisory**: it returns verdicts and findings, never blocks. Enfo
 
 A single Go binary, internally organized by layer.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                    anti-tangent-mcp (Go binary)             │
 │                                                             │
@@ -273,7 +273,7 @@ If parsing fails, `verdict/` does **one** retry with an appended *"respond with 
 
 ### Per-hook model defaults
 
-```
+```dotenv
 ANTI_TANGENT_PRE_MODEL=anthropic:claude-sonnet-4-6
 ANTI_TANGENT_MID_MODEL=anthropic:claude-haiku-4-5     # cheap, fast, called often
 ANTI_TANGENT_POST_MODEL=anthropic:claude-opus-4-7     # most rigorous
@@ -287,7 +287,7 @@ API keys: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`. Only provider
 
 Each hook has its own embedded prompt template (`//go:embed prompts/templates/*.tmpl`). Common skeleton:
 
-```
+```text
 SYSTEM: You are an exacting reviewer. You return ONLY a JSON object
 matching the provided schema. You give specific, evidence-backed findings.
 You never invent facts about code that wasn't shown to you.
@@ -325,7 +325,7 @@ The MCP handler enforces a soft cap on the size of `changed_files` / `final_file
 
 Env vars only. No config file in v1.
 
-```
+```dotenv
 # Provider keys (at least one required)
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
@@ -372,7 +372,7 @@ Modeled on the convention used in the `powow` repo: a `VERSION` file holds the c
 ### Version source of truth
 
 A single `VERSION` file at the repo root contains the current version, e.g.:
-```
+```text
 0.1.0
 ```
 This is the only place the version lives. The Go build embeds it via `-ldflags "-X main.version=$(cat VERSION)"` so `anti-tangent-mcp --version` reports it.
@@ -397,7 +397,7 @@ The branch name and the merge bump together must produce the same version that `
 
 ### CHANGELOG.md format
 
-```
+```markdown
 # Changelog
 
 All notable changes to this project will be documented in this file.
@@ -543,7 +543,7 @@ Three layers, each runnable via `go test`.
 
 ## Project layout
 
-```
+```text
 anti-tangent-mcp/
 ├── cmd/anti-tangent-mcp/main.go    # entry point, wiring
 ├── internal/
