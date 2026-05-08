@@ -30,12 +30,12 @@
               "other"
             ]
           },
-          "criterion":  { "type": "string" },
-          "evidence":   { "type": "string" },
-          "suggestion": { "type": "string" }
+          "criterion":  { "type": "string", "minLength": 1 },
+          "evidence":   { "type": "string", "minLength": 1 },
+          "suggestion": { "type": "string", "minLength": 1 }
         }
       }
     },
-    "next_action": { "type": "string" }
+    "next_action": { "type": "string", "minLength": 1 }
   }
 }

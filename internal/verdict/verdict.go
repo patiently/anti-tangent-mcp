@@ -52,4 +52,8 @@ var schema []byte
 
 // Schema returns the JSON Schema (draft-07-compatible subset) describing Result.
 // Providers are instructed to produce output matching this shape.
-func Schema() []byte { return schema }
+func Schema() []byte {
+	out := make([]byte, len(schema))
+	copy(out, schema)
+	return out
+}

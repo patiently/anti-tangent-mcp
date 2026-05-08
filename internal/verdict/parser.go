@@ -17,6 +17,9 @@ func Parse(raw []byte) (Result, error) {
 	if err := dec.Decode(&r); err != nil {
 		return Result{}, fmt.Errorf("decode result: %w", err)
 	}
+	if dec.More() {
+		return Result{}, fmt.Errorf("decode result: extra JSON after document")
+	}
 	switch r.Verdict {
 	case VerdictPass, VerdictWarn, VerdictFail:
 	default:
