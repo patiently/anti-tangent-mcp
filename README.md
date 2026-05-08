@@ -63,8 +63,16 @@ All return the same envelope:
 ```json
 {
   "session_id": "uuid",
-  "verdict": "pass | warn | fail",
-  "findings": [{ "severity", "category", "criterion", "evidence", "suggestion" }],
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_acceptance_criterion",
+      "criterion": "<verbatim AC>",
+      "evidence": "<code or spec text>",
+      "suggestion": "<concrete next action>"
+    }
+  ],
   "next_action": "one sentence",
   "model_used": "anthropic:claude-sonnet-4-6",
   "review_ms": 2341
@@ -77,4 +85,4 @@ Authoritative design: [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-desig
 
 ## License
 
-MIT (or the user's choice — substitute when adding a `LICENSE` file).
+MIT — see [`LICENSE`](LICENSE) for full text.

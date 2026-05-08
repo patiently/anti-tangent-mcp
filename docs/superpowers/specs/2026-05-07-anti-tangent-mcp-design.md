@@ -35,7 +35,7 @@ A single Go binary, internally organized by layer.
 │                    anti-tangent-mcp (Go binary)             │
 │                                                             │
 │  ┌──────────────┐                                           │
-│  │   mcp/       │  stdio transport, modelcontextprotocol/   │
+│  │   mcpsrv/    │  stdio transport, modelcontextprotocol/   │
 │  │              │  go-sdk; registers 3 tools                │
 │  └──────┬───────┘                                           │
 │         │                                                   │
@@ -60,10 +60,10 @@ A single Go binary, internally organized by layer.
                   Anthropic / OpenAI / Google APIs
 ```
 
-### Request flow (mid_check example)
+### Request flow (check_progress example)
 
-1. Subagent calls `mid_check` with `session_id`, `working_on`, `changed_files`.
-2. `mcp/` handler resolves the session from `session/`, fetches the locked spec.
+1. Subagent calls `check_progress` with `session_id`, `working_on`, `changed_files`.
+2. `mcpsrv/` handler resolves the session from `session/`, fetches the locked spec.
 3. `prompts/` builds the drift-check prompt: spec + delta + finding history.
 4. `providers/` dispatches to the configured provider for this hook.
 5. `verdict/` parses the JSON response into `{verdict, findings[], next_action}`.
@@ -547,7 +547,7 @@ Three layers, each runnable via `go test`.
 anti-tangent-mcp/
 ├── cmd/anti-tangent-mcp/main.go    # entry point, wiring
 ├── internal/
-│   ├── mcp/                        # tool registration & handlers
+│   ├── mcpsrv/                     # tool registration & handlers
 │   ├── session/
 │   ├── prompts/
 │   │   └── templates/{pre,mid,post}.tmpl
