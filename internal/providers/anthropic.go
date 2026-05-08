@@ -50,7 +50,10 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 		"tool_choice": map[string]any{"type": "tool", "name": "submit_review"},
 	}
 
-	buf, _ := json.Marshal(body)
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return Response{}, fmt.Errorf("anthropic: marshal request body: %w", err)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", r.baseURL+"/v1/messages", bytes.NewReader(buf))
 	if err != nil {
 		return Response{}, err
@@ -65,7 +68,10 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 	}
 	defer resp.Body.Close()
 
-	respBytes, _ := io.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Response{}, fmt.Errorf("anthropic: read response body: %w", err)
+	}
 	if resp.StatusCode >= 400 {
 		return Response{}, fmt.Errorf("anthropic: HTTP %d: %s", resp.StatusCode, string(respBytes))
 	}

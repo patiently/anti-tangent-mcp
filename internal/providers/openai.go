@@ -52,7 +52,10 @@ func (r *openaiReviewer) Review(ctx context.Context, req Request) (Response, err
 		},
 	}
 
-	buf, _ := json.Marshal(body)
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return Response{}, fmt.Errorf("openai: marshal request body: %w", err)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", r.baseURL+"/v1/chat/completions", bytes.NewReader(buf))
 	if err != nil {
 		return Response{}, err
@@ -66,7 +69,10 @@ func (r *openaiReviewer) Review(ctx context.Context, req Request) (Response, err
 	}
 	defer resp.Body.Close()
 
-	respBytes, _ := io.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Response{}, fmt.Errorf("openai: read response body: %w", err)
+	}
 	if resp.StatusCode >= 400 {
 		return Response{}, fmt.Errorf("openai: HTTP %d: %s", resp.StatusCode, string(respBytes))
 	}

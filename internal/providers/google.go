@@ -51,7 +51,10 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 		},
 	}
 
-	buf, _ := json.Marshal(body)
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return Response{}, fmt.Errorf("google: marshal request body: %w", err)
+	}
 	endpoint := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=%s",
 		r.baseURL, url.PathEscape(req.Model), url.QueryEscape(r.apiKey))
 
@@ -67,7 +70,10 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 	}
 	defer resp.Body.Close()
 
-	respBytes, _ := io.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Response{}, fmt.Errorf("google: read response body: %w", err)
+	}
 	if resp.StatusCode >= 400 {
 		return Response{}, fmt.Errorf("google: HTTP %d: %s", resp.StatusCode, string(respBytes))
 	}
