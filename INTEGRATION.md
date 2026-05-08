@@ -23,7 +23,7 @@ Pick one:
 
 ```bash
 # Option A: build from source
-go install github.com/patiently/anti-tangent-mcp@latest
+go install github.com/patiently/anti-tangent-mcp/cmd/anti-tangent-mcp@latest
 ```
 
 ```bash

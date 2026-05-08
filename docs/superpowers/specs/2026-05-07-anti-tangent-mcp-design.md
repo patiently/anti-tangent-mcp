@@ -349,7 +349,7 @@ Validation runs at startup. If no provider key is set, the server fails fast: *"
 
 In priority order:
 
-1. `go install github.com/patiently/anti-tangent-mcp@latest` — primary path.
+1. `go install github.com/patiently/anti-tangent-mcp/cmd/anti-tangent-mcp@latest` — primary path.
 2. GoReleaser pre-built binaries for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64. Published to GitHub Releases.
 3. Container image (`ghcr.io/patiently/anti-tangent-mcp:latest`).
 

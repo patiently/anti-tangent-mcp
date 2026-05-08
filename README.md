@@ -7,7 +7,7 @@ The reviewer is intentionally a different model than the implementer, so reviews
 ## Install
 
 ```bash
-go install github.com/patiently/anti-tangent-mcp@latest
+go install github.com/patiently/anti-tangent-mcp/cmd/anti-tangent-mcp@latest
 ```
 
 Or grab a pre-built binary from the [releases page](https://github.com/patiently/anti-tangent-mcp/releases). Or pull the container image:
