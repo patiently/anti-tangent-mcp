@@ -1,7 +1,7 @@
 # anti-tangent-mcp — Design
 
 **Date:** 2026-05-07
-**Status:** Draft — pending spec review
+**Status:** Implemented (v0.1.0)
 
 ## Purpose
 
@@ -349,9 +349,9 @@ Validation runs at startup. If no provider key is set, the server fails fast: *"
 
 In priority order:
 
-1. `go install github.com/<user>/anti-tangent-mcp@latest` — primary path.
+1. `go install github.com/patiently/anti-tangent-mcp@latest` — primary path.
 2. GoReleaser pre-built binaries for linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64. Published to GitHub Releases.
-3. Container image (`ghcr.io/<user>/anti-tangent-mcp:latest`).
+3. Container image (`ghcr.io/patiently/anti-tangent-mcp:latest`).
 
 Sample `.mcp.json` snippet shipped in the README:
 ```json
@@ -460,7 +460,7 @@ changelog:
   disable: true   # we supply our own notes via --release-notes
 release:
   github:
-    owner: <user>
+    owner: patiently
     name: anti-tangent-mcp
 ```
 
