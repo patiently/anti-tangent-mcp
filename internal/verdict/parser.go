@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -17,7 +18,7 @@ func Parse(raw []byte) (Result, error) {
 	if err := dec.Decode(&r); err != nil {
 		return Result{}, fmt.Errorf("decode result: %w", err)
 	}
-	if dec.More() {
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		return Result{}, fmt.Errorf("decode result: extra JSON after document")
 	}
 	switch r.Verdict {

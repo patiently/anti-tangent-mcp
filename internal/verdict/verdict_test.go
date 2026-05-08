@@ -71,6 +71,13 @@ func TestParse_StripsCodeFences(t *testing.T) {
 	assert.Equal(t, VerdictPass, r.Verdict)
 }
 
+func TestParse_RejectsExtraJSON(t *testing.T) {
+	in := []byte(`{"verdict":"pass","findings":[],"next_action":"a"}{"verdict":"fail","findings":[],"next_action":"b"}`)
+	_, err := Parse(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "extra JSON")
+}
+
 func TestRetryHint(t *testing.T) {
 	hint := RetryHint()
 	assert.Contains(t, hint, "JSON")
