@@ -43,7 +43,11 @@ func TestIntegration_FullLifecycle(t *testing.T) {
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	cs, err := client.Connect(ctx, ct, nil)
 	require.NoError(t, err)
-	defer cs.Close()
+	defer func() {
+		if err := cs.Close(); err != nil {
+			t.Errorf("cs.Close: %v", err)
+		}
+	}()
 
 	// 1. validate_task_spec
 	pre := callTool(t, ctx, cs, "validate_task_spec", map[string]any{

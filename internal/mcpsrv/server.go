@@ -17,12 +17,16 @@ type Deps struct {
 	Reviews  providers.Registry
 }
 
+// Version is the server version reported via the MCP Implementation block.
+// main wires this from its own ldflags-injected version at startup.
+var Version = "dev"
+
 // New creates and returns a configured MCP server with all three tools
 // registered.
 func New(d Deps) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "anti-tangent-mcp",
-		Version: "0.1.0",
+		Version: Version,
 	}, nil)
 
 	h := &handlers{deps: d}

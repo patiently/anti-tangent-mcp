@@ -67,6 +67,7 @@ func main() {
 	defer cancel()
 	go evictLoop(ctx, store, 5*time.Minute, logger)
 
+	mcpsrv.Version = version
 	srv := mcpsrv.New(mcpsrv.Deps{
 		Cfg:      cfg,
 		Sessions: store,
