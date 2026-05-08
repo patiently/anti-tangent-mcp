@@ -64,7 +64,10 @@ func TestAnthropic_Review_HTTPError(t *testing.T) {
 	defer srv.Close()
 
 	rv := NewAnthropic("k", srv.URL, 5*time.Second)
-	_, err := rv.Review(context.Background(), Request{Model: "claude-sonnet-4-6"})
+	_, err := rv.Review(context.Background(), Request{
+		Model:      "claude-sonnet-4-6",
+		JSONSchema: []byte(`{"type":"object"}`),
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "429")
 }
@@ -80,7 +83,10 @@ func TestAnthropic_Review_NoToolUse(t *testing.T) {
 	defer srv.Close()
 
 	rv := NewAnthropic("k", srv.URL, 5*time.Second)
-	_, err := rv.Review(context.Background(), Request{Model: "claude-sonnet-4-6"})
+	_, err := rv.Review(context.Background(), Request{
+		Model:      "claude-sonnet-4-6",
+		JSONSchema: []byte(`{"type":"object"}`),
+	})
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "tool_use")
 }

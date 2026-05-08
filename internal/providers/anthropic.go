@@ -31,12 +31,8 @@ func (r *anthropicReviewer) Name() string { return "anthropic" }
 
 func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, error) {
 	var schema map[string]any
-	if len(req.JSONSchema) > 0 {
-		if err := json.Unmarshal(req.JSONSchema, &schema); err != nil {
-			return Response{}, fmt.Errorf("anthropic: invalid schema: %w", err)
-		}
-	} else {
-		schema = map[string]any{"type": "object"}
+	if err := json.Unmarshal(req.JSONSchema, &schema); err != nil {
+		return Response{}, fmt.Errorf("anthropic: invalid schema: %w", err)
 	}
 
 	body := map[string]any{
