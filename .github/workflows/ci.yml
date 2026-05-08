@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+  workflow_call:
+
+jobs:
+  changelog:
+    name: Changelog entry
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Verify CHANGELOG.md entry for branch version
+        run: |
+          BRANCH="${{ github.head_ref || github.ref_name }}"
+          echo "Branch: $BRANCH"
+
+          if [[ ! "$BRANCH" =~ ^version/([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Branch does not match version/X.Y.Z pattern — skipping changelog check"
+            exit 0
+          fi
+
+          VERSION="${BASH_REMATCH[1]}"
+          echo "Detected version: $VERSION"
+
+          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::Missing changelog entry for version $VERSION"
+            echo ""
+            echo "Add an entry to CHANGELOG.md like:"
+            echo ""
+            echo "  ## [$VERSION] - YYYY-MM-DD"
+            echo ""
+            echo "  ### Added"
+            echo "  - your changes here"
+            echo ""
+            exit 1
+          fi
+
+          echo "✓ Found changelog entry for $VERSION"
+
+  build-test:
+    name: Build & Test (Go)
+    needs: changelog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@latest
+
+      - name: Test
+        run: gotestsum --format testdox --junitfile test-results.xml -- -race -count=1 ./...
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: test-results.xml
