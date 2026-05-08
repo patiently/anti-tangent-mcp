@@ -41,7 +41,7 @@ func (r *openaiReviewer) Review(ctx context.Context, req Request) (Response, err
 			{"role": "system", "content": req.System},
 			{"role": "user", "content": req.User},
 		},
-		"max_tokens": req.MaxTokens,
+		"max_completion_tokens": req.MaxTokens,
 		"response_format": map[string]any{
 			"type": "json_schema",
 			"json_schema": map[string]any{
