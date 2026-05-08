@@ -153,4 +153,138 @@ Acceptance criteria describe *what done looks like*, not *how to get there*. Imp
 
 ---
 
-<!-- Sections 3–5 added in subsequent commits -->
+## 3. For implementers — the lifecycle protocol
+
+If you're an implementing subagent (or you're writing a system prompt for one), this section is what to follow.
+
+### 3.1 Protocol summary
+
+| Phase | Tool | Required? | When to call |
+|---|---|---|---|
+| Start | `validate_task_spec` | **Yes** | Once, before writing any code |
+| During | `check_progress` | Recommended | After each meaningful chunk; at any moment of uncertainty |
+| End | `validate_completion` | **Yes** | Before reporting DONE |
+
+One task = one session = one subagent. The session_id returned by `validate_task_spec` lives in the implementer's context for the lifetime of the task; it is not handed off to anyone else.
+
+### 3.2 The implementer-prompt clause (paste this into every dispatch)
+
+```markdown
+## Drift-protection protocol (anti-tangent-mcp)
+
+Before, during, and after this task, you must use the `validate_task_spec`,
+`check_progress`, and `validate_completion` MCP tools.
+
+**1. At the start (REQUIRED).** Before writing any code, call
+`validate_task_spec` with the structured task fields below. Save the
+returned `session_id` — you'll thread it through subsequent calls.
+- Read the findings list. Treat `severity: critical` as blocking and
+  `severity: major` as "address or explain." If the spec is too ambiguous
+  to proceed, stop and ask the controller for clarification rather than
+  guessing.
+
+**2. During work (RECOMMENDED).** After each meaningful change (a new
+file, a non-trivial logic block, finishing one acceptance criterion),
+call `check_progress` with: the session_id, a one-sentence `working_on`
+summary, and the changed files. Address findings before continuing.
+
+**3. Before reporting DONE (REQUIRED).** Call `validate_completion` with
+the session_id, your summary, the final files, and any test evidence.
+If the verdict is `fail` or contains `critical`/`major` findings, do
+not report DONE — fix the findings and re-validate.
+
+## Task spec (pass these fields verbatim to validate_task_spec)
+
+- task_title:           <from the task block>
+- goal:                 <from "Goal:">
+- acceptance_criteria:  <from "Acceptance criteria:" bullets>
+- non_goals:            <from "Non-goals:" bullets if present>
+- context:              <from "Context:" if present>
+```
+
+### 3.3 How to address findings
+
+**Address vs. push back.** Reviewer LLMs can be wrong. If a finding misreads the code, document the disagreement in the next call's `working_on` field — for example, `working_on: "addressed all findings except F#3 which is incorrect because the helper does in fact perform the length check, see handlers.go line 42"` — and re-validate. Don't silently ignore: the next reviewer call won't see your reasoning unless you write it.
+
+**The retry loop.** Parse failures on the reviewer's response are handled inside the server (one retry with a JSON-only reminder). The implementer does not need to handle that.
+
+**Session not found.** If `check_progress` or `validate_completion` returns a finding with `category: session_not_found`, the session expired (default TTL 4h) or was never created. Call `validate_task_spec` again to start a fresh session and continue with the new ID.
+
+### 3.4 Concrete examples
+
+**Example A — pre-hook surfaces a vague AC.**
+
+Initial call:
+
+```json
+{
+  "task_title": "Add /healthz endpoint",
+  "goal": "Liveness probe for the HTTP server",
+  "acceptance_criteria": [
+    "Returns 200 OK with body \"ok\"",
+    "Should be fast"
+  ]
+}
+```
+
+Response (abridged):
+
+```json
+{
+  "verdict": "warn",
+  "findings": [{
+    "severity": "major",
+    "category": "ambiguous_spec",
+    "criterion": "Should be fast",
+    "evidence": "AC #2 lacks a measurable target",
+    "suggestion": "Replace with: 'p95 latency < 50 ms at 100 RPS'"
+  }],
+  "next_action": "Tighten AC #2 and re-validate."
+}
+```
+
+The implementer surfaces this to the controller, the AC is rewritten, and a fresh `validate_task_spec` call returns `verdict: "pass"`.
+
+**Example B — mid-hook catches scope drift.**
+
+After writing 200 lines, the implementer calls `check_progress` with `working_on: "added Prometheus metrics endpoint"` and the changed files. Response:
+
+```json
+{
+  "verdict": "warn",
+  "findings": [{
+    "severity": "major",
+    "category": "scope_drift",
+    "criterion": "non-goal: 'Authentication on the endpoint'",
+    "evidence": "metrics_handler.go line 17 wires the auth middleware",
+    "suggestion": "Remove the auth middleware from the new route; metrics handler is out of scope for this task entirely."
+  }],
+  "next_action": "Revert the auth wiring AND remove the metrics endpoint (out of scope)."
+}
+```
+
+The implementer rolls back the metrics work and the next mid-check passes.
+
+**Example C — post-hook catches an untouched AC.**
+
+Final call with `summary: "Implemented /healthz returning ok"` and the final file. Response:
+
+```json
+{
+  "verdict": "fail",
+  "findings": [{
+    "severity": "critical",
+    "category": "missing_acceptance_criterion",
+    "criterion": "p95 latency < 50 ms at 100 RPS",
+    "evidence": "no benchmark or load test was added",
+    "suggestion": "Add a Go benchmark in handlers/health_test.go that runs 100 RPS for 10s and asserts p95 < 50ms; include the result in test_evidence."
+  }],
+  "next_action": "Add the benchmark and re-validate; do not report DONE."
+}
+```
+
+The implementer adds the benchmark, re-runs `validate_completion` with the new test evidence, gets `verdict: "pass"`, and reports DONE.
+
+---
+
+<!-- Sections 4–5 added in subsequent commits -->
