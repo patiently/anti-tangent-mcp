@@ -43,3 +43,35 @@ func TestResult_RoundTripsJSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal(b, &back))
 	assert.Equal(t, r, back)
 }
+
+func TestParse_ValidJSON(t *testing.T) {
+	in := []byte(`{"verdict":"pass","findings":[],"next_action":"ship it"}`)
+	r, err := Parse(in)
+	require.NoError(t, err)
+	assert.Equal(t, VerdictPass, r.Verdict)
+	assert.Equal(t, "ship it", r.NextAction)
+}
+
+func TestParse_InvalidEnum(t *testing.T) {
+	in := []byte(`{"verdict":"maybe","findings":[],"next_action":""}`)
+	_, err := Parse(in)
+	require.Error(t, err)
+}
+
+func TestParse_MalformedJSON(t *testing.T) {
+	_, err := Parse([]byte(`{not json`))
+	require.Error(t, err)
+}
+
+func TestParse_StripsCodeFences(t *testing.T) {
+	// Some providers wrap the JSON in ```json fences despite instructions.
+	in := []byte("```json\n{\"verdict\":\"pass\",\"findings\":[],\"next_action\":\"ok\"}\n```")
+	r, err := Parse(in)
+	require.NoError(t, err)
+	assert.Equal(t, VerdictPass, r.Verdict)
+}
+
+func TestRetryHint(t *testing.T) {
+	hint := RetryHint()
+	assert.Contains(t, hint, "JSON")
+}
