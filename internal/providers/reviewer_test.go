@@ -12,7 +12,7 @@ import (
 func TestValidateModel_KnownAnthropic(t *testing.T) {
 	require.NoError(t, ValidateModel(config.ModelRef{Provider: "anthropic", Model: "claude-sonnet-4-6"}))
 	require.NoError(t, ValidateModel(config.ModelRef{Provider: "anthropic", Model: "claude-opus-4-7"}))
-	require.NoError(t, ValidateModel(config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5"}))
+	require.NoError(t, ValidateModel(config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"}))
 }
 
 func TestValidateModel_KnownOpenAI(t *testing.T) {

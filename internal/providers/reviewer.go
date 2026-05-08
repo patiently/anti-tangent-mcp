@@ -32,9 +32,9 @@ type Response struct {
 // one-line change here; the validator runs at startup and on per-call overrides.
 var allowlist = map[string]map[string]bool{
 	"anthropic": {
-		"claude-opus-4-7":   true,
-		"claude-sonnet-4-6": true,
-		"claude-haiku-4-5":  true,
+		"claude-opus-4-7":           true,
+		"claude-sonnet-4-6":         true,
+		"claude-haiku-4-5-20251001": true,
 	},
 	"openai": {
 		"gpt-5":      true,

@@ -98,7 +98,7 @@ func TestValidateTaskSpec_MissingFields(t *testing.T) {
 }
 
 func TestCheckProgress_HappyPath(t *testing.T) {
-	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5")}
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5-20251001")}
 	d := newDeps(t, rv)
 	h := &handlers{deps: d}
 
@@ -124,7 +124,7 @@ func TestCheckProgress_HappyPath(t *testing.T) {
 }
 
 func TestCheckProgress_UnknownSession(t *testing.T) {
-	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5")}
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5-20251001")}
 	h := &handlers{deps: newDeps(t, rv)}
 	_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
 		SessionID: "does-not-exist", WorkingOn: "x",
@@ -136,7 +136,7 @@ func TestCheckProgress_UnknownSession(t *testing.T) {
 }
 
 func TestCheckProgress_PayloadTooLarge(t *testing.T) {
-	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5")}
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5-20251001")}
 	d := newDeps(t, rv)
 	d.Cfg.MaxPayloadBytes = 10
 	h := &handlers{deps: d}

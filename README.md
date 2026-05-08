@@ -27,7 +27,7 @@ GOOGLE_API_KEY=...
 
 # Optional per-hook model defaults:
 ANTI_TANGENT_PRE_MODEL=anthropic:claude-sonnet-4-6
-ANTI_TANGENT_MID_MODEL=anthropic:claude-haiku-4-5
+ANTI_TANGENT_MID_MODEL=anthropic:claude-haiku-4-5-20251001
 ANTI_TANGENT_POST_MODEL=anthropic:claude-opus-4-7
 
 # Optional tunables:

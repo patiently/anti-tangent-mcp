@@ -19,7 +19,7 @@ func TestLoad_Defaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "sk-ant-test", cfg.AnthropicKey)
 	assert.Equal(t, ModelRef{Provider: "anthropic", Model: "claude-sonnet-4-6"}, cfg.PreModel)
-	assert.Equal(t, ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5"}, cfg.MidModel)
+	assert.Equal(t, ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"}, cfg.MidModel)
 	assert.Equal(t, ModelRef{Provider: "anthropic", Model: "claude-opus-4-7"}, cfg.PostModel)
 	assert.Equal(t, 4*time.Hour, cfg.SessionTTL)
 	assert.Equal(t, 204800, cfg.MaxPayloadBytes)

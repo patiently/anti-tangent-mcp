@@ -275,7 +275,7 @@ If parsing fails, `verdict/` does **one** retry with an appended *"respond with 
 
 ```dotenv
 ANTI_TANGENT_PRE_MODEL=anthropic:claude-sonnet-4-6
-ANTI_TANGENT_MID_MODEL=anthropic:claude-haiku-4-5     # cheap, fast, called often
+ANTI_TANGENT_MID_MODEL=anthropic:claude-haiku-4-5-20251001     # cheap, fast, called often
 ANTI_TANGENT_POST_MODEL=anthropic:claude-opus-4-7     # most rigorous
 ```
 
@@ -333,7 +333,7 @@ GOOGLE_API_KEY=...
 
 # Per-hook model defaults (optional)
 ANTI_TANGENT_PRE_MODEL=anthropic:claude-sonnet-4-6
-ANTI_TANGENT_MID_MODEL=anthropic:claude-haiku-4-5
+ANTI_TANGENT_MID_MODEL=anthropic:claude-haiku-4-5-20251001
 ANTI_TANGENT_POST_MODEL=anthropic:claude-opus-4-7
 
 # Tunables (optional)

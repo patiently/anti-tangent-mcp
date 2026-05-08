@@ -57,7 +57,7 @@ func Load(env func(string) string) (Config, error) {
 
 	defaults := map[*ModelRef][2]string{
 		&cfg.PreModel:  {"ANTI_TANGENT_PRE_MODEL", "anthropic:claude-sonnet-4-6"},
-		&cfg.MidModel:  {"ANTI_TANGENT_MID_MODEL", "anthropic:claude-haiku-4-5"},
+		&cfg.MidModel:  {"ANTI_TANGENT_MID_MODEL", "anthropic:claude-haiku-4-5-20251001"},
 		&cfg.PostModel: {"ANTI_TANGENT_POST_MODEL", "anthropic:claude-opus-4-7"},
 	}
 	for ptr, spec := range defaults {
