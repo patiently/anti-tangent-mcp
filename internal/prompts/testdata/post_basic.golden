@@ -1,0 +1,44 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
+## Task spec
+
+Title: Add /healthz endpoint
+Goal: Liveness probe for the HTTP server
+
+Acceptance criteria:
+- Returns 200 OK with body "ok"
+- Responds in under 50ms p95
+
+Non-goals:
+- Database health (covered separately)
+
+Context:
+Service is a Gin app on port 8080.
+
+## What to evaluate
+
+This is the FINAL review. Walk every acceptance criterion explicitly. For each AC, either:
+
+- find a passing implementation and cite it (no finding required), OR
+- emit a finding whose criterion is the verbatim AC text.
+
+Then walk the non-goals: emit a finding for any accidental violation.
+
+If test evidence was provided, cross-check it against the AC list — does it actually exercise each AC?
+
+## Implementer's summary
+
+Added Gin handler at /healthz returning "ok".
+
+## Final implementation
+
+=== handlers/health.go ===
+package handlers
+func Health(c *gin.Context) { c.String(200, "ok") }
+
+
+## Test evidence
+
+PASS: TestHealthReturns200
+
+Respond with the verdict JSON only.

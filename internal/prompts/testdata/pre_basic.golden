@@ -1,0 +1,32 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
+## Task spec
+
+Title: Add /healthz endpoint
+Goal: Liveness probe for the HTTP server
+
+Acceptance criteria:
+- Returns 200 OK with body "ok"
+- Responds in under 50ms p95
+
+Non-goals:
+- Database health (covered separately)
+
+Context:
+Service is a Gin app on port 8080.
+
+## What to evaluate
+
+You are evaluating the SPEC ITSELF, not any code. The implementer has not started yet.
+
+Check three things:
+
+1. Structural completeness — is the goal clear? Are there acceptance criteria? Are non-goals declared where they help bound scope?
+2. Acceptance-criterion quality — is each AC testable, specific, and unambiguous? For any vague AC, propose a concrete rewrite in the suggestion.
+3. Implicit assumptions — list any assumptions a fresh implementer would have to make. Each becomes a finding so the spec author can either pin them down or explicitly mark them as implementer's discretion.
+
+Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
+
+Use criterion = "spec" for structural findings, or quote the verbatim AC text for AC-quality findings.
+
+Respond with the verdict JSON only.
