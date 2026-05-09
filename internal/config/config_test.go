@@ -79,3 +79,32 @@ func TestParseModelRef(t *testing.T) {
 	_, err = ParseModelRef("bad")
 	require.Error(t, err)
 }
+
+func TestLoad_PlanModel_DefaultsToPre(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY": "k",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, cfg.PreModel, cfg.PlanModel)
+}
+
+func TestLoad_PlanModel_InheritsPreOverride(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":      "k",
+		"ANTI_TANGENT_PRE_MODEL": "openai:gpt-5",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, ModelRef{Provider: "openai", Model: "gpt-5"}, cfg.PreModel)
+	assert.Equal(t, cfg.PreModel, cfg.PlanModel)
+}
+
+func TestLoad_PlanModel_ExplicitOverride(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":       "k",
+		"ANTI_TANGENT_PRE_MODEL":  "openai:gpt-5",
+		"ANTI_TANGENT_PLAN_MODEL": "google:gemini-2.5-pro",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, ModelRef{Provider: "openai", Model: "gpt-5"}, cfg.PreModel)
+	assert.Equal(t, ModelRef{Provider: "google", Model: "gemini-2.5-pro"}, cfg.PlanModel)
+}

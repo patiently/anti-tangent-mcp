@@ -17,6 +17,7 @@ type Config struct {
 	PreModel        ModelRef
 	MidModel        ModelRef
 	PostModel       ModelRef
+	PlanModel       ModelRef
 	SessionTTL      time.Duration
 	MaxPayloadBytes int
 	RequestTimeout  time.Duration
@@ -70,6 +71,17 @@ func Load(env func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("%s: %w", spec[0], err)
 		}
 		*ptr = mr
+	}
+
+	// PlanModel: optional override; defaults to whatever PreModel resolved to.
+	if v := env("ANTI_TANGENT_PLAN_MODEL"); v != "" {
+		mr, err := ParseModelRef(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_MODEL: %w", err)
+		}
+		cfg.PlanModel = mr
+	} else {
+		cfg.PlanModel = cfg.PreModel
 	}
 
 	if v := env("ANTI_TANGENT_SESSION_TTL"); v != "" {
