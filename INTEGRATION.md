@@ -312,16 +312,19 @@ If you orchestrate implementer subagents — superpowers' `subagent-driven-devel
 
 ### 5.1 Plan-handoff gate (REQUIRED before any dispatch)
 
-When you are about to execute a multi-task plan — whether you do the work yourself or dispatch each task to a subagent — **first run plan-handoff validation across every task in the plan, before any implementation work begins**.
+When you are about to execute a multi-task plan — whether you do the work yourself or dispatch each task to a subagent — **first call `validate_plan` once with the full plan markdown**, before any implementation work begins.
 
 **Procedure:**
 
-1. For each task in the plan that has the structured Goal/AC/Non-goals header (§3.1), call `validate_task_spec` with that task's fields. Capture each call's verdict + findings.
-2. **Surface the results to the user.** Show which tasks passed, which warned, and which failed. For any task with `critical` or `major` findings, propose plan revisions (or escalate to the human) before dispatch.
-3. **Only proceed when every task passes** (or every `warn` is explicitly justified). Treat `critical` findings as blocking the plan, not just the individual task.
-4. The session created by each handoff-time `validate_task_spec` call is **separate** from the session the implementer will later create at task-start. Implementers will call `validate_task_spec` again with the (possibly revised) task; sessions auto-expire on a 4h TTL, no cleanup needed.
+1. Call `validate_plan` once with the full plan markdown. Capture the `PlanResult`.
+2. **Surface results to the user.** Show `plan_verdict`, plan-level findings, and per-task verdicts/findings. For any task whose `suggested_header_block` is non-empty, show the proposed header and ask the human to adopt or revise.
+3. **Apply the proposed header blocks** (the controller may apply automatically when verdicts are `pass`/`warn` and the human approves; always defer to the human for `fail`).
+4. If anything material changed (headers added, ACs rewritten), call `validate_plan` again to confirm. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified).
+5. **Only proceed to dispatch when the plan-level gate passes.**
 
-**Why this matters:** catching a vague AC at handoff time costs one tool call (~$0.01); catching it after a subagent has spent 10 minutes implementing against a misread of the spec costs a wasted dispatch. The plan-handoff gate is the cheap insurance.
+The implementing subagent still calls `validate_task_spec` at task start in its own session — see §4. The plan-level gate (`validate_plan`) and the per-task implementer gate (`validate_task_spec`) are two different responsibilities at two different lifecycle moments.
+
+**Why this matters:** catching a vague AC at handoff time costs one `validate_plan` call (~$0.01–$0.02 for a typical plan); catching it after a subagent has spent 10 minutes implementing against a misread of the spec costs a wasted dispatch. The plan-handoff gate is the cheap insurance.
 
 **Skip this gate** when the plan only has one task (just go straight to per-task validation), or when the work item didn't come from a plan at all (see §1).
 
@@ -348,6 +351,15 @@ After the subagent reports DONE, you may want to require evidence that `validate
 Do NOT have the controller call `validate_completion` itself after the subagent reports DONE. The implementer's session is scoped to its own lifetime, and the post-hook the subagent already called IS the gate. Calling `validate_completion` again from the controller produces a `session_not_found` finding and adds noise.
 
 (This is different from §5.1, which is `validate_task_spec` against fresh sessions before any subagent has started — that's pre-implementation and lives in the controller's own context.)
+
+### 5.5 `validate_plan` vs `validate_task_spec` — when to use which
+
+| Tool | Caller | Lifecycle moment | Returns |
+|---|---|---|---|
+| `validate_plan` | Controller | Once, before any dispatch | Plan-wide + per-task analysis with ready-to-paste header blocks. Stateless. |
+| `validate_task_spec` | Implementing subagent | Once at task start, after dispatch | Per-task structural/quality review. **Creates a session** that the implementer threads through `check_progress` and `validate_completion`. |
+
+The two tools' analyses overlap intentionally: the plan gate catches plan-wide and per-task issues at handoff; the implementer gate catches anything that changed between handoff and dispatch (e.g. another agent edited the plan in the meantime) and produces the session that the rest of the implementer's lifecycle uses.
 
 ---
 
@@ -378,7 +390,7 @@ Two defenses: the implementer-prompt clause (§4.2) marks post REQUIRED, and the
 No — the reviewer LLM reasons over text, not execution. Use mid-checks for drift detection (scope creep, untouched ACs, unaddressed prior findings), not for debugging. Run tests separately.
 
 **Cost / latency overhead.**
-Roughly 1–2 s and $0.001–$0.02 per call, depending on payload size and model choice. Two mandatory implementer calls per task minimum (pre + post), plus one handoff-gate call per task at the controller (§5.1). Use a cheap-fast model for mid-checks and a stronger model for handoff/post.
+Roughly 1–2 s and $0.001–$0.02 per call, depending on payload size and model choice. One mandatory `validate_plan` call per plan-handoff, and two mandatory implementer calls per task minimum (pre + post). Use a cheap-fast model for mid-checks and a stronger model for handoff/post.
 
 **Should I use this for ad-hoc code changes outside a plan?**
 No. The protocol only fires for tasks with the structured Goal/AC/Non-goals header — see §1 ("When the protocol applies"). Ad-hoc edits, debugging help, code review, and brainstorming all skip the protocol.

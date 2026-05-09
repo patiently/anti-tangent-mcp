@@ -52,13 +52,14 @@ ANTI_TANGENT_LOG_LEVEL=info
 }
 ```
 
-## The 3 tools
+## The 4 tools
 
+- `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings.
 - `validate_task_spec` — call once before coding. Returns findings on missing goals, weak acceptance criteria, unstated assumptions. Returns a `session_id` you thread through the next two calls.
 - `check_progress` — call at checkpoints during implementation. Catches scope drift, untouched ACs, and unaddressed prior findings.
 - `validate_completion` — call before claiming done. Walks every AC and non-goal explicitly.
 
-All return the same envelope:
+The latter three return the same envelope; `validate_plan` returns a richer `PlanResult` with per-task analysis (see [INTEGRATION.md](INTEGRATION.md) §5.5):
 
 ```json
 {
