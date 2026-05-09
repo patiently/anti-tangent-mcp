@@ -39,6 +39,7 @@ func main() {
 		"pre_model", cfg.PreModel.String(),
 		"mid_model", cfg.MidModel.String(),
 		"post_model", cfg.PostModel.String(),
+		"plan_model", cfg.PlanModel.String(),
 		"session_ttl", cfg.SessionTTL.String())
 
 	if err := providers.ValidateModel(cfg.PreModel); err != nil {
@@ -49,6 +50,9 @@ func main() {
 	}
 	if err := providers.ValidateModel(cfg.PostModel); err != nil {
 		fail(logger, "post model invalid", err)
+	}
+	if err := providers.ValidateModel(cfg.PlanModel); err != nil {
+		fail(logger, "plan model invalid", err)
 	}
 
 	registry := providers.Registry{}
