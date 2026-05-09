@@ -10,6 +10,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
@@ -304,6 +305,21 @@ type ValidateCompletionArgs struct {
 	ModelOverride string    `json:"model_override,omitempty"`
 }
 
+// ValidatePlanArgs is the input schema for the plan-level reviewer.
+type ValidatePlanArgs struct {
+	PlanText      string `json:"plan_text"      jsonschema:"required"`
+	ModelOverride string `json:"model_override,omitempty"`
+}
+
+func validatePlanTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name: "validate_plan",
+		Description: "Validate an implementation plan as a whole BEFORE dispatching subagents to implement individual tasks. " +
+			"Returns per-task findings and ready-to-paste structured headers (Goal / Acceptance criteria / Non-goals / Context) for tasks that lack them. " +
+			"Call this once at plan-handoff time; the per-task `validate_task_spec` is still called by each implementing subagent at task start.",
+	}
+}
+
 func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolRequest, args ValidateCompletionArgs) (*mcp.CallToolResult, Envelope, error) {
 	if args.SessionID == "" || args.Summary == "" {
 		return nil, Envelope{}, errors.New("session_id and summary are required")
@@ -349,4 +365,117 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		ReviewMS:   ms,
 	}
 	return envelopeResult(env)
+}
+
+func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, args ValidatePlanArgs) (*mcp.CallToolResult, verdict.PlanResult, error) {
+	if args.PlanText == "" {
+		return nil, verdict.PlanResult{}, errors.New("plan_text is required")
+	}
+	if size := len(args.PlanText); size > h.deps.Cfg.MaxPayloadBytes {
+		return planEnvelopeResult(tooLargePlanResult(size, h.deps.Cfg.MaxPayloadBytes), h.deps.Cfg.PlanModel.String(), 0)
+	}
+	tasks, _ := planparser.SplitTasks(args.PlanText)
+	if len(tasks) == 0 {
+		return planEnvelopeResult(noHeadingsPlanResult(), h.deps.Cfg.PlanModel.String(), 0)
+	}
+
+	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PlanModel)
+	if err != nil {
+		return nil, verdict.PlanResult{}, err
+	}
+
+	rendered, err := prompts.RenderPlan(prompts.PlanInput{PlanText: args.PlanText})
+	if err != nil {
+		return nil, verdict.PlanResult{}, fmt.Errorf("render plan prompt: %w", err)
+	}
+
+	pr, modelUsed, ms, err := h.reviewPlan(ctx, model, rendered)
+	if err != nil {
+		return nil, verdict.PlanResult{}, err
+	}
+	return planEnvelopeResult(pr, modelUsed, ms)
+}
+
+// reviewPlan mirrors review() for plan-level analysis: one provider call,
+// one parse, retry-once on malformed JSON.
+func (h *handlers) reviewPlan(ctx context.Context, model config.ModelRef, p prompts.Output) (verdict.PlanResult, string, int64, error) {
+	rv, err := h.deps.Reviews.Get(model.Provider)
+	if err != nil {
+		return verdict.PlanResult{}, "", 0, err
+	}
+	start := time.Now()
+	req := providers.Request{
+		Model:      model.Model,
+		System:     p.System,
+		User:       p.User,
+		MaxTokens:  4096,
+		JSONSchema: verdict.PlanSchema(),
+	}
+	resp, err := rv.Review(ctx, req)
+	if err != nil {
+		return verdict.PlanResult{}, "", 0, err
+	}
+	r, err := verdict.ParsePlan(resp.RawJSON)
+	if err != nil {
+		// One retry with explicit reminder.
+		req.User = p.User + "\n\n" + verdict.RetryHint()
+		resp, err = rv.Review(ctx, req)
+		if err != nil {
+			return verdict.PlanResult{}, "", 0, err
+		}
+		r, err = verdict.ParsePlan(resp.RawJSON)
+		if err != nil {
+			return verdict.PlanResult{}, "", 0, fmt.Errorf("plan provider response failed schema after retry: %w", err)
+		}
+	}
+	modelUsed := model.Provider + ":" + resp.Model
+	if resp.Model == "" {
+		modelUsed = model.String()
+	}
+	return r, modelUsed, time.Since(start).Milliseconds(), nil
+}
+
+func noHeadingsPlanResult() verdict.PlanResult {
+	return verdict.PlanResult{
+		PlanVerdict: verdict.VerdictFail,
+		PlanFindings: []verdict.Finding{{
+			Severity:   verdict.SeverityCritical,
+			Category:   verdict.CategoryOther,
+			Criterion:  "structure",
+			Evidence:   "no `### Task N:` headings detected",
+			Suggestion: "use `### Task N: Title` for each task; this tool expects numbered tasks",
+		}},
+		Tasks:      []verdict.PlanTaskResult{},
+		NextAction: "Add `### Task N: Title` headings for each task and re-run validate_plan.",
+	}
+}
+
+func tooLargePlanResult(size, limit int) verdict.PlanResult {
+	return verdict.PlanResult{
+		PlanVerdict: verdict.VerdictFail,
+		PlanFindings: []verdict.Finding{{
+			Severity:   verdict.SeverityMajor,
+			Category:   verdict.CategoryTooLarge,
+			Criterion:  "payload",
+			Evidence:   fmt.Sprintf("plan_text %d bytes exceeds cap %d", size, limit),
+			Suggestion: "Split the plan into smaller chunks or pass a unified diff.",
+		}},
+		Tasks:      []verdict.PlanTaskResult{},
+		NextAction: "Reduce plan_text size and retry.",
+	}
+}
+
+// planEnvelopeResult marshals the PlanResult into a CallToolResult (mirrors envelopeResult).
+func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
+	body, err := json.MarshalIndent(struct {
+		verdict.PlanResult
+		ModelUsed string `json:"model_used"`
+		ReviewMS  int64  `json:"review_ms"`
+	}{pr, modelUsed, ms}, "", "  ")
+	if err != nil {
+		return nil, verdict.PlanResult{}, err
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
+	}, pr, nil
 }

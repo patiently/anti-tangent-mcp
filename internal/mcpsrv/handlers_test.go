@@ -13,16 +13,19 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
+	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
 type fakeReviewer struct {
-	name string
-	resp providers.Response
-	err  error
+	name  string
+	resp  providers.Response
+	err   error
+	Calls int
 }
 
 func (f *fakeReviewer) Name() string { return f.name }
 func (f *fakeReviewer) Review(ctx context.Context, _ providers.Request) (providers.Response, error) {
+	f.Calls++
 	if f.err != nil {
 		return providers.Response{}, f.err
 	}
@@ -188,4 +191,70 @@ func TestValidateCompletion_UnknownSession(t *testing.T) {
 	assert.Equal(t, "fail", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, "session_not_found", string(env.Findings[0].Category))
+}
+
+func planPassResp() providers.Response {
+	return providers.Response{
+		RawJSON:      []byte(`{"plan_verdict":"pass","plan_findings":[],"tasks":[{"task_index":0,"task_title":"T1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"go"}`),
+		Model:        "gpt-5",
+		InputTokens:  3,
+		OutputTokens: 2,
+	}
+}
+
+func TestValidatePlan_HappyPath(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	plan := "# Plan\n\n### Task 1: First\n\nSome body.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+	require.Len(t, pr.Tasks, 1)
+	assert.Equal(t, "T1", pr.Tasks[0].TaskTitle)
+}
+
+func TestValidatePlan_NoTaskHeadings(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: "Not a plan, no headings."})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
+	require.Len(t, pr.PlanFindings, 1)
+	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
+	assert.Equal(t, 0, rv.Calls, "no provider call should be made")
+}
+
+func TestValidatePlan_PayloadTooLarge(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
+	d := newDeps(t, rv)
+	d.Cfg.MaxPayloadBytes = 10
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: "this plan text is far too large for the configured cap of 10 bytes; it should be rejected"})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
+	require.Len(t, pr.PlanFindings, 1)
+	assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
+	assert.Equal(t, 0, rv.Calls)
+}
+
+func TestValidatePlan_MissingPlanText(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: ""})
+	require.Error(t, err)
 }

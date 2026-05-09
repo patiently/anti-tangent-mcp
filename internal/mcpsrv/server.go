@@ -33,6 +33,7 @@ func New(d Deps) *mcp.Server {
 	mcp.AddTool(srv, validateTaskSpecTool(), h.ValidateTaskSpec)
 	mcp.AddTool(srv, checkProgressTool(), h.CheckProgress)
 	mcp.AddTool(srv, validateCompletionTool(), h.ValidateCompletion)
+	mcp.AddTool(srv, validatePlanTool(), h.ValidatePlan)
 
 	return srv
 }
