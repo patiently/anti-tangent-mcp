@@ -49,3 +49,81 @@ func TestPlanSchema_DefensiveCopy(t *testing.T) {
 	a[0] = 'X'
 	assert.NotEqual(t, a[0], b[0])
 }
+
+func TestParsePlan_Valid(t *testing.T) {
+	in := []byte(`{
+		"plan_verdict":"pass",
+		"plan_findings":[],
+		"tasks":[
+			{"task_index":0,"task_title":"T1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}
+		],
+		"next_action":"go"
+	}`)
+	r, err := ParsePlan(in)
+	require.NoError(t, err)
+	assert.Equal(t, VerdictPass, r.PlanVerdict)
+	require.Len(t, r.Tasks, 1)
+	assert.Equal(t, "T1", r.Tasks[0].TaskTitle)
+}
+
+func TestParsePlan_Malformed(t *testing.T) {
+	_, err := ParsePlan([]byte(`{not json`))
+	require.Error(t, err)
+}
+
+func TestParsePlan_InvalidPlanVerdict(t *testing.T) {
+	in := []byte(`{"plan_verdict":"maybe","plan_findings":[],"tasks":[],"next_action":"x"}`)
+	_, err := ParsePlan(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "plan_verdict")
+}
+
+func TestParsePlan_InvalidTaskVerdict(t *testing.T) {
+	in := []byte(`{
+		"plan_verdict":"pass",
+		"plan_findings":[],
+		"tasks":[{"task_index":0,"task_title":"T","verdict":"meh","findings":[],"suggested_header_block":"","suggested_header_reason":""}],
+		"next_action":"x"
+	}`)
+	_, err := ParsePlan(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "task[0]")
+}
+
+func TestParsePlan_InvalidFindingSeverity(t *testing.T) {
+	in := []byte(`{
+		"plan_verdict":"warn",
+		"plan_findings":[{"severity":"oops","category":"other","criterion":"c","evidence":"e","suggestion":"s"}],
+		"tasks":[],
+		"next_action":"x"
+	}`)
+	_, err := ParsePlan(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "severity")
+}
+
+func TestParsePlan_InvalidFindingCategory(t *testing.T) {
+	in := []byte(`{
+		"plan_verdict":"warn",
+		"plan_findings":[{"severity":"major","category":"made_up","criterion":"c","evidence":"e","suggestion":"s"}],
+		"tasks":[],
+		"next_action":"x"
+	}`)
+	_, err := ParsePlan(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "category")
+}
+
+func TestParsePlan_RejectsExtraJSON(t *testing.T) {
+	in := []byte(`{"plan_verdict":"pass","plan_findings":[],"tasks":[],"next_action":"a"}{"plan_verdict":"fail","plan_findings":[],"tasks":[],"next_action":"b"}`)
+	_, err := ParsePlan(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "extra JSON")
+}
+
+func TestParsePlan_StripsCodeFences(t *testing.T) {
+	in := []byte("```json\n{\"plan_verdict\":\"pass\",\"plan_findings\":[],\"tasks\":[],\"next_action\":\"ok\"}\n```")
+	r, err := ParsePlan(in)
+	require.NoError(t, err)
+	assert.Equal(t, VerdictPass, r.PlanVerdict)
+}
