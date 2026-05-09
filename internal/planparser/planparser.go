@@ -67,7 +67,6 @@ func SplitTasks(planText string) ([]RawTask, string) {
 func filterFencedMatches(planText string, matches [][]int) [][]int {
 	lines := strings.Split(planText, "\n")
 	inFence := false
-	lineStart := 0
 	lineFences := make(map[int]bool) // lineNumber -> isInsideFence
 
 	// Build a map of which lines are inside fences.
@@ -76,7 +75,6 @@ func filterFencedMatches(planText string, matches [][]int) [][]int {
 			inFence = !inFence
 		}
 		lineFences[i] = inFence
-		lineStart += len(line) + 1 // +1 for the newline
 	}
 
 	// Filter matches: keep only those on lines outside fences.
