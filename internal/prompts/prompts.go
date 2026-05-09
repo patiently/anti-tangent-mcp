@@ -43,6 +43,10 @@ type PostInput struct {
 	TestEvidence string
 }
 
+type PlanInput struct {
+	PlanText string
+}
+
 const systemPrompt = `You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.`
 
 func RenderPre(in PreInput) (Output, error) {
@@ -63,6 +67,14 @@ func RenderMid(in MidInput) (Output, error) {
 
 func RenderPost(in PostInput) (Output, error) {
 	body, err := render("post.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: systemPrompt, User: body}, nil
+}
+
+func RenderPlan(in PlanInput) (Output, error) {
+	body, err := render("plan.tmpl", in)
 	if err != nil {
 		return Output{}, err
 	}

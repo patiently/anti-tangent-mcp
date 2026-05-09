@@ -80,3 +80,26 @@ func TestRenderPost(t *testing.T) {
 	require.NoError(t, err)
 	golden(t, "post_basic", out.System+"\n---USER---\n"+out.User)
 }
+
+func TestRenderPlan(t *testing.T) {
+	plan := `# Sample Plan
+
+### Task 1: Bootstrap
+
+Files:
+- main.go
+
+Step 1: write main.
+
+### Task 2: Add tests
+
+**Goal:** Cover the bootstrap with a smoke test.
+
+**Acceptance criteria:**
+- main_test.go exists
+- go test ./... passes
+`
+	out, err := RenderPlan(PlanInput{PlanText: plan})
+	require.NoError(t, err)
+	golden(t, "plan_basic", out.System+"\n---USER---\n"+out.User)
+}
