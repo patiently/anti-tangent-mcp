@@ -16,7 +16,7 @@
 
 ## File map
 
-```
+```text
 anti-tangent-mcp/
 ├── internal/
 │   ├── verdict/

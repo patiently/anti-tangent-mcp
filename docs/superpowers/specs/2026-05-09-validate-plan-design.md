@@ -116,7 +116,7 @@ The Finding shape (`severity`, `category`, `criterion`, `evidence`, `suggestion`
 - `HasStructuredHeader` is determined by checking for both `**Goal:**` and `**Acceptance criteria:**` substrings in the body. Used for telemetry/logging only; not sent to the reviewer.
 
 **Edge cases:**
-- **No `### Task N:` headings detected** → handler short-circuits without a provider call: returns `PlanResult{plan_verdict: "fail", plan_findings: [{category: "other", criterion: "structure", evidence: "no `### Task N:` headings detected", suggestion: "use `### Task N: Title` for each task; this tool expects numbered tasks"}], tasks: []}`.
+- **No `### Task N:` headings detected** → handler short-circuits without a provider call. Returned shape (with `plan_verdict: "fail"`): a single `plan_findings` entry of `category: "other"`, `criterion: "structure"`, `evidence: "no \`### Task N:\` headings detected"`, `suggestion: "use \`### Task N: Title\` for each task; this tool expects numbered tasks"`, plus an empty `tasks` array.
 - **Headings out of order** (Task 1 → Task 3 → Task 2): preserved as-is in `tasks[]`; the reviewer is instructed to flag in `plan_findings` if it judges this a problem.
 - **Plan smaller than one paragraph + no headings**: same as the no-headings case.
 - **Heading without a number** (`### Task: Foo`): not matched by the regex; the parser ignores it. The reviewer sees the preamble (which contains it) and can flag it.

@@ -29,6 +29,7 @@ GOOGLE_API_KEY=...
 ANTI_TANGENT_PRE_MODEL=anthropic:claude-sonnet-4-6
 ANTI_TANGENT_MID_MODEL=anthropic:claude-haiku-4-5-20251001
 ANTI_TANGENT_POST_MODEL=anthropic:claude-opus-4-7
+ANTI_TANGENT_PLAN_MODEL=anthropic:claude-sonnet-4-6   # validate_plan; defaults to ANTI_TANGENT_PRE_MODEL
 
 # Optional tunables:
 ANTI_TANGENT_SESSION_TTL=4h

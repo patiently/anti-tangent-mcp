@@ -12,4 +12,5 @@ RUN CGO_ENABLED=0 go build \
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/anti-tangent-mcp /anti-tangent-mcp
+USER 65532:65532
 ENTRYPOINT ["/anti-tangent-mcp"]
