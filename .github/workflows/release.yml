@@ -125,7 +125,7 @@ jobs:
 
       - name: Write release notes
         run: |
-          cat > .release-notes.md <<'EOF_NOTES'
+          cat > "${RUNNER_TEMP}/release-notes.md" <<'EOF_NOTES'
           ${{ needs.version.outputs.release_notes }}
           EOF_NOTES
 
@@ -133,7 +133,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
-          args: release --clean --release-notes=.release-notes.md
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
