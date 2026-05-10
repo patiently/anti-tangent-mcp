@@ -1,0 +1,29 @@
+## Task spec
+
+Title: {{.Spec.Title}}
+Goal: {{.Spec.Goal}}
+
+Acceptance criteria:
+{{range .Spec.AcceptanceCriteria}}- {{.}}
+{{end}}
+Non-goals:
+{{range .Spec.NonGoals}}- {{.}}
+{{end}}{{if .Spec.Context}}
+Context:
+{{.Spec.Context}}
+{{end}}
+## What to evaluate
+
+You are evaluating the SPEC ITSELF, not any code. The implementer has not started yet.
+
+Check three things:
+
+1. Structural completeness — is the goal clear? Are there acceptance criteria? Are non-goals declared where they help bound scope?
+2. Acceptance-criterion quality — is each AC testable, specific, and unambiguous? For any vague AC, propose a concrete rewrite in the suggestion.
+3. Implicit assumptions — list any assumptions a fresh implementer would have to make. Each becomes a finding so the spec author can either pin them down or explicitly mark them as implementer's discretion.
+
+Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
+
+Use criterion = "spec" for structural findings, or quote the verbatim AC text for AC-quality findings.
+
+Respond with the verdict JSON only.

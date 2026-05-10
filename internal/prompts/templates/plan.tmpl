@@ -1,0 +1,38 @@
+## Plan under review
+
+{{.PlanText}}
+
+## What to evaluate
+
+You are reviewing an entire implementation plan BEFORE any tasks are dispatched
+to implementing subagents. Your job is twofold for EACH task:
+
+1. **Critique what's there.** If a task already has a Goal / Acceptance
+   criteria / Non-goals / Context block, evaluate the same way
+   `validate_task_spec` does: structural completeness, AC quality (testable /
+   specific / unambiguous), unstated assumptions. Emit findings.
+
+2. **Generate what's missing.** If a task does NOT have a structured
+   Goal/AC/Non-goals/Context header, propose one. Synthesize the Goal from
+   the task title and any "Files:" / "Steps:" content already present.
+   Synthesize Acceptance criteria from observable outcomes implied by the
+   steps. Suggest Non-goals only when steps imply scope boundaries; leave
+   empty otherwise. Suggest Context only when there's clear environmental
+   info (paths, deps) the implementer needs. Put the proposed markdown
+   verbatim in suggested_header_block.
+
+3. **Plan-wide review.** In addition to per-task findings, review the plan
+   as a whole: are tasks out of order, are there duplicate titles, is there
+   an architecture/intro section if one would help? Emit those as
+   plan_findings (separate from any task).
+
+For tasks that already have a perfectly fine structured header, leave
+suggested_header_block empty and emit findings only if quality issues exist.
+
+Severity: critical = unimplementable as written; major = implementer would
+still misimplement; minor = nit.
+
+## Output
+
+Respond with a JSON object matching the provided schema. Do not include
+prose outside the JSON.

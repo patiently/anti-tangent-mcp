@@ -1,0 +1,19 @@
+# Build artifacts
+/anti-tangent-mcp
+/dist/
+*.exe
+
+# Test outputs
+*.test
+*.out
+coverage.*
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Local env
+.env
+.env.local
+

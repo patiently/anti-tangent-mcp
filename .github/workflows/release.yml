@@ -1,0 +1,170 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  version:
+    name: Calculate Version
+    runs-on: ubuntu-latest
+    needs: ci
+    outputs:
+      new_version: ${{ steps.version.outputs.new_version }}
+      release_notes: ${{ steps.notes.outputs.notes }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Calculate new version
+        id: version
+        run: |
+          CURRENT=$(cat VERSION)
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          MSG=$(git log -1 --pretty=%B)
+
+          if [[ "$MSG" == *"[major]"* ]]; then
+            MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0
+          elif [[ "$MSG" == *"[minor]"* ]]; then
+            MINOR=$((MINOR + 1)); PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEW="${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_version=$NEW" >> $GITHUB_OUTPUT
+          echo "Bumping: $CURRENT -> $NEW"
+
+      - name: Validate changelog
+        run: |
+          NEW="${{ steps.version.outputs.new_version }}"
+          if ! grep -q "^## \[$NEW\]" CHANGELOG.md; then
+            echo "ERROR: CHANGELOG.md must contain '## [$NEW]'"
+            exit 1
+          fi
+
+      - name: Extract release notes
+        id: notes
+        run: |
+          NEW="${{ steps.version.outputs.new_version }}"
+          NOTES=$(awk "/^## \\[${NEW}\\]/{found=1; next} /^## \\[[0-9]+\\.[0-9]+\\.[0-9]+\\]/{if(found) exit} found{print}" CHANGELOG.md)
+          {
+            echo "notes<<EOF_NOTES"
+            echo "$NOTES"
+            echo "EOF_NOTES"
+          } >> $GITHUB_OUTPUT
+
+  tag:
+    name: Bump VERSION and tag
+    runs-on: ubuntu-latest
+    needs: version
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update VERSION file
+        run: |
+          echo "${{ needs.version.outputs.new_version }}" > VERSION
+          if git diff --quiet VERSION; then
+            echo "VERSION already at ${{ needs.version.outputs.new_version }}; skipping commit"
+          else
+            git add VERSION
+            git commit -m "chore: release v${{ needs.version.outputs.new_version }} [skip ci]"
+            git push
+          fi
+
+      - name: Create and push tag
+        run: |
+          TAG="v${{ needs.version.outputs.new_version }}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q "${TAG}"; then
+            echo "Tag ${TAG} already exists on origin; skipping"
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
+          fi
+
+  goreleaser:
+    name: GoReleaser
+    runs-on: ubuntu-latest
+    needs: [version, tag]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout at tag
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: v${{ needs.version.outputs.new_version }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Write release notes
+        run: |
+          cat > .release-notes.md <<'EOF_NOTES'
+          ${{ needs.version.outputs.release_notes }}
+          EOF_NOTES
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean --release-notes=.release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    name: Build and push Docker image
+    runs-on: ubuntu-latest
+    needs: [version, tag, goreleaser]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout at tag
+        uses: actions/checkout@v6
+        with:
+          ref: v${{ needs.version.outputs.new_version }}
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          build-args: |
+            VERSION=${{ needs.version.outputs.new_version }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/anti-tangent-mcp:${{ needs.version.outputs.new_version }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/anti-tangent-mcp:latest
