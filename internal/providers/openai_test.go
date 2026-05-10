@@ -23,6 +23,8 @@ func TestOpenAI_Review_OK(t *testing.T) {
 		var req map[string]any
 		require.NoError(t, json.Unmarshal(body, &req))
 		assert.Equal(t, "gpt-5", req["model"])
+		assert.Contains(t, req, "max_completion_tokens")
+		assert.EqualValues(t, 1024, req["max_completion_tokens"])
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{

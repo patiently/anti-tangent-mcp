@@ -12,7 +12,7 @@
 
 ## File map
 
-```
+```text
 anti-tangent-mcp/
 ├── INTEGRATION.md       <-- new, this plan creates it
 ├── README.md            <-- existing; gets one new "## Integration" linking line

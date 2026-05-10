@@ -40,7 +40,7 @@ goreleaser release --snapshot --clean --skip=publish
 
 ## Architecture
 
-```
+```text
 cmd/anti-tangent-mcp/main.go    # entry: load config, build deps, run MCP server
 internal/
   config/      env-driven Config + ModelRef parsing/validation

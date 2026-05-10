@@ -61,7 +61,11 @@ func TestIntegration_FullLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	go func() { _ = srv.Run(ctx, st) }()
+	go func() {
+		if err := srv.Run(ctx, st); err != nil && ctx.Err() == nil {
+			t.Errorf("srv.Run: %v", err)
+		}
+	}()
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	cs, err := client.Connect(ctx, ct, nil)
@@ -130,7 +134,11 @@ func TestIntegration_ValidatePlan(t *testing.T) {
 	st, ct := mcp.NewInMemoryTransports()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	go func() { _ = srv.Run(ctx, st) }()
+	go func() {
+		if err := srv.Run(ctx, st); err != nil && ctx.Err() == nil {
+			t.Errorf("srv.Run: %v", err)
+		}
+	}()
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	cs, err := client.Connect(ctx, ct, nil)
