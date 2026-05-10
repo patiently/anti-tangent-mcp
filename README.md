@@ -64,10 +64,10 @@ ANTI_TANGENT_LOG_LEVEL=info
       "command": ["/absolute/path/to/anti-tangent-mcp"],
       "environment": {
         "GOOGLE_API_KEY": "...",
-        "ANTI_TANGENT_PRE_MODEL":  "google:gemini-3-pro",
-        "ANTI_TANGENT_MID_MODEL":  "google:gemini-3.1-flash",
-        "ANTI_TANGENT_POST_MODEL": "google:gemini-3-pro",
-        "ANTI_TANGENT_PLAN_MODEL": "google:gemini-3-pro"
+        "ANTI_TANGENT_PRE_MODEL":  "google:gemini-3.1-pro-preview",
+        "ANTI_TANGENT_MID_MODEL":  "google:gemini-3.1-flash-lite",
+        "ANTI_TANGENT_POST_MODEL": "google:gemini-3.1-pro-preview",
+        "ANTI_TANGENT_PLAN_MODEL": "google:gemini-3.1-pro-preview"
       }
     }
   }
@@ -90,8 +90,8 @@ Set `ANTI_TANGENT_*_MODEL` (or pass `model` per call) using `provider:model-id`.
 | `openai` | `gpt-5-nano` | fast |
 | `openai` | `gpt-5.5-2026-04-23` | heavy |
 | `openai` | `gpt-5.4-mini-2026-03-17` | balanced |
-| `google` | `gemini-3-pro` | heavy |
-| `google` | `gemini-3.1-flash` | fast |
+| `google` | `gemini-3.1-pro-preview` | heavy |
+| `google` | `gemini-3.1-flash-lite` | fast |
 | `google` | `gemini-2.5-pro` | heavy |
 | `google` | `gemini-2.5-flash` | fast |
 

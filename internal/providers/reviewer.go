@@ -44,10 +44,10 @@ var allowlist = map[string]map[string]bool{
 		"gpt-5.4-mini-2026-03-17": true,
 	},
 	"google": {
-		"gemini-2.5-pro":   true,
-		"gemini-2.5-flash": true,
-		"gemini-3-pro":     true,
-		"gemini-3.1-flash": true,
+		"gemini-2.5-pro":          true,
+		"gemini-2.5-flash":        true,
+		"gemini-3.1-pro-preview":  true,
+		"gemini-3.1-flash-lite":   true,
 	},
 }
 

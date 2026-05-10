@@ -83,10 +83,10 @@ opencode (`~/.config/opencode/opencode.json`):
       "environment": {
         "ANTHROPIC_API_KEY": "sk-ant-...",
         "GOOGLE_API_KEY":    "...",
-        "ANTI_TANGENT_PRE_MODEL":  "google:gemini-3-pro",
-        "ANTI_TANGENT_MID_MODEL":  "google:gemini-3.1-flash",
-        "ANTI_TANGENT_POST_MODEL": "google:gemini-3-pro",
-        "ANTI_TANGENT_PLAN_MODEL": "google:gemini-3-pro"
+        "ANTI_TANGENT_PRE_MODEL":  "google:gemini-3.1-pro-preview",
+        "ANTI_TANGENT_MID_MODEL":  "google:gemini-3.1-flash-lite",
+        "ANTI_TANGENT_POST_MODEL": "google:gemini-3.1-pro-preview",
+        "ANTI_TANGENT_PLAN_MODEL": "google:gemini-3.1-pro-preview"
       }
     }
   }
@@ -113,8 +113,8 @@ The reviewer LLM should not be the same model as the implementer. Same model + s
 
 | If your implementer is… | Set `ANTI_TANGENT_*_MODEL` to… |
 |---|---|
-| Anthropic Claude (Sonnet/Opus) | `openai:gpt-5` and/or `google:gemini-3-pro` |
-| OpenAI GPT-5 family | `anthropic:claude-sonnet-4-6` and/or `google:gemini-3-pro` |
+| Anthropic Claude (Sonnet/Opus) | `openai:gpt-5` and/or `google:gemini-3.1-pro-preview` |
+| OpenAI GPT-5 family | `anthropic:claude-sonnet-4-6` and/or `google:gemini-3.1-pro-preview` |
 | Google Gemini | `anthropic:claude-sonnet-4-6` and/or `openai:gpt-5` |
 
 The mid-hook (`check_progress`) is called more often, so use a cheaper fast model. The plan-level hook (`validate_plan`) reasons over the whole plan in one shot — give it a strong tier:
@@ -142,8 +142,8 @@ Use `provider:model-id`. The server validates against this allowlist at startup 
 | `openai` | `gpt-5-nano` | fast |
 | `openai` | `gpt-5.5-2026-04-23` | heavy |
 | `openai` | `gpt-5.4-mini-2026-03-17` | balanced |
-| `google` | `gemini-3-pro` | heavy |
-| `google` | `gemini-3.1-flash` | fast |
+| `google` | `gemini-3.1-pro-preview` | heavy |
+| `google` | `gemini-3.1-flash-lite` | fast |
 | `google` | `gemini-2.5-pro` | heavy |
 | `google` | `gemini-2.5-flash` | fast |
 
