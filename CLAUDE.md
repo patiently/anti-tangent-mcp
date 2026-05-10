@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (and other agents) when working with 
 
 ## Project Overview
 
-`anti-tangent-mcp` is an advisory MCP server (Go binary) that helps prevent implementing subagents from drifting away from their assigned tasks. It exposes three tools — `validate_task_spec`, `check_progress`, `validate_completion` — that send the task spec and code under review to a reviewer LLM and return structured findings.
+`anti-tangent-mcp` is an advisory MCP server (Go binary) that helps prevent implementing subagents from drifting away from their assigned tasks. It exposes four tools — a plan-level handoff gate (`validate_plan`) plus three per-task lifecycle hooks (`validate_task_spec`, `check_progress`, `validate_completion`) — that send the plan / task spec / code under review to a reviewer LLM and return structured findings.
 
 The reviewer LLM is intentionally a *different* model from the implementer, so reviews are not blind to the implementer's blind spots.
 

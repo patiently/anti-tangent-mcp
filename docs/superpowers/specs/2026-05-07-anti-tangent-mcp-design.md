@@ -476,7 +476,7 @@ The first release is `0.1.0`. The repo lands with:
 - `Dockerfile`
 - `CLAUDE.md` (see next section)
 
-Cutting `0.1.0` is just the first time `main` advances past the initial scaffold and triggers the release workflow.
+Cutting the first release (`0.1.0`) is a manual bootstrap step: merge the initial PR to `main`, then create and push the `v0.1.0` tag manually (`git tag v0.1.0 && git push origin v0.1.0`) — that triggers GoReleaser and the GHCR push for v0.1.0. After this bootstrap, subsequent releases are produced automatically by the `main`-driven release workflow (which bumps `VERSION` based on the merge-commit `[major]`/`[minor]` tag, validates `CHANGELOG.md`, tags, and runs GoReleaser + Docker).
 
 ## CLAUDE.md
 

@@ -34,7 +34,7 @@ The motivating gap: real-world plans (superpowers' `writing-plans` output, hone-
 
 ### Code layout
 
-```
+```text
 internal/
   mcpsrv/
     handlers.go           # add ValidatePlan handler + ValidatePlanArgs
@@ -129,7 +129,7 @@ The Finding shape (`severity`, `category`, `criterion`, `evidence`, `suggestion`
 
 The plan template (`prompts/templates/plan.tmpl`) shares the system prompt with the existing 3 templates. The user prompt:
 
-```
+```text
 ## Plan under review
 
 {{.PlanText}}
@@ -289,7 +289,7 @@ Tool list grows from 3 to 4. The "all return the same envelope" line gets a foot
 
 One new env var, default-inheriting from PRE:
 
-```
+```dotenv
 ANTI_TANGENT_PLAN_MODEL=<provider>:<model_id>   # default: same as ANTI_TANGENT_PRE_MODEL
 ```
 

@@ -21,8 +21,9 @@ type Deps struct {
 // main wires this from its own ldflags-injected version at startup.
 var Version = "dev"
 
-// New creates and returns a configured MCP server with all three tools
-// registered.
+// New creates and returns a configured MCP server with all four tools
+// registered: validate_task_spec, check_progress, validate_completion, and
+// validate_plan.
 func New(d Deps) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "anti-tangent-mcp",
