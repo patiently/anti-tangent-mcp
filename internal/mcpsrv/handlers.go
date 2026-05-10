@@ -67,7 +67,6 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		NonGoals:           args.NonGoals,
 		Context:            args.Context,
 	}
-	sess := h.deps.Sessions.Create(spec)
 
 	rendered, err := prompts.RenderPre(prompts.PreInput{Spec: spec})
 	if err != nil {
@@ -79,6 +78,9 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, err
 	}
 
+	// Create the session only after the review succeeds so failed reviews
+	// don't leave orphan sessions in the store waiting for TTL eviction.
+	sess := h.deps.Sessions.Create(spec)
 	h.deps.Sessions.SetPreFindings(sess.ID, result.Findings)
 
 	env := Envelope{
