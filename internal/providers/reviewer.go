@@ -46,6 +46,8 @@ var allowlist = map[string]map[string]bool{
 	"google": {
 		"gemini-2.5-pro":   true,
 		"gemini-2.5-flash": true,
+		"gemini-3-pro":     true,
+		"gemini-3.1-flash": true,
 	},
 }
 
