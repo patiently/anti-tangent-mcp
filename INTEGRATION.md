@@ -1,6 +1,6 @@
 # Integrating anti-tangent-mcp
 
-`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It reviews the task spec and the in-progress work at three lifecycle points (pre / mid / post). The reviewer LLM is intentionally a different model from the implementer, so reviews are not blind to the implementer's blind spots. See [`README.md`](README.md) for the tool surface and [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md) for the authoritative design.
+`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It exposes four tools: a plan-level handoff gate (`validate_plan`) and three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`). The reviewer LLM is intentionally a different model from the implementer, so reviews are not blind to the implementer's blind spots. See [`README.md`](README.md) for the tool surface and [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md) for the authoritative design.
 
 This document has three audiences:
 
@@ -87,19 +87,20 @@ The reviewer LLM should not be the same model as the implementer. Same model + s
 | OpenAI GPT-5 family | `anthropic:claude-sonnet-4-6` and/or `google:gemini-2.5-pro` |
 | Google Gemini | `anthropic:claude-sonnet-4-6` and/or `openai:gpt-5` |
 
-The mid-hook (`check_progress`) is called more often, so use a cheaper fast model:
+The mid-hook (`check_progress`) is called more often, so use a cheaper fast model. The plan-level hook (`validate_plan`) reasons over the whole plan in one shot — give it a strong tier:
 
 ```dotenv
 ANTI_TANGENT_PRE_MODEL=openai:gpt-5
 ANTI_TANGENT_MID_MODEL=openai:gpt-5-mini
 ANTI_TANGENT_POST_MODEL=openai:gpt-5
+ANTI_TANGENT_PLAN_MODEL=openai:gpt-5    # optional; defaults to ANTI_TANGENT_PRE_MODEL
 ```
 
-Or mix providers across hooks if you have multiple keys.
+`ANTI_TANGENT_PLAN_MODEL` falls back to `ANTI_TANGENT_PRE_MODEL` if unset, so single-tier users keep working without changes. Or mix providers across hooks if you have multiple keys.
 
 ### 2.5 Smoke test
 
-Launch your harness with debug logging on and confirm the three tools (`validate_task_spec`, `check_progress`, `validate_completion`) appear in the discovered tool catalog. If the server fails at startup, it prints the configuration error to stderr.
+Launch your harness with debug logging on and confirm all four tools — `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion` — appear in the discovered tool catalog. If the server fails at startup, it prints the configuration error to stderr.
 
 ---
 
