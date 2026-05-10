@@ -53,9 +53,12 @@ func TestParse_ValidJSON(t *testing.T) {
 }
 
 func TestParse_InvalidEnum(t *testing.T) {
-	in := []byte(`{"verdict":"maybe","findings":[],"next_action":""}`)
+	// Use a valid next_action so the test asserts specifically on the verdict
+	// error path, not the now-stricter next_action presence check.
+	in := []byte(`{"verdict":"maybe","findings":[],"next_action":"x"}`)
 	_, err := Parse(in)
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "verdict")
 }
 
 func TestParse_MalformedJSON(t *testing.T) {
