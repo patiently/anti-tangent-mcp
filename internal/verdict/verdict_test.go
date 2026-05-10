@@ -82,3 +82,17 @@ func TestRetryHint(t *testing.T) {
 	hint := RetryHint()
 	assert.Contains(t, hint, "JSON")
 }
+
+func TestParse_RejectsMissingNextAction(t *testing.T) {
+	in := []byte(`{"verdict":"pass","findings":[]}`)
+	_, err := Parse(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "next_action")
+}
+
+func TestParse_RejectsEmptyNextAction(t *testing.T) {
+	in := []byte(`{"verdict":"pass","findings":[],"next_action":""}`)
+	_, err := Parse(in)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "next_action")
+}

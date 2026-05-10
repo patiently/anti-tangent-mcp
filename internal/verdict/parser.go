@@ -26,6 +26,9 @@ func Parse(raw []byte) (Result, error) {
 	default:
 		return Result{}, fmt.Errorf("invalid verdict %q", r.Verdict)
 	}
+	if r.NextAction == "" {
+		return Result{}, fmt.Errorf("decode result: next_action is required")
+	}
 	for i, f := range r.Findings {
 		switch f.Severity {
 		case SeverityCritical, SeverityMajor, SeverityMinor:

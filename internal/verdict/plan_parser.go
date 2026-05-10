@@ -24,6 +24,9 @@ func ParsePlan(raw []byte) (PlanResult, error) {
 	if err := validatePlanVerdict(r.PlanVerdict, "plan_verdict"); err != nil {
 		return PlanResult{}, err
 	}
+	if r.NextAction == "" {
+		return PlanResult{}, fmt.Errorf("decode plan result: next_action is required")
+	}
 	for i, f := range r.PlanFindings {
 		if err := validateFinding(f, fmt.Sprintf("plan_findings[%d]", i)); err != nil {
 			return PlanResult{}, err
@@ -33,6 +36,12 @@ func ParsePlan(raw []byte) (PlanResult, error) {
 		prefix := fmt.Sprintf("task[%d]", i)
 		if err := validatePlanVerdict(t.Verdict, prefix+".verdict"); err != nil {
 			return PlanResult{}, err
+		}
+		if t.TaskIndex < 0 {
+			return PlanResult{}, fmt.Errorf("plan: %s.task_index must be >= 0, got %d", prefix, t.TaskIndex)
+		}
+		if t.TaskTitle == "" {
+			return PlanResult{}, fmt.Errorf("plan: %s.task_title is required", prefix)
 		}
 		for j, f := range t.Findings {
 			if err := validateFinding(f, fmt.Sprintf("%s.findings[%d]", prefix, j)); err != nil {
