@@ -88,8 +88,10 @@ Set `ANTI_TANGENT_*_MODEL` (or pass `model` per call) using `provider:model-id`.
 | `openai` | `gpt-5` | heavy |
 | `openai` | `gpt-5-mini` | balanced |
 | `openai` | `gpt-5-nano` | fast |
-| `openai` | `gpt-5.5-2026-04-23` | heavy |
-| `openai` | `gpt-5.4-mini-2026-03-17` | balanced |
+| `openai` | `gpt-5.5` | heavy (rolling snapshot) |
+| `openai` | `gpt-5.5-2026-04-23` | heavy (pinned) |
+| `openai` | `gpt-5.4-mini` | balanced (rolling snapshot) |
+| `openai` | `gpt-5.4-mini-2026-03-17` | balanced (pinned) |
 | `google` | `gemini-3.1-pro-preview` | heavy |
 | `google` | `gemini-3.1-flash-lite` | fast |
 | `google` | `gemini-2.5-pro` | heavy |
