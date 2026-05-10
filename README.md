@@ -53,6 +53,52 @@ ANTI_TANGENT_LOG_LEVEL=info
 }
 ```
 
+## Use with opencode (`~/.config/opencode/opencode.json`)
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "anti-tangent": {
+      "type": "local",
+      "command": ["/absolute/path/to/anti-tangent-mcp"],
+      "environment": {
+        "GOOGLE_API_KEY": "...",
+        "ANTI_TANGENT_PRE_MODEL":  "google:gemini-3.1-pro-preview",
+        "ANTI_TANGENT_MID_MODEL":  "google:gemini-3.1-flash-lite",
+        "ANTI_TANGENT_POST_MODEL": "google:gemini-3.1-pro-preview",
+        "ANTI_TANGENT_PLAN_MODEL": "google:gemini-3.1-pro-preview"
+      }
+    }
+  }
+}
+```
+
+opencode requires `command` as an array and uses `environment` (not `env`). The binary path must be absolute — `$PATH` is not consulted. Restart opencode after editing.
+
+## Supported reviewer models
+
+Set `ANTI_TANGENT_*_MODEL` (or pass `model` per call) using `provider:model-id`. The server validates against this allowlist at startup and rejects unknown IDs with a clear error.
+
+| Provider | Model id | Tier |
+|---|---|---|
+| `anthropic` | `claude-opus-4-7` | heavy |
+| `anthropic` | `claude-sonnet-4-6` | balanced |
+| `anthropic` | `claude-haiku-4-5-20251001` | fast |
+| `openai` | `gpt-5` | heavy |
+| `openai` | `gpt-5-mini` | balanced |
+| `openai` | `gpt-5-nano` | fast |
+| `openai` | `gpt-5.5` | heavy (rolling snapshot) |
+| `openai` | `gpt-5.5-2026-04-23` | heavy (pinned) |
+| `openai` | `gpt-5.4-mini` | balanced (rolling snapshot) |
+| `openai` | `gpt-5.4-mini-2026-03-17` | balanced (pinned) |
+| `google` | `gemini-3.1-pro-preview` | heavy |
+| `google` | `gemini-3.1-flash-lite` | fast |
+| `google` | `gemini-2.5-pro` | heavy |
+| `google` | `gemini-2.5-flash` | fast |
+
+Adding a new model is a one-line change in [`internal/providers/reviewer.go`](internal/providers/reviewer.go) — open a PR.
+
 ## The 4 tools
 
 - `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings.

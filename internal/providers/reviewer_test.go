@@ -17,11 +17,15 @@ func TestValidateModel_KnownAnthropic(t *testing.T) {
 
 func TestValidateModel_KnownOpenAI(t *testing.T) {
 	require.NoError(t, ValidateModel(config.ModelRef{Provider: "openai", Model: "gpt-5"}))
+	require.NoError(t, ValidateModel(config.ModelRef{Provider: "openai", Model: "gpt-5.5"}))
+	require.NoError(t, ValidateModel(config.ModelRef{Provider: "openai", Model: "gpt-5.4-mini"}))
 }
 
 func TestValidateModel_KnownGoogle(t *testing.T) {
 	require.NoError(t, ValidateModel(config.ModelRef{Provider: "google", Model: "gemini-2.5-pro"}))
 	require.NoError(t, ValidateModel(config.ModelRef{Provider: "google", Model: "gemini-2.5-flash"}))
+	require.NoError(t, ValidateModel(config.ModelRef{Provider: "google", Model: "gemini-3.1-pro-preview"}))
+	require.NoError(t, ValidateModel(config.ModelRef{Provider: "google", Model: "gemini-3.1-flash-lite"}))
 }
 
 func TestValidateModel_UnknownProvider(t *testing.T) {

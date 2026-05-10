@@ -71,7 +71,37 @@ Claude Code (`.mcp.json`):
 }
 ```
 
-Other harnesses (Cursor, Continue, Zed, custom) accept the same `command` + `env` shape — adapt to their config file.
+opencode (`~/.config/opencode/opencode.json`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "anti-tangent": {
+      "type": "local",
+      "command": ["/absolute/path/to/anti-tangent-mcp"],
+      "environment": {
+        "ANTHROPIC_API_KEY": "sk-ant-...",
+        "GOOGLE_API_KEY":    "...",
+        "ANTI_TANGENT_PRE_MODEL":  "google:gemini-3.1-pro-preview",
+        "ANTI_TANGENT_MID_MODEL":  "google:gemini-3.1-flash-lite",
+        "ANTI_TANGENT_POST_MODEL": "google:gemini-3.1-pro-preview",
+        "ANTI_TANGENT_PLAN_MODEL": "google:gemini-3.1-pro-preview"
+      }
+    }
+  }
+}
+```
+
+opencode-specific notes: `command` is an array (not a string), the env block is named `environment` (not `env`), and the binary path must be absolute — opencode does not consult `$PATH`. To make the protocol guidance from `~/.claude/anti-tangent.md` (or your equivalent) load into opencode sessions, add it to the top-level `instructions` array:
+
+```json
+{
+  "instructions": ["/home/you/.claude/anti-tangent.md"]
+}
+```
+
+Other harnesses (Cursor, Continue, Zed, custom) accept the same `command` + env-map shape — adapt to their config file.
 
 ### 2.3 Provider keys
 
@@ -83,8 +113,8 @@ The reviewer LLM should not be the same model as the implementer. Same model + s
 
 | If your implementer is… | Set `ANTI_TANGENT_*_MODEL` to… |
 |---|---|
-| Anthropic Claude (Sonnet/Opus) | `openai:gpt-5` and/or `google:gemini-2.5-pro` |
-| OpenAI GPT-5 family | `anthropic:claude-sonnet-4-6` and/or `google:gemini-2.5-pro` |
+| Anthropic Claude (Sonnet/Opus) | `openai:gpt-5` and/or `google:gemini-3.1-pro-preview` |
+| OpenAI GPT-5 family | `anthropic:claude-sonnet-4-6` and/or `google:gemini-3.1-pro-preview` |
 | Google Gemini | `anthropic:claude-sonnet-4-6` and/or `openai:gpt-5` |
 
 The mid-hook (`check_progress`) is called more often, so use a cheaper fast model. The plan-level hook (`validate_plan`) reasons over the whole plan in one shot — give it a strong tier:
@@ -97,6 +127,29 @@ ANTI_TANGENT_PLAN_MODEL=openai:gpt-5    # optional; defaults to ANTI_TANGENT_PRE
 ```
 
 `ANTI_TANGENT_PLAN_MODEL` falls back to `ANTI_TANGENT_PRE_MODEL` if unset, so single-tier users keep working without changes. Or mix providers across hooks if you have multiple keys.
+
+#### Supported reviewer models
+
+Use `provider:model-id`. The server validates against this allowlist at startup and rejects unknown IDs with a clear error (e.g. `model "gemini-3-pro" not in allowlist for provider "google"`).
+
+| Provider | Model id | Tier |
+|---|---|---|
+| `anthropic` | `claude-opus-4-7` | heavy |
+| `anthropic` | `claude-sonnet-4-6` | balanced |
+| `anthropic` | `claude-haiku-4-5-20251001` | fast |
+| `openai` | `gpt-5` | heavy |
+| `openai` | `gpt-5-mini` | balanced |
+| `openai` | `gpt-5-nano` | fast |
+| `openai` | `gpt-5.5` | heavy (rolling snapshot) |
+| `openai` | `gpt-5.5-2026-04-23` | heavy (pinned) |
+| `openai` | `gpt-5.4-mini` | balanced (rolling snapshot) |
+| `openai` | `gpt-5.4-mini-2026-03-17` | balanced (pinned) |
+| `google` | `gemini-3.1-pro-preview` | heavy |
+| `google` | `gemini-3.1-flash-lite` | fast |
+| `google` | `gemini-2.5-pro` | heavy |
+| `google` | `gemini-2.5-flash` | fast |
+
+To add a new model id, edit [`internal/providers/reviewer.go`](internal/providers/reviewer.go) — it's a one-line change.
 
 ### 2.5 Smoke test
 
