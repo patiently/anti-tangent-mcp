@@ -23,6 +23,10 @@ func TestGoogle_Review_OK(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		var req map[string]any
 		require.NoError(t, json.Unmarshal(body, &req))
+		genCfg, ok := req["generationConfig"].(map[string]any)
+		require.True(t, ok, "generationConfig should be an object")
+		assert.Contains(t, genCfg, "responseJsonSchema", "raw JSON Schema must be passed under responseJsonSchema, not responseSchema")
+		assert.NotContains(t, genCfg, "responseSchema", "responseSchema is for Gemini's OpenAPI-Schema-subset, not raw JSON Schema")
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
