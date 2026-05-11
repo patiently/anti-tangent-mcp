@@ -103,3 +103,13 @@ Step 1: write main.
 	require.NoError(t, err)
 	golden(t, "plan_basic", out.System+"\n---USER---\n"+out.User)
 }
+
+func TestRenderPlanFindingsOnly_Golden(t *testing.T) {
+	out, err := RenderPlanFindingsOnly(PlanInput{
+		PlanText: "## Phase 1\n\n### Task 1: do thing\n\n**Goal:** thing\n\n**Acceptance criteria:**\n- thing happens\n",
+	})
+	if err != nil {
+		t.Fatalf("RenderPlanFindingsOnly: %v", err)
+	}
+	golden(t, "plan_findings_only", out.System+"\n---USER---\n"+out.User)
+}

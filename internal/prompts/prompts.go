@@ -81,6 +81,16 @@ func RenderPlan(in PlanInput) (Output, error) {
 	return Output{System: systemPrompt, User: body}, nil
 }
 
+// RenderPlanFindingsOnly produces the Pass-1 prompt for the chunked validate_plan
+// path: full plan as context, plan-level findings only, no per-task data.
+func RenderPlanFindingsOnly(in PlanInput) (Output, error) {
+	body, err := render("plan_findings_only.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: systemPrompt, User: body}, nil
+}
+
 func render(name string, data any) (string, error) {
 	tmpl, err := template.New("").ParseFS(templatesFS, "templates/"+name)
 	if err != nil {
