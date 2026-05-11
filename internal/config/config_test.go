@@ -121,10 +121,10 @@ func TestLoad_TokenBudgetsAndChunkSize_Defaults(t *testing.T) {
 
 func TestLoad_TokenBudgetsAndChunkSize_Overrides(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
-		"ANTHROPIC_API_KEY":                  "sk-ant-test",
-		"ANTI_TANGENT_PER_TASK_MAX_TOKENS":   "8192",
-		"ANTI_TANGENT_PLAN_MAX_TOKENS":       "16384",
-		"ANTI_TANGENT_PLAN_TASKS_PER_CHUNK":  "12",
+		"ANTHROPIC_API_KEY":                 "sk-ant-test",
+		"ANTI_TANGENT_PER_TASK_MAX_TOKENS":  "8192",
+		"ANTI_TANGENT_PLAN_MAX_TOKENS":      "16384",
+		"ANTI_TANGENT_PLAN_TASKS_PER_CHUNK": "12",
 	}))
 	require.NoError(t, err)
 	assert.Equal(t, 8192, cfg.PerTaskMaxTokens)
