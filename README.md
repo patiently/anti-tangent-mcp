@@ -36,7 +36,16 @@ ANTI_TANGENT_SESSION_TTL=4h
 ANTI_TANGENT_MAX_PAYLOAD_BYTES=204800
 ANTI_TANGENT_REQUEST_TIMEOUT=120s
 ANTI_TANGENT_LOG_LEVEL=info
+
+# Output budgets + chunking (v0.1.4+):
+ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion)
+ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # output cap per reviewer call in validate_plan (single-call and per-chunk)
+ANTI_TANGENT_PLAN_TASKS_PER_CHUNK=8      # plans above this task count are reviewed via the chunked path; also the per-chunk size
 ```
+
+### Large plans (chunking)
+
+`validate_plan` automatically chunks plans with more than `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` tasks (default 8). Internally the server makes one Pass-1 reviewer call for cross-cutting `plan_findings` plus `ceil(n/N)` per-task chunks, each carrying the full plan as context. The merged `PlanResult` is identical in shape to the single-call path — callers see no difference. Operators with very dense per-task content (long `**Goal:**` / `**Acceptance criteria:**` blocks) can lower `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` to reduce per-chunk output size, or raise `ANTI_TANGENT_PLAN_MAX_TOKENS` if their reviewer model supports it. Worst-case wall-clock for a 25-task plan is ~5 sequential calls.
 
 ## Use with Claude Code (`.mcp.json`)
 
