@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // ParsePlanFindingsOnly decodes a Pass-1 reviewer response into a PlanFindingsOnly
@@ -29,7 +30,7 @@ func ParsePlanFindingsOnly(raw []byte) (PlanFindingsOnly, error) {
 	if r.PlanFindings == nil {
 		return PlanFindingsOnly{}, fmt.Errorf("plan_findings_only: plan_findings is required")
 	}
-	if r.NextAction == "" {
+	if strings.TrimSpace(r.NextAction) == "" {
 		return PlanFindingsOnly{}, fmt.Errorf("plan_findings_only: next_action must be non-empty")
 	}
 	for i, f := range r.PlanFindings {

@@ -502,6 +502,12 @@ func (h *handlers) reviewPlanChunked(
 	tasks []planparser.RawTask,
 	chunkSize int,
 ) (verdict.PlanResult, string, int64, error) {
+	if chunkSize <= 0 {
+		// Defense-in-depth: config.Load already rejects PlanTasksPerChunk <= 0
+		// at startup, but a zero/negative chunkSize would turn the loop below
+		// into an infinite spin. Fail loudly instead.
+		return verdict.PlanResult{}, "", 0, fmt.Errorf("reviewPlanChunked: chunkSize must be positive, got %d", chunkSize)
+	}
 	rv, err := h.deps.Reviews.Get(model.Provider)
 	if err != nil {
 		return verdict.PlanResult{}, "", 0, err
@@ -603,12 +609,6 @@ func (h *handlers) reviewOnePlanChunk(
 		JSONSchema: verdict.TasksOnlySchema(),
 	}
 
-	// Build the expected-title set once per chunk for identity validation.
-	expected := make(map[string]struct{}, len(chunkTasks))
-	for _, t := range chunkTasks {
-		expected[strings.TrimSpace(t.Title)] = struct{}{}
-	}
-
 	// attempt mutates req.User in place; each call overwrites it before
 	// Review, so the retry sees the hint-augmented body cleanly.
 	attempt := func(user string) (verdict.TasksOnly, int64, error) {
@@ -623,7 +623,7 @@ func (h *handlers) reviewOnePlanChunk(
 		if err != nil {
 			return verdict.TasksOnly{}, ms, err
 		}
-		if err := validateChunkIdentity(parsed, expected, len(chunkTasks)); err != nil {
+		if err := validateChunkIdentity(parsed, chunkTasks); err != nil {
 			return verdict.TasksOnly{}, ms, err
 		}
 		return parsed, ms, nil
@@ -642,24 +642,27 @@ func (h *handlers) reviewOnePlanChunk(
 }
 
 // validateChunkIdentity checks that the parsed chunk response contains exactly
-// the expected number of tasks, that every returned task_title is in the
-// expected set, and that no title appears more than once (which would mask a
-// dropped task while still satisfying the count check). Returns a descriptive
-// error on any mismatch.
-func validateChunkIdentity(parsed verdict.TasksOnly, expected map[string]struct{}, want int) error {
-	if len(parsed.Tasks) != want {
-		return fmt.Errorf("chunk identity: got %d tasks, expected %d", len(parsed.Tasks), want)
+// the expected tasks **in the same order** as chunkTasks: count match, each
+// position's task_title equals the corresponding chunkTasks[i].Title (with
+// surrounding whitespace trimmed), and no title appears more than once.
+// Returns a descriptive error on any mismatch — the prompt template instructs
+// the reviewer to emit tasks "in the same order", so positional drift is a
+// reviewer-side error worth retrying.
+func validateChunkIdentity(parsed verdict.TasksOnly, chunkTasks []planparser.RawTask) error {
+	if len(parsed.Tasks) != len(chunkTasks) {
+		return fmt.Errorf("chunk identity: got %d tasks, expected %d", len(parsed.Tasks), len(chunkTasks))
 	}
-	seen := make(map[string]struct{}, want)
+	seen := make(map[string]struct{}, len(chunkTasks))
 	for i, t := range parsed.Tasks {
-		title := strings.TrimSpace(t.TaskTitle)
-		if _, ok := expected[title]; !ok {
-			return fmt.Errorf("chunk identity: tasks[%d].task_title %q not in requested chunk", i, title)
+		got := strings.TrimSpace(t.TaskTitle)
+		want := strings.TrimSpace(chunkTasks[i].Title)
+		if got != want {
+			return fmt.Errorf("chunk identity: tasks[%d].task_title %q, expected %q", i, got, want)
 		}
-		if _, dup := seen[title]; dup {
-			return fmt.Errorf("chunk identity: tasks[%d].task_title %q duplicated within chunk", i, title)
+		if _, dup := seen[got]; dup {
+			return fmt.Errorf("chunk identity: tasks[%d].task_title %q duplicated within chunk", i, got)
 		}
-		seen[title] = struct{}{}
+		seen[got] = struct{}{}
 	}
 	return nil
 }

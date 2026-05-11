@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // ParseTasksOnly unmarshals a per-chunk reviewer response and validates
@@ -30,7 +31,7 @@ func ParseTasksOnly(raw []byte) (TasksOnly, error) {
 		default:
 			return TasksOnly{}, fmt.Errorf("tasks_only: tasks[%d]: invalid verdict %q", i, t.Verdict)
 		}
-		if t.TaskTitle == "" {
+		if strings.TrimSpace(t.TaskTitle) == "" {
 			return TasksOnly{}, fmt.Errorf("tasks_only: tasks[%d]: task_title must be non-empty", i)
 		}
 		for j, f := range t.Findings {

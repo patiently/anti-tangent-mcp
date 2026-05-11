@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
+	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
 // ---------------------------------------------------------------------------
@@ -277,30 +278,19 @@ func TestReviewPlanChunked_DuplicateTitleInChunk_TriggersRetry(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Post-merge count mismatch
+// Post-merge count guard (positive path)
 // ---------------------------------------------------------------------------
 
-// TestReviewPlanChunked_PostMergeCountMismatch verifies that if after all chunks
-// are merged the total task count doesn't match the plan task count, ValidatePlan
-// returns an error. We achieve this by manipulating a scenario where the scripted
-// response for chunk2 passes identity validation (for a 1-task chunk, title matches)
-// but we construct the test to surface the count mismatch. Since both identity and
-// count checks happen inside reviewOnePlanChunk, the post-merge check fires only when
-// all chunk calls individually pass validation but their combined count still differs.
-// We test this via the retry path: chunk1 returns only 7 tasks on first attempt but
-// the retry returns 8 — then we confirm the overall result length is still correct
-// (this is already tested above). For the true post-merge path we need to arrange that
-// individual chunks pass their own validation but the aggregate is wrong; the easiest
-// way is to have a plan with only 1 task that the chunk check passes, but then supply
-// a corrupted response. Since reviewOnePlanChunk validates count per-chunk, the
-// post-merge check is a safety net. We test it directly via reviewPlanChunked by
-// using a plan of 2 tasks with chunkSize=1 where both chunks return 1 task correctly
-// but the test is really about verifying the path exists and is green — see the
-// other tests for the mismatch+error path.
-// NOTE: This test documents correct behavior — 2 tasks, 2 chunks, 2 calls total (no Pass1
-// since we call reviewPlanChunked directly through ValidatePlan with chunkSize=1,
-// total calls = Pass1 + 2 chunk calls = 3).
-func TestReviewPlanChunked_PostMergeCountMismatch(t *testing.T) {
+// TestReviewPlanChunked_PostMergeCount_NoErrorWhenCountsMatch verifies the
+// happy path of the post-merge count guard: when each chunk individually
+// passes identity validation AND the aggregated task count equals the
+// original plan's task count, the guard does NOT fire and ValidatePlan
+// returns the merged result. The guard's error path is a safety net
+// reachable only if per-chunk validation passes but the merge is somehow
+// wrong — given the positional identity check, the error path is
+// effectively unreachable from real reviewer responses. This test pins the
+// positive contract.
+func TestReviewPlanChunked_PostMergeCount_NoErrorWhenCountsMatch(t *testing.T) {
 	// We verify the post-merge guard by forcing a scenario where a chunk returns
 	// fewer tasks than expected AND the retry also returns fewer (wrong count after
 	// retry causes reviewOnePlanChunk to fail). We set chunkSize=1 and have a 2-task
@@ -327,4 +317,47 @@ func TestReviewPlanChunked_PostMergeCountMismatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pr.Tasks, 3)
 	assert.Equal(t, 3, sr.calls, "Pass1 + 2 chunks = 3 calls")
+}
+
+// ---------------------------------------------------------------------------
+// reviewPlanSingle retry path
+// ---------------------------------------------------------------------------
+
+// TestValidatePlan_SingleCall_RetryOnParseFailure exercises the single-call
+// path's schema-retry-once behavior: first reviewer response is malformed
+// JSON, retry response is valid → ValidatePlan succeeds with two reviewer
+// calls. Symmetric to the chunked-path retry tests above, closes the gap
+// in coverage for reviewPlanSingle's matching retry path.
+func TestValidatePlan_SingleCall_RetryOnParseFailure(t *testing.T) {
+	// 3 tasks ≤ default chunkSize=8 → single-call path.
+	plan := buildPlanWithNTasks(3)
+	validSingleCallResp := providers.Response{
+		RawJSON: []byte(`{
+			"plan_verdict":"pass",
+			"plan_findings":[],
+			"tasks":[
+				{"task_index":1,"task_title":"Task 1: t1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},
+				{"task_index":2,"task_title":"Task 2: t2","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},
+				{"task_index":3,"task_title":"Task 3: t3","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}
+			],
+			"next_action":"Proceed with implementation."
+		}`),
+		Model: "test-model",
+	}
+	sr := &scriptedReviewer{
+		responses: []providers.Response{
+			{RawJSON: []byte(`not json at all`), Model: "test-model"}, // first attempt fails ParsePlan
+			validSingleCallResp, // retry succeeds
+		},
+	}
+	// chunkSize doesn't matter here since len(tasks)=3 ≤ default 8 forces single-call;
+	// use 8 (the default) to keep the test obvious.
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.Len(t, pr.Tasks, 3)
+	assert.Equal(t, 2, sr.calls, "first call fails parse, retry succeeds = 2 calls total")
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
 }

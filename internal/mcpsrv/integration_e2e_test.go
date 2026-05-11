@@ -78,6 +78,7 @@ func TestValidatePlan_E2E_LargePlanChunked(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.False(t, res.IsError, "tool returned error: %v", res.Content)
+	require.Len(t, res.Content, 1)
 
 	tc, ok := res.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
