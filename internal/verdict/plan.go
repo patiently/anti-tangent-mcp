@@ -49,3 +49,19 @@ type PlanTaskResult struct {
 	SuggestedHeaderBlock  string    `json:"suggested_header_block"`
 	SuggestedHeaderReason string    `json:"suggested_header_reason"`
 }
+
+//go:embed tasks_only_schema.json
+var tasksOnlySchema []byte
+
+// TasksOnlySchema returns a defensive byte copy of the per-chunk reviewer
+// response schema (used by validate_plan's chunking fallback Passes 2..K+1).
+func TasksOnlySchema() []byte {
+	out := make([]byte, len(tasksOnlySchema))
+	copy(out, tasksOnlySchema)
+	return out
+}
+
+// TasksOnly is the per-chunk response shape during chunked plan review.
+type TasksOnly struct {
+	Tasks []PlanTaskResult `json:"tasks"`
+}
