@@ -602,6 +602,8 @@ func (h *handlers) reviewOnePlanChunk(
 		expected[strings.TrimSpace(t.Title)] = struct{}{}
 	}
 
+	// attempt mutates req.User in place; each call overwrites it before
+	// Review, so the retry sees the hint-augmented body cleanly.
 	attempt := func(user string) (verdict.TasksOnly, int64, error) {
 		req.User = user
 		start := time.Now()
@@ -633,17 +635,24 @@ func (h *handlers) reviewOnePlanChunk(
 }
 
 // validateChunkIdentity checks that the parsed chunk response contains exactly
-// the expected number of tasks and that every returned task_title is in the
-// expected set. Returns a descriptive error on any mismatch.
+// the expected number of tasks, that every returned task_title is in the
+// expected set, and that no title appears more than once (which would mask a
+// dropped task while still satisfying the count check). Returns a descriptive
+// error on any mismatch.
 func validateChunkIdentity(parsed verdict.TasksOnly, expected map[string]struct{}, want int) error {
 	if len(parsed.Tasks) != want {
 		return fmt.Errorf("chunk identity: got %d tasks, expected %d", len(parsed.Tasks), want)
 	}
+	seen := make(map[string]struct{}, want)
 	for i, t := range parsed.Tasks {
 		title := strings.TrimSpace(t.TaskTitle)
 		if _, ok := expected[title]; !ok {
 			return fmt.Errorf("chunk identity: tasks[%d].task_title %q not in requested chunk", i, title)
 		}
+		if _, dup := seen[title]; dup {
+			return fmt.Errorf("chunk identity: tasks[%d].task_title %q duplicated within chunk", i, title)
+		}
+		seen[title] = struct{}{}
 	}
 	return nil
 }
