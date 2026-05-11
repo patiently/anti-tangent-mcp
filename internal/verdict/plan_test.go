@@ -127,3 +127,74 @@ func TestParsePlan_StripsCodeFences(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, VerdictPass, r.PlanVerdict)
 }
+
+// ---------------------------------------------------------------------------
+// PlanFindingsOnly tests
+// ---------------------------------------------------------------------------
+
+func TestPlanFindingsOnlySchema_IsValidJSON(t *testing.T) {
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal(PlanFindingsOnlySchema(), &schema))
+	assert.Equal(t, "object", schema["type"])
+	props, ok := schema["properties"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, props, "plan_verdict")
+	assert.Contains(t, props, "plan_findings")
+	assert.Contains(t, props, "next_action")
+	assert.NotContains(t, props, "tasks")
+}
+
+func TestPlanFindingsOnlySchema_DefensiveCopy(t *testing.T) {
+	a := PlanFindingsOnlySchema()
+	b := PlanFindingsOnlySchema()
+	require.Equal(t, a, b)
+	// Mutate a; b must remain unchanged (proving Schema() returns a copy).
+	a[0] = 'X'
+	assert.NotEqual(t, a[0], b[0])
+}
+
+func TestParsePlanFindingsOnly_Valid(t *testing.T) {
+	in := []byte(`{
+		"plan_verdict": "warn",
+		"plan_findings": [
+			{"severity":"major","category":"ambiguous_spec","criterion":"c","evidence":"e","suggestion":"s"}
+		],
+		"next_action": "clarify before dispatch"
+	}`)
+	r, err := ParsePlanFindingsOnly(in)
+	require.NoError(t, err)
+	assert.Equal(t, VerdictWarn, r.PlanVerdict)
+	require.Len(t, r.PlanFindings, 1)
+	assert.NotEmpty(t, r.NextAction)
+}
+
+func TestParsePlanFindingsOnly_RejectsInvalid(t *testing.T) {
+	t.Run("missing plan_verdict", func(t *testing.T) {
+		in := []byte(`{"plan_findings":[],"next_action":"x"}`)
+		_, err := ParsePlanFindingsOnly(in)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "plan_verdict")
+	})
+	t.Run("invalid verdict enum", func(t *testing.T) {
+		in := []byte(`{"plan_verdict":"maybe","plan_findings":[],"next_action":"x"}`)
+		_, err := ParsePlanFindingsOnly(in)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "plan_verdict")
+	})
+	t.Run("empty next_action", func(t *testing.T) {
+		in := []byte(`{"plan_verdict":"pass","plan_findings":[],"next_action":""}`)
+		_, err := ParsePlanFindingsOnly(in)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "next_action")
+	})
+	t.Run("missing plan_findings", func(t *testing.T) {
+		in := []byte(`{"plan_verdict":"pass","next_action":"x"}`)
+		_, err := ParsePlanFindingsOnly(in)
+		require.Error(t, err)
+	})
+	t.Run("tasks field rejected", func(t *testing.T) {
+		in := []byte(`{"plan_verdict":"pass","plan_findings":[],"next_action":"x","tasks":[]}`)
+		_, err := ParsePlanFindingsOnly(in)
+		require.Error(t, err)
+	})
+}
