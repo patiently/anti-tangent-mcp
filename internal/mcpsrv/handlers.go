@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -480,4 +481,169 @@ func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
 	}, pr, nil
+}
+
+// reviewPlanChunked runs Pass 1 (plan-findings-only) plus one per-chunk call
+// per ceil(len(tasks)/chunkSize) batches of tasks. Each per-chunk call carries
+// the full plan as context but instructs the reviewer to emit results only for
+// the tasks in the chunk. Results merge into a PlanResult identical in shape
+// to the single-call path.
+func (h *handlers) reviewPlanChunked(
+	ctx context.Context,
+	model config.ModelRef,
+	planText string,
+	tasks []planparser.RawTask,
+	chunkSize int,
+) (verdict.PlanResult, string, int64, error) {
+	rv, err := h.deps.Reviews.Get(model.Provider)
+	if err != nil {
+		return verdict.PlanResult{}, "", 0, err
+	}
+
+	var totalMs int64
+	var modelUsed string
+
+	// ----- Pass 1: plan-findings only -----
+	rendered, err := prompts.RenderPlanFindingsOnly(prompts.PlanInput{PlanText: planText})
+	if err != nil {
+		return verdict.PlanResult{}, "", 0, fmt.Errorf("render plan_findings_only: %w", err)
+	}
+	req := providers.Request{
+		Model:      model.Model,
+		System:     rendered.System,
+		User:       rendered.User,
+		MaxTokens:  h.deps.Cfg.PlanMaxTokens,
+		JSONSchema: verdict.PlanFindingsOnlySchema(),
+	}
+	start := time.Now()
+	resp, err := rv.Review(ctx, req)
+	if err != nil {
+		return verdict.PlanResult{}, "", 0, err
+	}
+	pf, err := verdict.ParsePlanFindingsOnly(resp.RawJSON)
+	if err != nil {
+		req.User = rendered.User + "\n\n" + verdict.RetryHint()
+		resp, err = rv.Review(ctx, req)
+		if err != nil {
+			return verdict.PlanResult{}, "", 0, err
+		}
+		pf, err = verdict.ParsePlanFindingsOnly(resp.RawJSON)
+		if err != nil {
+			return verdict.PlanResult{}, "", 0, fmt.Errorf("plan_findings_only failed schema after retry: %w", err)
+		}
+	}
+	totalMs += time.Since(start).Milliseconds()
+	modelUsed = model.Provider + ":" + resp.Model
+	if resp.Model == "" {
+		modelUsed = model.String()
+	}
+
+	result := verdict.PlanResult{
+		PlanVerdict:  pf.PlanVerdict,
+		PlanFindings: pf.PlanFindings,
+		NextAction:   pf.NextAction,
+		Tasks:        make([]verdict.PlanTaskResult, 0, len(tasks)),
+	}
+
+	// ----- Passes 2..K+1: per-task chunks -----
+	n := len(tasks)
+	for i := 0; i < n; i += chunkSize {
+		end := i + chunkSize
+		if end > n {
+			end = n
+		}
+		chunkTasks := tasks[i:end]
+
+		chunkResult, ms, err := h.reviewOnePlanChunk(ctx, rv, model, planText, chunkTasks)
+		if err != nil {
+			return verdict.PlanResult{}, "", 0, err
+		}
+		totalMs += ms
+		result.Tasks = append(result.Tasks, chunkResult.Tasks...)
+	}
+
+	if len(result.Tasks) != len(tasks) {
+		return verdict.PlanResult{}, "", 0,
+			fmt.Errorf("chunked plan review returned %d task results, expected %d",
+				len(result.Tasks), len(tasks))
+	}
+
+	return result, modelUsed, totalMs, nil
+}
+
+// reviewOnePlanChunk runs one per-chunk reviewer call with identity validation
+// and the existing schema-retry-once pattern.
+func (h *handlers) reviewOnePlanChunk(
+	ctx context.Context,
+	rv providers.Reviewer,
+	model config.ModelRef,
+	planText string,
+	chunkTasks []planparser.RawTask,
+) (verdict.TasksOnly, int64, error) {
+	rendered, err := prompts.RenderPlanTasksChunk(prompts.PlanChunkInput{
+		PlanText:   planText,
+		ChunkTasks: chunkTasks,
+	})
+	if err != nil {
+		return verdict.TasksOnly{}, 0, fmt.Errorf("render plan_tasks_chunk: %w", err)
+	}
+
+	req := providers.Request{
+		Model:      model.Model,
+		System:     rendered.System,
+		User:       rendered.User,
+		MaxTokens:  h.deps.Cfg.PlanMaxTokens,
+		JSONSchema: verdict.TasksOnlySchema(),
+	}
+
+	// Build the expected-title set once per chunk for identity validation.
+	expected := make(map[string]struct{}, len(chunkTasks))
+	for _, t := range chunkTasks {
+		expected[strings.TrimSpace(t.Title)] = struct{}{}
+	}
+
+	attempt := func(user string) (verdict.TasksOnly, int64, error) {
+		req.User = user
+		start := time.Now()
+		resp, err := rv.Review(ctx, req)
+		if err != nil {
+			return verdict.TasksOnly{}, 0, err
+		}
+		ms := time.Since(start).Milliseconds()
+		parsed, err := verdict.ParseTasksOnly(resp.RawJSON)
+		if err != nil {
+			return verdict.TasksOnly{}, ms, err
+		}
+		if err := validateChunkIdentity(parsed, expected, len(chunkTasks)); err != nil {
+			return verdict.TasksOnly{}, ms, err
+		}
+		return parsed, ms, nil
+	}
+
+	parsed, ms, err := attempt(rendered.User)
+	if err == nil {
+		return parsed, ms, nil
+	}
+	// Schema or identity failure → retry once with hint.
+	parsed2, ms2, err2 := attempt(rendered.User + "\n\n" + verdict.RetryHint())
+	if err2 != nil {
+		return verdict.TasksOnly{}, ms + ms2, fmt.Errorf("plan_tasks_chunk failed after retry: %w", err2)
+	}
+	return parsed2, ms + ms2, nil
+}
+
+// validateChunkIdentity checks that the parsed chunk response contains exactly
+// the expected number of tasks and that every returned task_title is in the
+// expected set. Returns a descriptive error on any mismatch.
+func validateChunkIdentity(parsed verdict.TasksOnly, expected map[string]struct{}, want int) error {
+	if len(parsed.Tasks) != want {
+		return fmt.Errorf("chunk identity: got %d tasks, expected %d", len(parsed.Tasks), want)
+	}
+	for i, t := range parsed.Tasks {
+		title := strings.TrimSpace(t.TaskTitle)
+		if _, ok := expected[title]; !ok {
+			return fmt.Errorf("chunk identity: tasks[%d].task_title %q not in requested chunk", i, title)
+		}
+	}
+	return nil
 }
