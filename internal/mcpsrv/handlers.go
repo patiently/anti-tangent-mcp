@@ -387,7 +387,14 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return nil, verdict.PlanResult{}, err
 	}
 
-	pr, modelUsed, ms, err := h.reviewPlanSingle(ctx, model, args.PlanText)
+	var pr verdict.PlanResult
+	var modelUsed string
+	var ms int64
+	if len(tasks) <= h.deps.Cfg.PlanTasksPerChunk {
+		pr, modelUsed, ms, err = h.reviewPlanSingle(ctx, model, args.PlanText)
+	} else {
+		pr, modelUsed, ms, err = h.reviewPlanChunked(ctx, model, args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk)
+	}
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}
