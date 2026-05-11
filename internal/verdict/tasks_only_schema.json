@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TasksOnly",
+  "type": "object",
+  "required": ["tasks"],
+  "additionalProperties": false,
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["task_index", "task_title", "verdict", "findings", "suggested_header_block", "suggested_header_reason"],
+        "additionalProperties": false,
+        "properties": {
+          "task_index":              { "type": "integer", "minimum": 0 },
+          "task_title":              { "type": "string", "minLength": 1 },
+          "verdict":                 { "type": "string", "enum": ["pass", "warn", "fail"] },
+          "findings":                { "type": "array", "items": { "$ref": "#/definitions/finding" } },
+          "suggested_header_block":  { "type": "string" },
+          "suggested_header_reason": { "type": "string" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "finding": {
+      "type": "object",
+      "required": ["severity", "category", "criterion", "evidence", "suggestion"],
+      "additionalProperties": false,
+      "properties": {
+        "severity": { "type": "string", "enum": ["critical", "major", "minor"] },
+        "category": {
+          "type": "string",
+          "enum": [
+            "missing_acceptance_criterion",
+            "scope_drift",
+            "ambiguous_spec",
+            "unaddressed_finding",
+            "quality",
+            "session_not_found",
+            "payload_too_large",
+            "other"
+          ]
+        },
+        "criterion":  { "type": "string", "minLength": 1 },
+        "evidence":   { "type": "string", "minLength": 1 },
+        "suggestion": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

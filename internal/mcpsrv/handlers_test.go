@@ -258,3 +258,63 @@ func TestValidatePlan_MissingPlanText(t *testing.T) {
 	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: ""})
 	require.Error(t, err)
 }
+
+// captureReviewer records the last providers.Request it receives so tests can
+// assert on fields like MaxTokens.
+type captureReviewer struct {
+	name        string
+	LastRequest providers.Request
+	Response    providers.Response
+}
+
+func (c *captureReviewer) Name() string { return c.name }
+func (c *captureReviewer) Review(_ context.Context, req providers.Request) (providers.Response, error) {
+	c.LastRequest = req
+	return c.Response, nil
+}
+
+func TestValidateTaskSpec_UsesConfiguredPerTaskMaxTokens(t *testing.T) {
+	cap := &captureReviewer{
+		name: "anthropic",
+		Response: providers.Response{
+			RawJSON:     []byte(`{"verdict":"pass","findings":[],"next_action":"go"}`),
+			Model:       "claude-sonnet-4-6",
+			InputTokens: 3, OutputTokens: 2,
+		},
+	}
+	d := newDeps(t, &fakeReviewer{name: "anthropic"}) // build base deps with valid config
+	d.Cfg.PerTaskMaxTokens = 7777
+	d.Reviews = providers.Registry{"anthropic": cap}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:          "X",
+		Goal:               "Y",
+		AcceptanceCriteria: []string{"AC1"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 7777, cap.LastRequest.MaxTokens, "review() should use PerTaskMaxTokens from config")
+}
+
+func TestValidatePlan_UsesConfiguredPlanMaxTokens(t *testing.T) {
+	cap := &captureReviewer{
+		name: "openai",
+		Response: providers.Response{
+			RawJSON:      []byte(`{"plan_verdict":"pass","plan_findings":[],"tasks":[{"task_index":0,"task_title":"T1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"go"}`),
+			Model:        "gpt-5",
+			InputTokens:  3,
+			OutputTokens: 2,
+		},
+	}
+	d := newDeps(t, &fakeReviewer{name: "anthropic"})
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Cfg.PlanMaxTokens = 8888
+	d.Reviews = providers.Registry{"openai": cap}
+	h := &handlers{deps: d}
+
+	plan := "# Plan\n\n### Task 1: First\n\nSome body.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+	assert.Equal(t, 8888, cap.LastRequest.MaxTokens, "reviewPlanSingle() should use PlanMaxTokens from config")
+}

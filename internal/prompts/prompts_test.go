@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -102,4 +103,28 @@ Step 1: write main.
 	out, err := RenderPlan(PlanInput{PlanText: plan})
 	require.NoError(t, err)
 	golden(t, "plan_basic", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPlanTasksChunk_Golden(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText: "## Phase 1\n\n### Task 1: do thing\n\n### Task 2: do other thing\n",
+		ChunkTasks: []planparser.RawTask{
+			{Title: "Task 1: do thing", Body: "### Task 1: do thing\n"},
+			{Title: "Task 2: do other thing", Body: "### Task 2: do other thing\n"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RenderPlanTasksChunk: %v", err)
+	}
+	golden(t, "plan_tasks_chunk", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPlanFindingsOnly_Golden(t *testing.T) {
+	out, err := RenderPlanFindingsOnly(PlanInput{
+		PlanText: "## Phase 1\n\n### Task 1: do thing\n\n**Goal:** thing\n\n**Acceptance criteria:**\n- thing happens\n",
+	})
+	if err != nil {
+		t.Fatalf("RenderPlanFindingsOnly: %v", err)
+	}
+	golden(t, "plan_findings_only", out.System+"\n---USER---\n"+out.User)
 }

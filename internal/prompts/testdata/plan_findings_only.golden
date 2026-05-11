@@ -1,0 +1,47 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
+## Plan under review
+
+## Phase 1
+
+### Task 1: do thing
+
+**Goal:** thing
+
+**Acceptance criteria:**
+- thing happens
+
+
+## What to evaluate
+
+You are reviewing an entire implementation plan BEFORE any tasks are dispatched.
+Your job in THIS call is **plan-level analysis only** — cross-cutting findings
+that require visibility into the whole plan. Per-task analysis happens in
+separate follow-up calls; do not emit per-task data here.
+
+Specifically:
+
+1. **plan_verdict** — overall: `pass`, `warn`, or `fail` based on plan-wide
+   issues only (not per-task quality).
+2. **plan_findings** — cross-cutting issues only. Examples:
+   - Two tasks have overlapping or contradictory acceptance criteria.
+   - A task depends on something not produced by any earlier task.
+   - The plan is missing an architecture/intro section that an implementer
+     would need.
+   - Duplicate task titles.
+   - Tasks out of logical order (e.g. tests written before the code they test
+     when the codebase is TDD-strict, or deployment before testing).
+   Do NOT emit findings about individual task quality (vague AC on one task,
+   missing Non-goals on one task, etc.) — those are evaluated separately.
+3. **next_action** — one sentence telling the controller what to do next,
+   given the plan-level verdict.
+
+Severity: critical = unimplementable as written; major = implementer would
+still misimplement; minor = nit.
+
+## Output
+
+Respond with a JSON object matching the provided schema. The JSON object must
+contain exactly the top-level keys plan_verdict, plan_findings, and next_action.
+Do not return tasks[] or any task objects. Do not emit per-task findings — they
+belong in the per-task calls. Do not include prose outside the JSON.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"text/template"
 
+	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -75,6 +76,35 @@ func RenderPost(in PostInput) (Output, error) {
 
 func RenderPlan(in PlanInput) (Output, error) {
 	body, err := render("plan.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: systemPrompt, User: body}, nil
+}
+
+// PlanChunkInput is the input for one per-task chunk in chunked validate_plan.
+// ChunkTasks carries the exact subset of tasks the reviewer should emit
+// results for; PlanText carries the full plan for cross-task reasoning.
+type PlanChunkInput struct {
+	PlanText   string
+	ChunkTasks []planparser.RawTask
+}
+
+// RenderPlanTasksChunk produces a per-chunk prompt for the chunked validate_plan
+// path: full plan as context, but the reviewer is instructed to emit results
+// only for the subset of tasks in ChunkTasks.
+func RenderPlanTasksChunk(in PlanChunkInput) (Output, error) {
+	body, err := render("plan_tasks_chunk.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: systemPrompt, User: body}, nil
+}
+
+// RenderPlanFindingsOnly produces the Pass-1 prompt for the chunked validate_plan
+// path: full plan as context, plan-level findings only, no per-task data.
+func RenderPlanFindingsOnly(in PlanInput) (Output, error) {
+	body, err := render("plan_findings_only.tmpl", in)
 	if err != nil {
 		return Output{}, err
 	}

@@ -128,6 +128,25 @@ ANTI_TANGENT_PLAN_MODEL=openai:gpt-5    # optional; defaults to ANTI_TANGENT_PRE
 
 `ANTI_TANGENT_PLAN_MODEL` falls back to `ANTI_TANGENT_PRE_MODEL` if unset, so single-tier users keep working without changes. Or mix providers across hooks if you have multiple keys.
 
+### Output budgets and chunking for `validate_plan` (v0.1.4+)
+
+Three optional env vars tune output-token budgets and the chunking behavior of `validate_plan`:
+
+```dotenv
+ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # default 4096; output cap for validate_task_spec / check_progress / validate_completion
+ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # default 4096; output cap per reviewer call in validate_plan (single-call and per-chunk)
+ANTI_TANGENT_PLAN_TASKS_PER_CHUNK=8      # default 8; chunking threshold + per-chunk task count
+```
+
+Plans with more than `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` tasks are automatically chunked: one Pass-1 reviewer call for cross-cutting `plan_findings` plus `ceil(n/N)` per-task chunks, each with the full plan as context. The merged response is shape-identical to the single-call path — callers see no difference.
+
+Operator notes:
+
+- The `PER_TASK` name covers all three task-scoped lifecycle hooks (validate_task_spec, check_progress, validate_completion) — each reviews exactly one task.
+- `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` doubles as both the chunking threshold (`len(tasks) > N` triggers chunking) and the per-chunk size (chunks of N tasks each). Single knob, single mental model: "above N tasks, batch in groups of N."
+- `ANTI_TANGENT_REQUEST_TIMEOUT` applies **per reviewer call**, not to the whole chunked invocation. A 25-task plan does ~5 sequential calls (worst case `5 × RequestTimeout` wall-clock). MCP clients may have shorter tool-call deadlines; if you hit those, lower `PLAN_TASKS_PER_CHUNK` (more, smaller calls) rather than raising `REQUEST_TIMEOUT`.
+- All three env vars reject `0`, negative, and non-integer values at startup with a clear error.
+
 #### Supported reviewer models
 
 Use `provider:model-id`. The server validates against this allowlist at startup and rejects unknown IDs with a clear error (e.g. `model "gemini-3-pro" not in allowlist for provider "google"`).

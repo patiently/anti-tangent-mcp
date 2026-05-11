@@ -170,3 +170,76 @@ func TestIntegration_ValidatePlan(t *testing.T) {
 	require.Len(t, pr.Tasks, 1)
 	assert.Equal(t, "Task 1: First", pr.Tasks[0].TaskTitle)
 }
+
+// TestIntegration_ValidatePlanChunked exercises the chunked path end-to-end
+// through the MCP transport. A 12-task plan with PlanTasksPerChunk=8 triggers
+// the chunked dispatch: 1 plan-findings call + 2 per-chunk calls (sizes 8 and
+// 4). The merged envelope must be shape-compatible with the single-call path.
+func TestIntegration_ValidatePlanChunked(t *testing.T) {
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	require.NoError(t, err)
+	cfg.PlanTasksPerChunk = 8
+
+	sr := &scriptedReviewer{
+		responses: []providers.Response{
+			passOneResp(),
+			chunkResp(t, titlesRange(1, 8)),
+			chunkResp(t, titlesRange(9, 12)),
+		},
+	}
+
+	deps := Deps{
+		Cfg:      cfg,
+		Sessions: session.NewStore(1 * time.Hour),
+		Reviews:  providers.Registry{"anthropic": sr},
+	}
+	srv := New(deps)
+
+	st, ct := mcp.NewInMemoryTransports()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		if err := srv.Run(ctx, st); err != nil && ctx.Err() == nil {
+			t.Errorf("srv.Run: %v", err)
+		}
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+	cs, err := client.Connect(ctx, ct, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := cs.Close(); err != nil {
+			t.Errorf("cs.Close: %v", err)
+		}
+	}()
+
+	plan := buildPlanWithNTasks(12)
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "validate_plan",
+		Arguments: map[string]any{"plan_text": plan},
+	})
+	require.NoError(t, err)
+	require.False(t, res.IsError, "tool returned error: %v", res.Content)
+	require.Len(t, res.Content, 1)
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+
+	var pr struct {
+		verdict.PlanResult
+		ModelUsed string `json:"model_used"`
+		ReviewMS  int64  `json:"review_ms"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(tc.Text), &pr))
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+	require.Len(t, pr.Tasks, 12, "merged Tasks length")
+	assert.NotEmpty(t, pr.NextAction)
+	assert.Equal(t, 3, sr.calls, "reviewer call count (1 plan-findings + 2 chunks)")
+	// Spot-check ordering: first and last task titles match the plan.
+	assert.Equal(t, "Task 1: t1", pr.Tasks[0].TaskTitle)
+	assert.Equal(t, "Task 12: t12", pr.Tasks[11].TaskTitle)
+}

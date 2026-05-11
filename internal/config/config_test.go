@@ -108,3 +108,47 @@ func TestLoad_PlanModel_ExplicitOverride(t *testing.T) {
 	assert.Equal(t, ModelRef{Provider: "openai", Model: "gpt-5"}, cfg.PreModel)
 	assert.Equal(t, ModelRef{Provider: "google", Model: "gemini-2.5-pro"}, cfg.PlanModel)
 }
+
+func TestLoad_TokenBudgetsAndChunkSize_Defaults(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY": "sk-ant-test",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 4096, cfg.PerTaskMaxTokens)
+	assert.Equal(t, 4096, cfg.PlanMaxTokens)
+	assert.Equal(t, 8, cfg.PlanTasksPerChunk)
+}
+
+func TestLoad_TokenBudgetsAndChunkSize_Overrides(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                 "sk-ant-test",
+		"ANTI_TANGENT_PER_TASK_MAX_TOKENS":  "8192",
+		"ANTI_TANGENT_PLAN_MAX_TOKENS":      "16384",
+		"ANTI_TANGENT_PLAN_TASKS_PER_CHUNK": "12",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 8192, cfg.PerTaskMaxTokens)
+	assert.Equal(t, 16384, cfg.PlanMaxTokens)
+	assert.Equal(t, 12, cfg.PlanTasksPerChunk)
+}
+
+func TestLoad_TokenBudgetsAndChunkSize_Reject(t *testing.T) {
+	cases := []map[string]string{
+		// ANTI_TANGENT_PER_TASK_MAX_TOKENS
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PER_TASK_MAX_TOKENS": "0"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PER_TASK_MAX_TOKENS": "-1"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PER_TASK_MAX_TOKENS": "not-an-int"},
+		// ANTI_TANGENT_PLAN_MAX_TOKENS
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PLAN_MAX_TOKENS": "0"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PLAN_MAX_TOKENS": "-1"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PLAN_MAX_TOKENS": "not-an-int"},
+		// ANTI_TANGENT_PLAN_TASKS_PER_CHUNK
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PLAN_TASKS_PER_CHUNK": "0"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PLAN_TASKS_PER_CHUNK": "-1"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PLAN_TASKS_PER_CHUNK": "not-an-int"},
+	}
+	for _, tc := range cases {
+		_, err := Load(env(tc))
+		require.Error(t, err)
+	}
+}
