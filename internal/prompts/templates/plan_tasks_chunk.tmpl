@@ -1,0 +1,37 @@
+## Plan under review
+
+{{.PlanText}}
+
+## What to evaluate (this call: per-task analysis, restricted to a subset)
+
+You are reviewing an implementation plan. You have the **full plan** above as
+context, so you can reason about cross-task dependencies — but in this call
+you must emit per-task results for **only the following tasks**, identified
+by their `### Task N: Title` heading:
+
+{{range .ChunkTasks -}}
+- {{.Title}}
+{{end}}
+For each task in the list above, evaluate:
+
+1. **Structural completeness**: Goal / Acceptance criteria / (optional Non-goals
+   and Context) blocks present and well-formed.
+2. **Acceptance criteria quality**: each AC is testable, specific, and
+   unambiguous; ACs are observable outcomes, not implementation steps.
+3. **Unstated assumptions**: knowledge a fresh implementer would lack.
+
+If a task is missing the structured header block entirely, synthesize one in
+`suggested_header_block` (Goal + ACs + optional Non-goals/Context) and explain
+your reasoning in `suggested_header_reason`. If the header is already adequate,
+leave both empty.
+
+Severity: critical = unimplementable as written; major = implementer would
+still misimplement; minor = nit.
+
+## Output
+
+Respond with a JSON object matching the provided schema. The `tasks` array
+must contain exactly one entry per task in the list above, **in the same
+order**, with `task_title` matching the heading text verbatim. Do NOT emit
+results for any task outside the list. Do NOT emit `plan_findings` — those
+are handled in a separate call. Do not include prose outside the JSON.
