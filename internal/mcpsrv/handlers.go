@@ -106,7 +106,7 @@ func (h *handlers) review(ctx context.Context, model config.ModelRef, p prompts.
 		Model:      model.Model,
 		System:     p.System,
 		User:       p.User,
-		MaxTokens:  4096,
+		MaxTokens:  h.deps.Cfg.PerTaskMaxTokens,
 		JSONSchema: verdict.Schema(),
 	}
 	resp, err := rv.Review(ctx, req)
@@ -386,21 +386,21 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return nil, verdict.PlanResult{}, err
 	}
 
-	rendered, err := prompts.RenderPlan(prompts.PlanInput{PlanText: args.PlanText})
-	if err != nil {
-		return nil, verdict.PlanResult{}, fmt.Errorf("render plan prompt: %w", err)
-	}
-
-	pr, modelUsed, ms, err := h.reviewPlan(ctx, model, rendered)
+	pr, modelUsed, ms, err := h.reviewPlanSingle(ctx, model, args.PlanText)
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}
 	return planEnvelopeResult(pr, modelUsed, ms)
 }
 
-// reviewPlan mirrors review() for plan-level analysis: one provider call,
-// one parse, retry-once on malformed JSON.
-func (h *handlers) reviewPlan(ctx context.Context, model config.ModelRef, p prompts.Output) (verdict.PlanResult, string, int64, error) {
+// reviewPlanSingle runs one reviewer call for the entire plan — the
+// behavior used today for plans whose task count is at or below
+// h.deps.Cfg.PlanTasksPerChunk. Renders the prompt internally.
+func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, planText string) (verdict.PlanResult, string, int64, error) {
+	rendered, err := prompts.RenderPlan(prompts.PlanInput{PlanText: planText})
+	if err != nil {
+		return verdict.PlanResult{}, "", 0, fmt.Errorf("render plan prompt: %w", err)
+	}
 	rv, err := h.deps.Reviews.Get(model.Provider)
 	if err != nil {
 		return verdict.PlanResult{}, "", 0, err
@@ -408,9 +408,9 @@ func (h *handlers) reviewPlan(ctx context.Context, model config.ModelRef, p prom
 	start := time.Now()
 	req := providers.Request{
 		Model:      model.Model,
-		System:     p.System,
-		User:       p.User,
-		MaxTokens:  4096,
+		System:     rendered.System,
+		User:       rendered.User,
+		MaxTokens:  h.deps.Cfg.PlanMaxTokens,
 		JSONSchema: verdict.PlanSchema(),
 	}
 	resp, err := rv.Review(ctx, req)
@@ -420,7 +420,7 @@ func (h *handlers) reviewPlan(ctx context.Context, model config.ModelRef, p prom
 	r, err := verdict.ParsePlan(resp.RawJSON)
 	if err != nil {
 		// One retry with explicit reminder.
-		req.User = p.User + "\n\n" + verdict.RetryHint()
+		req.User = rendered.User + "\n\n" + verdict.RetryHint()
 		resp, err = rv.Review(ctx, req)
 		if err != nil {
 			return verdict.PlanResult{}, "", 0, err
