@@ -46,22 +46,50 @@ The caller sees an opaque error with no signal that length was the cause and no 
 
 ```
 validate_plan(plan_text)
-├── parse `### Task N:` headings → tasks[]
+├── parse `### Task N:` headings → tasks[] ([]RawTask from planparser)
 ├── if len(tasks) ≤ PlanTasksPerChunk:
 │   └── single-call path (today's behavior; uses PlanMaxTokens)
 └── else (chunking path):
     ├── Pass 1 — plan-findings-only call
     │   prompt: full plan_text
     │   schema: PlanFindingsOnlySchema
-    │   returns: {plan_verdict, plan_findings[], next_action_hint}
-    ├── Pass 2..K+1 — per-task chunks (K = ceil(len(tasks)/N))
-    │   prompt: full plan_text + "evaluate ONLY tasks i..j inclusive"
+    │   returns: {plan_verdict, plan_findings[], next_action}
+    ├── Pass 2..K+1 — per-task chunks where K = ceil(len(tasks)/N)
+    │   chunk i covers tasks[i*N : min((i+1)*N, len(tasks))]
+    │   prompt: full plan_text + an explicit list of the heading titles in this chunk
     │   schema: TasksOnlySchema
     │   returns: {tasks: [...]}
     └── merge → PlanResult{plan_verdict, plan_findings, tasks (flat, ordered), next_action, model_used, review_ms (sum)}
 ```
 
 The plan text is sent in full on every call. Input tokens are cheap and not the bottleneck; what overflows is the response. Splitting the output (not the input) is the correct fix.
+
+### Chunking math
+
+For `n = len(tasks)` and `N = PlanTasksPerChunk`, the chunk count is **strictly `K = ceil(n/N)`**. The slicing rule is `tasks[i*N : min((i+1)*N, n)]` for `i = 0..K-1`. The last chunk may contain anywhere from 1 to N tasks. Worked examples (all with `N=8`):
+
+| `n` | `K` | Chunk sizes |
+|---|---|---|
+| 8  | 1 (single-call path) | 8 |
+| 9  | 2 | 8, 1 |
+| 16 | 2 | 8, 8 |
+| 17 | 3 | 8, 8, 1 |
+| 25 | 4 | 8, 8, 8, 1 |
+| 50 | 7 | 8×6, 2 |
+
+A 1-task trailing chunk costs one extra reviewer call (~$0.005) and ~500 ms — accepted as the price of deterministic, easy-to-reason-about chunking. No "absorb the remainder into the previous chunk" optimization (would push a chunk past `N`, risking the very overflow this design exists to prevent).
+
+### Chunk-range identification (no slice-index ambiguity)
+
+`planparser.RawTask.Title` carries the full heading text (e.g. `"Task 4: Add /healthz endpoint"`). `### Task N:` numbers may not be contiguous in arbitrary plans, so the implementation **never** passes integer ranges to the reviewer. Instead, `PlanChunkInput` carries the *slice of `RawTask`* for the chunk, and the template renders the exact heading titles the reviewer must emit:
+
+```
+PlanChunkInput { PlanText string; ChunkTasks []planparser.RawTask }
+```
+
+Template directive (paraphrased): "Return per-task verdicts for **these specific tasks**, identified by their `### Task N: Title` headings: [enumerated list]. Do not emit `plan_findings`. Do not emit results for any task outside this list."
+
+The merge step uses the same `RawTask` slice to validate the response (see error handling below).
 
 ### Why a separate plan-findings pass
 
@@ -83,6 +111,13 @@ Three new optional env vars, all validated as positive integers (zero/negative r
 
 Defaults are chosen so that **plans of 8 tasks or fewer see zero behavioral change** from v0.1.3. Operators with larger or denser plans can raise `PlanMaxTokens` (and optionally `PlanTasksPerChunk`) without code changes.
 
+**Operator notes.**
+
+- *`PER_TASK` naming.* `ANTI_TANGENT_PER_TASK_MAX_TOKENS` governs all three task-scoped lifecycle hooks (`validate_task_spec`, `check_progress`, `validate_completion`) collectively. The dichotomy is per-task vs. plan-level; per-task is accurate because each hook reviews exactly one task. We're not adding three separate envs — that would be over-configuration.
+- *`PlanTasksPerChunk` as a single knob.* The same value acts as both the chunking threshold (`len(tasks) > N` triggers chunking) and the per-chunk size (`tasks[i*N : min((i+1)*N, n)]`). One knob, one mental model: "above N tasks, batch in groups of N." If a real operator ever needs them decoupled, we'll split it then (YAGNI).
+- *Per-call vs whole-request timeout.* `ANTI_TANGENT_REQUEST_TIMEOUT` (default 120 s) applies **per reviewer call**, not to the whole `reviewPlanChunked` invocation. A 25-task plan does 5 sequential calls, so worst-case wall-clock is ~5 × 120 s = 10 min. MCP clients (Claude Code, opencode) may have their own shorter tool-call timeouts; operators running large plans should be aware and may need to lower `PlanTasksPerChunk` (more, smaller calls) rather than raise `RequestTimeout` to fit within client deadlines.
+- *Bundled fix.* `ANTI_TANGENT_PER_TASK_MAX_TOKENS` and `ANTI_TANGENT_PLAN_MAX_TOKENS` both make a previously-hardcoded literal (`MaxTokens: 4096` at `handlers.go:109` and `:413`) configurable. This is intentionally bundled with the chunking work because the same root cause — fixed output budget — motivates both knobs, and shipping them together avoids a second release for a one-line config change.
+
 ## Components
 
 ### `internal/config/config.go` (extend)
@@ -98,11 +133,11 @@ Add unit tests in `internal/config/config_test.go`: default values, valid overri
 
 ### `internal/verdict/plan.go` (extend)
 
-Keep the existing `PlanResult` and `PlanSchema()` exactly as-is for the single-call path.
+Keep the existing `PlanResult` and `PlanSchema()` exactly as-is for the single-call path. `PlanSchema()` returns `[]byte` (embedded JSON loaded via `//go:embed`); the two new schemas must follow the same pattern to fit `providers.Request.JSONSchema []byte` without changing the provider interface.
 
 Add:
-- `PlanFindingsOnlySchema() *jsonschema.Schema` — returns a schema with `plan_verdict`, `plan_findings`, optional `next_action`; `tasks` field omitted entirely.
-- `TasksOnlySchema() *jsonschema.Schema` — returns a schema with `tasks` (required, same item shape as the existing `PlanTaskResult` schema), and nothing else.
+- `plan_findings_only_schema.json` (embedded) + `PlanFindingsOnlySchema() []byte` — schema with `plan_verdict`, `plan_findings`, optional `next_action`; `tasks` field omitted entirely.
+- `tasks_only_schema.json` (embedded) + `TasksOnlySchema() []byte` — schema with `tasks` (required, same item shape as the existing `PlanTaskResult` schema), and nothing else.
 - `ParsePlanFindingsOnly(raw json.RawMessage) (PlanFindingsOnly, error)` — typed parse for the plan-findings-only response.
 - `ParseTasksOnly(raw json.RawMessage) (TasksOnly, error)` — typed parse for the per-chunk response.
 
@@ -133,29 +168,38 @@ Two new templates plus their golden files:
 
 - `plan_tasks_chunk.tmpl` — system + user prompt that:
   - Embeds the full `plan_text`.
-  - Includes a range directive: "Return per-task verdicts for **tasks numbered {{.RangeStart}} through {{.RangeEnd}} inclusive**. Do not emit `plan_findings`. Do not emit results for tasks outside this range."
+  - Enumerates the *exact* heading titles for the chunk: "Return per-task verdicts for the following tasks, identified by their `### Task N:` headings: `{{range .ChunkTasks}}{{.Title}}{{end}}` (one per line). Do not emit `plan_findings`. Do not emit results for any task outside this list."
   - Notes that the model has the full plan as context so cross-task reasoning is allowed — but only emitted tasks count.
 
 Render functions in `internal/prompts/prompts.go`:
 - `RenderPlanFindingsOnly(input PlanInput) (Output, error)`
-- `RenderPlanTasksChunk(input PlanChunkInput) (Output, error)` where `PlanChunkInput` has `PlanText`, `RangeStart`, `RangeEnd`.
+- `RenderPlanTasksChunk(input PlanChunkInput) (Output, error)` where:
+  ```go
+  type PlanChunkInput struct {
+      PlanText   string
+      ChunkTasks []planparser.RawTask
+  }
+  ```
+  Carrying `[]RawTask` (not integer ranges) sidesteps the heading-number-vs-slice-index ambiguity for plans with non-contiguous `### Task N:` numbering. The template iterates the slice to render heading titles verbatim.
 
 Golden files added under `internal/prompts/testdata/`. Generate with `go test ./internal/prompts/... -update` and review the diff before committing.
 
 ### `internal/mcpsrv/handlers.go`
 
-Refactor `reviewPlan` into:
+Replace `reviewPlan` with two helpers that **both take `planText string` and render internally**. This is a deliberate departure from the current `reviewPlan(ctx, model, prompts.Output)` shape: the chunked path renders multiple distinct templates per call (one for plan-findings, one per chunk), so pre-rendering at the dispatch site doesn't make sense. Making both helpers symmetric (each renders its own prompt) keeps the code consistent and the dispatch site clean.
 
 ```go
-// Single-call path; today's behavior. Used when len(tasks) <= chunkSize.
-func (h *handlers) reviewPlanSingle(ctx, model, planText) (PlanResult, modelUsed, ms, error)
+// Single-call path; current behavior preserved. Used when len(tasks) <= chunkSize.
+// Renders prompts.RenderPlan internally; uses PlanSchema; MaxTokens = PlanMaxTokens.
+func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, planText string) (verdict.PlanResult, string, int64, error)
 
 // Chunked path; used when len(tasks) > chunkSize.
 // Orchestrates Pass 1 (plan-findings) + K per-task chunks, merges, returns PlanResult.
-func (h *handlers) reviewPlanChunked(ctx, model, planText, tasks, chunkSize) (PlanResult, modelUsed, ms, error)
+// Renders RenderPlanFindingsOnly and RenderPlanTasksChunk internally; uses PlanFindingsOnlySchema/TasksOnlySchema.
+func (h *handlers) reviewPlanChunked(ctx context.Context, model config.ModelRef, planText string, tasks []planparser.RawTask, chunkSize int) (verdict.PlanResult, string, int64, error)
 ```
 
-Dispatch lives in the existing `validate_plan` handler:
+Dispatch in `validate_plan`:
 
 ```go
 if len(tasks) <= h.deps.Cfg.PlanTasksPerChunk {
@@ -165,37 +209,61 @@ if len(tasks) <= h.deps.Cfg.PlanTasksPerChunk {
 }
 ```
 
-Both helpers read `h.deps.Cfg.PlanMaxTokens` for their `MaxTokens` field. The per-task `review()` helper (lines ~98–128) is updated to read `h.deps.Cfg.PerTaskMaxTokens` for the same purpose.
+The existing `prompts.RenderPlan` call at the dispatch site is **removed**; rendering moves inside the single-call helper. Both helpers read `h.deps.Cfg.PlanMaxTokens` for their `MaxTokens` field. The per-task `review()` helper (lines ~98–128) is updated to read `h.deps.Cfg.PerTaskMaxTokens` for the same purpose.
 
-The per-chunk schema-retry path (existing pattern: malformed JSON → retry once with `verdict.RetryHint()`) is preserved inside each call. Whole-request `review_ms` is the sum of all chunk call durations.
+The per-chunk schema-retry path (existing pattern: malformed JSON → retry once with `verdict.RetryHint()`) is preserved inside each individual reviewer call.
 
 ### Merge semantics
 
 ```go
-result := PlanResult{
+// passFindings = result of Pass 1 (PlanFindingsOnly)
+// chunkResults = ordered slice of TasksOnly, one per chunk
+// modelRef     = the config.ModelRef both passes used (same for all calls)
+// totalMs      = accumulated wall-clock across Pass 1 + all chunks
+
+result := verdict.PlanResult{
     PlanVerdict:  passFindings.PlanVerdict,
     PlanFindings: passFindings.PlanFindings,
-    Tasks:        []PlanTaskResult{}, // appended in chunk order
-    NextAction:   passFindings.NextAction, // or computed; see below
+    NextAction:   passFindings.NextAction, // taken verbatim; no server-side fallback
+    Tasks:        make([]verdict.PlanTaskResult, 0, len(tasks)),
 }
-for each chunk in order:
-    result.Tasks = append(result.Tasks, chunk.Tasks...)
+for _, c := range chunkResults {
+    result.Tasks = append(result.Tasks, c.Tasks...)
+}
 ```
 
-`next_action` selection: if Pass 1 returned a non-empty `next_action`, use it. Otherwise compose a default from `plan_verdict` (matches the single-call path's existing behavior).
+**`next_action` rule.** Use Pass 1's value verbatim — even if empty. This matches the single-call path, which has **no server-side fallback** today (`internal/mcpsrv/handlers.go` trusts whatever the LLM returns). Adding a synthesized default here would create a behavioral asymmetry between the single-call and chunked paths; symmetry is more valuable than the marginal benefit of a guaranteed-non-empty string.
 
-Task ordering is determined by the chunk dispatch order (1..K), which mirrors the order of `### Task N:` headings in the original plan. The model is instructed to emit tasks in the requested range order; we preserve that.
+**`model_used` rule.** All calls use the same `config.ModelRef`. The handler returns the model identifier from the first reviewer response (matches the existing pattern at `handlers.go:433`: `model.Provider + ":" + resp.Model`, falling back to `model.String()` if `resp.Model` is empty). This is reported in the MCP envelope, not stored on `PlanResult` itself — the existing return tuple `(PlanResult, modelUsed string, ms int64, error)` is preserved.
+
+**`review_ms` rule.** `reviewPlanChunked` accumulates `time.Since(start).Milliseconds()` from each individual reviewer call into `totalMs` and returns it as the third tuple element. The MCP envelope reports the sum, matching consumer expectations (one MCP tool call = one `review_ms` value).
+
+**Task ordering.** Chunks are dispatched in slice order, and tasks within each chunk are appended in the order the reviewer emits them. The model is instructed (via the enumerated heading-titles list) to emit tasks in the same order they appear in the chunk. The merge preserves that order.
+
+**Post-merge validation.** After all chunks return, the handler checks:
+
+```go
+if len(result.Tasks) != len(tasks) {
+    return verdict.PlanResult{}, "", 0,
+        fmt.Errorf("chunked plan review returned %d task results, expected %d",
+            len(result.Tasks), len(tasks))
+}
+```
+
+This is a server-side guard against the reviewer dropping or duplicating tasks across chunks. It surfaces as a normal `validate_plan` error (not partial results), and the caller can retry. No retry loop inside the server — keep the failure mode simple.
 
 ## Data flow example — 25-task plan, defaults
 
-1. Parse headings → 25 tasks. `25 > 8` → chunked path.
-2. **Pass 1** (plan-findings-only): full plan text in; ~500 tokens out. Returns `{plan_verdict, plan_findings, next_action?}`.
-3. **Pass 2** (tasks 1..8): full plan text + range directive; ~2,500 tokens out. Returns `{tasks: [8 entries]}`.
-4. **Pass 3** (tasks 9..16): same; ~2,500 tokens out.
-5. **Pass 4** (tasks 17..25): same; ~2,800 tokens out (9 tasks).
-6. Merge → 25-task `PlanResult`. Total: 4 sequential reviewer calls, all within the 4096 cap.
+1. Parse headings → 25 `RawTask`s. `25 > 8` → chunked path. `K = ceil(25/8) = 4`.
+2. **Pass 1** (plan-findings-only): full plan text in; ~500 tokens out. Returns `{plan_verdict, plan_findings, next_action}`.
+3. **Pass 2** (chunk 0, tasks `[0:8]`): full plan + enumerated headings for the chunk; ~2,500 tokens out. Returns `{tasks: [8 entries]}`.
+4. **Pass 3** (chunk 1, tasks `[8:16]`): same; ~2,500 tokens out.
+5. **Pass 4** (chunk 2, tasks `[16:24]`): same; ~2,500 tokens out.
+6. **Pass 5** (chunk 3, tasks `[24:25]`): single trailing task; ~350 tokens out.
+7. Post-merge validation: `len(result.Tasks) == 25`. Pass.
+8. Return 25-task `PlanResult`. Total: **5 sequential reviewer calls** (1 plan-findings + 4 task chunks), all within the 4096 cap.
 
-For a 50-task plan: 1 + ceil(50/8) = 1 + 7 = **8 calls**. Linear in task count; bounded by the natural size of the plan.
+For a 50-task plan: 1 + `ceil(50/8)` = 1 + 7 = **8 calls** (chunks 8+8+8+8+8+8+2). Linear in task count; bounded by the natural size of the plan.
 
 ## Error handling
 
