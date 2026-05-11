@@ -230,6 +230,9 @@ result := verdict.PlanResult{
 for _, c := range chunkResults {
     result.Tasks = append(result.Tasks, c.Tasks...)
 }
+// totalMs is accumulated during dispatch, not here:
+//   for each reviewer call: totalMs += time.Since(start).Milliseconds()
+// reviewPlanChunked returns (result, modelUsed, totalMs, nil)
 ```
 
 **`next_action` rule.** Use Pass 1's value verbatim — even if empty. This matches the single-call path, which has **no server-side fallback** today (`internal/mcpsrv/handlers.go` trusts whatever the LLM returns). Adding a synthesized default here would create a behavioral asymmetry between the single-call and chunked paths; symmetry is more valuable than the marginal benefit of a guaranteed-non-empty string.
@@ -251,6 +254,8 @@ if len(result.Tasks) != len(tasks) {
 ```
 
 This is a server-side guard against the reviewer dropping or duplicating tasks across chunks. It surfaces as a normal `validate_plan` error (not partial results), and the caller can retry. No retry loop inside the server — keep the failure mode simple.
+
+Additionally, **per-chunk identity validation** runs inside each chunk call before appending to the merge buffer: after parsing a `TasksOnly` response, the handler asserts that every returned task's title (or `task_index` if the schema requires it) matches one of the heading titles in the chunk's `ChunkTasks` slice. A mismatch (reviewer hallucinated a heading, returned a task outside the requested chunk, or shuffled the response) triggers the existing per-call retry-once path with `verdict.RetryHint()`; a second failure surfaces as a normal error. This complements the post-merge count check — count catches drops/duplicates, identity catches wrong-task-emitted.
 
 ## Data flow example — 25-task plan, defaults
 
