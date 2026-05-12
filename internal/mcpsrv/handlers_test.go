@@ -27,10 +27,7 @@ type fakeReviewer struct {
 func (f *fakeReviewer) Name() string { return f.name }
 func (f *fakeReviewer) Review(ctx context.Context, _ providers.Request) (providers.Response, error) {
 	f.Calls++
-	if f.err != nil {
-		return providers.Response{}, f.err
-	}
-	return f.resp, nil
+	return f.resp, f.err
 }
 
 func passResp(model string) providers.Response {
@@ -409,6 +406,138 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
+}
+
+func TestValidateTaskSpec_PartialFindingsRecoveredOnTruncation(t *testing.T) {
+	// Populated RawJSON with one complete finding, then truncation in the
+	// middle of a second finding.
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[` +
+				`{"severity":"major","category":"other","criterion":"ac1","evidence":"e1","suggestion":"s1"},` +
+				`{"severity":"minor","category":"other","crit`),
+			Model: "claude-sonnet-4-6",
+		},
+		err: providers.ErrResponseTruncated,
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "warn", env.Verdict)
+	assert.True(t, env.Partial, "envelope should signal partial recovery")
+	assert.Empty(t, env.SessionID, "validate_task_spec should NOT create a session on partial-recovery flows")
+
+	// One recovered finding + one minor truncation marker = 2 total.
+	require.Len(t, env.Findings, 2)
+	// Recovered finding comes first.
+	assert.Equal(t, "ac1", env.Findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	// Truncation marker is minor and references both env var and override.
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[1].Severity)
+	assert.Equal(t, verdict.CategoryOther, env.Findings[1].Category)
+	assert.Contains(t, env.Findings[1].Evidence, "1 complete findings recovered")
+	assert.Contains(t, env.Findings[1].Suggestion, "max_tokens_override")
+	assert.Contains(t, env.Findings[1].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+
+	// next_action steers the caller to re-run with a higher cap.
+	assert.Contains(t, env.NextAction, "max_tokens_override")
+}
+
+// TestRecoverPartialFindings_PreservesReviewerNextActionWithOverrideHint
+// exercises the defensive AC-MUST branch: when the partial parser yields a
+// non-empty NextAction that does NOT mention max_tokens_override, the helper
+// preserves the reviewer's text AND appends the override hint so the
+// envelope still satisfies the "next_action MUST mention max_tokens_override"
+// requirement. ParseResultPartial's array-truncation path strips trailing
+// keys, so this branch is most reliably reached via a strict-parse path
+// (well-formed JSON paired with a truncation signal from the provider);
+// we test the helper directly here for branch coverage independent of how
+// the partial parser happens to behave in any given scenario.
+func TestRecoverPartialFindings_PreservesReviewerNextActionWithOverrideHint(t *testing.T) {
+	// Well-formed JSON that strict-parses, but with a non-empty next_action
+	// that does NOT mention max_tokens_override.
+	raw := []byte(`{"verdict":"warn","findings":[` +
+		`{"severity":"major","category":"other","criterion":"ac1","evidence":"e1","suggestion":"s1"}` +
+		`],"next_action":"Tighten AC1 wording."}`)
+
+	env, ok := recoverPartialFindings("", config.ModelRef{Provider: "anthropic", Model: "claude-sonnet-4-6"}, raw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	require.True(t, ok)
+	assert.True(t, env.Partial)
+	assert.Contains(t, env.NextAction, "Tighten AC1 wording.")
+	assert.Contains(t, env.NextAction, "max_tokens_override")
+}
+
+func TestCheckProgress_PartialFindingsRecoveredOnTruncation(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G",
+	})
+	require.NoError(t, err)
+
+	h.deps.Reviews = providers.Registry{"anthropic": &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[` +
+				`{"severity":"major","category":"other","criterion":"cp1","evidence":"e1","suggestion":"s1"},` +
+				`{"severity":"minor","category":"other","crit`),
+			Model: "claude-sonnet-4-6",
+		},
+		err: providers.ErrResponseTruncated,
+	}}
+
+	_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID: pre.SessionID, WorkingOn: "x",
+	})
+	require.NoError(t, err)
+	assert.True(t, env.Partial)
+	require.Len(t, env.Findings, 2)
+	assert.Equal(t, "cp1", env.Findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[1].Severity)
+	assert.Contains(t, env.Findings[1].Suggestion, "max_tokens_override")
+	assert.Equal(t, pre.SessionID, env.SessionID, "existing session is preserved on partial recovery")
+}
+
+func TestValidateCompletion_PartialFindingsRecoveredOnTruncation(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+
+	h.deps.Reviews = providers.Registry{"anthropic": &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[` +
+				`{"severity":"critical","category":"other","criterion":"vc1","evidence":"e1","suggestion":"s1"},` +
+				`{"severity":"minor","category":"other","crit`),
+			Model: "claude-sonnet-4-6",
+		},
+		err: providers.ErrResponseTruncated,
+	}}
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+	})
+	require.NoError(t, err)
+	assert.True(t, env.Partial)
+	require.Len(t, env.Findings, 2)
+	assert.Equal(t, "vc1", env.Findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[1].Severity)
+	assert.Contains(t, env.Findings[1].Suggestion, "max_tokens_override")
+	assert.Equal(t, pre.SessionID, env.SessionID, "existing session is preserved on partial recovery")
 }
 
 func TestValidatePlan_TruncatedResponseSurfacesWarn(t *testing.T) {

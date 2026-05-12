@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -428,4 +429,42 @@ func TestValidateChunkIdentity_ReviewerReturnsDuplicateForDistinctExpected(t *te
 	// Per-position mismatch: got "Same", expected "Task 2: Other".
 	assert.Contains(t, err.Error(), "expected")
 	assert.Contains(t, err.Error(), `"Task 2: Other"`)
+}
+
+// TestValidatePlan_PartialFindingsRecoveredOnTruncation verifies the
+// plan-level partial-recovery branch: when reviewPlanSingle yields a
+// truncated response with two complete tasks and a third task cut mid-find,
+// ValidatePlan recovers the two cleanly-closed tasks plus the original
+// plan-level finding, appends a minor truncation marker, and sets Partial=true.
+func TestValidatePlan_PartialFindingsRecoveredOnTruncation(t *testing.T) {
+	// Two complete tasks; truncation hits in the third.
+	rawJSON := []byte(`{"plan_verdict":"warn","plan_findings":[` +
+		`{"severity":"major","category":"other","criterion":"pf1","evidence":"e","suggestion":"s"}` +
+		`],"tasks":[` +
+		`{"task_index":0,"task_title":"T0","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":1,"task_title":"T1","verdict":"warn","findings":[{"severity":"minor","category":"other","criterion":"tf1","evidence":"e","suggestion":"s"}],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":2,"task_title":"T2","verdict":"warn","find`)
+
+	rv := &fakeReviewer{
+		name: "openai",
+		resp: providers.Response{RawJSON: rawJSON, Model: "gpt-5"},
+		err:  providers.ErrResponseTruncated,
+	}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	plan := "# Plan\n\n### Task 1: First\n\nbody.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	assert.True(t, pr.Partial)
+	require.Len(t, pr.Tasks, 2)
+	assert.Equal(t, "T0", pr.Tasks[0].TaskTitle)
+	assert.Equal(t, "T1", pr.Tasks[1].TaskTitle)
+	// plan_findings has the original major finding plus the minor truncation marker.
+	require.Len(t, pr.PlanFindings, 2)
+	assert.Equal(t, "pf1", pr.PlanFindings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[1].Severity)
+	assert.Contains(t, pr.PlanFindings[1].Suggestion, "max_tokens_override")
 }

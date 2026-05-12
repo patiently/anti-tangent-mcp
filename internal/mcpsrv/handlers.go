@@ -27,6 +27,7 @@ type Envelope struct {
 	NextAction                 string            `json:"next_action"`
 	ModelUsed                  string            `json:"model_used"`
 	ReviewMS                   int64             `json:"review_ms"`
+	Partial                    bool              `json:"partial,omitempty"`
 	SessionExpiresAt           *time.Time        `json:"session_expires_at,omitempty"`
 	SessionTTLRemainingSeconds *int              `json:"session_ttl_remaining_seconds,omitempty"`
 }
@@ -77,9 +78,12 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, fmt.Errorf("render pre prompt: %w", err)
 	}
 
-	result, modelUsed, ms, err := h.review(ctx, model, rendered)
+	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered)
 	if err != nil {
 		if errors.Is(err, providers.ErrResponseTruncated) {
+			if env, ok := recoverPartialFindings("", model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
+				return envelopeResult(env)
+			}
 			return envelopeResult(truncatedEnvelope("", model))
 		}
 		return nil, Envelope{}, err
@@ -107,10 +111,13 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 }
 
 // review runs a single reviewer call with one parse-retry on malformed JSON.
-func (h *handlers) review(ctx context.Context, model config.ModelRef, p prompts.Output) (verdict.Result, string, int64, error) {
+// On ErrResponseTruncated, the returned []byte carries the partial response
+// bytes (possibly empty if the provider returned none) so the caller can
+// attempt partial-findings recovery via recoverPartialFindings.
+func (h *handlers) review(ctx context.Context, model config.ModelRef, p prompts.Output) (verdict.Result, string, int64, []byte, error) {
 	rv, err := h.deps.Reviews.Get(model.Provider)
 	if err != nil {
-		return verdict.Result{}, "", 0, err
+		return verdict.Result{}, "", 0, nil, err
 	}
 	start := time.Now()
 
@@ -123,7 +130,10 @@ func (h *handlers) review(ctx context.Context, model config.ModelRef, p prompts.
 	}
 	resp, err := rv.Review(ctx, req)
 	if err != nil {
-		return verdict.Result{}, "", 0, err
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return verdict.Result{}, "", 0, resp.RawJSON, err
+		}
+		return verdict.Result{}, "", 0, nil, err
 	}
 	r, err := verdict.Parse(resp.RawJSON)
 	if err != nil {
@@ -131,11 +141,14 @@ func (h *handlers) review(ctx context.Context, model config.ModelRef, p prompts.
 		req.User = p.User + "\n\n" + verdict.RetryHint()
 		resp, err = rv.Review(ctx, req)
 		if err != nil {
-			return verdict.Result{}, "", 0, err
+			if errors.Is(err, providers.ErrResponseTruncated) {
+				return verdict.Result{}, "", 0, resp.RawJSON, err
+			}
+			return verdict.Result{}, "", 0, nil, err
 		}
 		r, err = verdict.Parse(resp.RawJSON)
 		if err != nil {
-			return verdict.Result{}, "", 0, fmt.Errorf("provider response failed schema after retry: %w", err)
+			return verdict.Result{}, "", 0, nil, fmt.Errorf("provider response failed schema after retry: %w", err)
 		}
 	}
 
@@ -143,7 +156,7 @@ func (h *handlers) review(ctx context.Context, model config.ModelRef, p prompts.
 	if resp.Model == "" {
 		modelUsed = model.String()
 	}
-	return r, modelUsed, time.Since(start).Milliseconds(), nil
+	return r, modelUsed, time.Since(start).Milliseconds(), nil, nil
 }
 
 func (h *handlers) resolveModel(override string, fallback config.ModelRef) (config.ModelRef, error) {
@@ -242,9 +255,13 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		return nil, Envelope{}, fmt.Errorf("render mid prompt: %w", err)
 	}
 
-	result, modelUsed, ms, err := h.review(ctx, model, rendered)
+	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered)
 	if err != nil {
 		if errors.Is(err, providers.ErrResponseTruncated) {
+			if env, ok := recoverPartialFindings(sess.ID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
+				env = h.withSessionTTL(env, sess)
+				return envelopeResult(env)
+			}
 			return envelopeResult(truncatedEnvelope(sess.ID, model))
 		}
 		return nil, Envelope{}, err
@@ -330,6 +347,53 @@ func truncatedEnvelope(id string, model config.ModelRef) Envelope {
 	}
 }
 
+// recoverPartialFindings attempts to extract complete findings from a
+// truncated reviewer response. Returns (envelope, true) when at least one
+// finding was recovered; (zero, false) when the caller should fall back to
+// truncatedEnvelope.
+//
+// The returned envelope has Verdict="warn", Findings = recovered list plus a
+// single minor "truncation marker" finding noting the count and referencing
+// both envVar and max_tokens_override mitigations, Partial=true, and
+// NextAction = the parsed result's next_action when non-empty, otherwise a
+// generic fallback that points the caller at max_tokens_override.
+func recoverPartialFindings(id string, model config.ModelRef, rawJSON []byte, envVar string) (Envelope, bool) {
+	if len(rawJSON) == 0 {
+		return Envelope{}, false
+	}
+	r, ok := verdict.ParseResultPartial(rawJSON)
+	if !ok || len(r.Findings) == 0 {
+		return Envelope{}, false
+	}
+	marker := verdict.Finding{
+		Severity:   verdict.SeverityMinor,
+		Category:   verdict.CategoryOther,
+		Criterion:  "reviewer_response",
+		Evidence:   fmt.Sprintf("reviewer output truncated at the max_tokens cap; %d complete findings recovered", len(r.Findings)),
+		Suggestion: "Raise " + envVar + " or pass max_tokens_override on the next call to capture more.",
+	}
+	findings := append([]verdict.Finding{}, r.Findings...)
+	findings = append(findings, marker)
+	// AC: next_action MUST mention re-running with max_tokens_override. If the
+	// reviewer returned a NextAction that already mentions it, preserve it;
+	// otherwise append the mitigation hint (or supply a fallback if empty).
+	next := r.NextAction
+	switch {
+	case next == "":
+		next = "Address recovered findings; reviewer output was truncated. Re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
+	case !strings.Contains(next, "max_tokens_override"):
+		next = next + " Reviewer output was truncated; re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
+	}
+	return Envelope{
+		SessionID:  id,
+		Verdict:    string(verdict.VerdictWarn),
+		Findings:   findings,
+		NextAction: next,
+		ModelUsed:  model.String(),
+		Partial:    true,
+	}, true
+}
+
 func truncatedPlanResult() verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictWarn,
@@ -343,6 +407,53 @@ func truncatedPlanResult() verdict.PlanResult {
 		Tasks:      []verdict.PlanTaskResult{},
 		NextAction: "Retry with a higher plan max-tokens cap.",
 	}
+}
+
+// recoverPartialPlanFindings attempts to extract complete plan findings and
+// tasks from a truncated reviewer response. Returns (planResult, true) when
+// at least one complete finding or task was recovered anywhere in the
+// structure; (zero, false) otherwise.
+//
+// The returned PlanResult has Partial=true, a single minor "truncation
+// marker" finding appended to PlanFindings noting the total recovered count
+// across plan and tasks, and a NextAction that either preserves the parsed
+// value (when non-empty) or falls back to a generic message pointing the
+// caller at ANTI_TANGENT_PLAN_MAX_TOKENS / max_tokens_override.
+func recoverPartialPlanFindings(rawJSON []byte) (verdict.PlanResult, bool) {
+	if len(rawJSON) == 0 {
+		return verdict.PlanResult{}, false
+	}
+	pr, ok := verdict.ParsePlanResultPartial(rawJSON)
+	if !ok {
+		return verdict.PlanResult{}, false
+	}
+	count := len(pr.PlanFindings)
+	for _, t := range pr.Tasks {
+		count += len(t.Findings)
+	}
+	pr.PlanFindings = append(pr.PlanFindings, verdict.Finding{
+		Severity:   verdict.SeverityMinor,
+		Category:   verdict.CategoryOther,
+		Criterion:  "reviewer_response",
+		Evidence:   fmt.Sprintf("reviewer output truncated at the max_tokens cap; %d complete findings recovered across plan and tasks", count),
+		Suggestion: "Raise ANTI_TANGENT_PLAN_MAX_TOKENS or pass max_tokens_override on the next call to capture more.",
+	})
+	// Mirror the per-task helper's contract: NextAction MUST mention
+	// re-running with max_tokens_override. Preserve a non-empty
+	// reviewer-supplied NextAction but append the mitigation hint when it
+	// doesn't already mention the override.
+	switch {
+	case pr.NextAction == "":
+		pr.NextAction = "Address recovered findings; reviewer output was truncated. Re-call with a higher max_tokens_override (or raise ANTI_TANGENT_PLAN_MAX_TOKENS) to capture the full review."
+	case !strings.Contains(pr.NextAction, "max_tokens_override"):
+		pr.NextAction = pr.NextAction + " Reviewer output was truncated; re-call with a higher max_tokens_override (or raise ANTI_TANGENT_PLAN_MAX_TOKENS) to capture the full review."
+	}
+	// Ensure Tasks is non-nil so JSON marshaling emits [] rather than null.
+	if pr.Tasks == nil {
+		pr.Tasks = []verdict.PlanTaskResult{}
+	}
+	pr.Partial = true
+	return pr, true
 }
 
 func tooLargeEnvelope(id string, model config.ModelRef, size, limit int, suggestion string) Envelope {
@@ -433,9 +544,13 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, fmt.Errorf("render post prompt: %w", err)
 	}
 
-	result, modelUsed, ms, err := h.review(ctx, model, rendered)
+	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered)
 	if err != nil {
 		if errors.Is(err, providers.ErrResponseTruncated) {
+			if env, ok := recoverPartialFindings(sess.ID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
+				env = h.withSessionTTL(env, sess)
+				return envelopeResult(env)
+			}
 			return envelopeResult(truncatedEnvelope(sess.ID, model))
 		}
 		return nil, Envelope{}, err
@@ -479,13 +594,17 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	var pr verdict.PlanResult
 	var modelUsed string
 	var ms int64
+	var partialRaw []byte
 	if len(tasks) <= h.deps.Cfg.PlanTasksPerChunk {
-		pr, modelUsed, ms, err = h.reviewPlanSingle(ctx, model, args.PlanText)
+		pr, modelUsed, ms, partialRaw, err = h.reviewPlanSingle(ctx, model, args.PlanText)
 	} else {
-		pr, modelUsed, ms, err = h.reviewPlanChunked(ctx, model, args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk)
+		pr, modelUsed, ms, partialRaw, err = h.reviewPlanChunked(ctx, model, args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk)
 	}
 	if err != nil {
 		if errors.Is(err, providers.ErrResponseTruncated) {
+			if recovered, ok := recoverPartialPlanFindings(partialRaw); ok {
+				return planEnvelopeResult(recovered, model.String(), 0)
+			}
 			return planEnvelopeResult(truncatedPlanResult(), model.String(), 0)
 		}
 		return nil, verdict.PlanResult{}, err
@@ -496,14 +615,17 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 // reviewPlanSingle runs one reviewer call for the entire plan — the
 // behavior used today for plans whose task count is at or below
 // h.deps.Cfg.PlanTasksPerChunk. Renders the prompt internally.
-func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, planText string) (verdict.PlanResult, string, int64, error) {
+// On ErrResponseTruncated, the returned []byte carries the partial response
+// bytes (possibly empty if the provider returned none) so the caller can
+// attempt partial-findings recovery via recoverPartialPlanFindings.
+func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, planText string) (verdict.PlanResult, string, int64, []byte, error) {
 	rendered, err := prompts.RenderPlan(prompts.PlanInput{PlanText: planText})
 	if err != nil {
-		return verdict.PlanResult{}, "", 0, fmt.Errorf("render plan prompt: %w", err)
+		return verdict.PlanResult{}, "", 0, nil, fmt.Errorf("render plan prompt: %w", err)
 	}
 	rv, err := h.deps.Reviews.Get(model.Provider)
 	if err != nil {
-		return verdict.PlanResult{}, "", 0, err
+		return verdict.PlanResult{}, "", 0, nil, err
 	}
 	start := time.Now()
 	req := providers.Request{
@@ -515,7 +637,10 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 	}
 	resp, err := rv.Review(ctx, req)
 	if err != nil {
-		return verdict.PlanResult{}, "", 0, err
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return verdict.PlanResult{}, "", 0, resp.RawJSON, err
+		}
+		return verdict.PlanResult{}, "", 0, nil, err
 	}
 	r, err := verdict.ParsePlan(resp.RawJSON)
 	if err != nil {
@@ -523,18 +648,21 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 		req.User = rendered.User + "\n\n" + verdict.RetryHint()
 		resp, err = rv.Review(ctx, req)
 		if err != nil {
-			return verdict.PlanResult{}, "", 0, err
+			if errors.Is(err, providers.ErrResponseTruncated) {
+				return verdict.PlanResult{}, "", 0, resp.RawJSON, err
+			}
+			return verdict.PlanResult{}, "", 0, nil, err
 		}
 		r, err = verdict.ParsePlan(resp.RawJSON)
 		if err != nil {
-			return verdict.PlanResult{}, "", 0, fmt.Errorf("plan provider response failed schema after retry: %w", err)
+			return verdict.PlanResult{}, "", 0, nil, fmt.Errorf("plan provider response failed schema after retry: %w", err)
 		}
 	}
 	modelUsed := model.Provider + ":" + resp.Model
 	if resp.Model == "" {
 		modelUsed = model.String()
 	}
-	return r, modelUsed, time.Since(start).Milliseconds(), nil
+	return r, modelUsed, time.Since(start).Milliseconds(), nil, nil
 }
 
 func noHeadingsPlanResult() verdict.PlanResult {
@@ -587,22 +715,29 @@ func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp
 // the full plan as context but instructs the reviewer to emit results only for
 // the tasks in the chunk. Results merge into a PlanResult identical in shape
 // to the single-call path.
+//
+// On ErrResponseTruncated, the returned []byte carries the partial response
+// bytes from the FIRST call that truncated. This is best-effort: if Pass 1
+// truncates, the bytes can yield a plan_findings list; if a per-chunk Pass
+// 2..K+1 truncates, the bytes can yield a partial tasks[] list for that
+// chunk only. The chunked path does not aggregate partial bytes across
+// multiple successful calls — that is a follow-up.
 func (h *handlers) reviewPlanChunked(
 	ctx context.Context,
 	model config.ModelRef,
 	planText string,
 	tasks []planparser.RawTask,
 	chunkSize int,
-) (verdict.PlanResult, string, int64, error) {
+) (verdict.PlanResult, string, int64, []byte, error) {
 	if chunkSize <= 0 {
 		// Defense-in-depth: config.Load already rejects PlanTasksPerChunk <= 0
 		// at startup, but a zero/negative chunkSize would turn the loop below
 		// into an infinite spin. Fail loudly instead.
-		return verdict.PlanResult{}, "", 0, fmt.Errorf("reviewPlanChunked: chunkSize must be positive, got %d", chunkSize)
+		return verdict.PlanResult{}, "", 0, nil, fmt.Errorf("reviewPlanChunked: chunkSize must be positive, got %d", chunkSize)
 	}
 	rv, err := h.deps.Reviews.Get(model.Provider)
 	if err != nil {
-		return verdict.PlanResult{}, "", 0, err
+		return verdict.PlanResult{}, "", 0, nil, err
 	}
 
 	var totalMs int64
@@ -611,7 +746,7 @@ func (h *handlers) reviewPlanChunked(
 	// ----- Pass 1: plan-findings only -----
 	rendered, err := prompts.RenderPlanFindingsOnly(prompts.PlanInput{PlanText: planText})
 	if err != nil {
-		return verdict.PlanResult{}, "", 0, fmt.Errorf("render plan_findings_only: %w", err)
+		return verdict.PlanResult{}, "", 0, nil, fmt.Errorf("render plan_findings_only: %w", err)
 	}
 	req := providers.Request{
 		Model:      model.Model,
@@ -623,18 +758,24 @@ func (h *handlers) reviewPlanChunked(
 	start := time.Now()
 	resp, err := rv.Review(ctx, req)
 	if err != nil {
-		return verdict.PlanResult{}, "", 0, err
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return verdict.PlanResult{}, "", 0, resp.RawJSON, err
+		}
+		return verdict.PlanResult{}, "", 0, nil, err
 	}
 	pf, err := verdict.ParsePlanFindingsOnly(resp.RawJSON)
 	if err != nil {
 		req.User = rendered.User + "\n\n" + verdict.RetryHint()
 		resp, err = rv.Review(ctx, req)
 		if err != nil {
-			return verdict.PlanResult{}, "", 0, err
+			if errors.Is(err, providers.ErrResponseTruncated) {
+				return verdict.PlanResult{}, "", 0, resp.RawJSON, err
+			}
+			return verdict.PlanResult{}, "", 0, nil, err
 		}
 		pf, err = verdict.ParsePlanFindingsOnly(resp.RawJSON)
 		if err != nil {
-			return verdict.PlanResult{}, "", 0, fmt.Errorf("plan_findings_only failed schema after retry: %w", err)
+			return verdict.PlanResult{}, "", 0, nil, fmt.Errorf("plan_findings_only failed schema after retry: %w", err)
 		}
 	}
 	totalMs += time.Since(start).Milliseconds()
@@ -659,38 +800,47 @@ func (h *handlers) reviewPlanChunked(
 		}
 		chunkTasks := tasks[i:end]
 
-		chunkResult, ms, err := h.reviewOnePlanChunk(ctx, rv, model, planText, chunkTasks)
+		chunkResult, ms, partialRaw, err := h.reviewOnePlanChunk(ctx, rv, model, planText, chunkTasks)
 		if err != nil {
-			return verdict.PlanResult{}, "", 0, err
+			if errors.Is(err, providers.ErrResponseTruncated) {
+				return verdict.PlanResult{}, "", 0, partialRaw, err
+			}
+			return verdict.PlanResult{}, "", 0, nil, err
 		}
 		totalMs += ms
 		result.Tasks = append(result.Tasks, chunkResult.Tasks...)
 	}
 
 	if len(result.Tasks) != len(tasks) {
-		return verdict.PlanResult{}, "", 0,
+		return verdict.PlanResult{}, "", 0, nil,
 			fmt.Errorf("chunked plan review returned %d task results, expected %d",
 				len(result.Tasks), len(tasks))
 	}
 
-	return result, modelUsed, totalMs, nil
+	return result, modelUsed, totalMs, nil, nil
 }
 
 // reviewOnePlanChunk runs one per-chunk reviewer call with identity validation
 // and the existing schema-retry-once pattern.
+//
+// On ErrResponseTruncated, the returned []byte carries the partial response
+// bytes from whichever attempt truncated (first or retry) so the caller can
+// attempt partial-findings recovery. Non-truncation errors return a nil
+// []byte and are wrapped in the usual "plan_tasks_chunk failed after retry"
+// message.
 func (h *handlers) reviewOnePlanChunk(
 	ctx context.Context,
 	rv providers.Reviewer,
 	model config.ModelRef,
 	planText string,
 	chunkTasks []planparser.RawTask,
-) (verdict.TasksOnly, int64, error) {
+) (verdict.TasksOnly, int64, []byte, error) {
 	rendered, err := prompts.RenderPlanTasksChunk(prompts.PlanChunkInput{
 		PlanText:   planText,
 		ChunkTasks: chunkTasks,
 	})
 	if err != nil {
-		return verdict.TasksOnly{}, 0, fmt.Errorf("render plan_tasks_chunk: %w", err)
+		return verdict.TasksOnly{}, 0, nil, fmt.Errorf("render plan_tasks_chunk: %w", err)
 	}
 
 	req := providers.Request{
@@ -702,35 +852,47 @@ func (h *handlers) reviewOnePlanChunk(
 	}
 
 	// attempt mutates req.User in place; each call overwrites it before
-	// Review, so the retry sees the hint-augmented body cleanly.
-	attempt := func(user string) (verdict.TasksOnly, int64, error) {
+	// Review, so the retry sees the hint-augmented body cleanly. On
+	// ErrResponseTruncated, the returned []byte carries resp.RawJSON.
+	attempt := func(user string) (verdict.TasksOnly, int64, []byte, error) {
 		req.User = user
 		start := time.Now()
 		resp, err := rv.Review(ctx, req)
 		if err != nil {
-			return verdict.TasksOnly{}, 0, err
+			if errors.Is(err, providers.ErrResponseTruncated) {
+				return verdict.TasksOnly{}, time.Since(start).Milliseconds(), resp.RawJSON, err
+			}
+			return verdict.TasksOnly{}, 0, nil, err
 		}
 		ms := time.Since(start).Milliseconds()
 		parsed, err := verdict.ParseTasksOnly(resp.RawJSON)
 		if err != nil {
-			return verdict.TasksOnly{}, ms, err
+			return verdict.TasksOnly{}, ms, nil, err
 		}
 		if err := validateChunkIdentity(parsed, chunkTasks); err != nil {
-			return verdict.TasksOnly{}, ms, err
+			return verdict.TasksOnly{}, ms, nil, err
 		}
-		return parsed, ms, nil
+		return parsed, ms, nil, nil
 	}
 
-	parsed, ms, err := attempt(rendered.User)
+	parsed, ms, partialRaw, err := attempt(rendered.User)
 	if err == nil {
-		return parsed, ms, nil
+		return parsed, ms, nil, nil
+	}
+	// Truncation on the first attempt: surface partial bytes immediately
+	// rather than retry — the retry would just be cut off the same way.
+	if errors.Is(err, providers.ErrResponseTruncated) {
+		return verdict.TasksOnly{}, ms, partialRaw, err
 	}
 	// Schema or identity failure → retry once with hint.
-	parsed2, ms2, err2 := attempt(rendered.User + "\n\n" + verdict.RetryHint())
+	parsed2, ms2, partialRaw2, err2 := attempt(rendered.User + "\n\n" + verdict.RetryHint())
 	if err2 != nil {
-		return verdict.TasksOnly{}, ms + ms2, fmt.Errorf("plan_tasks_chunk failed after retry: %w", err2)
+		if errors.Is(err2, providers.ErrResponseTruncated) {
+			return verdict.TasksOnly{}, ms + ms2, partialRaw2, err2
+		}
+		return verdict.TasksOnly{}, ms + ms2, nil, fmt.Errorf("plan_tasks_chunk failed after retry: %w", err2)
 	}
-	return parsed2, ms + ms2, nil
+	return parsed2, ms + ms2, nil, nil
 }
 
 // taskPrefixRe matches a leading "Task <number>: " prefix (with optional
