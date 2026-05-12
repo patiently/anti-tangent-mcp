@@ -111,6 +111,35 @@ func TestAnthropic_Review_TruncatedResponse(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrResponseTruncated))
 }
 
+func TestAnthropic_TruncatedResponseReturnsPartialBytes(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"model": "claude-opus-4-7",
+			"stop_reason": "max_tokens",
+			"content": [
+				{"type": "tool_use", "input": {"verdict":"warn","findings":[{"severity":"major"}]}}
+			],
+			"usage": {"input_tokens": 200, "output_tokens": 4096}
+		}`))
+	}))
+	defer srv.Close()
+
+	rv := NewAnthropic("test-key", srv.URL, 5*time.Second)
+	resp, err := rv.Review(context.Background(), Request{
+		Model: "claude-opus-4-7", System: "s", User: "u",
+		MaxTokens: 4096, JSONSchema: []byte(`{"type":"object"}`),
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrResponseTruncated))
+	assert.NotEmpty(t, resp.RawJSON, "truncated response should still carry partial bytes")
+	assert.Contains(t, string(resp.RawJSON), `"severity":"major"`)
+	assert.Equal(t, "claude-opus-4-7", resp.Model)
+	assert.Equal(t, 200, resp.InputTokens)
+	assert.Equal(t, 4096, resp.OutputTokens)
+}
+
 func TestAnthropic_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(50 * time.Millisecond)

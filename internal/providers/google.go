@@ -106,17 +106,23 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 	if len(parsed.Candidates) == 0 {
 		return Response{}, fmt.Errorf("google: no candidates in response")
 	}
-	if parsed.Candidates[0].FinishReason == "MAX_TOKENS" {
-		return Response{}, fmt.Errorf("google: %w", ErrResponseTruncated)
-	}
-	if len(parsed.Candidates[0].Content.Parts) == 0 {
-		return Response{}, fmt.Errorf("google: candidate has no content parts")
+
+	var text string
+	if len(parsed.Candidates[0].Content.Parts) > 0 {
+		text = parsed.Candidates[0].Content.Parts[0].Text
 	}
 
-	return Response{
-		RawJSON:      []byte(parsed.Candidates[0].Content.Parts[0].Text),
+	out := Response{
+		RawJSON:      []byte(text),
 		Model:        parsed.ModelVersion,
 		InputTokens:  parsed.UsageMetadata.PromptTokenCount,
 		OutputTokens: parsed.UsageMetadata.CandidatesTokenCount,
-	}, nil
+	}
+	if parsed.Candidates[0].FinishReason == "MAX_TOKENS" {
+		return out, fmt.Errorf("google: %w", ErrResponseTruncated)
+	}
+	if text == "" {
+		return Response{}, fmt.Errorf("google: candidate has no content parts")
+	}
+	return out, nil
 }

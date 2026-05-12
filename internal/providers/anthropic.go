@@ -97,19 +97,32 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 	if err := json.Unmarshal(respBytes, &parsed); err != nil {
 		return Response{}, fmt.Errorf("anthropic: decode response: %w", err)
 	}
-	if parsed.StopReason == "max_tokens" {
-		return Response{}, fmt.Errorf("anthropic: %w", ErrResponseTruncated)
-	}
-
+	// Extract the tool_use input first — Anthropic returns it inside the
+	// content array even when stop_reason is "max_tokens".
+	var raw json.RawMessage
 	for _, c := range parsed.Content {
 		if c.Type == "tool_use" && len(c.Input) > 0 {
-			return Response{
-				RawJSON:      []byte(c.Input),
-				Model:        parsed.Model,
-				InputTokens:  parsed.Usage.InputTokens,
-				OutputTokens: parsed.Usage.OutputTokens,
-			}, nil
+			raw = c.Input
+			break
 		}
 	}
-	return Response{}, fmt.Errorf("anthropic: no tool_use block in response")
+	if len(raw) == 0 {
+		// Truncation that hit before any tool_use input materialized;
+		// fall through to the "no tool_use block" error.
+		if parsed.StopReason == "max_tokens" {
+			return Response{}, fmt.Errorf("anthropic: %w", ErrResponseTruncated)
+		}
+		return Response{}, fmt.Errorf("anthropic: no tool_use block in response")
+	}
+
+	out := Response{
+		RawJSON:      []byte(raw),
+		Model:        parsed.Model,
+		InputTokens:  parsed.Usage.InputTokens,
+		OutputTokens: parsed.Usage.OutputTokens,
+	}
+	if parsed.StopReason == "max_tokens" {
+		return out, fmt.Errorf("anthropic: %w", ErrResponseTruncated)
+	}
+	return out, nil
 }
