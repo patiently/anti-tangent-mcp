@@ -3,6 +3,7 @@ package mcpsrv
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -28,10 +29,13 @@ func (s *scriptedReviewer) Review(_ context.Context, _ providers.Request) (provi
 	i := s.calls
 	s.calls++
 	if i < len(s.errors) && s.errors[i] != nil {
-		// Real providers return the partial response body alongside
-		// ErrResponseTruncated so handlers can recover findings; mirror
-		// that contract here by returning responses[i] with the error.
-		return s.responses[i], s.errors[i]
+		// Faithfully mirror the real-provider contract: ErrResponseTruncated
+		// carries the partial response body alongside the sentinel so handlers
+		// can recover findings; any OTHER error returns a zero Response.
+		if errors.Is(s.errors[i], providers.ErrResponseTruncated) {
+			return s.responses[i], s.errors[i]
+		}
+		return providers.Response{}, s.errors[i]
 	}
 	return s.responses[i], nil
 }

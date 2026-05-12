@@ -121,7 +121,7 @@ The clamp finding fires once per call, no accumulation.
 
 ### 3. `mode: quick | thorough` on validate_plan
 
-**Arg shape.** Optional `Mode string \`json:"mode,omitempty"\`` on `ValidatePlanArgs`. Values: `""`, `"quick"`, `"thorough"`. Empty defaults to `"thorough"` (current behavior preserved). Invalid values rejected at the handler boundary with `errors.New("mode must be \"quick\" or \"thorough\"")`.
+**Arg shape.** Optional ``Mode string `json:"mode,omitempty"` `` on `ValidatePlanArgs`. Values: `""`, `"quick"`, `"thorough"`. Empty defaults to `"thorough"` (current behavior preserved). Invalid values rejected at the handler boundary with `errors.New("mode must be \"quick\" or \"thorough\"")`.
 
 **Prompt branching.** `internal/prompts/prompts.go` gets a new `Mode string` field on `PlanInput`. Each of `plan.tmpl`, `plan_findings_only.tmpl`, `plan_tasks_chunk.tmpl` gets a `{{ if eq .Mode "quick" }}...{{ end }}` block in the `## What to evaluate` section:
 
