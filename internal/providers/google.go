@@ -87,7 +87,8 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 
 	var parsed struct {
 		Candidates []struct {
-			Content struct {
+			FinishReason string `json:"finishReason"`
+			Content      struct {
 				Parts []struct {
 					Text string `json:"text"`
 				} `json:"parts"`
@@ -102,7 +103,13 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 	if err := json.Unmarshal(respBytes, &parsed); err != nil {
 		return Response{}, fmt.Errorf("google: decode response: %w", err)
 	}
-	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
+	if len(parsed.Candidates) == 0 {
+		return Response{}, fmt.Errorf("google: empty candidates in response")
+	}
+	if parsed.Candidates[0].FinishReason == "MAX_TOKENS" {
+		return Response{}, fmt.Errorf("google: %w", ErrResponseTruncated)
+	}
+	if len(parsed.Candidates[0].Content.Parts) == 0 {
 		return Response{}, fmt.Errorf("google: empty candidates in response")
 	}
 

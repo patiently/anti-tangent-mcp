@@ -83,8 +83,9 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 	}
 
 	var parsed struct {
-		Model   string `json:"model"`
-		Content []struct {
+		Model      string `json:"model"`
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
 			Type  string          `json:"type"`
 			Input json.RawMessage `json:"input"`
 		} `json:"content"`
@@ -95,6 +96,9 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 	}
 	if err := json.Unmarshal(respBytes, &parsed); err != nil {
 		return Response{}, fmt.Errorf("anthropic: decode response: %w", err)
+	}
+	if parsed.StopReason == "max_tokens" {
+		return Response{}, fmt.Errorf("anthropic: %w", ErrResponseTruncated)
 	}
 
 	for _, c := range parsed.Content {

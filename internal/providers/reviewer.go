@@ -3,12 +3,19 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 )
+
+// ErrResponseTruncated is returned when a provider signals that its response
+// was cut short by the configured max-token limit. Callers should use
+// errors.Is to detect it and surface advisory findings rather than opaque
+// parse errors.
+var ErrResponseTruncated = errors.New("reviewer response truncated at max_tokens limit")
 
 type Reviewer interface {
 	Name() string

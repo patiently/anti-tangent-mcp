@@ -67,6 +67,23 @@ func TestOpenAI_Review_HTTPError(t *testing.T) {
 	assert.Contains(t, err.Error(), "401")
 }
 
+func TestOpenAI_Review_TruncatedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"model": "gpt-5",
+			"choices": [{"finish_reason":"length","message":{"role":"assistant","content":"{}"}}],
+			"usage": {"prompt_tokens": 1, "completion_tokens": 1}
+		}`))
+	}))
+	defer srv.Close()
+
+	rv := NewOpenAI("k", srv.URL, 5*time.Second)
+	_, err := rv.Review(context.Background(), Request{Model: "gpt-5", JSONSchema: []byte(`{"type":"object"}`)})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrResponseTruncated))
+}
+
 func TestOpenAI_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(50 * time.Millisecond)

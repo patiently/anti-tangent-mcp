@@ -234,6 +234,97 @@ func TestValidateCompletion_RejectsAllEmptyEvidence(t *testing.T) {
 	assert.Contains(t, err.Error(), "test_evidence")
 }
 
+func TestValidateTaskSpec_TruncatedResponseSurfacesWarn(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "warn", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+
+	// No session should be created on truncation.
+	assert.Empty(t, env.SessionID)
+}
+
+func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
+	// First call succeeds (ValidateTaskSpec), second call truncates (CheckProgress).
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G",
+	})
+	require.NoError(t, err)
+
+	// Now override the reviewer on h.deps directly to return truncation.
+	h.deps.Reviews = providers.Registry{"anthropic": &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}}
+
+	_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID:    pre.SessionID,
+		WorkingOn:    "implementing X",
+		ChangedFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "warn", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	assert.Equal(t, pre.SessionID, env.SessionID)
+}
+
+func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+
+	// Now override the reviewer on h.deps directly to return truncation.
+	h.deps.Reviews = providers.Registry{"anthropic": &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}}
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "warn", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	assert.Equal(t, pre.SessionID, env.SessionID)
+}
+
+func TestValidatePlan_TruncatedResponseSurfacesWarn(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", err: providers.ErrResponseTruncated}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	plan := "# Plan\n\n### Task 1: First\n\nSome body.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
+	require.Len(t, pr.PlanFindings, 1)
+	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
+	assert.Equal(t, verdict.SeverityMajor, pr.PlanFindings[0].Severity)
+	assert.Contains(t, pr.PlanFindings[0].Suggestion, "ANTI_TANGENT_PLAN_MAX_TOKENS")
+}
+
 func planPassResp() providers.Response {
 	return providers.Response{
 		RawJSON:      []byte(`{"plan_verdict":"pass","plan_findings":[],"tasks":[{"task_index":0,"task_title":"T1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"go"}`),

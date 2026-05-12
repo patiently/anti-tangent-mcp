@@ -77,6 +77,9 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 
 	result, modelUsed, ms, err := h.review(ctx, model, rendered)
 	if err != nil {
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return envelopeResult(truncatedEnvelope("", model))
+		}
 		return nil, Envelope{}, err
 	}
 
@@ -214,6 +217,9 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 
 	result, modelUsed, ms, err := h.review(ctx, model, rendered)
 	if err != nil {
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return envelopeResult(truncatedEnvelope(sess.ID, model))
+		}
 		return nil, Envelope{}, err
 	}
 
@@ -273,6 +279,37 @@ func notFoundEnvelope(id string, model config.ModelRef) Envelope {
 		}},
 		NextAction: "Call validate_task_spec first.",
 		ModelUsed:  model.String(),
+	}
+}
+
+func truncatedEnvelope(id string, model config.ModelRef) Envelope {
+	return Envelope{
+		SessionID: id,
+		Verdict:   string(verdict.VerdictWarn),
+		Findings: []verdict.Finding{{
+			Severity:   verdict.SeverityMajor,
+			Category:   verdict.CategoryOther,
+			Criterion:  "reviewer_response",
+			Evidence:   providers.ErrResponseTruncated.Error(),
+			Suggestion: "Raise ANTI_TANGENT_PER_TASK_MAX_TOKENS and retry.",
+		}},
+		NextAction: "Retry with a higher max-tokens cap.",
+		ModelUsed:  model.String(),
+	}
+}
+
+func truncatedPlanResult() verdict.PlanResult {
+	return verdict.PlanResult{
+		PlanVerdict: verdict.VerdictWarn,
+		PlanFindings: []verdict.Finding{{
+			Severity:   verdict.SeverityMajor,
+			Category:   verdict.CategoryOther,
+			Criterion:  "reviewer_response",
+			Evidence:   providers.ErrResponseTruncated.Error(),
+			Suggestion: "Raise ANTI_TANGENT_PLAN_MAX_TOKENS and retry.",
+		}},
+		Tasks:      []verdict.PlanTaskResult{},
+		NextAction: "Retry with a higher plan max-tokens cap.",
 	}
 }
 
@@ -365,6 +402,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 
 	result, modelUsed, ms, err := h.review(ctx, model, rendered)
 	if err != nil {
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return envelopeResult(truncatedEnvelope(sess.ID, model))
+		}
 		return nil, Envelope{}, err
 	}
 
@@ -407,6 +447,9 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		pr, modelUsed, ms, err = h.reviewPlanChunked(ctx, model, args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk)
 	}
 	if err != nil {
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return planEnvelopeResult(truncatedPlanResult(), model.String(), 0)
+		}
 		return nil, verdict.PlanResult{}, err
 	}
 	return planEnvelopeResult(pr, modelUsed, ms)

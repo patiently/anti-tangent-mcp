@@ -69,6 +69,23 @@ func TestGoogle_Review_HTTPError(t *testing.T) {
 	assert.Contains(t, err.Error(), "400")
 }
 
+func TestGoogle_Review_TruncatedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"candidates": [{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"{}"}]}}],
+			"usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1},
+			"modelVersion": "gemini-2.5-pro"
+		}`))
+	}))
+	defer srv.Close()
+
+	rv := NewGoogle("k", srv.URL, 5*time.Second)
+	_, err := rv.Review(context.Background(), Request{Model: "gemini-2.5-pro", JSONSchema: []byte(`{"type":"object"}`)})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrResponseTruncated))
+}
+
 func TestGoogle_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(50 * time.Millisecond)

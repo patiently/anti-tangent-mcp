@@ -92,6 +92,25 @@ func TestAnthropic_Review_NoToolUse(t *testing.T) {
 	assert.Contains(t, strings.ToLower(err.Error()), "tool_use")
 }
 
+func TestAnthropic_Review_TruncatedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_x",
+			"model": "claude-sonnet-4-6",
+			"stop_reason": "max_tokens",
+			"content": [{"type":"text","text":"truncated"}],
+			"usage": {"input_tokens": 1, "output_tokens": 1}
+		}`))
+	}))
+	defer srv.Close()
+
+	rv := NewAnthropic("k", srv.URL, 5*time.Second)
+	_, err := rv.Review(context.Background(), Request{Model: "claude-sonnet-4-6", JSONSchema: []byte(`{"type":"object"}`)})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrResponseTruncated))
+}
+
 func TestAnthropic_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(50 * time.Millisecond)
