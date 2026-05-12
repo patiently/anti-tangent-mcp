@@ -90,7 +90,9 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	sess := h.deps.Sessions.Create(spec)
 	h.deps.Sessions.SetPreFindings(sess.ID, result.Findings)
 	// Re-fetch after SetPreFindings so LastAccessed reflects the final mutation.
-	sess, _ = h.deps.Sessions.Get(sess.ID)
+	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
+		sess = refreshed
+	}
 
 	env := Envelope{
 		SessionID:  sess.ID,
@@ -256,7 +258,9 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		Findings:  result.Findings,
 	})
 	// Re-fetch after AppendCheckpoint so LastAccessed reflects the final mutation.
-	sess, _ = h.deps.Sessions.Get(sess.ID)
+	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
+		sess = refreshed
+	}
 
 	env := Envelope{
 		SessionID:  sess.ID,
@@ -439,7 +443,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 
 	h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
 	// Re-fetch after SetPostFindings so LastAccessed reflects the final mutation.
-	sess, _ = h.deps.Sessions.Get(sess.ID)
+	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
+		sess = refreshed
+	}
 
 	env := Envelope{
 		SessionID:  sess.ID,
@@ -752,7 +758,15 @@ func validateChunkIdentity(parsed verdict.TasksOnly, chunkTasks []planparser.Raw
 	if len(parsed.Tasks) != len(chunkTasks) {
 		return fmt.Errorf("chunk identity: got %d tasks, expected %d", len(parsed.Tasks), len(chunkTasks))
 	}
-	seen := make(map[string]struct{}, len(chunkTasks))
+	// Pre-compute how many times each normalized expected title appears so that
+	// plans with intentionally duplicate normalized titles (e.g. "Add tests" for
+	// two different tasks) are not incorrectly rejected.
+	wantCounts := make(map[string]int, len(chunkTasks))
+	for _, ct := range chunkTasks {
+		wantCounts[normalizeTaskTitle(strings.TrimSpace(ct.Title))]++
+	}
+
+	seen := make(map[string]int, len(chunkTasks))
 	for i, t := range parsed.Tasks {
 		gotOriginal := strings.TrimSpace(t.TaskTitle)
 		wantOriginal := strings.TrimSpace(chunkTasks[i].Title)
@@ -761,10 +775,10 @@ func validateChunkIdentity(parsed verdict.TasksOnly, chunkTasks []planparser.Raw
 		if got != want {
 			return fmt.Errorf("chunk identity: tasks[%d].task_title %q, expected %q", i, gotOriginal, wantOriginal)
 		}
-		if _, dup := seen[got]; dup {
+		seen[got]++
+		if seen[got] > wantCounts[got] {
 			return fmt.Errorf("chunk identity: tasks[%d].task_title %q duplicated within chunk", i, gotOriginal)
 		}
-		seen[got] = struct{}{}
 	}
 	return nil
 }

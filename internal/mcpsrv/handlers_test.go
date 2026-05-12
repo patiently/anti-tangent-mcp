@@ -127,22 +127,22 @@ func TestEnvelope_SessionTTLFieldsSerializeCorrectly(t *testing.T) {
 	})
 
 	t.Run("remaining seconds clamped to zero (not negative)", func(t *testing.T) {
-		past := time.Now().Add(-1 * time.Hour)
-		remaining := 0
-		env := Envelope{
-			SessionID:                  "abc",
-			Verdict:                    "pass",
-			Findings:                   []verdict.Finding{},
-			NextAction:                 "go",
-			ModelUsed:                  "m",
-			ReviewMS:                   1,
-			SessionExpiresAt:           &past,
-			SessionTTLRemainingSeconds: &remaining,
-		}
+		// Use a real store and a session whose LastAccessed is 2h in the past so
+		// the computed expiry (LastAccessed + TTL) lies in the past, exercising
+		// the clamp branch inside withSessionTTL.
+		store := session.NewStore(1 * time.Hour)
+		sess := store.Create(session.TaskSpec{Title: "t", Goal: "g"})
+		sess.LastAccessed = time.Now().Add(-2 * time.Hour)
+
+		h := &handlers{deps: Deps{Sessions: store}}
+		env := h.withSessionTTL(Envelope{SessionID: "abc"}, sess)
+
+		require.NotNil(t, env.SessionTTLRemainingSeconds)
+		assert.Equal(t, 0, *env.SessionTTLRemainingSeconds)
+
 		b, err := json.Marshal(env)
 		require.NoError(t, err)
 		assert.Contains(t, string(b), `"session_ttl_remaining_seconds":0`)
-		assert.GreaterOrEqual(t, *env.SessionTTLRemainingSeconds, 0)
 	})
 }
 
