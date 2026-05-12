@@ -1,3 +1,5 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
 ## Reviewer ground rules
 
 You have access ONLY to the plan markdown rendered below. You have NOT been given the codebase. Any function name, file path, variable, struct field, environment variable, or other symbol that appears in the plan is an identifier reference — you do not know its definition, signature, return type, or behavior. Treat such identifiers as black-box references.
@@ -8,7 +10,23 @@ Every finding's `evidence` field must quote or paraphrase text that literally ap
 
 ## Plan under review
 
-{{.PlanText}}
+# Sample Plan
+
+### Task 1: Bootstrap
+
+Files:
+- main.go
+
+Step 1: write main.
+
+### Task 2: Add tests
+
+**Goal:** Cover the bootstrap with a smoke test.
+
+**Acceptance criteria:**
+- main_test.go exists
+- go test ./... passes
+
 
 ## What to evaluate
 
@@ -40,10 +58,8 @@ suggested_header_block empty and emit findings only if quality issues exist.
 Severity: critical = unimplementable as written; major = implementer would
 still misimplement; minor = nit.
 
-{{ if eq .Mode "quick" -}}
 **Quick mode.** Surface only the most-severe findings — at most 3 per scope (3 plan-level findings, and at most 3 findings per task). Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
 
-{{ end -}}
 ## Output
 
 Respond with a JSON object matching the provided schema. Do not include

@@ -623,6 +623,34 @@ func TestValidatePlan_MissingPlanText(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestValidatePlan_InvalidModeRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: "# P\n\n### Task 1: X\n", Mode: "fast",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `mode must be "quick" or "thorough"`)
+}
+
+func TestValidatePlan_ModeQuickPlumbedToPrompt(t *testing.T) {
+	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "openai", resp: planPassResp()}}
+	d := newDeps(t, &cap.fakeReviewer)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": cap}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: "# P\n\n### Task 1: X\n", Mode: "quick",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, cap.LastRequest.User, "**Quick mode.**", "quick mode should plumb through to the rendered prompt")
+}
+
 // captureReviewer records the last providers.Request it receives so tests can
 // assert on fields like MaxTokens.
 type captureReviewer struct {

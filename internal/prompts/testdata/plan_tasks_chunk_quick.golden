@@ -1,3 +1,5 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
 ## Reviewer ground rules
 
 You have access ONLY to the plan markdown rendered below. You have NOT been given the codebase. Any function name, file path, variable, struct field, environment variable, or other symbol that appears in the plan is an identifier reference — you do not know its definition, signature, return type, or behavior. Treat such identifiers as black-box references.
@@ -8,7 +10,12 @@ Every finding's `evidence` field must quote or paraphrase text that literally ap
 
 ## Plan under review
 
-{{.PlanText}}
+## Phase 1
+
+### Task 1: do thing
+
+### Task 2: do other thing
+
 
 ## What to evaluate (this call: per-task analysis, restricted to a subset)
 
@@ -17,9 +24,9 @@ context, so you can reason about cross-task dependencies — but in this call
 you must emit per-task results for **only the following tasks**, identified
 by their `### Task N: Title` heading:
 
-{{range .ChunkTasks -}}
-- {{.Title}}
-{{end}}
+- Task 1: do thing
+- Task 2: do other thing
+
 For each task in the list above, evaluate:
 
 1. **Structural completeness**: Goal / Acceptance criteria / (optional Non-goals
@@ -36,10 +43,8 @@ leave both empty.
 Severity: critical = unimplementable as written; major = implementer would
 still misimplement; minor = nit.
 
-{{ if eq .Mode "quick" -}}
 **Quick mode.** For each task in the list above, surface only the most-severe findings — at most 3 per task. Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
 
-{{ end -}}
 ## Output
 
 Respond with a JSON object matching the provided schema. The `tasks` array

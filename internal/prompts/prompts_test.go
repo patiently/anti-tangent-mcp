@@ -195,3 +195,108 @@ func TestRenderPlanTasksChunk_IncludesReviewerGroundRules(t *testing.T) {
 	assert.Contains(t, out.User, anchorUnstatedAssumptionRule)
 	assert.Contains(t, out.User, anchorConcreteEvidenceRule)
 }
+
+const (
+	anchorQuickModeBasic        = "**Quick mode.** Surface only the most-severe findings — at most 3 per scope"
+	anchorQuickModeFindingsOnly = "**Quick mode.** Surface only the most-severe findings — at most 3 plan-level findings"
+	anchorQuickModeTasksChunk   = "**Quick mode.** For each task in the list above, surface only the most-severe findings — at most 3 per task"
+)
+
+func TestRenderPlan_QuickMode_IncludesInstruction(t *testing.T) {
+	out, err := RenderPlan(PlanInput{
+		PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n",
+		Mode:     "quick",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorQuickModeBasic)
+}
+
+func TestRenderPlanFindingsOnly_QuickMode_IncludesInstruction(t *testing.T) {
+	out, err := RenderPlanFindingsOnly(PlanInput{
+		PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n",
+		Mode:     "quick",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorQuickModeFindingsOnly)
+}
+
+func TestRenderPlanTasksChunk_QuickMode_IncludesInstruction(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n",
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: A"}},
+		Mode:       "quick",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorQuickModeTasksChunk)
+}
+
+func TestPlanTemplates_DefaultMode_OmitsQuickInstruction(t *testing.T) {
+	planText := "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"
+
+	for _, mode := range []string{"", "thorough"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			out, err := RenderPlan(PlanInput{PlanText: planText, Mode: mode})
+			require.NoError(t, err)
+			assert.NotContains(t, out.User, "**Quick mode.**", "plan.tmpl should not include quick-mode block for mode=%q", mode)
+
+			out, err = RenderPlanFindingsOnly(PlanInput{PlanText: planText, Mode: mode})
+			require.NoError(t, err)
+			assert.NotContains(t, out.User, "**Quick mode.**", "plan_findings_only.tmpl should not include quick-mode block for mode=%q", mode)
+
+			out, err = RenderPlanTasksChunk(PlanChunkInput{
+				PlanText:   planText,
+				ChunkTasks: []planparser.RawTask{{Title: "Task 1: A"}},
+				Mode:       mode,
+			})
+			require.NoError(t, err)
+			assert.NotContains(t, out.User, "**Quick mode.**", "plan_tasks_chunk.tmpl should not include quick-mode block for mode=%q", mode)
+		})
+	}
+}
+
+func TestRenderPlan_QuickMode_Golden(t *testing.T) {
+	out, err := RenderPlan(PlanInput{
+		PlanText: `# Sample Plan
+
+### Task 1: Bootstrap
+
+Files:
+- main.go
+
+Step 1: write main.
+
+### Task 2: Add tests
+
+**Goal:** Cover the bootstrap with a smoke test.
+
+**Acceptance criteria:**
+- main_test.go exists
+- go test ./... passes
+`,
+		Mode: "quick",
+	})
+	require.NoError(t, err)
+	golden(t, "plan_basic_quick", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPlanTasksChunk_QuickMode_Golden(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText: "## Phase 1\n\n### Task 1: do thing\n\n### Task 2: do other thing\n",
+		ChunkTasks: []planparser.RawTask{
+			{Title: "Task 1: do thing", Body: "### Task 1: do thing\n"},
+			{Title: "Task 2: do other thing", Body: "### Task 2: do other thing\n"},
+		},
+		Mode: "quick",
+	})
+	require.NoError(t, err)
+	golden(t, "plan_tasks_chunk_quick", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPlanFindingsOnly_QuickMode_Golden(t *testing.T) {
+	out, err := RenderPlanFindingsOnly(PlanInput{
+		PlanText: "## Phase 1\n\n### Task 1: do thing\n\n**Goal:** thing\n\n**Acceptance criteria:**\n- thing happens\n",
+		Mode:     "quick",
+	})
+	require.NoError(t, err)
+	golden(t, "plan_findings_only_quick", out.System+"\n---USER---\n"+out.User)
+}

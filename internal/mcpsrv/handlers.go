@@ -575,6 +575,7 @@ type ValidatePlanArgs struct {
 	PlanText          string `json:"plan_text"      jsonschema:"required"`
 	ModelOverride     string `json:"model_override,omitempty"`
 	MaxTokensOverride int    `json:"max_tokens_override,omitempty"`
+	Mode              string `json:"mode,omitempty"`
 }
 
 func validatePlanTool() *mcp.Tool {
@@ -668,6 +669,9 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if args.PlanText == "" {
 		return nil, verdict.PlanResult{}, errors.New("plan_text is required")
 	}
+	if args.Mode != "" && args.Mode != "quick" && args.Mode != "thorough" {
+		return nil, verdict.PlanResult{}, errors.New(`mode must be "quick" or "thorough"`)
+	}
 
 	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PlanMaxTokens, h.deps.Cfg.MaxTokensCeiling)
 	if err != nil {
@@ -692,9 +696,9 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	var ms int64
 	var partialRaw []byte
 	if len(tasks) <= h.deps.Cfg.PlanTasksPerChunk {
-		pr, modelUsed, ms, partialRaw, err = h.reviewPlanSingle(ctx, model, args.PlanText, maxTokens)
+		pr, modelUsed, ms, partialRaw, err = h.reviewPlanSingle(ctx, model, args.PlanText, maxTokens, args.Mode)
 	} else {
-		pr, modelUsed, ms, partialRaw, err = h.reviewPlanChunked(ctx, model, args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk, maxTokens)
+		pr, modelUsed, ms, partialRaw, err = h.reviewPlanChunked(ctx, model, args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk, maxTokens, args.Mode)
 	}
 	if err != nil {
 		if errors.Is(err, providers.ErrResponseTruncated) {
@@ -718,8 +722,8 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 // On ErrResponseTruncated, the returned []byte carries the partial response
 // bytes (possibly empty if the provider returned none) so the caller can
 // attempt partial-findings recovery via recoverPartialPlanFindings.
-func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, planText string, maxTokens int) (verdict.PlanResult, string, int64, []byte, error) {
-	rendered, err := prompts.RenderPlan(prompts.PlanInput{PlanText: planText})
+func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, planText string, maxTokens int, mode string) (verdict.PlanResult, string, int64, []byte, error) {
+	rendered, err := prompts.RenderPlan(prompts.PlanInput{PlanText: planText, Mode: mode})
 	if err != nil {
 		return verdict.PlanResult{}, "", 0, nil, fmt.Errorf("render plan prompt: %w", err)
 	}
@@ -829,6 +833,7 @@ func (h *handlers) reviewPlanChunked(
 	tasks []planparser.RawTask,
 	chunkSize int,
 	maxTokens int,
+	mode string,
 ) (verdict.PlanResult, string, int64, []byte, error) {
 	if chunkSize <= 0 {
 		// Defense-in-depth: config.Load already rejects PlanTasksPerChunk <= 0
@@ -845,7 +850,7 @@ func (h *handlers) reviewPlanChunked(
 	var modelUsed string
 
 	// ----- Pass 1: plan-findings only -----
-	rendered, err := prompts.RenderPlanFindingsOnly(prompts.PlanInput{PlanText: planText})
+	rendered, err := prompts.RenderPlanFindingsOnly(prompts.PlanInput{PlanText: planText, Mode: mode})
 	if err != nil {
 		return verdict.PlanResult{}, "", 0, nil, fmt.Errorf("render plan_findings_only: %w", err)
 	}
@@ -901,7 +906,7 @@ func (h *handlers) reviewPlanChunked(
 		}
 		chunkTasks := tasks[i:end]
 
-		chunkResult, ms, partialRaw, err := h.reviewOnePlanChunk(ctx, rv, model, planText, chunkTasks, maxTokens)
+		chunkResult, ms, partialRaw, err := h.reviewOnePlanChunk(ctx, rv, model, planText, chunkTasks, maxTokens, mode)
 		if err != nil {
 			if errors.Is(err, providers.ErrResponseTruncated) {
 				return verdict.PlanResult{}, "", 0, partialRaw, err
@@ -936,10 +941,12 @@ func (h *handlers) reviewOnePlanChunk(
 	planText string,
 	chunkTasks []planparser.RawTask,
 	maxTokens int,
+	mode string,
 ) (verdict.TasksOnly, int64, []byte, error) {
 	rendered, err := prompts.RenderPlanTasksChunk(prompts.PlanChunkInput{
 		PlanText:   planText,
 		ChunkTasks: chunkTasks,
+		Mode:       mode,
 	})
 	if err != nil {
 		return verdict.TasksOnly{}, 0, nil, fmt.Errorf("render plan_tasks_chunk: %w", err)
