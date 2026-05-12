@@ -104,13 +104,13 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 		return Response{}, fmt.Errorf("google: decode response: %w", err)
 	}
 	if len(parsed.Candidates) == 0 {
-		return Response{}, fmt.Errorf("google: empty candidates in response")
+		return Response{}, fmt.Errorf("google: no candidates in response")
 	}
 	if parsed.Candidates[0].FinishReason == "MAX_TOKENS" {
 		return Response{}, fmt.Errorf("google: %w", ErrResponseTruncated)
 	}
 	if len(parsed.Candidates[0].Content.Parts) == 0 {
-		return Response{}, fmt.Errorf("google: empty candidates in response")
+		return Response{}, fmt.Errorf("google: candidate has no content parts")
 	}
 
 	return Response{
