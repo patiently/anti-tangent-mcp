@@ -466,7 +466,7 @@ Less than if they were different models. Same model + same training data ≈ sam
 You'll get a finding with `category: session_not_found`. Default TTL is 4h. Re-call `validate_task_spec` to start a new session and continue with the new ID.
 
 **My payload is too big.**
-The MCP returns a finding with `category: payload_too_large`. Default cap is 200 KB across `changed_files` / `final_files`. The finding includes a tool-specific suggestion: for `validate_completion`, pass `final_diff` (unified diff) instead of or in addition to `final_files`; for `check_progress`, reduce `changed_files` or split the call. The `ANTI_TANGENT_MAX_PAYLOAD_BYTES` env var controls the cap.
+The MCP returns a finding with `category: payload_too_large`. Default cap is 200 KB across `changed_files`, `final_files`, and `final_diff` (the unified-diff body, when present on `validate_completion`). The finding includes a tool-specific suggestion: for `validate_completion`, pass `final_diff` instead of or in addition to `final_files`; for `check_progress`, reduce `changed_files` or split the call. The `ANTI_TANGENT_MAX_PAYLOAD_BYTES` env var controls the cap.
 
 **A hook returned a finding with `category: other` and `criterion: reviewer_response`.**
 The reviewer's response was cut off at the output token budget. Raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` (for stateful hooks: `validate_task_spec`, `check_progress`, `validate_completion`) or `ANTI_TANGENT_PLAN_MAX_TOKENS` (for `validate_plan`) and retry. The finding's `evidence` reads `reviewer response truncated at max_tokens limit`.

@@ -24,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Chunked `validate_plan` identity reconciliation accepts task titles when reviewers strip the `Task N:` prefix while still rejecting wrong or duplicate tasks.
 
+### Removed
+
+_None._
+
+### Deprecated
+
+_None._
+
+### Security
+
+_None._
+
 ## [0.1.4] - 2026-05-11
 
 ### Added

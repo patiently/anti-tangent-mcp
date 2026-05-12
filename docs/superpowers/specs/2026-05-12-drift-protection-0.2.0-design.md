@@ -117,7 +117,7 @@ The same field is **not** added to `check_progress`. Mid-flight changes are usua
 
 Tightening the minimum-evidence check is a behavioral break for any caller that today sends `validate_completion` with `summary` only. Such requests now return a hard error:
 
-```
+```text
 validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty
 ```
 
@@ -178,7 +178,7 @@ The bias paragraph is the highest-stakes change. The 0.2.0 wording is deliberate
 
 When the model isn't in the per-provider map, sort the map's keys deterministically and include them in the error string:
 
-```
+```text
 model "gpt-4o" not in allowlist for provider "openai" (allowed: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5.4-mini, gpt-5.4-mini-2026-03-17, gpt-5.5, gpt-5.5-2026-04-23)
 ```
 
@@ -296,7 +296,7 @@ Unit test: trigger the cap with a synthetic >200KB payload; assert the error con
 
 ## CHANGELOG entries (0.2.0)
 
-```
+```markdown
 ### Added
 - `validate_completion` accepts a new optional `final_diff` field for delta-style evidence when full file contents would exceed the 200KB payload cap or aren't practical to paste.
 - `Envelope` adds optional `session_expires_at` (RFC3339) and `session_ttl_remaining_seconds` so implementers can see when a session is approaching the 4h TTL.
