@@ -721,8 +721,8 @@ type reviewerCapture struct {
 
 func (c *reviewerCapture) Review(ctx context.Context, req providers.Request) (providers.Response, error) {
 	c.LastRequest = req
-	c.fakeReviewer.Calls++
-	return c.fakeReviewer.resp, c.fakeReviewer.err
+	c.Calls++
+	return c.resp, c.err
 }
 
 // overrideCase is one row of the max_tokens_override table.

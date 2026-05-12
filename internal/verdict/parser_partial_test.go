@@ -127,3 +127,22 @@ func TestParsePlanResultPartial_TruncatedInsideTaskBeforeAnyFinding_DropsPartial
 	assert.True(t, got.Partial)
 	require.Len(t, got.Tasks, 2, "partial task with no complete finding should be dropped")
 }
+
+func TestParsePlanResultPartial_SyntheticTaskRejectsNonIntegerTaskIndex(t *testing.T) {
+	// Synthetic-task recovery must NOT silently truncate non-integer
+	// task_index values like 2.7 to 2. The synthetic task should fall
+	// back to the caller-assigned sentinel (-1).
+	raw := []byte(`{"plan_verdict":"warn","plan_findings":[],"tasks":[` +
+		`{"task_index":1,"task_title":"T1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":2.7,"task_title":"T2","verdict":"warn","findings":[` +
+		`{"severity":"major","category":"other","criterion":"tf2","evidence":"e","suggestion":"s"},` +
+		`{"severity":"min`)
+
+	got, ok := ParsePlanResultPartial(raw)
+	require.True(t, ok)
+	require.Len(t, got.Tasks, 2)
+	// The synthetic task with task_index=2.7 must not be silently
+	// coerced to 2. It falls back to the caller-assigned sentinel
+	// (recoverPlanResult sets the second task's index to len(complete)=1).
+	assert.NotEqual(t, 2, got.Tasks[1].TaskIndex, "non-integer task_index 2.7 must not be silently truncated to 2")
+}

@@ -3,6 +3,7 @@ package verdict
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 )
 
 // ParseResultPartial parses a possibly-truncated reviewer response into a
@@ -459,7 +460,10 @@ func buildSyntheticTask(partialBytes []byte) (PlanTaskResult, bool) {
 		}
 	}
 	if v, ok := scalars["task_index"]; ok {
-		if f, ok := v.(float64); ok && f >= 0 {
+		// JSON numbers parse as float64; only accept non-negative
+		// integer-valued floats. 2.7 → reject rather than silently
+		// truncate to 2.
+		if f, ok := v.(float64); ok && f >= 0 && f == math.Trunc(f) {
 			t.TaskIndex = int(f)
 		}
 	}
