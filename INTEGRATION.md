@@ -130,7 +130,7 @@ ANTI_TANGENT_PLAN_MODEL=openai:gpt-5    # optional; defaults to ANTI_TANGENT_PRE
 
 ### Output budgets and chunking for `validate_plan` (v0.1.4+)
 
-Three optional env vars tune output-token budgets and the chunking behavior of `validate_plan`:
+Four env vars tune output-token budgets, the chunking behavior of `validate_plan`, and the per-call `max_tokens_override` ceiling:
 
 ```dotenv
 ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # default 4096; output cap for validate_task_spec / check_progress / validate_completion; raise if a stateful hook returns a truncation finding
@@ -146,7 +146,7 @@ Operator notes:
 - The `PER_TASK` name covers all three task-scoped lifecycle hooks (validate_task_spec, check_progress, validate_completion) — each reviews exactly one task.
 - `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` doubles as both the chunking threshold (`len(tasks) > N` triggers chunking) and the per-chunk size (chunks of N tasks each). Single knob, single mental model: "above N tasks, batch in groups of N."
 - `ANTI_TANGENT_REQUEST_TIMEOUT` (default `180s`) applies **per reviewer call**, not to the whole chunked invocation. A 25-task plan does ~5 sequential calls (worst case `5 × RequestTimeout` wall-clock). MCP clients may have shorter tool-call deadlines; if you hit those, lower `PLAN_TASKS_PER_CHUNK` (more, smaller calls) rather than raising `REQUEST_TIMEOUT`. When a timeout occurs, the error message includes the configured timeout value and the `ANTI_TANGENT_REQUEST_TIMEOUT` env-var name so you can self-diagnose and adjust.
-- All three env vars reject `0`, negative, and non-integer values at startup with a clear error.
+- All four env vars reject `0`, negative, and non-integer values at startup with a clear error.
 
 #### Supported reviewer models
 
