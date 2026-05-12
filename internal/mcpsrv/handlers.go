@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -641,10 +642,24 @@ func (h *handlers) reviewOnePlanChunk(
 	return parsed2, ms + ms2, nil
 }
 
+// taskPrefixRe matches a leading "Task <number>: " prefix (with optional
+// trailing whitespace) so we can normalize reviewer-returned task_title values
+// that drop the prefix compared to the planparser.RawTask.Title form.
+var taskPrefixRe = regexp.MustCompile(`^Task \d+:\s*`)
+
+// normalizeTaskTitle trims surrounding whitespace then removes a single leading
+// "Task N: " prefix if present. Comparison is case-sensitive after normalization.
+func normalizeTaskTitle(s string) string {
+	return taskPrefixRe.ReplaceAllString(strings.TrimSpace(s), "")
+}
+
 // validateChunkIdentity checks that the parsed chunk response contains exactly
 // the expected tasks **in the same order** as chunkTasks: count match, each
-// position's task_title equals the corresponding chunkTasks[i].Title (with
-// surrounding whitespace trimmed), and no title appears more than once.
+// position's task_title equals the corresponding chunkTasks[i].Title (after
+// normalizing both sides by trimming whitespace and removing any leading
+// "Task N: " prefix), and no normalized title appears more than once.
+// Mismatch and duplicate errors report the original (un-normalized, trimmed)
+// reviewer title so the caller can correlate with the raw response.
 // Returns a descriptive error on any mismatch — the prompt template instructs
 // the reviewer to emit tasks "in the same order", so positional drift is a
 // reviewer-side error worth retrying.
@@ -654,13 +669,15 @@ func validateChunkIdentity(parsed verdict.TasksOnly, chunkTasks []planparser.Raw
 	}
 	seen := make(map[string]struct{}, len(chunkTasks))
 	for i, t := range parsed.Tasks {
-		got := strings.TrimSpace(t.TaskTitle)
-		want := strings.TrimSpace(chunkTasks[i].Title)
+		gotOriginal := strings.TrimSpace(t.TaskTitle)
+		wantOriginal := strings.TrimSpace(chunkTasks[i].Title)
+		got := normalizeTaskTitle(gotOriginal)
+		want := normalizeTaskTitle(wantOriginal)
 		if got != want {
-			return fmt.Errorf("chunk identity: tasks[%d].task_title %q, expected %q", i, got, want)
+			return fmt.Errorf("chunk identity: tasks[%d].task_title %q, expected %q", i, gotOriginal, wantOriginal)
 		}
 		if _, dup := seen[got]; dup {
-			return fmt.Errorf("chunk identity: tasks[%d].task_title %q duplicated within chunk", i, got)
+			return fmt.Errorf("chunk identity: tasks[%d].task_title %q duplicated within chunk", i, gotOriginal)
 		}
 		seen[got] = struct{}{}
 	}

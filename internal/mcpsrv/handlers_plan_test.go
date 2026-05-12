@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -360,4 +361,52 @@ func TestValidatePlan_SingleCall_RetryOnParseFailure(t *testing.T) {
 	require.Len(t, pr.Tasks, 3)
 	assert.Equal(t, 2, sr.calls, "first call fails parse, retry succeeds = 2 calls total")
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+}
+
+// ---------------------------------------------------------------------------
+// validateChunkIdentity: title normalization
+// ---------------------------------------------------------------------------
+
+func TestValidateChunkIdentity_PrefixStripped(t *testing.T) {
+	parsed := verdict.TasksOnly{Tasks: []verdict.PlanTaskResult{
+		{TaskTitle: "Add final diff"},
+		{TaskTitle: "Surface TTL"},
+	}}
+	chunkTasks := []planparser.RawTask{
+		{Title: "Task 1: Add final diff"},
+		{Title: "Task 2: Surface TTL"},
+	}
+
+	require.NoError(t, validateChunkIdentity(parsed, chunkTasks))
+}
+
+func TestValidateChunkIdentity_WrongTitleAfterNormalization(t *testing.T) {
+	parsed := verdict.TasksOnly{Tasks: []verdict.PlanTaskResult{{TaskTitle: "Wrong title"}}}
+	chunkTasks := []planparser.RawTask{{Title: "Task 1: Right title"}}
+
+	err := validateChunkIdentity(parsed, chunkTasks)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"Wrong title"`)
+	assert.Contains(t, err.Error(), `"Task 1: Right title"`)
+}
+
+// TestValidateChunkIdentity_DuplicateAfterNormalization verifies that two
+// reviewer titles that are identical after prefix normalization ("Task 1: Same"
+// and "Same" both normalize to "Same") are detected as duplicates, and that
+// the error message contains the original unnormalized reviewer title.
+func TestValidateChunkIdentity_DuplicateAfterNormalization(t *testing.T) {
+	parsed := verdict.TasksOnly{Tasks: []verdict.PlanTaskResult{
+		{TaskTitle: "Task 1: Same"},
+		{TaskTitle: "Same"}, // prefix-stripped form of the same normalized title
+	}}
+	chunkTasks := []planparser.RawTask{
+		{Title: "Task 1: Same"},
+		{Title: "Task 2: Same"},
+	}
+
+	err := validateChunkIdentity(parsed, chunkTasks)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicated within chunk")
+	// Error must contain the original (un-normalized) reviewer title.
+	assert.Contains(t, err.Error(), `"Same"`)
 }
