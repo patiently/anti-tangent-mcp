@@ -145,3 +145,16 @@ func TestRenderPost_WithoutFinalDiffOmitsSection(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, out.User, "## Final diff")
 }
+
+func TestRenderPost_IncludesEvidenceToleranceGuidance(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:         sampleSpec(),
+		Summary:      "Implemented AC via diff and tests.",
+		TestEvidence: "go test ./... PASS",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Context:` block in the task spec above is authoritative")
+	assert.Contains(t, out.User, "a bare summary on its own is not evidence")
+	assert.Contains(t, out.User, "prefer `verdict: pass` with a `category: quality` finding")
+	assert.Contains(t, out.User, "left unaddressed by any of the provided evidence")
+}

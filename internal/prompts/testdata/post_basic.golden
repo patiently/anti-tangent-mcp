@@ -26,6 +26,10 @@ Then walk the non-goals: emit a finding for any accidental violation.
 
 If test evidence was provided, cross-check it against the AC list — does it actually exercise each AC?
 
+The `Context:` block in the task spec above is authoritative. If an AC reads one way literally but `Context:` explicitly anticipates or approves a deviation (for example, a framework constraint, an upstream design decision, or an in-flight refactor), treat `Context:` as the disambiguator. Do not emit a finding solely because an AC's literal phrasing conflicts with a deviation that `Context:` permits.
+
+Evidence for completion comes from `final_files` (full file contents), `final_diff` (a unified diff), `test_evidence` (test command output), or cited summary evidence (a summary that cites concrete artifacts such as file paths, functions, tests, or diff hunks). The `summary` is the implementer's description of what was done — cross-reference it against the evidence, but a bare summary on its own is not evidence; the request schema requires at least one of the three evidence fields to be non-empty. Grade whatever evidence is provided, in any combination. Do not emit a `missing_acceptance_criterion` finding solely because `final_files` is missing when `final_diff` or `test_evidence` already covers the same AC. Do emit one if (a) the evidence affirmatively contradicts an AC, (b) the evidence is internally inconsistent with the summary's claims, or (c) an AC is not addressed by any of the provided evidence.
+
 ## Implementer's summary
 
 Added Gin handler at /healthz returning "ok".
@@ -45,5 +49,7 @@ func Health(c *gin.Context) { c.String(200, "ok") }
 
 PASS: TestHealthReturns200
 
+
+When the provided evidence addresses every AC and the implementer's narrative is internally consistent with it, prefer `verdict: pass` with a `category: quality` finding for nit-level concerns over `verdict: fail`. Reserve `severity: critical` and `severity: major` for evidence that affirmatively contradicts an AC, OR for an AC that is left unaddressed by any of the provided evidence. The bias toward `pass` applies only when every AC has been addressed — not when evidence is absent for an AC.
 
 Respond with the verdict JSON only.
