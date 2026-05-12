@@ -286,6 +286,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 			}
 			env := truncatedEnvelope(sess.ID, model)
 			env = prependClamp(env, clamp)
+			env = h.withSessionTTL(env, sess)
 			return envelopeResult(env)
 		}
 		return nil, Envelope{}, err
@@ -365,9 +366,9 @@ func truncatedEnvelope(id string, model config.ModelRef) Envelope {
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
-			Suggestion: "Raise ANTI_TANGENT_PER_TASK_MAX_TOKENS and retry.",
+			Suggestion: "Raise ANTI_TANGENT_PER_TASK_MAX_TOKENS or pass max_tokens_override and retry.",
 		}},
-		NextAction: "Retry with a higher max-tokens cap.",
+		NextAction: "Retry with a higher max_tokens_override (or raise the configured max-tokens cap).",
 		ModelUsed:  model.String(),
 	}
 }
@@ -481,30 +482,67 @@ func truncatedPlanResult() verdict.PlanResult {
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
-			Suggestion: "Raise ANTI_TANGENT_PLAN_MAX_TOKENS and retry.",
+			Suggestion: "Raise ANTI_TANGENT_PLAN_MAX_TOKENS or pass max_tokens_override and retry.",
 		}},
 		Tasks:      []verdict.PlanTaskResult{},
-		NextAction: "Retry with a higher plan max-tokens cap.",
+		NextAction: "Retry with a higher max_tokens_override (or raise the plan max-tokens cap).",
 	}
 }
 
 // recoverPartialPlanFindings attempts to extract complete plan findings and
 // tasks from a truncated reviewer response. Returns (planResult, true) when
 // at least one complete finding or task was recovered anywhere in the
-// structure; (zero, false) otherwise.
+// structure OR the supplied `prior` PlanResult already carries findings/tasks
+// to preserve; (zero, false) otherwise.
+//
+// The optional `prior` argument carries plan-level findings and task results
+// that were already collected before the truncation point — e.g. the Pass-1
+// `plan_findings` and any complete Pass-2 chunk task results accumulated in
+// the chunked path. Prior plan_findings are prepended to recovered ones; prior
+// tasks are prepended to recovered tasks (de-duped by task_index, with prior
+// winning on collisions since the prior copy is the complete one).
 //
 // The returned PlanResult has Partial=true, a single minor "truncation
-// marker" finding appended to PlanFindings noting the total recovered count
+// marker" finding appended to PlanFindings noting the total merged count
 // across plan and tasks, and a NextAction that either preserves the parsed
 // value (when non-empty) or falls back to a generic message pointing the
 // caller at ANTI_TANGENT_PLAN_MAX_TOKENS / max_tokens_override.
-func recoverPartialPlanFindings(rawJSON []byte) (verdict.PlanResult, bool) {
-	if len(rawJSON) == 0 {
+func recoverPartialPlanFindings(rawJSON []byte, prior verdict.PlanResult) (verdict.PlanResult, bool) {
+	pr, parsedOK := verdict.PlanResult{}, false
+	if len(rawJSON) > 0 {
+		pr, parsedOK = verdict.ParsePlanResultPartial(rawJSON)
+	}
+	priorHasContent := len(prior.PlanFindings) > 0 || len(prior.Tasks) > 0
+	if !parsedOK && !priorHasContent {
 		return verdict.PlanResult{}, false
 	}
-	pr, ok := verdict.ParsePlanResultPartial(rawJSON)
-	if !ok {
-		return verdict.PlanResult{}, false
+	// Merge prior into pr. Prior findings/tasks come first so they appear
+	// before anything salvaged from the truncating chunk's partial bytes.
+	if priorHasContent {
+		pr.PlanFindings = append(append([]verdict.Finding{}, prior.PlanFindings...), pr.PlanFindings...)
+		// De-dupe tasks by TaskIndex: prior wins on collision because prior
+		// task results came from cleanly-closed chunks.
+		seen := make(map[int]struct{}, len(prior.Tasks))
+		merged := make([]verdict.PlanTaskResult, 0, len(prior.Tasks)+len(pr.Tasks))
+		for _, t := range prior.Tasks {
+			seen[t.TaskIndex] = struct{}{}
+			merged = append(merged, t)
+		}
+		for _, t := range pr.Tasks {
+			if _, dup := seen[t.TaskIndex]; dup {
+				continue
+			}
+			merged = append(merged, t)
+		}
+		pr.Tasks = merged
+		// Prefer the prior PlanVerdict/NextAction when pr is empty (the
+		// truncating chunk may not have re-emitted them).
+		if pr.PlanVerdict == "" {
+			pr.PlanVerdict = prior.PlanVerdict
+		}
+		if pr.NextAction == "" {
+			pr.NextAction = prior.NextAction
+		}
 	}
 	count := len(pr.PlanFindings)
 	for _, t := range pr.Tasks {
@@ -641,6 +679,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			}
 			env := truncatedEnvelope(sess.ID, model)
 			env = prependClamp(env, clamp)
+			env = h.withSessionTTL(env, sess)
 			return envelopeResult(env)
 		}
 		return nil, Envelope{}, err
@@ -702,7 +741,12 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}
 	if err != nil {
 		if errors.Is(err, providers.ErrResponseTruncated) {
-			if recovered, ok := recoverPartialPlanFindings(partialRaw); ok {
+			// `pr` carries any partial state already collected before the
+			// truncation point — for the chunked path that means Pass-1
+			// plan_findings plus any cleanly-closed Pass-2 chunk task
+			// results. Pass it as `prior` so those aren't dropped if the
+			// truncating chunk's bytes yield further recovery.
+			if recovered, ok := recoverPartialPlanFindings(partialRaw, pr); ok {
 				recovered = prependPlanClamp(recovered, clamp)
 				return planEnvelopeResult(recovered, model.String(), 0)
 			}
@@ -909,7 +953,13 @@ func (h *handlers) reviewPlanChunked(
 		chunkResult, ms, partialRaw, err := h.reviewOnePlanChunk(ctx, rv, model, planText, chunkTasks, maxTokens, mode)
 		if err != nil {
 			if errors.Is(err, providers.ErrResponseTruncated) {
-				return verdict.PlanResult{}, "", 0, partialRaw, err
+				// Return the partially-built result (Pass-1 plan_findings plus
+				// any complete chunk task results accumulated so far) so the
+				// caller can merge it with anything recoverable from the
+				// truncating chunk's partial bytes. Without this, the Pass-1
+				// findings would be silently dropped.
+				totalMs += ms
+				return result, modelUsed, totalMs, partialRaw, err
 			}
 			return verdict.PlanResult{}, "", 0, nil, err
 		}

@@ -28,7 +28,10 @@ func (s *scriptedReviewer) Review(_ context.Context, _ providers.Request) (provi
 	i := s.calls
 	s.calls++
 	if i < len(s.errors) && s.errors[i] != nil {
-		return providers.Response{}, s.errors[i]
+		// Real providers return the partial response body alongside
+		// ErrResponseTruncated so handlers can recover findings; mirror
+		// that contract here by returning responses[i] with the error.
+		return s.responses[i], s.errors[i]
 	}
 	return s.responses[i], nil
 }

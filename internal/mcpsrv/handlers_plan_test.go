@@ -441,9 +441,9 @@ func TestValidatePlan_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 	rawJSON := []byte(`{"plan_verdict":"warn","plan_findings":[` +
 		`{"severity":"major","category":"other","criterion":"pf1","evidence":"e","suggestion":"s"}` +
 		`],"tasks":[` +
-		`{"task_index":0,"task_title":"T0","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
-		`{"task_index":1,"task_title":"T1","verdict":"warn","findings":[{"severity":"minor","category":"other","criterion":"tf1","evidence":"e","suggestion":"s"}],"suggested_header_block":"","suggested_header_reason":""},` +
-		`{"task_index":2,"task_title":"T2","verdict":"warn","find`)
+		`{"task_index":1,"task_title":"Task 1: First","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":2,"task_title":"Task 2: Second","verdict":"warn","findings":[{"severity":"minor","category":"other","criterion":"tf1","evidence":"e","suggestion":"s"}],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":3,"task_title":"Task 3: Third","verdict":"warn","find`)
 
 	rv := &fakeReviewer{
 		name: "openai",
@@ -455,16 +455,90 @@ func TestValidatePlan_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 	d.Reviews = providers.Registry{"openai": rv}
 	h := &handlers{deps: d}
 
-	plan := "# Plan\n\n### Task 1: First\n\nbody.\n"
+	plan := "# Plan\n\n### Task 1: First\n\nbody.\n\n### Task 2: Second\n\nbody.\n"
 	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
 	require.NoError(t, err)
 	assert.True(t, pr.Partial)
 	require.Len(t, pr.Tasks, 2)
-	assert.Equal(t, "T0", pr.Tasks[0].TaskTitle)
-	assert.Equal(t, "T1", pr.Tasks[1].TaskTitle)
+	assert.Equal(t, "Task 1: First", pr.Tasks[0].TaskTitle)
+	assert.Equal(t, "Task 2: Second", pr.Tasks[1].TaskTitle)
 	// plan_findings has the original major finding plus the minor truncation marker.
 	require.Len(t, pr.PlanFindings, 2)
 	assert.Equal(t, "pf1", pr.PlanFindings[0].Criterion)
 	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[1].Severity)
 	assert.Contains(t, pr.PlanFindings[1].Suggestion, "max_tokens_override")
+}
+
+// TestReviewPlanChunked_Pass2Truncation_PreservesPass1Findings exercises the
+// chunked path with a Pass-2 chunk truncation and verifies that the Pass-1
+// plan_findings AND the cleanly-closed chunk task results from earlier chunks
+// are BOTH preserved in the final envelope, alongside whatever the parser can
+// recover from the truncating chunk's partial bytes. Prior to the fix in
+// reviewPlanChunked + recoverPartialPlanFindings, the Pass-1 findings and
+// earlier-chunk tasks were silently dropped because reviewPlanChunked returned
+// a zero PlanResult on Pass-2 truncation.
+func TestReviewPlanChunked_Pass2Truncation_PreservesPass1Findings(t *testing.T) {
+	// 9-task plan with chunkSize=8 → Pass1 + chunk1(8) + chunk2(1).
+	// chunk2 truncates mid-response.
+	plan := buildPlanWithNTasks(9)
+
+	// Pass 1 returns a plan-level major finding we must preserve.
+	pass1 := providers.Response{
+		RawJSON: []byte(`{"plan_verdict":"warn","plan_findings":[` +
+			`{"severity":"major","category":"other","criterion":"pass1_pf","evidence":"e","suggestion":"s"}` +
+			`],"next_action":"address pass1_pf."}`),
+		Model: "claude-sonnet-4-6",
+	}
+	// chunk1 returns complete results for tasks 1-8.
+	chunk1 := chunkResp(t, titlesRange(1, 8))
+	// chunk2 truncates: emit one well-formed task result then cut off.
+	chunk2Partial := providers.Response{
+		RawJSON: []byte(`{"tasks":[` +
+			`{"task_index":9,"task_title":"Task 9: t9","verdict":"warn","findings":[` +
+			`{"severity":"minor","category":"other","criterion":"recovered","evidence":"e","suggestion":"s"}` +
+			`],"suggested_header_block":"","suggested_header_reason":""},` +
+			`{"task_index":10,"task_title":"cut","verdict":"warn","find`),
+		Model: "claude-sonnet-4-6",
+	}
+
+	sr := &scriptedReviewer{
+		responses: []providers.Response{
+			pass1,         // call 0: Pass1 — ok
+			chunk1,        // call 1: chunk1 — ok
+			chunk2Partial, // call 2: chunk2 — truncation
+		},
+		errors: []error{
+			nil,
+			nil,
+			providers.ErrResponseTruncated,
+		},
+	}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	assert.True(t, pr.Partial, "envelope must be marked partial after Pass-2 truncation")
+
+	// Pass-1 plan finding must survive the truncation recovery.
+	require.GreaterOrEqual(t, len(pr.PlanFindings), 2,
+		"expected at least Pass-1 finding + truncation marker; got %d", len(pr.PlanFindings))
+	assert.Equal(t, "pass1_pf", pr.PlanFindings[0].Criterion,
+		"Pass-1 plan finding must be the first PlanFinding")
+	// Last finding must be the minor truncation marker.
+	last := pr.PlanFindings[len(pr.PlanFindings)-1]
+	assert.Equal(t, verdict.SeverityMinor, last.Severity)
+	assert.Equal(t, "reviewer_response", last.Criterion)
+	assert.Contains(t, last.Suggestion, "max_tokens_override")
+
+	// Chunk1's 8 complete tasks must be preserved. The partial parser may or
+	// may not recover task 9; we assert the floor (>= 8) and that task 1's
+	// title is intact in position 0.
+	require.GreaterOrEqual(t, len(pr.Tasks), 8,
+		"expected at least 8 cleanly-closed chunk1 tasks preserved; got %d", len(pr.Tasks))
+	assert.Equal(t, "Task 1: t1", pr.Tasks[0].TaskTitle,
+		"Pass-2 chunk1 task results must lead the merged tasks list")
+
+	// NextAction must mention max_tokens_override (mitigation hint contract).
+	assert.Contains(t, pr.NextAction, "max_tokens_override")
 }

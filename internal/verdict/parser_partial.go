@@ -579,14 +579,10 @@ func scanPartialObjectScalars(b []byte) map[string]any {
 			// Other string starts (nested, or value-region tracking
 			// for non-string scalars) — just track string state.
 			inString = true
+		// Nested container at depth 1 (when valueStart >= 0): we don't
+		// capture nested values; let depth tracking handle skipping. The
+		// '}' / ']' branch below clears valueStart when depth returns to 1.
 		case '{', '[':
-			if depth == 1 && valueStart >= 0 {
-				// Nested container value at depth 1. We don't capture
-				// nested values in scalars map; skip past it by letting
-				// depth tracking handle it. Mark valueStart-as-handled
-				// by clearing it once depth returns to 1.
-				// We'll detect "return to depth 1" below.
-			}
 			depth++
 		case '}', ']':
 			depth--
