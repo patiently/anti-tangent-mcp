@@ -1,19 +1,19 @@
-# 0.1.5 drift-protection fixes — design
+# 0.2.0 drift-protection fixes — design
 
 **Status:** approved 2026-05-12
-**Target version:** 0.1.5
+**Target version:** 0.2.0
 **Tracking issue:** [#6](https://github.com/patiently/anti-tangent-mcp/issues/6)
-**Branch:** `version/0.1.5`
+**Branch:** `version/0.2.0`
 
 ## Background
 
-Field execution of a 10-task subagent-driven plan against `anti-tangent-mcp` 0.1.4 surfaced four classes of issue across ~30 MCP calls. Two are bugs in code we shipped; two are reviewer-prompt and ergonomics problems that surfaced as friction during real use. Issue #6 captures the report (anonymized). This spec proposes the 0.1.5 fix set.
+Field execution of a 10-task subagent-driven plan against `anti-tangent-mcp` 0.1.4 surfaced four classes of issue across ~30 MCP calls. Two are bugs in code we shipped; two are reviewer-prompt and ergonomics problems that surfaced as friction during real use. Issue #6 captures the report (anonymized). This spec proposes the 0.2.0 fix set.
 
 The reviewer model in `anti-tangent-mcp` is intentionally a different provider than the implementer. That property amplifies the cost of any "the reviewer over-fires on shape" bug: the implementer can't simply re-prompt around it. So the prompt-rewrite work in §B below is high-leverage even though the code change is small.
 
 ## Scope
 
-In scope for 0.1.5 (all four buckets from #6):
+In scope for 0.2.0 (all four buckets from #6):
 
 - **A.** Chunker identity reconciliation regression (introduced 0.1.4).
 - **B.** `validate_completion` reviewer prompt rewrite: evidence-shape tolerance, `Context:`-as-authoritative, bias toward `pass` with quality findings.
@@ -21,7 +21,7 @@ In scope for 0.1.5 (all four buckets from #6):
 - **C.** `model_override` UX: allowlist enumeration in errors; default request timeout 120s → 180s with the configured value surfaced in timeout errors; truncation detection with a structured finding.
 - **D.** Session TTL surfaced in the envelope; `payload_too_large` error gains a diff suggestion.
 
-Out of scope for 0.1.5:
+Out of scope for 0.2.0:
 
 - No new providers or models beyond what's already in the allowlist.
 - No persistent session store (`What This Repo Is Not`).
@@ -30,13 +30,17 @@ Out of scope for 0.1.5:
 
 ## Bump rationale
 
-Patch (`0.1.4` → `0.1.5`). All additions are backward-compatible:
+Minor (`0.1.4` → `0.2.0`). The minor bump signals the breaking change on `validate_completion`: callers that today send summary-only requests now receive a hard error rejecting the request (`validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty`). Per Keep a Changelog and pre-1.0 semver, minor is the right level for this kind of API tightening; patch is reserved for additive / bugfix-only releases.
+
+Other changes in this release would have been patch-compatible on their own:
 
 - New optional request field (`final_diff`).
 - New optional envelope fields (`session_expires_at`, `session_ttl_remaining_seconds`).
-- Allowlist behavior is unchanged (only the error string is more informative).
-- Default timeout bump is widening, not narrowing.
-- Prompt rewrites are more permissive, not stricter.
+- Allowlist error messages are more informative (the validation rule itself is unchanged).
+- Default timeout bump (120s → 180s) is widening, not narrowing.
+- Reviewer-prompt rewrites are more permissive on what counts as gradable evidence, while keeping coverage of every AC.
+
+The merge commit into `main` must carry `[minor]` to drive the same bump in the release workflow (per `CLAUDE.md`'s branch convention; the branch name and merge bump must agree).
 
 ## A. Chunker identity reconciliation
 
@@ -103,11 +107,23 @@ type validateCompletionRequest struct {
 }
 ```
 
-Minimum-evidence check: at least one of `final_files`, `final_diff`, `test_evidence` must be non-empty.
+Minimum-evidence check: at least one of `final_files`, `final_diff`, or `test_evidence` must be non-empty. **This is a NEW requirement in 0.2.0** — current code (0.1.4) accepts summary-only completions; 0.2.0 rejects them. See "Backward compatibility" immediately below.
 
 Payload cap (200KB) applies to the sum of `final_files` content + `len(final_diff)`. The error string in the over-cap case gains the diff-suggestion language (§D).
 
 The same field is **not** added to `check_progress`. Mid-flight changes are usually small and the current `changed_files` shape handles them; we revisit if real use produces friction.
+
+#### Backward compatibility
+
+Tightening the minimum-evidence check is a behavioral break for any caller that today sends `validate_completion` with `summary` only. Such requests now return a hard error:
+
+```
+validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty
+```
+
+Intentional: the reviewer prompt below grades against concrete evidence (files / diff / test output). Summary text is the implementer's description, not evidence; treating it as evidence is exactly the over-firing pattern documented in #6 §3. Migration is short — the smallest fix for a summary-only caller is to put the test command output in `test_evidence`.
+
+Bump implication: minor (`0.1.4` → `0.2.0`). The minor bump signals the API break to consumers; the CHANGELOG entry also marks it under `### Changed` with a `(breaking)` prefix.
 
 ### Prompt rewrite
 
@@ -119,9 +135,9 @@ Four targeted additions, no overall restructure of the template:
 
    > *"The `Context:` block in the task spec above is authoritative. If an AC reads one way literally but `Context:` explicitly anticipates or approves a deviation (e.g. a framework constraint, an upstream design decision, or an in-flight refactor), treat `Context:` as the disambiguator. Do not emit a finding solely because an AC's literal phrasing conflicts with a deviation that `Context:` permits."*
 
-2. **Grade-evidence-not-absence paragraph** — same section, immediately after (1):
+2. **Grade-evidence paragraph** — same section, immediately after (1):
 
-   > *"You may receive `final_files` with full file contents, OR a `final_diff` (unified diff), OR citations in the `summary` field (paths, test names, test output snippets) without full content. Grade whatever evidence is provided. Do **not** emit a `missing_acceptance_criterion` finding solely because file content wasn't pasted. Only emit one if the cited evidence is internally inconsistent — e.g. a test name in `summary` doesn't appear in `test_evidence` or in any `final_files` path; a diff hunk contradicts the AC; the summary cites a behavior that the diff or files don't show."*
+   > *"Evidence for completion comes from `final_files` (full file contents), `final_diff` (a unified diff), and `test_evidence` (test command output). The `summary` is the implementer's description of what was done — cross-reference it against the evidence, but **the summary on its own is not evidence**; the request schema requires at least one of the three evidence fields to be non-empty. Grade whatever evidence is provided, in any combination. Do **not** emit a `missing_acceptance_criterion` finding solely because `final_files` is missing when `final_diff` or `test_evidence` already covers the same AC. **Do** emit one if (a) the evidence affirmatively contradicts an AC, (b) the evidence is internally inconsistent with the summary's claims, or (c) an AC is not addressed by any of the provided evidence."*
 
 3. **New `## Final diff` section** — renders between the existing `## Final implementation` and `## Test evidence` sections when `FinalDiff` is non-empty. Same 4-backtick fencing and prompt-injection-safety language as the existing `## Final implementation` block. The template fragment (4-backtick fences match the existing pattern in `post.tmpl`; not reproduced here verbatim to avoid markdown-nesting confusion) renders:
 
@@ -133,15 +149,16 @@ Four targeted additions, no overall restructure of the template:
 
 4. **Bias paragraph** — inserted immediately before the closing `Respond with the verdict JSON only.` line:
 
-   > *"When evidence is ambiguous and the implementer's narrative is internally consistent with the ACs, prefer `verdict: pass` with a `category: quality` finding over `verdict: fail`. Reserve `severity: critical` and `severity: major` for evidence that **affirmatively contradicts** an AC, not for absence of evidence."*
+   > *"When the provided evidence addresses every AC and the implementer's narrative is internally consistent with it, prefer `verdict: pass` with a `category: quality` finding for nit-level concerns over `verdict: fail`. Reserve `severity: critical` and `severity: major` for evidence that **affirmatively contradicts** an AC, OR for an AC that is left unaddressed by any of the provided evidence. The bias toward `pass` applies only when every AC has been addressed — not when evidence is absent for an AC."*
 
 ### Risk: under-firing real defects
 
-The bias paragraph is the highest-stakes change. Mitigation:
+The bias paragraph is the highest-stakes change. The 0.2.0 wording is deliberately tight to minimize under-fire:
 
-- Paragraph (2) is paired with an internal-consistency requirement: "Only emit `missing_acceptance_criterion` if the cited evidence is internally inconsistent." That keeps the reviewer accountable to cross-check citations against test_evidence and file paths.
-- The bias paragraph applies only when evidence is *ambiguous*. Affirmative contradiction still earns `major` / `critical`.
-- The reviewer still walks every AC and emits findings; the change is in severity / verdict mapping, not in coverage.
+- The schema-level minimum-evidence check (above) is the first line of defense: a request with no `final_files`, no `final_diff`, and no `test_evidence` is rejected before it ever reaches the reviewer. So the reviewer is never asked to grade a summary-only payload.
+- Paragraph (2) lists three explicit emit triggers: affirmative contradiction, internal inconsistency with the summary's claims, **and** an AC unaddressed by any provided evidence. The third trigger means "absence of evidence for an AC" still earns a `missing_acceptance_criterion` finding.
+- The bias paragraph applies **only when every AC has been addressed** by the provided evidence. If even one AC is unaddressed, the bias does not apply and the reviewer is expected to emit `severity: major`.
+- The reviewer still walks every AC and emits findings; the change is in severity / verdict mapping for nit-level concerns, not in coverage.
 - E2E test changes (below) should sanity-check that planted defects still surface as findings.
 
 ### Tests
@@ -246,7 +263,7 @@ type Envelope struct {
 
 Pointer types so they only render in JSON when the session is known. Populated from the session's `expires_at` in `internal/mcpsrv/handlers.go` for the three stateful tools (`validate_task_spec`, `check_progress`, `validate_completion`); left nil for `validate_plan`.
 
-The `_remaining_seconds` field uses `int(time.Until(expiresAt).Seconds())`; if negative (already-expired race), set to 0. Both fields rendered with omitempty so a `validate_plan` envelope is bit-identical to 0.1.4 (modulo any other 0.1.5 additions).
+The `_remaining_seconds` field uses `int(time.Until(expiresAt).Seconds())`; if negative (already-expired race), set to 0. Both fields rendered with omitempty so a `validate_plan` envelope is bit-identical to 0.1.4 (modulo any other 0.2.0 additions).
 
 Unit test: envelope serialization with a known session timestamp matches a golden JSON snippet.
 
@@ -271,7 +288,7 @@ Unit test: trigger the cap with a synthetic >200KB payload; assert the error con
 
 `-race` stays on. Network-free unit tests via `httptest`. Golden files reviewed in PR diff before commit.
 
-## CHANGELOG entries (0.1.5)
+## CHANGELOG entries (0.2.0)
 
 ```
 ### Added
@@ -281,11 +298,12 @@ Unit test: trigger the cap with a synthetic >200KB payload; assert the error con
 - Reviewer-response truncation (`finish_reason: length` for OpenAI, equivalents for Anthropic/Google) is detected and surfaced as a structured `category: other` finding suggesting an `ANTI_TANGENT_*_MAX_TOKENS` bump, instead of the opaque `decode: EOF` error.
 
 ### Changed
+- **(breaking)** `validate_completion` now requires at least one of `final_files`, `final_diff`, or `test_evidence` to be non-empty. Summary-only completion requests are rejected with `validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty`. Migration: include test command output in `test_evidence` (smallest path), a unified diff in `final_diff`, or full files in `final_files`. Rationale: the reviewer prompt rewrite below grades against concrete evidence; summary text alone produced the reviewer over-firing pattern in #6 §3.
 - Default `ANTI_TANGENT_REQUEST_TIMEOUT` raised from 120s to 180s; reasoning-heavy models (e.g. `openai:gpt-5`) consistently need more than 120s on dense plan inputs.
 - Timeout errors now include the configured value and env-var name, e.g. `openai: request timeout 180s exceeded (set ANTI_TANGENT_REQUEST_TIMEOUT to raise)`.
-- `validate_completion` reviewer prompt (`post.tmpl`) rewritten to (a) grade cited evidence when full file content isn't pasted, (b) treat the task spec's `Context:` block as authoritative when it disambiguates an AC's literal phrasing, (c) bias toward `verdict: pass` with a quality finding when evidence is ambiguous, reserving `major`/`critical` for affirmative contradictions of an AC.
+- `validate_completion` reviewer prompt (`post.tmpl`) rewritten to (a) treat `final_files` / `final_diff` / `test_evidence` as the evidence under review (not the `summary`), (b) treat the task spec's `Context:` block as authoritative when it disambiguates an AC's literal phrasing, (c) bias toward `verdict: pass` with a `category: quality` finding for nit-level concerns when every AC is addressed, reserving `severity: major`/`critical` for affirmative contradictions or for an AC left unaddressed by any evidence.
 - `validate_plan` chunker prompt asks the reviewer to echo the `Task N:` prefix verbatim.
-- `payload_too_large` error appends a unified-diff-or-split suggestion.
+- `payload_too_large` errors include tool-specific suggestions: `validate_completion` suggests `final_diff` or split; `check_progress` suggests a smaller `changed_files` set or split.
 
 ### Fixed
 - `validate_plan` chunker identity reconciliation no longer fails when the reviewer strips the `Task N:` prefix from echoed task titles. Both sides are now normalized via a regex before comparison; the prompt is also tightened. Regression from 0.1.4. (Fixes #6.)
@@ -301,7 +319,7 @@ Unit test: trigger the cap with a synthetic >200KB payload; assert the error con
 | Timeout bump masks a real provider performance regression | Surfacing the configured timeout in the error means anyone seeing "timeout 180s exceeded" knows to investigate, not silently retry. |
 | Truncation finding turns transient response issues into noise | Severity is `major`, not `critical`; suggestion text is specific; only fires on the actual `finish_reason: length` signal, not on generic decode errors. |
 
-## Non-goals (won't fix in 0.1.5)
+## Non-goals (won't fix in 0.2.0)
 
 - Listing the allowed models in the `model_override` tool description directly (the error-side enumeration is sufficient; doc churn isn't worth a release on its own).
 - Per-model timeout overrides (one knob is enough until we see real friction).
