@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 type openaiReviewer struct {
 	apiKey  string
 	baseURL string
+	timeout time.Duration
 	client  *http.Client
 }
 
@@ -23,6 +25,7 @@ func NewOpenAI(apiKey, baseURL string, timeout time.Duration) Reviewer {
 	return &openaiReviewer{
 		apiKey:  apiKey,
 		baseURL: baseURL,
+		timeout: timeout,
 		client:  &http.Client{Timeout: timeout},
 	}
 }
@@ -65,6 +68,9 @@ func (r *openaiReviewer) Review(ctx context.Context, req Request) (Response, err
 
 	resp, err := r.client.Do(httpReq)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return Response{}, fmt.Errorf("openai: request timeout %s exceeded (set ANTI_TANGENT_REQUEST_TIMEOUT to raise): %w", r.timeout, err)
+		}
 		return Response{}, fmt.Errorf("openai: %w", err)
 	}
 	defer resp.Body.Close()
@@ -80,7 +86,8 @@ func (r *openaiReviewer) Review(ctx context.Context, req Request) (Response, err
 	var parsed struct {
 		Model   string `json:"model"`
 		Choices []struct {
-			Message struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
@@ -94,6 +101,9 @@ func (r *openaiReviewer) Review(ctx context.Context, req Request) (Response, err
 	}
 	if len(parsed.Choices) == 0 {
 		return Response{}, fmt.Errorf("openai: no choices in response")
+	}
+	if parsed.Choices[0].FinishReason == "length" {
+		return Response{}, fmt.Errorf("openai: %w", ErrResponseTruncated)
 	}
 
 	return Response{

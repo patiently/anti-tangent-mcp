@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 type googleReviewer struct {
 	apiKey  string
 	baseURL string
+	timeout time.Duration
 	client  *http.Client
 }
 
@@ -24,6 +26,7 @@ func NewGoogle(apiKey, baseURL string, timeout time.Duration) Reviewer {
 	return &googleReviewer{
 		apiKey:  apiKey,
 		baseURL: baseURL,
+		timeout: timeout,
 		client:  &http.Client{Timeout: timeout},
 	}
 }
@@ -67,6 +70,9 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 
 	resp, err := r.client.Do(httpReq)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return Response{}, fmt.Errorf("google: request timeout %s exceeded (set ANTI_TANGENT_REQUEST_TIMEOUT to raise): %w", r.timeout, err)
+		}
 		return Response{}, fmt.Errorf("google: %w", err)
 	}
 	defer resp.Body.Close()
@@ -81,7 +87,8 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 
 	var parsed struct {
 		Candidates []struct {
-			Content struct {
+			FinishReason string `json:"finishReason"`
+			Content      struct {
 				Parts []struct {
 					Text string `json:"text"`
 				} `json:"parts"`
@@ -96,8 +103,14 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 	if err := json.Unmarshal(respBytes, &parsed); err != nil {
 		return Response{}, fmt.Errorf("google: decode response: %w", err)
 	}
-	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
-		return Response{}, fmt.Errorf("google: empty candidates in response")
+	if len(parsed.Candidates) == 0 {
+		return Response{}, fmt.Errorf("google: no candidates in response")
+	}
+	if parsed.Candidates[0].FinishReason == "MAX_TOKENS" {
+		return Response{}, fmt.Errorf("google: %w", ErrResponseTruncated)
+	}
+	if len(parsed.Candidates[0].Content.Parts) == 0 {
+		return Response{}, fmt.Errorf("google: candidate has no content parts")
 	}
 
 	return Response{

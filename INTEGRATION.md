@@ -133,8 +133,8 @@ ANTI_TANGENT_PLAN_MODEL=openai:gpt-5    # optional; defaults to ANTI_TANGENT_PRE
 Three optional env vars tune output-token budgets and the chunking behavior of `validate_plan`:
 
 ```dotenv
-ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # default 4096; output cap for validate_task_spec / check_progress / validate_completion
-ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # default 4096; output cap per reviewer call in validate_plan (single-call and per-chunk)
+ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # default 4096; output cap for validate_task_spec / check_progress / validate_completion; raise if a stateful hook returns a truncation finding
+ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # default 4096; output cap per reviewer call in validate_plan (single-call and per-chunk); raise if plan validation returns a truncation finding
 ANTI_TANGENT_PLAN_TASKS_PER_CHUNK=8      # default 8; chunking threshold + per-chunk task count
 ```
 
@@ -144,7 +144,7 @@ Operator notes:
 
 - The `PER_TASK` name covers all three task-scoped lifecycle hooks (validate_task_spec, check_progress, validate_completion) — each reviews exactly one task.
 - `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` doubles as both the chunking threshold (`len(tasks) > N` triggers chunking) and the per-chunk size (chunks of N tasks each). Single knob, single mental model: "above N tasks, batch in groups of N."
-- `ANTI_TANGENT_REQUEST_TIMEOUT` applies **per reviewer call**, not to the whole chunked invocation. A 25-task plan does ~5 sequential calls (worst case `5 × RequestTimeout` wall-clock). MCP clients may have shorter tool-call deadlines; if you hit those, lower `PLAN_TASKS_PER_CHUNK` (more, smaller calls) rather than raising `REQUEST_TIMEOUT`.
+- `ANTI_TANGENT_REQUEST_TIMEOUT` (default `180s`) applies **per reviewer call**, not to the whole chunked invocation. A 25-task plan does ~5 sequential calls (worst case `5 × RequestTimeout` wall-clock). MCP clients may have shorter tool-call deadlines; if you hit those, lower `PLAN_TASKS_PER_CHUNK` (more, smaller calls) rather than raising `REQUEST_TIMEOUT`. When a timeout occurs, the error message includes the configured timeout value and the `ANTI_TANGENT_REQUEST_TIMEOUT` env-var name so you can self-diagnose and adjust.
 - All three env vars reject `0`, negative, and non-integer values at startup with a clear error.
 
 #### Supported reviewer models
@@ -359,7 +359,18 @@ The implementer rolls back the metrics work and the next mid-check passes.
 
 **Example C — post-hook catches an untouched AC.**
 
-Final call with `summary: "Implemented /healthz returning ok"` and the final file. Response:
+Final call with `summary: "Implemented /healthz returning ok"`, a unified diff in `final_diff`, and test output in `test_evidence` (v0.2.0+: at least one of `final_files`, `final_diff`, or `test_evidence` must be non-empty). Request:
+
+```json
+{
+  "session_id": "...",
+  "summary": "Implemented /healthz returning ok; see diff and test run.",
+  "final_diff": "diff --git a/handlers/health.go b/handlers/health.go\n...",
+  "test_evidence": "go test ./handlers/... -run TestHealthz\nok handlers 0.012s"
+}
+```
+
+Response:
 
 ```json
 {
@@ -371,9 +382,13 @@ Final call with `summary: "Implemented /healthz returning ok"` and the final fil
     "evidence": "no benchmark or load test was added",
     "suggestion": "Add a Go benchmark in handlers/health_test.go that runs 100 RPS for 10s and asserts p95 < 50ms; include the result in test_evidence."
   }],
-  "next_action": "Add the benchmark and re-validate; do not report DONE."
+  "next_action": "Add the benchmark and re-validate; do not report DONE.",
+  "session_expires_at": "2026-05-12T18:30:00Z",
+  "session_ttl_remaining_seconds": 12600
 }
 ```
+
+`session_expires_at` and `session_ttl_remaining_seconds` are included in all stateful-hook responses (v0.2.0+). If the session TTL expires mid-task (default 4h), `check_progress` or `validate_completion` returns a `category: session_not_found` finding — re-call `validate_task_spec` to start a fresh session.
 
 The implementer adds the benchmark, re-runs `validate_completion` with the new test evidence, gets `verdict: "pass"`, and reports DONE.
 
@@ -451,7 +466,10 @@ Less than if they were different models. Same model + same training data ≈ sam
 You'll get a finding with `category: session_not_found`. Default TTL is 4h. Re-call `validate_task_spec` to start a new session and continue with the new ID.
 
 **My payload is too big.**
-The MCP returns a finding with `category: payload_too_large`. Default cap is 200 KB across `changed_files` / `final_files`. Send a unified diff against the prior state, or split the call.
+The MCP returns a finding with `category: payload_too_large`. Default cap is 200 KB across `changed_files`, `final_files`, and `final_diff` (the unified-diff body, when present on `validate_completion`). The finding includes a tool-specific suggestion: for `validate_completion`, pass `final_diff` instead of or in addition to `final_files`; for `check_progress`, reduce `changed_files` or split the call. The `ANTI_TANGENT_MAX_PAYLOAD_BYTES` env var controls the cap.
+
+**A hook returned a finding with `category: other` and `criterion: reviewer_response`.**
+The reviewer's response was cut off at the output token budget. Raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` (for stateful hooks: `validate_task_spec`, `check_progress`, `validate_completion`) or `ANTI_TANGENT_PLAN_MAX_TOKENS` (for `validate_plan`) and retry. The finding's `evidence` reads `reviewer response truncated at max_tokens limit`.
 
 **`validate_task_spec` is asking for ACs my plan doesn't have.**
 That's the spec quality gate working as designed. Either (a) add the missing ACs to the plan and re-validate, or (b) acknowledge the gap in the next `working_on` description so the reviewer knows to expect implementer-discretion choices.

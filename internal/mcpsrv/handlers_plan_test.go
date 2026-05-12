@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -360,4 +361,71 @@ func TestValidatePlan_SingleCall_RetryOnParseFailure(t *testing.T) {
 	require.Len(t, pr.Tasks, 3)
 	assert.Equal(t, 2, sr.calls, "first call fails parse, retry succeeds = 2 calls total")
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+}
+
+// ---------------------------------------------------------------------------
+// validateChunkIdentity: title normalization
+// ---------------------------------------------------------------------------
+
+func TestValidateChunkIdentity_PrefixStripped(t *testing.T) {
+	parsed := verdict.TasksOnly{Tasks: []verdict.PlanTaskResult{
+		{TaskTitle: "Add final diff"},
+		{TaskTitle: "Surface TTL"},
+	}}
+	chunkTasks := []planparser.RawTask{
+		{Title: "Task 1: Add final diff"},
+		{Title: "Task 2: Surface TTL"},
+	}
+
+	require.NoError(t, validateChunkIdentity(parsed, chunkTasks))
+}
+
+func TestValidateChunkIdentity_WrongTitleAfterNormalization(t *testing.T) {
+	parsed := verdict.TasksOnly{Tasks: []verdict.PlanTaskResult{{TaskTitle: "Wrong title"}}}
+	chunkTasks := []planparser.RawTask{{Title: "Task 1: Right title"}}
+
+	err := validateChunkIdentity(parsed, chunkTasks)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"Wrong title"`)
+	assert.Contains(t, err.Error(), `"Task 1: Right title"`)
+}
+
+// TestValidateChunkIdentity_AllowsLegitimateDuplicateNormalizedTitles verifies
+// that a plan with two tasks whose titles legitimately normalize to the same
+// string (e.g. "Add tests" for two different tasks) is accepted when the
+// reviewer correctly echoes both titles in order.
+func TestValidateChunkIdentity_AllowsLegitimateDuplicateNormalizedTitles(t *testing.T) {
+	parsed := verdict.TasksOnly{Tasks: []verdict.PlanTaskResult{
+		{TaskTitle: "Task 1: Add tests"},
+		{TaskTitle: "Task 2: Add tests"},
+	}}
+	chunkTasks := []planparser.RawTask{
+		{Title: "Task 1: Add tests"},
+		{Title: "Task 2: Add tests"},
+	}
+
+	require.NoError(t, validateChunkIdentity(parsed, chunkTasks))
+}
+
+// TestValidateChunkIdentity_ReviewerReturnsDuplicateForDistinctExpected verifies
+// that when the reviewer echoes the same title twice but the expected titles are
+// distinct (per-position mismatch fires), an error is returned. This replaces the
+// old DuplicateAfterNormalization test whose premise was the bug now fixed above.
+func TestValidateChunkIdentity_ReviewerReturnsDuplicateForDistinctExpected(t *testing.T) {
+	// Reviewer returns "Same" for both positions, but position 1's expected
+	// title normalizes to "Other". The per-position check fires at position 1.
+	parsed := verdict.TasksOnly{Tasks: []verdict.PlanTaskResult{
+		{TaskTitle: "Task 1: Same"},
+		{TaskTitle: "Same"}, // reviewer echoed "Same" again instead of "Other"
+	}}
+	chunkTasks := []planparser.RawTask{
+		{Title: "Task 1: Same"},
+		{Title: "Task 2: Other"},
+	}
+
+	err := validateChunkIdentity(parsed, chunkTasks)
+	require.Error(t, err)
+	// Per-position mismatch: got "Same", expected "Task 2: Other".
+	assert.Contains(t, err.Error(), "expected")
+	assert.Contains(t, err.Error(), `"Task 2: Other"`)
 }

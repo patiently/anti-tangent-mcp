@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 type anthropicReviewer struct {
 	apiKey  string
 	baseURL string
+	timeout time.Duration
 	client  *http.Client
 }
 
@@ -23,6 +25,7 @@ func NewAnthropic(apiKey, baseURL string, timeout time.Duration) Reviewer {
 	return &anthropicReviewer{
 		apiKey:  apiKey,
 		baseURL: baseURL,
+		timeout: timeout,
 		client:  &http.Client{Timeout: timeout},
 	}
 }
@@ -64,6 +67,9 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 
 	resp, err := r.client.Do(httpReq)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return Response{}, fmt.Errorf("anthropic: request timeout %s exceeded (set ANTI_TANGENT_REQUEST_TIMEOUT to raise): %w", r.timeout, err)
+		}
 		return Response{}, fmt.Errorf("anthropic: %w", err)
 	}
 	defer resp.Body.Close()
@@ -77,8 +83,9 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 	}
 
 	var parsed struct {
-		Model   string `json:"model"`
-		Content []struct {
+		Model      string `json:"model"`
+		StopReason string `json:"stop_reason"`
+		Content    []struct {
 			Type  string          `json:"type"`
 			Input json.RawMessage `json:"input"`
 		} `json:"content"`
@@ -89,6 +96,9 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 	}
 	if err := json.Unmarshal(respBytes, &parsed); err != nil {
 		return Response{}, fmt.Errorf("anthropic: decode response: %w", err)
+	}
+	if parsed.StopReason == "max_tokens" {
+		return Response{}, fmt.Errorf("anthropic: %w", ErrResponseTruncated)
 	}
 
 	for _, c := range parsed.Content {

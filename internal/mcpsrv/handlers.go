@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,12 +21,14 @@ import (
 
 // Envelope is the JSON returned to the subagent for every hook.
 type Envelope struct {
-	SessionID  string            `json:"session_id"`
-	Verdict    string            `json:"verdict"`
-	Findings   []verdict.Finding `json:"findings"`
-	NextAction string            `json:"next_action"`
-	ModelUsed  string            `json:"model_used"`
-	ReviewMS   int64             `json:"review_ms"`
+	SessionID                  string            `json:"session_id"`
+	Verdict                    string            `json:"verdict"`
+	Findings                   []verdict.Finding `json:"findings"`
+	NextAction                 string            `json:"next_action"`
+	ModelUsed                  string            `json:"model_used"`
+	ReviewMS                   int64             `json:"review_ms"`
+	SessionExpiresAt           *time.Time        `json:"session_expires_at,omitempty"`
+	SessionTTLRemainingSeconds *int              `json:"session_ttl_remaining_seconds,omitempty"`
 }
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
@@ -76,6 +79,9 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 
 	result, modelUsed, ms, err := h.review(ctx, model, rendered)
 	if err != nil {
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return envelopeResult(truncatedEnvelope("", model))
+		}
 		return nil, Envelope{}, err
 	}
 
@@ -83,6 +89,10 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	// don't leave orphan sessions in the store waiting for TTL eviction.
 	sess := h.deps.Sessions.Create(spec)
 	h.deps.Sessions.SetPreFindings(sess.ID, result.Findings)
+	// Re-fetch after SetPreFindings so LastAccessed reflects the final mutation.
+	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
+		sess = refreshed
+	}
 
 	env := Envelope{
 		SessionID:  sess.ID,
@@ -92,6 +102,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
+	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
 
@@ -149,6 +160,25 @@ func (h *handlers) resolveModel(override string, fallback config.ModelRef) (conf
 	return mr, nil
 }
 
+// withSessionTTL populates the session expiry fields on env using the session's
+// LastAccessed time and the store's configured idle TTL. Call this AFTER all
+// store mutations that refresh LastAccessed (e.g. Get, AppendCheckpoint,
+// SetPostFindings) so the surfaced expiry reflects the post-operation state.
+// Returns env unchanged if sess is nil (e.g. not-found / truncation paths).
+func (h *handlers) withSessionTTL(env Envelope, sess *session.Session) Envelope {
+	if sess == nil || h.deps.Sessions == nil {
+		return env
+	}
+	expiresAt := sess.LastAccessed.Add(h.deps.Sessions.TTL())
+	remaining := int(time.Until(expiresAt).Seconds())
+	if remaining < 0 {
+		remaining = 0
+	}
+	env.SessionExpiresAt = &expiresAt
+	env.SessionTTLRemainingSeconds = &remaining
+	return env
+}
+
 func envelopeResult(env Envelope) (*mcp.CallToolResult, Envelope, error) {
 	body, err := json.MarshalIndent(env, "", "  ")
 	if err != nil {
@@ -192,7 +222,8 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 	}
 
 	if size := totalBytes(args.ChangedFiles); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes))
+		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."))
 	}
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.MidModel)
@@ -213,6 +244,9 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 
 	result, modelUsed, ms, err := h.review(ctx, model, rendered)
 	if err != nil {
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return envelopeResult(truncatedEnvelope(sess.ID, model))
+		}
 		return nil, Envelope{}, err
 	}
 
@@ -223,6 +257,10 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		Verdict:   result.Verdict,
 		Findings:  result.Findings,
 	})
+	// Re-fetch after AppendCheckpoint so LastAccessed reflects the final mutation.
+	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
+		sess = refreshed
+	}
 
 	env := Envelope{
 		SessionID:  sess.ID,
@@ -232,6 +270,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
+	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
 
@@ -275,7 +314,38 @@ func notFoundEnvelope(id string, model config.ModelRef) Envelope {
 	}
 }
 
-func tooLargeEnvelope(id string, model config.ModelRef, size, limit int) Envelope {
+func truncatedEnvelope(id string, model config.ModelRef) Envelope {
+	return Envelope{
+		SessionID: id,
+		Verdict:   string(verdict.VerdictWarn),
+		Findings: []verdict.Finding{{
+			Severity:   verdict.SeverityMajor,
+			Category:   verdict.CategoryOther,
+			Criterion:  "reviewer_response",
+			Evidence:   providers.ErrResponseTruncated.Error(),
+			Suggestion: "Raise ANTI_TANGENT_PER_TASK_MAX_TOKENS and retry.",
+		}},
+		NextAction: "Retry with a higher max-tokens cap.",
+		ModelUsed:  model.String(),
+	}
+}
+
+func truncatedPlanResult() verdict.PlanResult {
+	return verdict.PlanResult{
+		PlanVerdict: verdict.VerdictWarn,
+		PlanFindings: []verdict.Finding{{
+			Severity:   verdict.SeverityMajor,
+			Category:   verdict.CategoryOther,
+			Criterion:  "reviewer_response",
+			Evidence:   providers.ErrResponseTruncated.Error(),
+			Suggestion: "Raise ANTI_TANGENT_PLAN_MAX_TOKENS and retry.",
+		}},
+		Tasks:      []verdict.PlanTaskResult{},
+		NextAction: "Retry with a higher plan max-tokens cap.",
+	}
+}
+
+func tooLargeEnvelope(id string, model config.ModelRef, size, limit int, suggestion string) Envelope {
 	return Envelope{
 		SessionID: id,
 		Verdict:   string(verdict.VerdictFail),
@@ -284,7 +354,7 @@ func tooLargeEnvelope(id string, model config.ModelRef, size, limit int) Envelop
 			Category:   verdict.CategoryTooLarge,
 			Criterion:  "payload",
 			Evidence:   fmt.Sprintf("payload %d bytes exceeds cap %d", size, limit),
-			Suggestion: "Send a unified diff instead of full files, or split the call.",
+			Suggestion: suggestion,
 		}},
 		NextAction: "Reduce the payload and retry.",
 		ModelUsed:  model.String(),
@@ -304,6 +374,7 @@ type ValidateCompletionArgs struct {
 	SessionID     string    `json:"session_id"  jsonschema:"required"`
 	Summary       string    `json:"summary"     jsonschema:"required"`
 	FinalFiles    []FileArg `json:"final_files,omitempty"`
+	FinalDiff     string    `json:"final_diff,omitempty"`
 	TestEvidence  string    `json:"test_evidence,omitempty"`
 	ModelOverride string    `json:"model_override,omitempty"`
 }
@@ -323,9 +394,17 @@ func validatePlanTool() *mcp.Tool {
 	}
 }
 
+func totalCompletionBytes(files []FileArg, finalDiff string) int {
+	return totalBytes(files) + len(finalDiff)
+}
+
 func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolRequest, args ValidateCompletionArgs) (*mcp.CallToolResult, Envelope, error) {
 	if args.SessionID == "" || args.Summary == "" {
 		return nil, Envelope{}, errors.New("session_id and summary are required")
+	}
+
+	if len(args.FinalFiles) == 0 && args.FinalDiff == "" && args.TestEvidence == "" {
+		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty")
 	}
 
 	sess, ok := h.deps.Sessions.Get(args.SessionID)
@@ -333,8 +412,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return envelopeResult(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel))
 	}
 
-	if size := totalBytes(args.FinalFiles); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes))
+	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
+		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a unified diff via final_diff, or split the call into smaller chunks."))
 	}
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PostModel)
@@ -346,6 +426,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		Spec:         sess.Spec,
 		Summary:      args.Summary,
 		Files:        toPromptFiles(args.FinalFiles),
+		FinalDiff:    args.FinalDiff,
 		TestEvidence: args.TestEvidence,
 	})
 	if err != nil {
@@ -354,10 +435,17 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 
 	result, modelUsed, ms, err := h.review(ctx, model, rendered)
 	if err != nil {
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return envelopeResult(truncatedEnvelope(sess.ID, model))
+		}
 		return nil, Envelope{}, err
 	}
 
 	h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
+	// Re-fetch after SetPostFindings so LastAccessed reflects the final mutation.
+	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
+		sess = refreshed
+	}
 
 	env := Envelope{
 		SessionID:  sess.ID,
@@ -367,6 +455,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
+	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
 
@@ -396,6 +485,9 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		pr, modelUsed, ms, err = h.reviewPlanChunked(ctx, model, args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk)
 	}
 	if err != nil {
+		if errors.Is(err, providers.ErrResponseTruncated) {
+			return planEnvelopeResult(truncatedPlanResult(), model.String(), 0)
+		}
 		return nil, verdict.PlanResult{}, err
 	}
 	return planEnvelopeResult(pr, modelUsed, ms)
@@ -641,10 +733,24 @@ func (h *handlers) reviewOnePlanChunk(
 	return parsed2, ms + ms2, nil
 }
 
+// taskPrefixRe matches a leading "Task <number>: " prefix (with optional
+// trailing whitespace) so we can normalize reviewer-returned task_title values
+// that drop the prefix compared to the planparser.RawTask.Title form.
+var taskPrefixRe = regexp.MustCompile(`^Task \d+:\s*`)
+
+// normalizeTaskTitle trims surrounding whitespace then removes a single leading
+// "Task N: " prefix if present. Comparison is case-sensitive after normalization.
+func normalizeTaskTitle(s string) string {
+	return taskPrefixRe.ReplaceAllString(strings.TrimSpace(s), "")
+}
+
 // validateChunkIdentity checks that the parsed chunk response contains exactly
 // the expected tasks **in the same order** as chunkTasks: count match, each
-// position's task_title equals the corresponding chunkTasks[i].Title (with
-// surrounding whitespace trimmed), and no title appears more than once.
+// position's task_title equals the corresponding chunkTasks[i].Title (after
+// normalizing both sides by trimming whitespace and removing any leading
+// "Task N: " prefix), and no normalized title appears more than once.
+// Mismatch and duplicate errors report the original (un-normalized, trimmed)
+// reviewer title so the caller can correlate with the raw response.
 // Returns a descriptive error on any mismatch — the prompt template instructs
 // the reviewer to emit tasks "in the same order", so positional drift is a
 // reviewer-side error worth retrying.
@@ -652,17 +758,27 @@ func validateChunkIdentity(parsed verdict.TasksOnly, chunkTasks []planparser.Raw
 	if len(parsed.Tasks) != len(chunkTasks) {
 		return fmt.Errorf("chunk identity: got %d tasks, expected %d", len(parsed.Tasks), len(chunkTasks))
 	}
-	seen := make(map[string]struct{}, len(chunkTasks))
+	// Pre-compute how many times each normalized expected title appears so that
+	// plans with intentionally duplicate normalized titles (e.g. "Add tests" for
+	// two different tasks) are not incorrectly rejected.
+	wantCounts := make(map[string]int, len(chunkTasks))
+	for _, ct := range chunkTasks {
+		wantCounts[normalizeTaskTitle(strings.TrimSpace(ct.Title))]++
+	}
+
+	seen := make(map[string]int, len(chunkTasks))
 	for i, t := range parsed.Tasks {
-		got := strings.TrimSpace(t.TaskTitle)
-		want := strings.TrimSpace(chunkTasks[i].Title)
+		gotOriginal := strings.TrimSpace(t.TaskTitle)
+		wantOriginal := strings.TrimSpace(chunkTasks[i].Title)
+		got := normalizeTaskTitle(gotOriginal)
+		want := normalizeTaskTitle(wantOriginal)
 		if got != want {
-			return fmt.Errorf("chunk identity: tasks[%d].task_title %q, expected %q", i, got, want)
+			return fmt.Errorf("chunk identity: tasks[%d].task_title %q, expected %q", i, gotOriginal, wantOriginal)
 		}
-		if _, dup := seen[got]; dup {
-			return fmt.Errorf("chunk identity: tasks[%d].task_title %q duplicated within chunk", i, got)
+		seen[got]++
+		if seen[got] > wantCounts[got] {
+			return fmt.Errorf("chunk identity: tasks[%d].task_title %q duplicated within chunk", i, gotOriginal)
 		}
-		seen[got] = struct{}{}
 	}
 	return nil
 }

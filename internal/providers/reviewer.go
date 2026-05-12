@@ -3,10 +3,19 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 )
+
+// ErrResponseTruncated is returned when a provider signals that its response
+// was cut short by the configured max-token limit. Callers should use
+// errors.Is to detect it and surface advisory findings rather than opaque
+// parse errors.
+var ErrResponseTruncated = errors.New("reviewer response truncated at max_tokens limit")
 
 type Reviewer interface {
 	Name() string
@@ -53,13 +62,31 @@ var allowlist = map[string]map[string]bool{
 	},
 }
 
+func sortedKeys(m map[string]bool) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedProviders() []string {
+	keys := make([]string, 0, len(allowlist))
+	for k := range allowlist {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func ValidateModel(mr config.ModelRef) error {
 	models, ok := allowlist[mr.Provider]
 	if !ok {
-		return fmt.Errorf("unknown provider %q (supported: anthropic, openai, google)", mr.Provider)
+		return fmt.Errorf("unknown provider %q (supported: %s)", mr.Provider, strings.Join(sortedProviders(), ", "))
 	}
 	if !models[mr.Model] {
-		return fmt.Errorf("model %q not in allowlist for provider %q", mr.Model, mr.Provider)
+		return fmt.Errorf("model %q not in allowlist for provider %q (allowed: %s)", mr.Model, mr.Provider, strings.Join(sortedKeys(models), ", "))
 	}
 	return nil
 }

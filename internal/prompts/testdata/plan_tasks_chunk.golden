@@ -39,6 +39,6 @@ still misimplement; minor = nit.
 
 Respond with a JSON object matching the provided schema. The `tasks` array
 must contain exactly one entry per task in the list above, **in the same
-order**, with `task_title` matching the heading text verbatim. Do NOT emit
+order**, with `task_title` matching the heading text verbatim, including the `Task N:` prefix. Do NOT emit
 results for any task outside the list. Do NOT emit `plan_findings` — those
 are handled in a separate call. Do not include prose outside the JSON.

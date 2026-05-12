@@ -71,6 +71,18 @@ The merge commit into `main` carries `[major]` or `[minor]` to drive the same bu
 
 Add the entry as you write the code, not at the end. The body of the matching `## [X.Y.Z]` block is what users see on the GitHub Release.
 
+## GitHub Issues & Public-Repo Hygiene
+
+Bug reports, feature requests, and design discussion for this project live as GitHub issues on this repo (`patiently/anti-tangent-mcp`), not in any consumer project's tracker. Use `gh issue create` (and `gh issue edit` / `gh issue comment` for follow-ups).
+
+**This is a public repository.** When field-reporting bugs that surfaced during work on a private or consumer project, anonymize before filing:
+
+- **Strip consumer-project identifiers**: ticket IDs (e.g. Jira keys), class / function / file names, framework names, product names, person names, internal commit SHAs.
+- **Keep `anti-tangent-mcp`'s own surface**: error strings emitted by this server, model IDs, env-var names, MCP tool names, and config field names are public — keep them verbatim so future readers can grep their own logs against the report.
+- **Preserve the *shape* of the bug**: how to reproduce, what the symptom was, what fix is proposed. Generalize the *content* (e.g. "a task whose ACs reference specific function names" rather than naming those functions).
+
+Two failure modes to avoid: (1) leaking consumer code or naming into a public issue body, and (2) over-redacting to the point that the issue stops being a useful, reproducible bug report.
+
 ## Adding a Provider or Model
 
 1. Implement the `Reviewer` interface in `internal/providers/<name>.go`. Use plain `net/http`; no vendor SDK.

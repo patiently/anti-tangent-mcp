@@ -128,3 +128,33 @@ func TestRenderPlanFindingsOnly_Golden(t *testing.T) {
 	}
 	golden(t, "plan_findings_only", out.System+"\n---USER---\n"+out.User)
 }
+
+func TestRenderPost_WithFinalDiff(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:      sampleSpec(),
+		Summary:   "Changed health handler.",
+		FinalDiff: "diff --git a/handlers/health.go b/handlers/health.go\n+@@\n+-old\n++new\n",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "## Final diff")
+	assert.Contains(t, out.User, "diff --git")
+}
+
+func TestRenderPost_WithoutFinalDiffOmitsSection(t *testing.T) {
+	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "No diff."})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "## Final diff")
+}
+
+func TestRenderPost_IncludesEvidenceToleranceGuidance(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:         sampleSpec(),
+		Summary:      "Implemented AC via diff and tests.",
+		TestEvidence: "go test ./... PASS",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Context:` block in the task spec above is authoritative")
+	assert.Contains(t, out.User, "the summary on its own is not evidence")
+	assert.Contains(t, out.User, "prefer `verdict: pass` with a `category: quality` finding")
+	assert.Contains(t, out.User, "left unaddressed by any of the provided evidence")
+}
