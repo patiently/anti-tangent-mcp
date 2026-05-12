@@ -362,7 +362,7 @@ func truncatedEnvelope(id string, model config.ModelRef) Envelope {
 		SessionID: id,
 		Verdict:   string(verdict.VerdictWarn),
 		Findings: []verdict.Finding{{
-			Severity:   verdict.SeverityMajor,
+			Severity:   verdict.SeverityMinor,
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
@@ -478,7 +478,7 @@ func truncatedPlanResult() verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictWarn,
 		PlanFindings: []verdict.Finding{{
-			Severity:   verdict.SeverityMajor,
+			Severity:   verdict.SeverityMinor,
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),

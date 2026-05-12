@@ -346,7 +346,7 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 
 	// No session should be created on truncation.
@@ -376,7 +376,7 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 }
@@ -403,7 +403,7 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 }
@@ -553,7 +553,7 @@ func TestValidatePlan_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
-	assert.Equal(t, verdict.SeverityMajor, pr.PlanFindings[0].Severity)
+	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[0].Severity)
 	assert.Contains(t, pr.PlanFindings[0].Suggestion, "ANTI_TANGENT_PLAN_MAX_TOKENS")
 }
 

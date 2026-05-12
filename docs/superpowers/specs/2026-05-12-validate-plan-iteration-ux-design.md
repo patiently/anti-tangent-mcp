@@ -86,7 +86,7 @@ The walk is bounded by input length and uses no third-party dependency — a han
 
 **Truncation finding.** Keep emitting it but downgrade severity from `major` to `minor` and reword:
 
-```
+```text
 Reviewer output truncated at the max_tokens cap; N complete findings recovered.
 Raise ANTI_TANGENT_<PER_TASK|PLAN>_MAX_TOKENS or pass max_tokens_override to capture more.
 ```
@@ -110,7 +110,7 @@ Threaded into `providers.Request.MaxTokens` for that call.
 - `0 < MaxTokensOverride ≤ Ceiling`: use the override directly.
 - `MaxTokensOverride > Ceiling`: use the ceiling, AND emit a `minor` finding:
 
-  ```
+  ```text
   max_tokens_override (N) exceeds ceiling (Ceiling); used Ceiling.
   Raise ANTI_TANGENT_MAX_TOKENS_CEILING if you need a larger budget.
   ```
@@ -125,7 +125,7 @@ The clamp finding fires once per call, no accumulation.
 
 **Prompt branching.** `internal/prompts/prompts.go` gets a new `Mode string` field on `PlanInput`. Each of `plan.tmpl`, `plan_findings_only.tmpl`, `plan_tasks_chunk.tmpl` gets a `{{ if eq .Mode "quick" }}...{{ end }}` block in the `## What to evaluate` section:
 
-```
+```text
 **Quick mode.** Surface only the most-severe findings — at most 3 per scope
 (3 plan-level findings, and at most 3 findings per task). Omit minor nits and
 stylistic suggestions. Prefer fewer high-quality findings over many low-value
@@ -148,7 +148,7 @@ Both edits are plan-template-scoped only. Per-task templates (`pre.tmpl`, `mid.t
 
 ### Files touched
 
-```
+```text
 Modify  internal/providers/openai.go      — return partial bytes on truncation
 Modify  internal/providers/anthropic.go   — same
 Modify  internal/providers/google.go      — same

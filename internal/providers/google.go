@@ -107,9 +107,12 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 		return Response{}, fmt.Errorf("google: no candidates in response")
 	}
 
+	// Concatenate all text parts — Google may emit multi-part content
+	// (rare for structured-output mode but possible). Dropping parts[1:]
+	// would silently lose the tail.
 	var text string
-	if len(parsed.Candidates[0].Content.Parts) > 0 {
-		text = parsed.Candidates[0].Content.Parts[0].Text
+	for _, p := range parsed.Candidates[0].Content.Parts {
+		text += p.Text
 	}
 
 	out := Response{
