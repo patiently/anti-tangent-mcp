@@ -41,11 +41,18 @@ ANTI_TANGENT_LOG_LEVEL=info
 ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion); raise if a stateful hook returns a truncation finding
 ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # output cap per reviewer call in validate_plan (single-call and per-chunk); raise if plan validation returns a truncation finding
 ANTI_TANGENT_PLAN_TASKS_PER_CHUNK=8      # plans above this task count are reviewed via the chunked path; also the per-chunk size
+ANTI_TANGENT_MAX_TOKENS_CEILING=16384    # cap on per-call max_tokens_override; over-ceiling values are clamped and emit a minor clamp finding (v0.3.0+)
 ```
 
 ### Large plans (chunking)
 
 `validate_plan` automatically chunks plans with more than `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` tasks (default 8). Internally the server makes one Pass-1 reviewer call for cross-cutting `plan_findings` plus `ceil(n/N)` per-task chunks, each carrying the full plan as context. The merged `PlanResult` is identical in shape to the single-call path — callers see no difference. Operators with very dense per-task content (long `**Goal:**` / `**Acceptance criteria:**` blocks) can lower `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` to reduce per-chunk output size, or raise `ANTI_TANGENT_PLAN_MAX_TOKENS` if their reviewer model supports it. Worst-case wall-clock for a 25-task plan is ~5 sequential calls.
+
+### Per-call tool args (v0.3.0+)
+
+All four tools accept an optional `max_tokens_override` int — replaces the configured default (`PerTaskMaxTokens` or `PlanMaxTokens`) for this call only. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING`. Use when you know one specific call needs a larger reviewer budget without changing global config.
+
+`validate_plan` additionally accepts an optional `mode` arg of `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings (at most 3 per scope) — useful for small ASAP plans where you don't want round-after-round of stylistic refinement.
 
 ## Use with Claude Code (`.mcp.json`)
 
