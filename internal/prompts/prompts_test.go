@@ -254,6 +254,49 @@ func TestPlanTemplates_DefaultMode_OmitsQuickInstruction(t *testing.T) {
 	}
 }
 
+const (
+	anchorHypotheticalMarker = "e.g. illustrative —"
+	anchorNextActionNudge    = "single highest-leverage finding"
+)
+
+func TestPlanTemplates_IncludeHypotheticalMarker(t *testing.T) {
+	planText := "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"
+
+	out, err := RenderPlan(PlanInput{PlanText: planText})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorHypotheticalMarker, "plan.tmpl should include hypothetical-marker rule")
+
+	out, err = RenderPlanFindingsOnly(PlanInput{PlanText: planText})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorHypotheticalMarker, "plan_findings_only.tmpl should include hypothetical-marker rule")
+
+	out, err = RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   planText,
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: A"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorHypotheticalMarker, "plan_tasks_chunk.tmpl should include hypothetical-marker rule")
+}
+
+func TestPlanTemplates_IncludeNextActionNudge(t *testing.T) {
+	planText := "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"
+
+	out, err := RenderPlan(PlanInput{PlanText: planText})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorNextActionNudge, "plan.tmpl should include next_action specificity nudge")
+
+	out, err = RenderPlanFindingsOnly(PlanInput{PlanText: planText})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorNextActionNudge, "plan_findings_only.tmpl should include next_action specificity nudge")
+
+	out, err = RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   planText,
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: A"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorNextActionNudge, "plan_tasks_chunk.tmpl should include next_action specificity nudge")
+}
+
 func TestRenderPlan_QuickMode_Golden(t *testing.T) {
 	out, err := RenderPlan(PlanInput{
 		PlanText: `# Sample Plan

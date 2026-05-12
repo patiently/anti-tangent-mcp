@@ -8,6 +8,8 @@ For `unstated_assumption` findings, only flag assumption gaps that are visible i
 
 Every finding's `evidence` field must quote or paraphrase text that literally appears in the plan above, OR describe an expected piece of plan text that is absent (e.g. "the task block has no `Acceptance criteria:` section"). If your evidence cannot be tied to plan text — present or missing — do not emit the finding.
 
+When you cite a code symbol's signature, an example sibling key, or an adjacent attribute value as an *illustration*, prefix it with `e.g. illustrative —`. The reader does not know whether your illustration matches the codebase, and false confidence is worse than no example.
+
 ## Plan under review
 
 # Sample Plan
@@ -64,3 +66,5 @@ still misimplement; minor = nit.
 
 Respond with a JSON object matching the provided schema. Do not include
 prose outside the JSON.
+
+The `next_action` field must name the single highest-leverage finding the author should address next — not generic advice like "address the warnings." If no findings warrant immediate attention, say so explicitly: "no blocking findings; proceed to dispatch."
