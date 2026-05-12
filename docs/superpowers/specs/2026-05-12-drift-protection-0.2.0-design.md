@@ -194,7 +194,7 @@ Change `RequestTimeout`'s default from `120 * time.Second` to `180 * time.Second
 
 **Files:** `internal/providers/{anthropic,openai,google}.go`.
 
-Each provider's outbound HTTP call wraps the `context.DeadlineExceeded` error with the configured timeout:
+Provider structs gain a `timeout time.Duration` field set in constructors. Each provider's outbound HTTP call wraps the `context.DeadlineExceeded` error with the configured timeout:
 
 ```go
 if errors.Is(err, context.DeadlineExceeded) {
@@ -210,7 +210,7 @@ Unit test (per provider, `httptest`-based): server delays past a tight timeout; 
 
 **File:** `internal/providers/openai.go` (primary), `anthropic.go`, `google.go`.
 
-Each provider already deserializes a response shape that includes the finish reason; today we ignore it. Add detection:
+Extend each provider response struct to deserialize the finish reason; the existing structs do not yet include it. Add detection:
 
 - OpenAI: `choices[0].finish_reason == "length"`.
 - Anthropic: `stop_reason == "max_tokens"`.
@@ -249,7 +249,7 @@ Unit tests (one per provider): `httptest` server returns a truncated response wi
 
 ### Session TTL in envelope
 
-**File:** `internal/verdict/verdict.go` — `Envelope` struct.
+**File:** `internal/mcpsrv/handlers.go` — `Envelope` struct.
 
 Add two optional fields:
 
@@ -261,9 +261,11 @@ type Envelope struct {
 }
 ```
 
-Pointer types so they only render in JSON when the session is known. Populated from the session's `expires_at` in `internal/mcpsrv/handlers.go` for the three stateful tools (`validate_task_spec`, `check_progress`, `validate_completion`); left nil for `validate_plan`.
+The session store uses sliding idle TTL: each successful `Get`, checkpoint append, or findings update refreshes `LastAccessed`. Compute the expiry surfaced in responses as `sess.LastAccessed.Add(h.deps.Sessions.TTL())` after the handler has performed any operation that refreshes `LastAccessed`. `_remaining_seconds` uses `int(time.Until(expiresAt).Seconds())`, clamped to 0.
 
-The `_remaining_seconds` field uses `int(time.Until(expiresAt).Seconds())`; if negative (already-expired race), set to 0. Both fields rendered with omitempty so a `validate_plan` envelope is bit-identical to 0.1.4 (modulo any other 0.2.0 additions).
+Pointer types so they only render in JSON when the session is known. Populated for the three stateful tools (`validate_task_spec`, `check_progress`, `validate_completion`); left nil for `validate_plan`.
+
+Both fields rendered with omitempty so a `validate_plan` envelope is bit-identical to 0.1.4 (modulo any other 0.2.0 additions).
 
 Unit test: envelope serialization with a known session timestamp matches a golden JSON snippet.
 
@@ -271,7 +273,11 @@ Unit test: envelope serialization with a known session timestamp matches a golde
 
 **File:** `internal/mcpsrv/handlers.go` — where the 200KB cap is checked.
 
-Append to the existing error message: ` — try sending a unified diff via final_diff, or splitting the call into smaller chunks`.
+For `validate_completion`, append: ` — try sending a unified diff via final_diff, or splitting the call into smaller chunks`.
+
+For `check_progress`, append: ` — try sending a smaller changed_files set, or splitting the checkpoint into smaller chunks`.
+
+Payload accounting remains `len(path) + len(content)` for file snapshots and additionally includes `len(final_diff)` for `validate_completion`.
 
 Unit test: trigger the cap with a synthetic >200KB payload; assert the error contains the suggestion text.
 
