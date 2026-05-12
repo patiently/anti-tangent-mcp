@@ -107,7 +107,7 @@ Expected: diff only resolves the six review findings above.
 - Duplicate detection uses normalized titles.
 - Mismatch and duplicate errors still include original unnormalized reviewer titles.
 - `plan_tasks_chunk.tmpl` explicitly asks for `task_title` including the `Task N:` prefix.
-- Tests cover prefix-stripped success, wrong-title failure, and duplicate-after-normalization failure.
+- Tests cover prefix-stripped success, wrong-title failure, and the case where the plan legitimately has multiple tasks that normalize to the same title (allowed, since per-position identity matching guards the chunk and the dedupe map now uses an expected-count tolerance).
 
 **Non-goals:**
 - Do not change `PlanResult` or `TasksOnly` schema.
@@ -149,19 +149,17 @@ func TestValidateChunkIdentity_WrongTitleAfterNormalization(t *testing.T) {
     assert.Contains(t, err.Error(), `"Task 1: Right title"`)
 }
 
-func TestValidateChunkIdentity_DuplicateAfterNormalization(t *testing.T) {
+func TestValidateChunkIdentity_AllowsLegitimateDuplicateNormalizedTitles(t *testing.T) {
     parsed := verdict.TasksOnly{Tasks: []verdict.PlanTaskResult{
-        {TaskTitle: "Task 1: Same"},
-        {TaskTitle: "Same"},
+        {TaskTitle: "Task 1: Add tests"},
+        {TaskTitle: "Task 2: Add tests"},
     }}
     chunkTasks := []planparser.RawTask{
-        {Title: "Task 1: Same"},
-        {Title: "Task 2: Same"},
+        {Title: "Task 1: Add tests"},
+        {Title: "Task 2: Add tests"},
     }
 
-    err := validateChunkIdentity(parsed, chunkTasks)
-    require.Error(t, err)
-    assert.Contains(t, err.Error(), "duplicated within chunk")
+    require.NoError(t, validateChunkIdentity(parsed, chunkTasks))
 }
 ```
 
@@ -431,7 +429,7 @@ git commit -m "feat: accept final_diff and require concrete evidence on validate
 
 **Acceptance criteria:**
 - `post.tmpl` tells the reviewer that `Context:` disambiguates ACs.
-- `post.tmpl` says evidence may be full files, final diff, test evidence, or cited summary evidence.
+- `post.tmpl` says evidence may be full files, final diff, or test evidence (the summary is the implementer's narrative — it is cross-referenced against the evidence but is not itself counted as evidence; the schema gate enforces that at least one of the three real evidence fields is present).
 - `post.tmpl` tells the reviewer not to emit `missing_acceptance_criterion` solely because file content was not pasted.
 - `post.tmpl` biases ambiguous evidence toward `pass` with `quality` findings and reserves `major`/`critical` for affirmative contradictions.
 - Golden prompt diff is reviewed and intentional.

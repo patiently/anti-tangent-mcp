@@ -76,7 +76,7 @@ Belt + suspenders. If the reviewer obeys, the normalizer is a no-op. If not, the
 
 - `validateChunkIdentity_PrefixStripped`: feed a `TasksOnly` whose tasks have prefix-stripped titles; assert no error.
 - `validateChunkIdentity_WrongTitle`: feed a `TasksOnly` whose titles don't match (even after normalization); assert the existing mismatch error fires and the error message includes both original strings.
-- `validateChunkIdentity_DuplicateAfterNormalization`: two tasks normalize to the same string; assert duplicate error.
+- `validateChunkIdentity_AllowsLegitimateDuplicateNormalizedTitles`: when the chunk legitimately contains multiple tasks that normalize to the same string (e.g. `Task 1: Add tests` and `Task 2: Add tests`), per-position identity matching plus an expected-count tolerance on the dedupe map keep the chunk valid. Reviewer-side over-duplication (returning the same normalized title more times than expected) is still caught by the per-position mismatch error.
 - Golden file regen for `plan_tasks_chunk.tmpl` (`go test ./internal/prompts/... -update`). Diff reviewed in PR.
 
 ## B. `validate_completion` evidence shape
@@ -273,9 +273,9 @@ Unit test: envelope serialization with a known session timestamp matches a golde
 
 **File:** `internal/mcpsrv/handlers.go` — where the 200KB cap is checked.
 
-For `validate_completion`, append: ` — try sending a unified diff via final_diff, or splitting the call into smaller chunks`.
+For `validate_completion`, append (with a leading " — " separator) "try sending a unified diff via final_diff, or splitting the call into smaller chunks".
 
-For `check_progress`, append: ` — try sending a smaller changed_files set, or splitting the checkpoint into smaller chunks`.
+For `check_progress`, append (same separator) "try sending a smaller changed_files set, or splitting the checkpoint into smaller chunks".
 
 Payload accounting remains `len(path) + len(content)` for file snapshots and additionally includes `len(final_diff)` for `validate_completion`.
 
