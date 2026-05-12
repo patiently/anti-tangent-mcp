@@ -138,7 +138,7 @@ The latter three return the same envelope; `validate_plan` returns a richer `Pla
 }
 ```
 
-`session_expires_at` and `session_ttl_remaining_seconds` are included in stateful-hook responses (v0.2.0+). If a stateful hook returns a `category: reviewer_truncated` finding, the reviewer response was cut off at the token budget — raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` and retry.
+`session_expires_at` and `session_ttl_remaining_seconds` are included in stateful-hook responses (v0.2.0+). If a stateful hook returns a `category: other` finding with `criterion: reviewer_response`, the reviewer response was cut off at the token budget — raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` and retry.
 
 `validate_completion` (v0.2.0+) accepts `final_diff` as an alternative or supplement to `final_files`. Pass a unified diff when the changed files are too large to inline. At least one of `final_files`, `final_diff`, or `test_evidence` must be non-empty — summary-only requests are rejected. Timeout errors (default 180s, configurable via `ANTI_TANGENT_REQUEST_TIMEOUT`) include the configured timeout value and the env-var name for self-diagnosis.
 

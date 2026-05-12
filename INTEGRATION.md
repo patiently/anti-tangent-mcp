@@ -468,8 +468,8 @@ You'll get a finding with `category: session_not_found`. Default TTL is 4h. Re-c
 **My payload is too big.**
 The MCP returns a finding with `category: payload_too_large`. Default cap is 200 KB across `changed_files` / `final_files`. The finding includes a tool-specific suggestion: for `validate_completion`, pass `final_diff` (unified diff) instead of or in addition to `final_files`; for `check_progress`, reduce `changed_files` or split the call. The `ANTI_TANGENT_MAX_PAYLOAD_BYTES` env var controls the cap.
 
-**A hook returned a `reviewer_truncated` finding.**
-The reviewer's response was cut off at the output token budget. Raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` (for stateful hooks: `validate_task_spec`, `check_progress`, `validate_completion`) or `ANTI_TANGENT_PLAN_MAX_TOKENS` (for `validate_plan`) and retry.
+**A hook returned a finding with `category: other` and `criterion: reviewer_response`.**
+The reviewer's response was cut off at the output token budget. Raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` (for stateful hooks: `validate_task_spec`, `check_progress`, `validate_completion`) or `ANTI_TANGENT_PLAN_MAX_TOKENS` (for `validate_plan`) and retry. The finding's `evidence` reads `reviewer response truncated at max_tokens limit`.
 
 **`validate_task_spec` is asking for ACs my plan doesn't have.**
 That's the spec quality gate working as designed. Either (a) add the missing ACs to the plan and re-validate, or (b) acknowledge the gap in the next `working_on` description so the reviewer knows to expect implementer-discretion choices.
