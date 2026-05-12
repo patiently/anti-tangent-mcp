@@ -2,6 +2,7 @@ package mcpsrv
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -76,11 +77,73 @@ func TestValidateTaskSpec_HappyPath(t *testing.T) {
 	_, ok := d.Sessions.Get(env.SessionID)
 	assert.True(t, ok)
 
+	// TTL fields are populated on successful creation.
+	require.NotNil(t, env.SessionExpiresAt)
+	require.NotNil(t, env.SessionTTLRemainingSeconds)
+	assert.Greater(t, *env.SessionTTLRemainingSeconds, 0)
+
 	// And out.Content includes a TextContent with the JSON form of the envelope.
 	require.Len(t, out.Content, 1)
 	tc, ok := out.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Contains(t, tc.Text, env.SessionID)
+}
+
+func TestEnvelope_SessionTTLFieldsSerializeCorrectly(t *testing.T) {
+	t.Run("fields present when set", func(t *testing.T) {
+		ts := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+		remaining := 3600
+		env := Envelope{
+			SessionID:                  "abc",
+			Verdict:                    "pass",
+			Findings:                   []verdict.Finding{},
+			NextAction:                 "go",
+			ModelUsed:                  "m",
+			ReviewMS:                   10,
+			SessionExpiresAt:           &ts,
+			SessionTTLRemainingSeconds: &remaining,
+		}
+		b, err := json.Marshal(env)
+		require.NoError(t, err)
+		assert.Contains(t, string(b), `"session_expires_at"`)
+		assert.Contains(t, string(b), `"session_ttl_remaining_seconds"`)
+		assert.Contains(t, string(b), `"2030-01-01T12:00:00Z"`)
+		assert.Contains(t, string(b), `3600`)
+	})
+
+	t.Run("fields absent when nil (omitempty)", func(t *testing.T) {
+		env := Envelope{
+			SessionID:  "abc",
+			Verdict:    "fail",
+			Findings:   []verdict.Finding{},
+			NextAction: "fix",
+			ModelUsed:  "m",
+			ReviewMS:   5,
+		}
+		b, err := json.Marshal(env)
+		require.NoError(t, err)
+		assert.NotContains(t, string(b), `"session_expires_at"`)
+		assert.NotContains(t, string(b), `"session_ttl_remaining_seconds"`)
+	})
+
+	t.Run("remaining seconds clamped to zero (not negative)", func(t *testing.T) {
+		past := time.Now().Add(-1 * time.Hour)
+		remaining := 0
+		env := Envelope{
+			SessionID:                  "abc",
+			Verdict:                    "pass",
+			Findings:                   []verdict.Finding{},
+			NextAction:                 "go",
+			ModelUsed:                  "m",
+			ReviewMS:                   1,
+			SessionExpiresAt:           &past,
+			SessionTTLRemainingSeconds: &remaining,
+		}
+		b, err := json.Marshal(env)
+		require.NoError(t, err)
+		assert.Contains(t, string(b), `"session_ttl_remaining_seconds":0`)
+		assert.GreaterOrEqual(t, *env.SessionTTLRemainingSeconds, 0)
+	})
 }
 
 func TestValidateTaskSpec_ProviderError(t *testing.T) {
@@ -120,6 +183,11 @@ func TestCheckProgress_HappyPath(t *testing.T) {
 	require.NotNil(t, out)
 	assert.Equal(t, pre.SessionID, env.SessionID)
 	assert.Equal(t, "pass", env.Verdict)
+
+	// TTL fields are populated on successful progress check.
+	require.NotNil(t, env.SessionExpiresAt)
+	require.NotNil(t, env.SessionTTLRemainingSeconds)
+	assert.Greater(t, *env.SessionTTLRemainingSeconds, 0)
 
 	// A checkpoint was appended.
 	got, _ := d.Sessions.Get(env.SessionID)
@@ -176,6 +244,11 @@ func TestValidateCompletion_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pre.SessionID, env.SessionID)
 	assert.Equal(t, "pass", env.Verdict)
+
+	// TTL fields are populated on successful completion.
+	require.NotNil(t, env.SessionExpiresAt)
+	require.NotNil(t, env.SessionTTLRemainingSeconds)
+	assert.Greater(t, *env.SessionTTLRemainingSeconds, 0)
 
 	got, _ := d.Sessions.Get(pre.SessionID)
 	assert.NotNil(t, got.PostFindings)

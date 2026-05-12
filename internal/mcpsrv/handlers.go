@@ -21,12 +21,14 @@ import (
 
 // Envelope is the JSON returned to the subagent for every hook.
 type Envelope struct {
-	SessionID  string            `json:"session_id"`
-	Verdict    string            `json:"verdict"`
-	Findings   []verdict.Finding `json:"findings"`
-	NextAction string            `json:"next_action"`
-	ModelUsed  string            `json:"model_used"`
-	ReviewMS   int64             `json:"review_ms"`
+	SessionID                  string            `json:"session_id"`
+	Verdict                    string            `json:"verdict"`
+	Findings                   []verdict.Finding `json:"findings"`
+	NextAction                 string            `json:"next_action"`
+	ModelUsed                  string            `json:"model_used"`
+	ReviewMS                   int64             `json:"review_ms"`
+	SessionExpiresAt           *time.Time        `json:"session_expires_at,omitempty"`
+	SessionTTLRemainingSeconds *int              `json:"session_ttl_remaining_seconds,omitempty"`
 }
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
@@ -87,6 +89,8 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	// don't leave orphan sessions in the store waiting for TTL eviction.
 	sess := h.deps.Sessions.Create(spec)
 	h.deps.Sessions.SetPreFindings(sess.ID, result.Findings)
+	// Re-fetch after SetPreFindings so LastAccessed reflects the final mutation.
+	sess, _ = h.deps.Sessions.Get(sess.ID)
 
 	env := Envelope{
 		SessionID:  sess.ID,
@@ -96,6 +100,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
+	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
 
@@ -151,6 +156,25 @@ func (h *handlers) resolveModel(override string, fallback config.ModelRef) (conf
 		return config.ModelRef{}, err
 	}
 	return mr, nil
+}
+
+// withSessionTTL populates the session expiry fields on env using the session's
+// LastAccessed time and the store's configured idle TTL. Call this AFTER all
+// store mutations that refresh LastAccessed (e.g. Get, AppendCheckpoint,
+// SetPostFindings) so the surfaced expiry reflects the post-operation state.
+// Returns env unchanged if sess is nil (e.g. not-found / truncation paths).
+func (h *handlers) withSessionTTL(env Envelope, sess *session.Session) Envelope {
+	if sess == nil || h.deps.Sessions == nil {
+		return env
+	}
+	expiresAt := sess.LastAccessed.Add(h.deps.Sessions.TTL())
+	remaining := int(time.Until(expiresAt).Seconds())
+	if remaining < 0 {
+		remaining = 0
+	}
+	env.SessionExpiresAt = &expiresAt
+	env.SessionTTLRemainingSeconds = &remaining
+	return env
 }
 
 func envelopeResult(env Envelope) (*mcp.CallToolResult, Envelope, error) {
@@ -230,6 +254,8 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		Verdict:   result.Verdict,
 		Findings:  result.Findings,
 	})
+	// Re-fetch after AppendCheckpoint so LastAccessed reflects the final mutation.
+	sess, _ = h.deps.Sessions.Get(sess.ID)
 
 	env := Envelope{
 		SessionID:  sess.ID,
@@ -239,6 +265,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
+	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
 
@@ -409,6 +436,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	}
 
 	h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
+	// Re-fetch after SetPostFindings so LastAccessed reflects the final mutation.
+	sess, _ = h.deps.Sessions.Get(sess.ID)
 
 	env := Envelope{
 		SessionID:  sess.ID,
@@ -418,6 +447,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
+	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
 
