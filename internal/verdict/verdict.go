@@ -45,6 +45,7 @@ type Result struct {
 	Verdict    Verdict   `json:"verdict"`
 	Findings   []Finding `json:"findings"`
 	NextAction string    `json:"next_action"`
+	Partial    bool      `json:"partial,omitempty"`
 }
 
 //go:embed schema.json
