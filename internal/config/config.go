@@ -51,7 +51,7 @@ func Load(env func(string) string) (Config, error) {
 		GoogleKey:         env("GOOGLE_API_KEY"),
 		SessionTTL:        4 * time.Hour,
 		MaxPayloadBytes:   204800,
-		RequestTimeout:    120 * time.Second,
+		RequestTimeout:    180 * time.Second,
 		LogLevel:          slog.LevelInfo,
 		PerTaskMaxTokens:  4096,
 		PlanMaxTokens:     4096,

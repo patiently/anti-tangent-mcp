@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -66,4 +67,21 @@ func TestGoogle_Review_HTTPError(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "400")
+}
+
+func TestGoogle_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	rv := NewGoogle("k", srv.URL, 1*time.Millisecond)
+	_, err := rv.Review(context.Background(), Request{
+		Model:      "gemini-2.5-pro",
+		JSONSchema: []byte(`{"type":"object"}`),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "google: request timeout 1ms exceeded")
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_REQUEST_TIMEOUT")
+	assert.True(t, errors.Is(err, context.DeadlineExceeded))
 }

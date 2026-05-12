@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -89,4 +90,21 @@ func TestAnthropic_Review_NoToolUse(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "tool_use")
+}
+
+func TestAnthropic_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	rv := NewAnthropic("k", srv.URL, 1*time.Millisecond)
+	_, err := rv.Review(context.Background(), Request{
+		Model:      "claude-sonnet-4-6",
+		JSONSchema: []byte(`{"type":"object"}`),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "anthropic: request timeout 1ms exceeded")
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_REQUEST_TIMEOUT")
+	assert.True(t, errors.Is(err, context.DeadlineExceeded))
 }

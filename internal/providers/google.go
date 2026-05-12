@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 type googleReviewer struct {
 	apiKey  string
 	baseURL string
+	timeout time.Duration
 	client  *http.Client
 }
 
@@ -24,6 +26,7 @@ func NewGoogle(apiKey, baseURL string, timeout time.Duration) Reviewer {
 	return &googleReviewer{
 		apiKey:  apiKey,
 		baseURL: baseURL,
+		timeout: timeout,
 		client:  &http.Client{Timeout: timeout},
 	}
 }
@@ -67,6 +70,9 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 
 	resp, err := r.client.Do(httpReq)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return Response{}, fmt.Errorf("google: request timeout %s exceeded (set ANTI_TANGENT_REQUEST_TIMEOUT to raise): %w", r.timeout, err)
+		}
 		return Response{}, fmt.Errorf("google: %w", err)
 	}
 	defer resp.Body.Close()
