@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2026-05-12
 
-_Pending. Addressing [#6](https://github.com/patiently/anti-tangent-mcp/issues/6): chunker identity reconciliation, `model_override` UX, `validate_completion` reviewer over-strictness. Minor bump because `validate_completion` now requires at least one of `final_files`, `final_diff`, or `test_evidence` to be non-empty (summary-only requests rejected) — see the design doc for migration guidance._
+### Added
+- `validate_completion` accepts optional `final_diff` evidence for unified diffs.
+- Stateful hook envelopes include optional `session_expires_at` and `session_ttl_remaining_seconds`.
+- Reviewer-response truncation is detected and surfaced as structured findings with max-token retry guidance.
+
+### Changed
+- **(breaking)** `validate_completion` now requires at least one of `final_files`, `final_diff`, or `test_evidence` to be non-empty. Summary-only completion requests are rejected with `validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty`. Migration: include test command output in `test_evidence` (smallest path), a unified diff in `final_diff`, or full files in `final_files`. Rationale: the reviewer prompt rewrite grades against concrete evidence; summary text alone caused the over-firing pattern in #6 §3.
+- Default `ANTI_TANGENT_REQUEST_TIMEOUT` is 180s.
+- Timeout errors include the configured timeout and `ANTI_TANGENT_REQUEST_TIMEOUT`.
+- Invalid model override errors list supported models for the selected provider.
+- `validate_completion` review guidance grades `final_files` / `final_diff` / `test_evidence` (not the `summary`), treats the task spec's `Context:` block as authoritative when it disambiguates an AC, and biases ambiguous-but-fully-covered evidence toward `verdict: pass` with a `category: quality` finding while reserving `severity: major`/`critical` for affirmative contradictions or for an AC left unaddressed.
+- `validate_plan` chunk prompts ask reviewers to echo the `Task N:` prefix verbatim.
+- Payload-too-large findings include tool-specific retry suggestions (`final_diff`-or-split for `validate_completion`; smaller `changed_files`-or-split for `check_progress`).
+
+### Fixed
+- Chunked `validate_plan` identity reconciliation accepts task titles when reviewers strip the `Task N:` prefix while still rejecting wrong or duplicate tasks.
 
 ## [0.1.4] - 2026-05-11
 

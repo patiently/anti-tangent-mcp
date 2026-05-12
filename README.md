@@ -34,12 +34,12 @@ ANTI_TANGENT_PLAN_MODEL=anthropic:claude-sonnet-4-6   # validate_plan; defaults 
 # Optional tunables:
 ANTI_TANGENT_SESSION_TTL=4h
 ANTI_TANGENT_MAX_PAYLOAD_BYTES=204800
-ANTI_TANGENT_REQUEST_TIMEOUT=120s
+ANTI_TANGENT_REQUEST_TIMEOUT=180s
 ANTI_TANGENT_LOG_LEVEL=info
 
 # Output budgets + chunking (v0.1.4+):
-ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion)
-ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # output cap per reviewer call in validate_plan (single-call and per-chunk)
+ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion); raise if a stateful hook returns a truncation finding
+ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # output cap per reviewer call in validate_plan (single-call and per-chunk); raise if plan validation returns a truncation finding
 ANTI_TANGENT_PLAN_TASKS_PER_CHUNK=8      # plans above this task count are reviewed via the chunked path; also the per-chunk size
 ```
 
@@ -132,9 +132,15 @@ The latter three return the same envelope; `validate_plan` returns a richer `Pla
   ],
   "next_action": "one sentence",
   "model_used": "anthropic:claude-sonnet-4-6",
-  "review_ms": 2341
+  "review_ms": 2341,
+  "session_expires_at": "2026-05-12T18:30:00Z",
+  "session_ttl_remaining_seconds": 14399
 }
 ```
+
+`session_expires_at` and `session_ttl_remaining_seconds` are included in stateful-hook responses (v0.2.0+). If a stateful hook returns a `category: reviewer_truncated` finding, the reviewer response was cut off at the token budget — raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` and retry.
+
+`validate_completion` (v0.2.0+) accepts `final_diff` as an alternative or supplement to `final_files`. Pass a unified diff when the changed files are too large to inline. At least one of `final_files`, `final_diff`, or `test_evidence` must be non-empty — summary-only requests are rejected. Timeout errors (default 180s, configurable via `ANTI_TANGENT_REQUEST_TIMEOUT`) include the configured timeout value and the env-var name for self-diagnosis.
 
 ## Integration
 
