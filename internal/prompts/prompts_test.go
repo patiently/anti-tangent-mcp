@@ -158,3 +158,40 @@ func TestRenderPost_IncludesEvidenceToleranceGuidance(t *testing.T) {
 	assert.Contains(t, out.User, "prefer `verdict: pass` with a `category: quality` finding")
 	assert.Contains(t, out.User, "left unaddressed by any of the provided evidence")
 }
+
+const (
+	anchorReviewerGroundRules    = "## Reviewer ground rules"
+	anchorEpistemicBoundary      = "You have access ONLY to the plan markdown"
+	anchorUnstatedAssumptionRule = "For `unstated_assumption` findings, only flag"
+	anchorConcreteEvidenceRule   = "Every finding's `evidence` field must quote or paraphrase"
+)
+
+func TestRenderPlan_IncludesReviewerGroundRules(t *testing.T) {
+	out, err := RenderPlan(PlanInput{PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorReviewerGroundRules)
+	assert.Contains(t, out.User, anchorEpistemicBoundary)
+	assert.Contains(t, out.User, anchorUnstatedAssumptionRule)
+	assert.Contains(t, out.User, anchorConcreteEvidenceRule)
+}
+
+func TestRenderPlanFindingsOnly_IncludesReviewerGroundRules(t *testing.T) {
+	out, err := RenderPlanFindingsOnly(PlanInput{PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorReviewerGroundRules)
+	assert.Contains(t, out.User, anchorEpistemicBoundary)
+	assert.Contains(t, out.User, anchorUnstatedAssumptionRule)
+	assert.Contains(t, out.User, anchorConcreteEvidenceRule)
+}
+
+func TestRenderPlanTasksChunk_IncludesReviewerGroundRules(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n",
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: A"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorReviewerGroundRules)
+	assert.Contains(t, out.User, anchorEpistemicBoundary)
+	assert.Contains(t, out.User, anchorUnstatedAssumptionRule)
+	assert.Contains(t, out.User, anchorConcreteEvidenceRule)
+}
