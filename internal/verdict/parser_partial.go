@@ -41,31 +41,12 @@ func ParseResultPartial(raw []byte) (Result, bool) {
 }
 
 // ParsePlanResultPartial parses a possibly-truncated plan-level reviewer
-// response. Recovery semantics:
-//
-//   - If strict json.Unmarshal succeeds, return the parsed value with
-//     ok=true and Partial=false.
-//   - Walk the bytes to identify the boundaries of plan_findings[] and
-//     tasks[]. Recover complete elements from each.
-//   - If a tasks[i] is open at EOF (truncated mid-task), attempt synthetic
-//     recovery: if the partial task has a parseable task_title AND an
-//     opened findings[ AND at least one complete finding inside, append
-//     a synthetic task with the recovered scalars + defaults.
-//   - Return (zero, false) only when both recovered Tasks and recovered
-//     PlanFindings are empty.
-//
-// NOTE: the plan task spec AC text reads "for ParsePlanResultPartial,
-// 'at least one complete finding' counts findings across plan_findings[]
-// AND each tasks[].findings[]" — strictly interpreted, that would
-// require at least one recovered Finding, not just a recovered Task.
-// However, the plan-supplied test fixture
-// `TruncatedInsideTaskBeforeAnyFinding_DropsPartialTask` recovers two
-// cleanly-closed tasks whose findings arrays are both empty (total
-// findings == 0) and pins `require.True(t, ok)`. The tests are the
-// contract per Step 5 of the plan ("The implementer fills in the body
-// of repairOuterArray and recoverPlanResult driven by the tests added
-// in Step 3"), so a recovered complete task counts as a recovery unit
-// on its own.
+// response. Strict parse first; on failure, recover complete elements
+// from plan_findings[] and tasks[] (including synthetic recovery of a
+// truncated trailing task when it has a parseable task_title and at
+// least one complete finding). Test fixtures supersede AC text per plan
+// Step 5: a recovered complete task counts as a recovery unit on its
+// own, so two cleanly-closed empty-findings tasks are sufficient.
 func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	var pr PlanResult
@@ -77,13 +58,6 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 	if !ok {
 		return PlanResult{}, false
 	}
-	// Success criterion: at least one complete recovery unit. The plan
-	// task spec phrases this as "at least one complete finding across
-	// plan_findings[] AND tasks[].findings[]," but the test fixture
-	// `TruncatedInsideTaskBeforeAnyFinding_DropsPartialTask` pins the
-	// broader rule: two cleanly-closed tasks with empty findings
-	// arrays are sufficient to declare recovery successful. So a
-	// recovered complete task counts as a recovery unit on its own.
 	if len(pr.Tasks) == 0 && len(pr.PlanFindings) == 0 {
 		return PlanResult{}, false
 	}
@@ -91,43 +65,14 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 	return pr, true
 }
 
-// repairOuterArray finds `"<key>":[ ... ` inside the top-level object
-// of raw, walks the array's elements while tracking JSON depth and
-// string state, then constructs a repaired JSON byte slice that is
-// syntactically valid: it contains everything from the start of raw up
-// to the end of the last completed element inside the array, followed
-// by `]` and `}` to close the array and the enclosing object.
-//
-// Returns (nil, false) if:
-//   - the key cannot be located at depth 1 (top-level of the outer
-//     object) before EOF or before truncation,
-//   - no element boundary was observed inside the array.
-//
-// String-literal truncation handling:
-//
-// The plan task spec AC text reads "Truncation inside a JSON string
-// literal returns (zero, false) — we don't attempt to recover from
-// mid-string truncation." Strictly interpreted, ANY EOF-inside-string
-// should fail.
-//
-// However, the plan-supplied test fixture `TruncatedMidFinding` ends
-// the input mid-string ("...","crit) inside the THIRD finding (the
-// in-progress one) and pins recovery of the first TWO complete
-// findings with `require.True(t, ok)`. So the behavior pinned by tests
-// is: EOF inside the in-progress (un-closed) element is OK — earlier
-// boundaries are still safe truncation points. The strict AC reading
-// only governs the case where the in-progress element is the FIRST
-// element (no prior boundary), which is exactly what the
-// `TruncatedInsideStringLiteral` fixture exercises (and where my
-// implementation correctly returns (zero, false)).
-//
-// Since the plan explicitly says tests are the contract (Step 5), I
-// follow the tests. The strict AC text is documented above as
-// implementer-visible context for any future reader cross-checking
-// the spec against the code.
-//
-// The walker tolerates whitespace and nested objects/arrays inside
-// elements. It does not validate the JSON beyond brace/quote balance.
+// repairOuterArray finds `"<key>":[ ... ` at depth 1 of the outer
+// object, walks the array tracking JSON depth and string state, then
+// returns a repaired byte slice that includes raw up to the last
+// complete element boundary, followed by `]}`. Returns (nil, false)
+// when the key cannot be located or no element boundary was observed.
+// Test fixtures supersede AC text per plan Step 5: EOF inside a string
+// literal is OK if an earlier element already closed cleanly (the
+// earlier boundary remains a safe truncation point).
 func repairOuterArray(raw []byte, key string) ([]byte, bool) {
 	// Find `"<key>":` at depth 1 of the outermost object, then the `[`.
 	arrStart, ok := findArrayStartForKey(raw, key)
@@ -210,17 +155,11 @@ func repairOuterArray(raw []byte, key string) ([]byte, bool) {
 		}
 	}
 done:
-	// EOF / array-close handling.
-	//
-	// Note: encountering EOF while still inside a string literal is OK
-	// as long as we already saw at least one complete element BEFORE
-	// the in-progress element started. The earlier `lastBoundary` is
-	// still a safe truncation point — by construction, that string
-	// began AFTER lastBoundary (inside the current open element). The
-	// caller-visible "truncation inside string → fail" AC is satisfied
-	// only when there are no earlier complete elements (sawAnyElement
-	// remains false, and we fall through to the "no element" return).
-	_ = inString
+	// EOF / array-close handling. EOF inside a string literal is OK so
+	// long as an earlier `lastBoundary` was observed; that boundary
+	// predates the in-progress element's open quote and is still a safe
+	// truncation point. With no prior boundary, sawAnyElement stays
+	// false and we fall through to the "no element" return.
 
 	if arrayClosed {
 		// The array closed cleanly. Recovery is still useful for cases
@@ -362,8 +301,7 @@ func recoverPlanResult(raw []byte) (PlanResult, bool) {
 		return pr, true
 	}
 
-	tasks, _, _ := walkTasksArray(raw, arrStart)
-	pr.Tasks = tasks
+	pr.Tasks = walkTasksArray(raw, arrStart)
 	return pr, true
 }
 
@@ -372,13 +310,8 @@ func recoverPlanResult(raw []byte) (PlanResult, bool) {
 // every task that closes cleanly inside the array, and — if the array
 // itself is truncated mid-task — attempts synthetic recovery of the
 // last (partial) task.
-//
-// Returns:
-//   - tasks: recovered task slice (possibly empty).
-//   - arrayClosed: true if the array closed cleanly (saw matching `]`).
-//   - hitStringEOF: true if walker hit EOF inside a JSON string literal
-//     anywhere inside the array — caller treats this as unrecoverable.
-func walkTasksArray(raw []byte, arrStart int) (tasks []PlanTaskResult, arrayClosed bool, hitStringEOF bool) {
+func walkTasksArray(raw []byte, arrStart int) []PlanTaskResult {
+	var tasks []PlanTaskResult
 	// Track the start index of the currently-open task element, or -1
 	// when between elements (i.e. between `[`/`,` and the next `{`).
 	elemStart := -1
@@ -414,11 +347,9 @@ func walkTasksArray(raw []byte, arrStart int) (tasks []PlanTaskResult, arrayClos
 		case '}', ']':
 			if depth == 0 {
 				// `]` closes the tasks array (a `}` here would be
-				// malformed top-level — bail).
-				if c == ']' {
-					return tasks, true, false
-				}
-				return tasks, false, false
+				// malformed top-level — bail). Either way we're done
+				// walking; closed tasks captured so far are returned.
+				return tasks
 			}
 			depth--
 			if depth == 0 && elemStart != -1 {
@@ -457,7 +388,7 @@ func walkTasksArray(raw []byte, arrStart int) (tasks []PlanTaskResult, arrayClos
 		}
 	}
 
-	return tasks, false, false
+	return tasks
 }
 
 // buildSyntheticTask attempts to recover a PlanTaskResult from the
@@ -583,12 +514,7 @@ func scanPartialObjectScalars(b []byte) map[string]any {
 	// and valueStart is the index of the first non-whitespace byte
 	// of the value.
 	valueStart := -1
-	// valueDepth: depth at which the current value sits, measured
-	// relative to the object interior. Scalars have valueDepth==0
-	// (relative); nested objects/arrays bump depth as we go in.
-	// We don't need to track this separately since we use the
-	// global depth: a value at depth 1 (inside the object) is
-	// scalar; deeper means nested.
+	// scalar values live at depth==1; deeper means a nested container we skip.
 
 	for i := 0; i < len(b); i++ {
 		c := b[i]
@@ -650,14 +576,8 @@ func scanPartialObjectScalars(b []byte) map[string]any {
 				inString = true
 				continue
 			}
-			if depth == 1 && valueStart >= 0 {
-				// Value-region already entered (shouldn't usually
-				// happen since the first `"` after the colon already
-				// hit the branch above). Track string state.
-				inString = true
-				continue
-			}
-			// Other string starts (nested) — just track string state.
+			// Other string starts (nested, or value-region tracking
+			// for non-string scalars) — just track string state.
 			inString = true
 		case '{', '[':
 			if depth == 1 && valueStart >= 0 {
