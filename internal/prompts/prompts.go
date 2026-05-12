@@ -41,6 +41,7 @@ type PostInput struct {
 	Spec         session.TaskSpec
 	Summary      string
 	Files        []File
+	FinalDiff    string
 	TestEvidence string
 }
 

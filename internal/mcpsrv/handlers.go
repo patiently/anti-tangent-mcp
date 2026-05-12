@@ -305,6 +305,7 @@ type ValidateCompletionArgs struct {
 	SessionID     string    `json:"session_id"  jsonschema:"required"`
 	Summary       string    `json:"summary"     jsonschema:"required"`
 	FinalFiles    []FileArg `json:"final_files,omitempty"`
+	FinalDiff     string    `json:"final_diff,omitempty"`
 	TestEvidence  string    `json:"test_evidence,omitempty"`
 	ModelOverride string    `json:"model_override,omitempty"`
 }
@@ -324,9 +325,17 @@ func validatePlanTool() *mcp.Tool {
 	}
 }
 
+func totalCompletionBytes(files []FileArg, finalDiff string) int {
+	return totalBytes(files) + len(finalDiff)
+}
+
 func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolRequest, args ValidateCompletionArgs) (*mcp.CallToolResult, Envelope, error) {
 	if args.SessionID == "" || args.Summary == "" {
 		return nil, Envelope{}, errors.New("session_id and summary are required")
+	}
+
+	if len(args.FinalFiles) == 0 && args.FinalDiff == "" && args.TestEvidence == "" {
+		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty")
 	}
 
 	sess, ok := h.deps.Sessions.Get(args.SessionID)
@@ -334,7 +343,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return envelopeResult(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel))
 	}
 
-	if size := totalBytes(args.FinalFiles); size > h.deps.Cfg.MaxPayloadBytes {
+	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
 		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes))
 	}
 
@@ -347,6 +356,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		Spec:         sess.Spec,
 		Summary:      args.Summary,
 		Files:        toPromptFiles(args.FinalFiles),
+		FinalDiff:    args.FinalDiff,
 		TestEvidence: args.TestEvidence,
 	})
 	if err != nil {

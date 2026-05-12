@@ -185,12 +185,53 @@ func TestValidateCompletion_UnknownSession(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
 	h := &handlers{deps: newDeps(t, rv)}
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
-		SessionID: "missing", Summary: "x",
+		SessionID:    "missing",
+		Summary:      "x",
+		TestEvidence: "go test ./... PASS",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "fail", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, "session_not_found", string(env.Findings[0].Category))
+}
+
+func TestValidateCompletion_FinalDiffOnly(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: pre.SessionID,
+		Summary:   "Implemented AC in diff.",
+		FinalDiff: "diff --git a/f.go b/f.go\n+@@\n++package f\n",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "pass", env.Verdict)
+}
+
+func TestValidateCompletion_RejectsAllEmptyEvidence(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+
+	_, _, err = h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: pre.SessionID,
+		Summary:   "Did stuff but didn't provide evidence.",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "final_files")
+	assert.Contains(t, err.Error(), "final_diff")
+	assert.Contains(t, err.Error(), "test_evidence")
 }
 
 func planPassResp() providers.Response {
