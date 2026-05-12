@@ -929,3 +929,148 @@ func TestMaxTokensOverride_ClampComposesWithTruncation(t *testing.T) {
 	assert.Equal(t, verdict.SeverityMinor, env.Findings[2].Severity)
 	assert.Contains(t, env.Findings[2].Evidence, "complete findings recovered")
 }
+
+// TestMaxTokensOverride_ClampSurvivesEarlyExits asserts that the
+// max_tokens_override clamp finding is prepended on every envelope-returning
+// early-exit branch, not just the review-result branches. The AC says the
+// clamp fires "regardless of which exit branch the handler takes" — the four
+// branches covered here previously dropped the clamp silently:
+//   - CheckProgress / ValidateCompletion: notFoundEnvelope (expired session)
+//   - CheckProgress / ValidateCompletion: tooLargeEnvelope (payload over cap)
+//   - ValidatePlan: noHeadingsPlanResult (no `### Task N:` headings)
+//   - ValidatePlan: tooLargePlanResult (plan_text over cap)
+func TestMaxTokensOverride_ClampSurvivesEarlyExits(t *testing.T) {
+	t.Run("CheckProgress session_not_found", func(t *testing.T) {
+		// No reviewer call happens on the not-found branch, but we still
+		// need a registered reviewer for newDeps to construct a valid Deps.
+		d := newDeps(t, &fakeReviewer{name: "anthropic"})
+		d.Cfg.PerTaskMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		h := &handlers{deps: d}
+
+		_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+			SessionID:         "missing",
+			WorkingOn:         "x",
+			MaxTokensOverride: 32000, // over ceiling → clamp
+		})
+		require.NoError(t, err)
+		require.Len(t, env.Findings, 2, "clamp + session_not_found finding")
+		// Clamp is prepended first.
+		assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+		assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
+		// Original session-not-found finding is preserved.
+		assert.Equal(t, "session_not_found", string(env.Findings[1].Category))
+	})
+
+	t.Run("ValidateCompletion session_not_found", func(t *testing.T) {
+		d := newDeps(t, &fakeReviewer{name: "anthropic"})
+		d.Cfg.PerTaskMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		h := &handlers{deps: d}
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			SessionID:         "missing",
+			Summary:           "x",
+			TestEvidence:      "go test PASS",
+			MaxTokensOverride: 32000,
+		})
+		require.NoError(t, err)
+		require.Len(t, env.Findings, 2, "clamp + session_not_found finding")
+		assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+		assert.Equal(t, "session_not_found", string(env.Findings[1].Category))
+	})
+
+	t.Run("CheckProgress payload_too_large", func(t *testing.T) {
+		rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+		d := newDeps(t, rv)
+		d.Cfg.PerTaskMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		d.Cfg.MaxPayloadBytes = 10
+		h := &handlers{deps: d}
+
+		// Seed a session via ValidateTaskSpec (default tokens — no clamp).
+		_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+			TaskTitle: "T", Goal: "G",
+		})
+		require.NoError(t, err)
+
+		_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+			SessionID:         pre.SessionID,
+			WorkingOn:         "x",
+			ChangedFiles:      []FileArg{{Path: "f", Content: "this is way too much"}},
+			MaxTokensOverride: 32000,
+		})
+		require.NoError(t, err)
+		require.Len(t, env.Findings, 2, "clamp + payload_too_large finding")
+		assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+		assert.Equal(t, "payload_too_large", string(env.Findings[1].Category))
+	})
+
+	t.Run("ValidateCompletion payload_too_large", func(t *testing.T) {
+		rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
+		d := newDeps(t, rv)
+		d.Cfg.PerTaskMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		d.Cfg.MaxPayloadBytes = 10
+		h := &handlers{deps: d}
+
+		_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+			TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+		})
+		require.NoError(t, err)
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			SessionID:         pre.SessionID,
+			Summary:           "implemented",
+			FinalFiles:        []FileArg{{Path: "f.go", Content: "this is way too much"}},
+			MaxTokensOverride: 32000,
+		})
+		require.NoError(t, err)
+		require.Len(t, env.Findings, 2, "clamp + payload_too_large finding")
+		assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+		assert.Equal(t, "payload_too_large", string(env.Findings[1].Category))
+	})
+
+	t.Run("ValidatePlan no headings", func(t *testing.T) {
+		// noHeadingsPlanResult fires before any reviewer call.
+		d := newDeps(t, &fakeReviewer{name: "anthropic"})
+		d.Cfg.PlanMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+		d.Reviews["openai"] = &fakeReviewer{name: "openai"}
+		h := &handlers{deps: d}
+
+		// Plan body without any `### Task N:` heading.
+		_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+			PlanText:          "# Plan\n\nJust some prose, no task headings.\n",
+			MaxTokensOverride: 32000,
+		})
+		require.NoError(t, err)
+		require.Len(t, pr.PlanFindings, 2, "clamp + no-headings finding")
+		assert.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion)
+		assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[0].Severity)
+		// Original no-headings finding is preserved.
+		assert.Equal(t, "structure", pr.PlanFindings[1].Criterion)
+		assert.Contains(t, pr.PlanFindings[1].Evidence, "no `### Task N:` headings")
+	})
+
+	t.Run("ValidatePlan plan_text too large", func(t *testing.T) {
+		d := newDeps(t, &fakeReviewer{name: "anthropic"})
+		d.Cfg.PlanMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		d.Cfg.MaxPayloadBytes = 10
+		d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+		d.Reviews["openai"] = &fakeReviewer{name: "openai"}
+		h := &handlers{deps: d}
+
+		// Anything over 10 bytes triggers the payload-too-large branch.
+		_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+			PlanText:          "# Plan\n\n### Task 1: First\n\nplenty of body to exceed the cap easily.\n",
+			MaxTokensOverride: 32000,
+		})
+		require.NoError(t, err)
+		require.Len(t, pr.PlanFindings, 2, "clamp + payload_too_large finding")
+		assert.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion)
+		assert.Equal(t, "payload_too_large", string(pr.PlanFindings[1].Category))
+	})
+}

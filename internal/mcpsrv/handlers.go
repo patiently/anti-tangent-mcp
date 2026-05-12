@@ -252,12 +252,12 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 
 	sess, ok := h.deps.Sessions.Get(args.SessionID)
 	if !ok {
-		return envelopeResult(notFoundEnvelope(args.SessionID, h.deps.Cfg.MidModel))
+		return envelopeResult(prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.MidModel), clamp))
 	}
 
 	if size := totalBytes(args.ChangedFiles); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes,
-			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."))
+		return envelopeResult(prependClamp(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."), clamp))
 	}
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.MidModel)
@@ -606,12 +606,12 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 
 	sess, ok := h.deps.Sessions.Get(args.SessionID)
 	if !ok {
-		return envelopeResult(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel))
+		return envelopeResult(prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel), clamp))
 	}
 
 	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
-			"Send a unified diff via final_diff, or split the call into smaller chunks."))
+		return envelopeResult(prependClamp(tooLargeEnvelope(sess.ID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp))
 	}
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PostModel)
@@ -675,11 +675,11 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}
 
 	if size := len(args.PlanText); size > h.deps.Cfg.MaxPayloadBytes {
-		return planEnvelopeResult(tooLargePlanResult(size, h.deps.Cfg.MaxPayloadBytes), h.deps.Cfg.PlanModel.String(), 0)
+		return planEnvelopeResult(prependPlanClamp(tooLargePlanResult(size, h.deps.Cfg.MaxPayloadBytes), clamp), h.deps.Cfg.PlanModel.String(), 0)
 	}
 	tasks, _ := planparser.SplitTasks(args.PlanText)
 	if len(tasks) == 0 {
-		return planEnvelopeResult(noHeadingsPlanResult(), h.deps.Cfg.PlanModel.String(), 0)
+		return planEnvelopeResult(prependPlanClamp(noHeadingsPlanResult(), clamp), h.deps.Cfg.PlanModel.String(), 0)
 	}
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PlanModel)
