@@ -67,7 +67,10 @@ Handler-side, the `errors.Is(err, ErrResponseTruncated)` check stays — but ins
 // recovered (caller should fall back to truncatedEnvelope).
 func ParseResultPartial(raw []byte) (Result, bool)
 
-// ParsePlanResultPartial does the same for the plan-level shape.
+// ParsePlanResultPartial does the same for the plan-level shape. The
+// "at least one complete finding" success criterion counts findings
+// across both plan_findings[] AND each tasks[].findings[] — recovering
+// only task-level findings still returns (result, true).
 func ParsePlanResultPartial(raw []byte) (PlanResult, bool)
 ```
 
@@ -103,6 +106,7 @@ Threaded into `providers.Request.MaxTokens` for that call.
 **Clamping.** New config knob `MaxTokensCeiling int` in `internal/config`, sourced from `ANTI_TANGENT_MAX_TOKENS_CEILING` env var, default `16384`. Behavior:
 
 - `MaxTokensOverride == 0` (or unset): use configured default (`PerTaskMaxTokens` or `PlanMaxTokens`).
+- `MaxTokensOverride < 0`: rejected at the handler boundary with `errors.New("max_tokens_override must be ≥ 0")`. Fail loud rather than silent fallback so a caller bug surfaces.
 - `0 < MaxTokensOverride ≤ Ceiling`: use the override directly.
 - `MaxTokensOverride > Ceiling`: use the ceiling, AND emit a `minor` finding:
 
