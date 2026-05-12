@@ -25,6 +25,7 @@ type Config struct {
 	PerTaskMaxTokens  int
 	PlanMaxTokens     int
 	PlanTasksPerChunk int
+	MaxTokensCeiling  int
 }
 
 type ModelRef struct {
@@ -56,6 +57,7 @@ func Load(env func(string) string) (Config, error) {
 		PerTaskMaxTokens:  4096,
 		PlanMaxTokens:     4096,
 		PlanTasksPerChunk: 8,
+		MaxTokensCeiling:  16384,
 	}
 
 	if cfg.AnthropicKey == "" && cfg.OpenAIKey == "" && cfg.GoogleKey == "" {
@@ -149,6 +151,16 @@ func Load(env func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_TASKS_PER_CHUNK: must be positive, got %d", n)
 		}
 		cfg.PlanTasksPerChunk = n
+	}
+	if v := env("ANTI_TANGENT_MAX_TOKENS_CEILING"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_MAX_TOKENS_CEILING: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_MAX_TOKENS_CEILING: must be positive, got %d", n)
+		}
+		cfg.MaxTokensCeiling = n
 	}
 	if v := env("ANTI_TANGENT_LOG_LEVEL"); v != "" {
 		switch strings.ToLower(v) {
