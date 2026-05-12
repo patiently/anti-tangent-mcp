@@ -50,7 +50,7 @@ ANTI_TANGENT_MAX_TOKENS_CEILING=16384    # cap on per-call max_tokens_override; 
 
 ### Per-call tool args (v0.3.0+)
 
-All four tools accept an optional `max_tokens_override` int — replaces the configured default (`PerTaskMaxTokens` or `PlanMaxTokens`) for this call only. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING`. Use when you know one specific call needs a larger reviewer budget without changing global config.
+All four tools accept an optional `max_tokens_override` non-negative int — replaces the configured default (`PerTaskMaxTokens` or `PlanMaxTokens`) for this call only. Zero or unset uses the configured default; positive values up to `ANTI_TANGENT_MAX_TOKENS_CEILING` are used directly; over-ceiling values are clamped to the ceiling and emit a `minor` clamp finding. Negative values are rejected at the handler boundary with `max_tokens_override must be ≥ 0`. Use when you know one specific call needs a larger reviewer budget without changing global config.
 
 `validate_plan` additionally accepts an optional `mode` arg of `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings (at most 3 per scope) — useful for small ASAP plans where you don't want round-after-round of stylistic refinement.
 

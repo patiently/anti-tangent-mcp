@@ -82,7 +82,7 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool)
 
 The walk is bounded by input length and uses no third-party dependency — a hand-written state machine in `parser_partial.go` is the right cost.
 
-**Envelope shape.** Add `Partial bool \`json:"partial,omitempty"\`` to both `verdict.Result` and `verdict.PlanResult`. `omitempty` keeps the field absent in the common (non-truncated) case, so JSON consumers see no change. Go consumers see an additive struct field whose zero value matches the old behavior.
+**Envelope shape.** Add ``Partial bool `json:"partial,omitempty"` `` to both `verdict.Result` and `verdict.PlanResult`. `omitempty` keeps the field absent in the common (non-truncated) case, so JSON consumers see no change. Go consumers see an additive struct field whose zero value matches the old behavior.
 
 **Truncation finding.** Keep emitting it but downgrade severity from `major` to `minor` and reword:
 
