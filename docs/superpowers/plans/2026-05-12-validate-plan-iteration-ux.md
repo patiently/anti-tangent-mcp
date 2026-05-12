@@ -37,7 +37,7 @@
 - `internal/verdict/verdict.go` — add `Partial bool \`json:"partial,omitempty"\`` to `Result`.
 - `internal/verdict/plan.go` — add `Partial bool \`json:"partial,omitempty"\`` to `PlanResult`.
 - `internal/config/config.go` — add `MaxTokensCeiling int` to `Config`; read `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384, must be positive).
-- `internal/mcpsrv/handlers.go` — add `MaxTokensOverride int` to all four `*Args` structs; add `Mode string` to `ValidatePlanArgs`; route truncation through `ParseResultPartial` / `ParsePlanResultPartial`; thread `MaxTokensOverride` to `providers.Request.MaxTokens` with ceiling clamp; thread `Mode` to `PlanInput`.
+- `internal/mcpsrv/handlers.go` — add `Partial bool \`json:"partial,omitempty"\`` to the `Envelope` struct so per-task callers can see partial-recovery state (mirrors `verdict.Result.Partial` / `verdict.PlanResult.Partial`); add `MaxTokensOverride int` to all four `*Args` structs; add `Mode string` to `ValidatePlanArgs`; route truncation through `ParseResultPartial` / `ParsePlanResultPartial`; thread `MaxTokensOverride` to `providers.Request.MaxTokens` with ceiling clamp; thread `Mode` to `PlanInput`.
 - `internal/mcpsrv/handlers_test.go` — extend `fakeReviewer` to return both resp and err; add four partial-recovery tests; add `max_tokens_override` tests (zero / in-range / over-ceiling) for each tool; add `mode` plumbing and invalid-value tests.
 - `internal/mcpsrv/handlers_plan_test.go` — add plan-level partial-recovery test that asserts `tasks[]` is recovered up to the truncation point.
 - `internal/prompts/prompts.go` — add `Mode string` to `PlanInput`.
@@ -366,11 +366,14 @@ Refs #10."
 
 **Acceptance criteria:**
 - Both functions return `(zero, false)` only when no complete findings could be recovered; otherwise return `(result, true)` with `Partial: true` set.
-- For `ParsePlanResultPartial`, "at least one complete finding" counts findings across `plan_findings[]` AND each `tasks[].findings[]` — recovering only task-level findings still returns `(result, true)`.
+- For `ParsePlanResultPartial`, "at least one complete finding" counts findings across `plan_findings[]` AND each `tasks[].findings[]`.
+- **Truncation inside a `tasks[i]` object still recovers complete findings from within that task.** When the truncation cuts a task object mid-stream:
+  - If the partial task has a parseable `task_title` AND a `findings:` field with a `[` opener AND at least one complete `{...}` finding inside that findings array, the parser emits a synthetic task object using the parsed scalar fields where present (`task_index`, `task_title`, `verdict`) and defaults for missing ones (`verdict` → `"warn"` since truncation implies non-pass, `suggested_header_block` and `suggested_header_reason` → `""`).
+  - If the partial task lacks a parseable `task_title`, OR has no opened findings array, OR has no complete finding inside its findings array, the partial task is dropped (it's too anonymous to be useful).
 - Complete inputs (no truncation) round-trip identically to `json.Unmarshal`. This is asserted by a parity test that feeds both a strict input and a strict plan input.
 - Truncation inside a JSON string literal returns `(zero, false)` — we don't attempt to recover from mid-string truncation.
 - Truncation at trailing whitespace after valid JSON returns the full parsed result with `Partial: false` (the JSON was actually complete).
-- All seven table-driven cases in `parser_partial_test.go` pass.
+- All eight table-driven cases in `parser_partial_test.go` pass (the seven listed below plus the new `TestParsePlanResultPartial_TruncatedInsideTaskFindings_RecoversFromSyntheticTask`).
 - `go test -race ./internal/verdict/...` is green.
 
 **Non-goals:**
@@ -378,7 +381,15 @@ Refs #10."
 - No new third-party JSON library — uses only `encoding/json` and a hand-rolled brace-tracker.
 - No changes to the JSON schemas (`schema.json`, `plan_schema.json`) — the recovery is over the wire format, not the schema.
 
-**Context:** Reviewer output is constrained by the JSON schema to a fixed shape with a small number of top-level keys. The only unbounded arrays are `findings[]` for per-task results, and `plan_findings[]` / `tasks[]` / `tasks[i].findings[]` for plan results. Truncation almost always hits inside one of these arrays. The algorithm: try strict parse first; on failure, find the last complete `{...}` element inside the deepest unbounded array containing the truncation point, truncate after it, close any open brackets/braces in reverse depth order, retry strict parse.
+**Context:** Reviewer output is constrained by the JSON schema to a fixed shape with a small number of top-level keys. The only unbounded arrays are `findings[]` for per-task results, and `plan_findings[]` / `tasks[]` / `tasks[i].findings[]` for plan results. Truncation almost always hits inside one of these arrays.
+
+**Algorithm overview:**
+1. Try strict `json.Unmarshal` first. On success, return.
+2. For per-task results: walk the bytes to find the last complete `{...}` element inside `findings[]`. Truncate after it; close `]` and `}` to restore a parseable shape; retry.
+3. For plan results: walk the bytes once, tracking depth, string state, and the boundaries of each `tasks[i]` object. Two outcomes:
+   - **Last `tasks[i]` closed cleanly:** truncate after it; close `]` and `}`; retry.
+   - **A `tasks[i]` is partial:** parse what's visible of the partial task. If it has `task_title` and an opened `findings[` containing ≥1 complete finding, build a *synthetic* task with parsed scalars + defaults for missing ones + recovered findings. Append the synthetic task to the recovery output. Then close `]` and `}`; retry.
+4. If after recovery `tasks` has no entries AND `plan_findings` has no entries, return `(zero, false)`.
 
 **Files:**
 - Create: `internal/verdict/parser_partial.go`
@@ -515,6 +526,41 @@ func TestParseResultPartial_TruncatedAtTrailingWhitespace(t *testing.T) {
 	assert.False(t, got.Partial, "complete JSON with trailing whitespace should not be marked partial")
 	assert.Equal(t, Verdict("pass"), got.Verdict)
 }
+
+func TestParsePlanResultPartial_TruncatedInsideTaskFindings_RecoversSyntheticTask(t *testing.T) {
+	// Two complete tasks; the third task has task_title and verdict parsed,
+	// findings[] opened with one complete finding inside, then truncation
+	// cuts the second finding. The recovery should emit a SYNTHETIC tasks[2]
+	// containing the one complete finding.
+	raw := []byte(`{"plan_verdict":"warn","plan_findings":[],"tasks":[` +
+		`{"task_index":0,"task_title":"T0","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":1,"task_title":"T1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":2,"task_title":"T2","verdict":"warn","findings":[` +
+		`{"severity":"major","category":"other","criterion":"tf2","evidence":"e","suggestion":"s"},` +
+		`{"severity":"min`)
+
+	got, ok := ParsePlanResultPartial(raw)
+	require.True(t, ok, "should recover the two complete tasks plus a synthetic third task")
+	assert.True(t, got.Partial)
+	require.Len(t, got.Tasks, 3, "third task should be present as synthetic with recovered finding")
+	assert.Equal(t, "T2", got.Tasks[2].TaskTitle)
+	require.Len(t, got.Tasks[2].Findings, 1, "synthetic task should carry its one complete finding")
+	assert.Equal(t, "tf2", got.Tasks[2].Findings[0].Criterion)
+}
+
+func TestParsePlanResultPartial_TruncatedInsideTaskBeforeAnyFinding_DropsPartialTask(t *testing.T) {
+	// Truncation hits inside the third task's findings[] before any complete
+	// finding is emitted. The partial task should be dropped entirely.
+	raw := []byte(`{"plan_verdict":"warn","plan_findings":[],"tasks":[` +
+		`{"task_index":0,"task_title":"T0","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":1,"task_title":"T1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":2,"task_title":"T2","verdict":"warn","findings":[{"severity":"maj`)
+
+	got, ok := ParsePlanResultPartial(raw)
+	require.True(t, ok, "the two complete tasks alone are enough to consider recovery successful")
+	assert.True(t, got.Partial)
+	require.Len(t, got.Tasks, 2, "partial task with no complete finding should be dropped")
+}
 ```
 
 - [ ] **Step 4: Run the partial-parser tests to verify they fail**
@@ -524,7 +570,9 @@ Expected: FAIL with `undefined: ParseResultPartial` and `undefined: ParsePlanRes
 
 - [ ] **Step 5: Implement the tolerant parser**
 
-Create `internal/verdict/parser_partial.go`:
+Create `internal/verdict/parser_partial.go`. The per-task parser is straightforward (repair the `findings` array). The plan parser is more involved because truncation inside a partial `tasks[i]` should still recover findings from that task via a synthetic task object.
+
+Suggested structure (the implementer may refine; tests are the contract):
 
 ```go
 package verdict
@@ -537,7 +585,7 @@ import (
 // ParseResultPartial parses a possibly-truncated reviewer response into a
 // Result. Returns (result, true) when partial recovery succeeded with at
 // least one complete finding; (result, false) when no findings could be
-// recovered (caller should fall back to truncatedEnvelope).
+// recovered.
 func ParseResultPartial(raw []byte) (Result, bool) {
 	// Try strict parse first — most calls aren't truncated.
 	var r Result
@@ -546,11 +594,11 @@ func ParseResultPartial(raw []byte) (Result, bool) {
 	}
 
 	// Locate the findings array and recover complete elements.
-	recovered, ok := repairTopLevelArray(raw, "findings")
+	repaired, ok := repairOuterArray(raw, "findings")
 	if !ok {
 		return Result{}, false
 	}
-	if err := json.Unmarshal(recovered, &r); err != nil {
+	if err := json.Unmarshal(repaired, &r); err != nil {
 		return Result{}, false
 	}
 	if len(r.Findings) == 0 {
@@ -560,10 +608,22 @@ func ParseResultPartial(raw []byte) (Result, bool) {
 	return r, true
 }
 
-// ParsePlanResultPartial does the same for the plan-level shape. The
-// "at least one complete finding" success criterion counts findings
-// across both plan_findings[] AND each tasks[].findings[] — recovering
-// only task-level findings still returns (result, true).
+// ParsePlanResultPartial parses a possibly-truncated plan-level reviewer
+// response. Recovery semantics:
+//
+//   - If strict json.Unmarshal succeeds, return.
+//   - Walk the bytes to identify task boundaries inside tasks[].
+//   - Tasks that closed cleanly are taken as-is.
+//   - If a tasks[i] is open at EOF:
+//     - If it has parseable task_title AND findings[ opened AND ≥1 complete
+//       finding inside that findings array, build a synthetic task and
+//       append it. Defaults: verdict="warn", suggested_header_block="",
+//       suggested_header_reason="". task_index from parsed JSON if seen,
+//       else len(tasks).
+//     - Otherwise, drop the partial task.
+//   - Recover plan_findings[] independently (it may or may not have closed).
+//   - Return (zero, false) only if both plan_findings and all tasks[].findings
+//     are empty.
 func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 	// Try strict parse first.
 	var pr PlanResult
@@ -571,22 +631,7 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 		return pr, true
 	}
 
-	// Plan-level recovery walks down: try to recover tasks[], then
-	// inside each surviving task, plan_findings[] is whatever made it
-	// through. The repair tries the outermost unbounded array first.
-	recovered, ok := repairTopLevelArray(raw, "tasks")
-	if !ok {
-		// Truncation may have hit before tasks[] started; try recovering
-		// plan_findings[] only.
-		recovered, ok = repairTopLevelArray(raw, "plan_findings")
-		if !ok {
-			return PlanResult{}, false
-		}
-	}
-	if err := json.Unmarshal(recovered, &pr); err != nil {
-		return PlanResult{}, false
-	}
-
+	pr = recoverPlanResult(raw)
 	totalFindings := len(pr.PlanFindings)
 	for _, t := range pr.Tasks {
 		totalFindings += len(t.Findings)
@@ -598,132 +643,38 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 	return pr, true
 }
 
-// repairTopLevelArray scans raw for the named array (e.g. "findings"),
-// finds the last complete `{...}` element, truncates after it, closes any
-// open brackets/braces in reverse depth order, and returns the repaired
-// bytes. Returns ok=false if the array couldn't be located or no complete
-// element exists.
+// repairOuterArray scans raw for `"<key>":[ ... `, finds the last complete
+// top-level element inside that array, truncates after it, then closes
+// ']' for the array and '}' for the enclosing object. Returns the repaired
+// bytes, or ok=false if the array can't be located, no complete element
+// exists, or truncation hit inside a string literal.
 //
-// The walk tracks: brace depth, bracket depth, quote state (including
-// backslash-escape), and stack of opener characters. Truncation inside a
-// string literal returns ok=false — we don't try to recover from mid-string
-// cuts.
-func repairTopLevelArray(raw []byte, arrayKey string) ([]byte, bool) {
-	// Locate `"<arrayKey>":` and then the opening `[`.
-	needle := []byte(`"` + arrayKey + `":`)
-	arrStart := bytes.Index(raw, needle)
-	if arrStart < 0 {
-		return nil, false
-	}
-	// Advance past the colon and any whitespace, then expect '['.
-	i := arrStart + len(needle)
-	for i < len(raw) && (raw[i] == ' ' || raw[i] == '\t' || raw[i] == '\n') {
-		i++
-	}
-	if i >= len(raw) || raw[i] != '[' {
-		return nil, false
-	}
-	arrayOpenIdx := i
-	i++ // move past '['
+// Implementation: brace/bracket walker that tracks depth, string state
+// (with backslash escapes), and the last position at which the array's
+// top-level depth saw a complete element (closed object/array or comma).
+func repairOuterArray(raw []byte, key string) ([]byte, bool)
 
-	// Walk forward, tracking depth. lastCompleteElementEnd is the byte
-	// index just AFTER the last complete `{...}` (or primitive) inside
-	// this array's top level.
-	depth := 1 // inside the named array
-	inString := false
-	escape := false
-	lastCompleteElementEnd := -1
-
-	// Track which stack openers we passed through ('[' or '{') and their
-	// positions to know where to close in repair mode.
-	openers := []byte{'['}
-
-	for ; i < len(raw); i++ {
-		b := raw[i]
-		if inString {
-			if escape {
-				escape = false
-				continue
-			}
-			if b == '\\' {
-				escape = true
-				continue
-			}
-			if b == '"' {
-				inString = false
-			}
-			continue
-		}
-		switch b {
-		case '"':
-			inString = true
-		case '[':
-			depth++
-			openers = append(openers, '[')
-		case '{':
-			depth++
-			openers = append(openers, '{')
-		case ']':
-			depth--
-			if len(openers) > 0 {
-				openers = openers[:len(openers)-1]
-			}
-			if depth == 0 {
-				// Array closed cleanly — caller can defer to strict parse,
-				// but we got here because strict failed, so something after
-				// this array is the problem. Return everything up to i+1
-				// plus closing of any further structure handled below.
-				// For simplicity, return the prefix up to i+1 plus closing
-				// braces that the outer object needs.
-				return closeOuterObject(raw[:i+1]), true
-			}
-			if depth == 1 {
-				lastCompleteElementEnd = i + 1
-			}
-		case '}':
-			depth--
-			if len(openers) > 0 {
-				openers = openers[:len(openers)-1]
-			}
-			if depth == 1 {
-				lastCompleteElementEnd = i + 1
-			}
-		case ',':
-			if depth == 1 {
-				// A comma at depth 1 separates array elements; the element
-				// before it is complete.
-				lastCompleteElementEnd = i
-			}
-		}
-	}
-
-	// Reached end of input while still inside the array.
-	if inString {
-		return nil, false
-	}
-	if lastCompleteElementEnd <= arrayOpenIdx+1 {
-		// No complete element inside the array yet.
-		return nil, false
-	}
-
-	// Build repaired bytes: prefix up to last complete element, close ']'
-	// for the array, then close enclosing '}' for the outer object.
-	repaired := make([]byte, 0, lastCompleteElementEnd+8)
-	repaired = append(repaired, raw[:lastCompleteElementEnd]...)
-	repaired = append(repaired, ']', '}')
-	return repaired, true
-}
-
-// closeOuterObject takes a byte slice ending with a complete inner array
-// and appends a closing '}' if the outer object is missing one. Used when
-// the named array closed cleanly but the outer object did not.
-func closeOuterObject(prefix []byte) []byte {
-	out := make([]byte, len(prefix)+1)
-	copy(out, prefix)
-	out[len(prefix)] = '}'
-	return out
-}
+// recoverPlanResult walks raw and returns a best-effort PlanResult.
+// It uses two passes:
+//
+//  1. Locate "plan_findings":[ ... and recover complete findings via
+//     repairOuterArray-style walk.
+//  2. Locate "tasks":[ ... walk it; collect complete task objects and
+//     handle the trailing partial-task case as described above.
+//
+// Returns a zero PlanResult if neither pass yields recoverable content;
+// the caller is responsible for the (zero, false) sentinel decision.
+func recoverPlanResult(raw []byte) PlanResult
 ```
+
+The implementer fills in the body of `repairOuterArray` and `recoverPlanResult` driven by the tests added in Step 3. Use only `bytes`, `encoding/json`, and a hand-rolled brace walker — no third-party JSON library.
+
+Tips for the implementer:
+
+- The walker only needs ASCII brace/bracket/quote tracking; JSON's UTF-8 multi-byte runes don't include any of `{` `}` `[` `]` `"` `\` as continuation bytes, so byte-level scanning is safe.
+- For the synthetic-task case, extract `task_title` by scanning for `"task_title":"…"` inside the partial-task slice (mind the string-literal walker — the title itself may contain escapes). `task_index` and `verdict` use the same scan-for-key approach.
+- If the synthetic task's findings array has any complete `{…}` element, recover them via a recursive `repairOuterArray` call on the partial-task slice with key `"findings"`. If none, the partial task is dropped.
+- Always close every open container in reverse depth order — failure to do so will make `json.Unmarshal` reject the repaired bytes.
 
 - [ ] **Step 6: Run the partial-parser tests to verify they pass**
 
@@ -757,10 +708,12 @@ Refs #10."
 **Goal:** Each of the four tool handlers — `ValidateTaskSpec`, `CheckProgress`, `ValidateCompletion`, `ValidatePlan` — routes a truncated reviewer response through `ParseResultPartial` / `ParsePlanResultPartial` and surfaces any recovered findings in the envelope. The synthetic truncation finding is downgraded from `major` to `minor` and reworded to reference both env-var and `max_tokens_override` mitigations.
 
 **Acceptance criteria:**
-- When a provider returns `(populated Response, ErrResponseTruncated)`, the handler attempts partial parse; if at least one finding is recovered, the envelope returns `Partial: true`, the recovered findings, AND a single `minor` truncation finding noting the count.
-- When the partial parser returns `(zero, false)`, the handler falls back to the existing single-finding truncation envelope (current behaviour).
-- The new behaviour is asserted by four new tests (one per tool), each with a `fakeReviewer` returning `(populated Response, ErrResponseTruncated)`.
-- Existing truncation tests in `handlers_test.go` (lines 340, 359, 387, 414) need updating to match the new severity (`minor`) and finding count when partial bytes are present; tests with empty-bytes truncation continue to surface the legacy `major` finding.
+- `Envelope` (in `internal/mcpsrv/handlers.go`) gains a new `Partial bool \`json:"partial,omitempty"\`` field so per-task callers can observe partial-recovery state. The field is set to `true` by the partial-recovery branch and unset (omitted via `omitempty`) on every other path.
+- When a provider returns `(populated Response, ErrResponseTruncated)`, the handler attempts partial parse; if at least one finding is recovered, the envelope returns `Partial: true`, the recovered findings, AND a single `minor` truncation marker finding noting the count.
+- When the partial parser returns `(zero, false)`, the handler falls back to the existing single-finding truncation envelope (current behaviour; `Partial` is NOT set on this path — the field's `omitempty` semantics keep it absent in the marshaled output).
+- **No session is created on partial-recovery flows for `validate_task_spec`.** The recovered envelope returns an empty `session_id`. Rationale: the session's `PreFindings` would be incomplete and would mis-prime subsequent `check_progress` calls. The envelope's `next_action` MUST mention re-running with `max_tokens_override` to get a clean session. This matches today's behavior on truncation (no session on failed reviews) and is explicit in the AC to avoid regression.
+- The new behaviour is asserted by four new tests (one per tool), each with a `fakeReviewer` returning `(populated Response, ErrResponseTruncated)`. The `validate_task_spec` test additionally asserts the envelope's `SessionID` is empty AND `Partial == true`.
+- Existing truncation tests in `handlers_test.go` (lines 340, 359, 387, 414) continue to pass — they use empty-bytes truncation which routes to the legacy single-`major`-finding path (with `Partial` unset).
 - `fakeReviewer.Review` is changed to return `(f.resp, f.err)` so tests can stub the "(partial bytes, truncation error)" shape.
 - `go test -race ./internal/mcpsrv/...` is green.
 
@@ -775,6 +728,25 @@ Refs #10."
 - Modify: `internal/mcpsrv/handlers.go` — modify `truncatedEnvelope` (line 317) and `truncatedPlanResult` (line 333); add `recoverPartialFindings` helper; thread partial-recovery into all four handlers.
 - Modify: `internal/mcpsrv/handlers_test.go` — update `fakeReviewer.Review`; update existing truncation tests; add four new partial-recovery tests.
 - Modify: `internal/mcpsrv/handlers_plan_test.go` — add a plan-level partial-recovery test asserting `tasks[]` is recovered up to the truncation point.
+
+- [ ] **Step 0: Add `Partial` field to `Envelope`**
+
+In `internal/mcpsrv/handlers.go`, update the `Envelope` struct (around line 22-32):
+
+```go
+// Envelope is the JSON returned to the subagent for every hook.
+type Envelope struct {
+	SessionID                  string            `json:"session_id"`
+	Verdict                    string            `json:"verdict"`
+	Findings                   []verdict.Finding `json:"findings"`
+	NextAction                 string            `json:"next_action"`
+	ModelUsed                  string            `json:"model_used"`
+	ReviewMS                   int64             `json:"review_ms"`
+	Partial                    bool              `json:"partial,omitempty"`
+	SessionExpiresAt           *time.Time        `json:"session_expires_at,omitempty"`
+	SessionTTLRemainingSeconds *int              `json:"session_ttl_remaining_seconds,omitempty"`
+}
+```
 
 - [ ] **Step 1: Update `fakeReviewer.Review` to return both resp and err**
 
@@ -818,6 +790,8 @@ func TestValidateTaskSpec_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "warn", env.Verdict)
+	assert.True(t, env.Partial, "envelope should signal partial recovery")
+	assert.Empty(t, env.SessionID, "validate_task_spec should NOT create a session on partial-recovery flows")
 
 	// One recovered finding + one minor truncation marker = 2 total.
 	require.Len(t, env.Findings, 2)
@@ -830,6 +804,9 @@ func TestValidateTaskSpec_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 	assert.Contains(t, env.Findings[1].Evidence, "1 complete findings recovered")
 	assert.Contains(t, env.Findings[1].Suggestion, "max_tokens_override")
 	assert.Contains(t, env.Findings[1].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+
+	// next_action steers the caller to re-run with a higher cap.
+	assert.Contains(t, env.NextAction, "max_tokens_override")
 }
 ```
 
@@ -871,7 +848,7 @@ func recoverPartialFindings(id string, model config.ModelRef, rawJSON []byte, en
 	findings = append(findings, marker)
 	next := r.NextAction
 	if next == "" {
-		next = "Address recovered findings; reviewer output was truncated, so the list may be incomplete."
+		next = "Address recovered findings; reviewer output was truncated. Re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
 	}
 	return Envelope{
 		SessionID:  id,
@@ -879,6 +856,7 @@ func recoverPartialFindings(id string, model config.ModelRef, rawJSON []byte, en
 		Findings:   findings,
 		NextAction: next,
 		ModelUsed:  model.String(),
+		Partial:    true,
 	}, true
 }
 ```
@@ -1040,11 +1018,12 @@ func TestCheckProgress_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 		SessionID: pre.SessionID, WorkingOn: "x",
 	})
 	require.NoError(t, err)
+	assert.True(t, env.Partial)
 	require.Len(t, env.Findings, 2)
 	assert.Equal(t, "cp1", env.Findings[0].Criterion)
 	assert.Equal(t, verdict.SeverityMinor, env.Findings[1].Severity)
 	assert.Contains(t, env.Findings[1].Suggestion, "max_tokens_override")
-	assert.Equal(t, pre.SessionID, env.SessionID)
+	assert.Equal(t, pre.SessionID, env.SessionID, "existing session is preserved on partial recovery")
 }
 
 func TestValidateCompletion_PartialFindingsRecoveredOnTruncation(t *testing.T) {
@@ -1074,11 +1053,12 @@ func TestValidateCompletion_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
 	})
 	require.NoError(t, err)
+	assert.True(t, env.Partial)
 	require.Len(t, env.Findings, 2)
 	assert.Equal(t, "vc1", env.Findings[0].Criterion)
 	assert.Equal(t, verdict.SeverityMinor, env.Findings[1].Severity)
 	assert.Contains(t, env.Findings[1].Suggestion, "max_tokens_override")
-	assert.Equal(t, pre.SessionID, env.SessionID)
+	assert.Equal(t, pre.SessionID, env.SessionID, "existing session is preserved on partial recovery")
 }
 ```
 
@@ -1211,13 +1191,14 @@ func recoverPartialPlanFindings(model config.ModelRef, rawJSON []byte) (verdict.
 		Suggestion: "Raise ANTI_TANGENT_PLAN_MAX_TOKENS or pass max_tokens_override on the next call to capture more.",
 	})
 	if pr.NextAction == "" {
-		pr.NextAction = "Address recovered findings; reviewer output was truncated, so the list may be incomplete."
+		pr.NextAction = "Address recovered findings; reviewer output was truncated. Re-call with a higher max_tokens_override (or raise ANTI_TANGENT_PLAN_MAX_TOKENS) to capture the full review."
 	}
 	// Ensure Tasks is non-nil so JSON marshaling produces an empty array
 	// rather than null.
 	if pr.Tasks == nil {
 		pr.Tasks = []verdict.PlanTaskResult{}
 	}
+	pr.Partial = true
 	return pr, true
 }
 ```
@@ -1300,7 +1281,8 @@ Refs #10."
 - Zero (or unset) `MaxTokensOverride` uses the configured default — no clamp finding.
 - In-range override is used directly — no clamp finding.
 - Over-ceiling override uses the ceiling AND emits a single `minor` `clamp` finding in the envelope's findings list.
-- One unit test per tool (4 tools × 4 cases = 16 cases via table-driven test) covers: unset, zero, in-range, over-ceiling.
+- **Clamp composes with partial-recovery findings.** If a call clamps the `max_tokens_override` AND the reviewer's output is still truncated AND partial findings are recovered, the envelope shows all three: recovered findings + truncation marker + clamp finding. Suppression of clamp on truncation would hide the ceiling signal from exactly the caller who most needs it (they raised the cap and it still wasn't enough). The clamp finding is appended once per call regardless of which other findings are present.
+- **Test coverage:** 4 tools × 4 cases = 16 unit-test cases via a table-driven helper. Cases per tool: (a) unset → default used, no clamp finding; (b) zero → default used, no clamp finding; (c) in-range → override used, no clamp finding; (d) over-ceiling → ceiling used, one `minor` clamp finding. Plus one negative test per tool asserting negative values are rejected with the expected error string. Plus one composition test asserting "clamped + truncated + partial recovery" produces all three findings.
 - `go test -race ./internal/...` is green.
 
 **Non-goals:**
@@ -1473,28 +1455,54 @@ Update the `ValidateTaskSpec` call:
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
 ```
 
-After the existing `env := Envelope{...}` block in `ValidateTaskSpec` (around line 97-104 in the post-Task-3 file) and before the `env = h.withSessionTTL(env, sess)` line, prepend the clamp finding to the envelope's findings list if non-empty:
+**Compose clamp with every flow.** The clamp finding must appear exactly once per call, regardless of whether the call succeeded, truncated with recovery, or truncated without recovery. Introduce a small helper at the top of `handlers.go` (near `recoverPartialFindings`):
 
 ```go
-	if clamp.Severity != "" {
-		env.Findings = append([]verdict.Finding{clamp}, env.Findings...)
+// prependClamp inserts the clamp finding at the head of the envelope's
+// findings list if clamp is non-zero. Idempotent on the empty-clamp case.
+// Centralises the clamp-composition rule so every handler flow (success,
+// partial recovery, legacy truncation) treats it identically.
+func prependClamp(env Envelope, clamp verdict.Finding) Envelope {
+	if clamp.Severity == "" {
+		return env
 	}
+	env.Findings = append([]verdict.Finding{clamp}, env.Findings...)
+	return env
+}
 ```
 
-For partial-recovery flows (the `recoverPartialFindings` path), do NOT prepend the clamp here — it would conflict with the truncation marker. The clamp finding only fires on successful (non-truncated) calls in this release.
+Then in `ValidateTaskSpec`:
+
+- After the successful-review path builds `env := Envelope{...}`, call `env = prependClamp(env, clamp)` BEFORE `env = h.withSessionTTL(env, sess)`.
+- In the partial-recovery branch: `env = prependClamp(env, clamp)` AFTER the envelope is returned from `recoverPartialFindings` and BEFORE returning it.
+- In the legacy-truncation branch (no recovered findings): `env := truncatedEnvelope("", model); env = prependClamp(env, clamp)`.
+
+The same pattern applies to `CheckProgress` and `ValidateCompletion` — each of their three branches (success, partial recovery, legacy truncation) calls `prependClamp` exactly once.
+
+For `ValidatePlan`: introduce an analogous `prependPlanClamp(pr verdict.PlanResult, clamp verdict.Finding) verdict.PlanResult` that prepends the clamp finding to `pr.PlanFindings`. Call it on all three branches.
 
 - [ ] **Step 7: Apply the same threading to CheckProgress, ValidateCompletion, ValidatePlan**
 
-For each of the other three handlers, mirror the pattern from Step 6:
+For each of the other three handlers, replicate the Step 6 pattern explicitly:
 
-- Validate `args.MaxTokensOverride ≥ 0`.
-- Call `effectiveMaxTokens(args.MaxTokensOverride, default, h.deps.Cfg.MaxTokensCeiling)` where `default` is `PerTaskMaxTokens` for `CheckProgress` / `ValidateCompletion` and `PlanMaxTokens` for `ValidatePlan`.
-- Pass the returned `maxTokens` into `review` / `reviewPlanSingle` / `reviewPlanChunked`.
-- Prepend the clamp finding to the envelope's findings (or `PlanFindings`) if non-empty.
+**`CheckProgress`:** At the top of the handler (after the `args.SessionID == ""` validation), call:
 
-The `reviewPlanSingle` and `reviewPlanChunked` functions need their `MaxTokens: h.deps.Cfg.PlanMaxTokens` reads (handlers.go:513, 620, 700) replaced with the threaded parameter. Add `maxTokens int` to both signatures.
+```go
+	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PerTaskMaxTokens, h.deps.Cfg.MaxTokensCeiling)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+```
 
-- [ ] **Step 8: Write the max_tokens_override table-driven test**
+Pass `maxTokens` into the `h.review(ctx, model, rendered, maxTokens)` call. Apply `env = prependClamp(env, clamp)` on each of the three exit branches (success, partial-recovery, legacy-truncation).
+
+**`ValidateCompletion`:** Same pattern — `effectiveMaxTokens` with `PerTaskMaxTokens` default, threaded into `h.review`, `prependClamp` on each exit branch.
+
+**`ValidatePlan`:** Use `PlanMaxTokens` as the default. Thread `maxTokens` into `h.reviewPlanSingle` / `h.reviewPlanChunked`. Apply `prependPlanClamp(pr, clamp)` on each exit branch.
+
+The `reviewPlanSingle` and `reviewPlanChunked` functions need `maxTokens int` added to their signatures so they can pass it into `providers.Request.MaxTokens`. The three `MaxTokens: h.deps.Cfg.PlanMaxTokens` reads (handlers.go:513, 620, 700 in the original file) become `MaxTokens: maxTokens,`.
+
+- [ ] **Step 8: Write the max_tokens_override tests for all four tools**
 
 Add to `internal/mcpsrv/handlers_test.go`:
 
@@ -1509,66 +1517,239 @@ type reviewerCapture struct {
 func (c *reviewerCapture) Review(ctx context.Context, req providers.Request) (providers.Response, error) {
 	c.LastRequest = req
 	c.fakeReviewer.Calls++
-	if c.fakeReviewer.err != nil {
-		return providers.Response{}, c.fakeReviewer.err
-	}
-	return c.fakeReviewer.resp, nil
+	return c.fakeReviewer.resp, c.fakeReviewer.err
 }
 
-func TestMaxTokensOverride_AllTools(t *testing.T) {
-	tests := []struct {
-		name         string
-		override     int
-		ceiling      int
-		defaultMax   int
-		wantSent     int
-		wantClamp    bool
-		wantErrEmpty bool
-	}{
-		{"unset uses default", 0, 16384, 4096, 4096, false, true},
-		{"in-range uses override", 8000, 16384, 4096, 8000, false, true},
-		{"over-ceiling clamps", 32000, 16384, 4096, 16384, true, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+// overrideCase is one row of the max_tokens_override table.
+type overrideCase struct {
+	name      string
+	override  int
+	wantSent  int
+	wantClamp bool
+}
+
+var overrideCases = []overrideCase{
+	{"unset uses default", 0, 4096, false},
+	{"in-range uses override", 8000, 8000, false},
+	{"over-ceiling clamps", 32000, 16384, true},
+	// "zero" is the same wire-shape as "unset" since omitempty; treat as one case.
+}
+
+func TestMaxTokensOverride_ValidateTaskSpec(t *testing.T) {
+	for _, tc := range overrideCases {
+		t.Run(tc.name, func(t *testing.T) {
 			cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
 			d := newDeps(t, &cap.fakeReviewer)
-			d.Cfg.PerTaskMaxTokens = tt.defaultMax
-			d.Cfg.MaxTokensCeiling = tt.ceiling
+			d.Cfg.PerTaskMaxTokens = 4096
+			d.Cfg.MaxTokensCeiling = 16384
 			d.Reviews = providers.Registry{"anthropic": cap}
 			h := &handlers{deps: d}
 
 			_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
-				TaskTitle: "T", Goal: "G", MaxTokensOverride: tt.override,
+				TaskTitle: "T", Goal: "G", MaxTokensOverride: tc.override,
 			})
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantSent, cap.LastRequest.MaxTokens, "MaxTokens sent to provider")
-			if tt.wantClamp {
-				require.NotEmpty(t, env.Findings, "should have clamp finding when over-ceiling")
-				assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
-				assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
-			}
+			assert.Equal(t, tc.wantSent, cap.LastRequest.MaxTokens)
+			assertClampFinding(t, env.Findings, tc.wantClamp)
 		})
 	}
 }
 
+func TestMaxTokensOverride_CheckProgress(t *testing.T) {
+	for _, tc := range overrideCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+			d := newDeps(t, &cap.fakeReviewer)
+			d.Cfg.PerTaskMaxTokens = 4096
+			d.Cfg.MaxTokensCeiling = 16384
+			d.Reviews = providers.Registry{"anthropic": cap}
+			h := &handlers{deps: d}
+
+			// Create a session first.
+			_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G",
+			})
+			require.NoError(t, err)
+			cap.LastRequest = providers.Request{} // reset after the pre call
+
+			_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+				SessionID: pre.SessionID, WorkingOn: "x",
+				MaxTokensOverride: tc.override,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSent, cap.LastRequest.MaxTokens)
+			assertClampFinding(t, env.Findings, tc.wantClamp)
+		})
+	}
+}
+
+func TestMaxTokensOverride_ValidateCompletion(t *testing.T) {
+	for _, tc := range overrideCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+			d := newDeps(t, &cap.fakeReviewer)
+			d.Cfg.PerTaskMaxTokens = 4096
+			d.Cfg.MaxTokensCeiling = 16384
+			d.Reviews = providers.Registry{"anthropic": cap}
+			h := &handlers{deps: d}
+
+			_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+			})
+			require.NoError(t, err)
+			cap.LastRequest = providers.Request{}
+
+			_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+				SessionID: pre.SessionID, Summary: "done",
+				FinalFiles:        []FileArg{{Path: "f.go", Content: "package f\n"}},
+				MaxTokensOverride: tc.override,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSent, cap.LastRequest.MaxTokens)
+			assertClampFinding(t, env.Findings, tc.wantClamp)
+		})
+	}
+}
+
+func TestMaxTokensOverride_ValidatePlan(t *testing.T) {
+	for _, tc := range overrideCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "openai", resp: planPassResp()}}
+			d := newDeps(t, &cap.fakeReviewer)
+			d.Cfg.PlanMaxTokens = 4096
+			d.Cfg.MaxTokensCeiling = 16384
+			d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+			d.Reviews = providers.Registry{"openai": cap}
+			h := &handlers{deps: d}
+
+			_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+				PlanText:          "# Plan\n\n### Task 1: First\n\nbody.\n",
+				MaxTokensOverride: tc.override,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSent, cap.LastRequest.MaxTokens)
+			assertClampFinding(t, pr.PlanFindings, tc.wantClamp)
+		})
+	}
+}
+
+// assertClampFinding asserts the findings list does/does not start with
+// a clamp finding (per spec: appended once per call, at the head).
+func assertClampFinding(t *testing.T, findings []verdict.Finding, want bool) {
+	t.Helper()
+	if !want {
+		for _, f := range findings {
+			assert.NotEqual(t, "max_tokens_override", f.Criterion, "should not have clamp finding")
+		}
+		return
+	}
+	require.NotEmpty(t, findings)
+	assert.Equal(t, "max_tokens_override", findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, findings[0].Severity)
+}
+
+// TestMaxTokensOverride_NegativeRejected covers all four tools.
 func TestMaxTokensOverride_NegativeRejected(t *testing.T) {
-	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
-	d := newDeps(t, rv)
+	negCases := []struct {
+		name string
+		run  func(*handlers) error
+	}{
+		{"ValidateTaskSpec", func(h *handlers) error {
+			_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G", MaxTokensOverride: -1,
+			})
+			return err
+		}},
+		{"CheckProgress", func(h *handlers) error {
+			_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G",
+			})
+			require.NoError(t, err)
+			_, _, err = h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+				SessionID: pre.SessionID, WorkingOn: "x", MaxTokensOverride: -5,
+			})
+			return err
+		}},
+		{"ValidateCompletion", func(h *handlers) error {
+			_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+			})
+			require.NoError(t, err)
+			_, _, err = h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+				SessionID: pre.SessionID, Summary: "done",
+				FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+				MaxTokensOverride: -1,
+			})
+			return err
+		}},
+		{"ValidatePlan", func(h *handlers) error {
+			_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+				PlanText: "# Plan\n\n### Task 1: T\n", MaxTokensOverride: -1,
+			})
+			return err
+		}},
+	}
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+			d := newDeps(t, rv)
+			// ValidatePlan also needs openai dep wired.
+			d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+			d.Reviews["openai"] = &fakeReviewer{name: "openai", resp: planPassResp()}
+			h := &handlers{deps: d}
+
+			err := tc.run(h)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "max_tokens_override must be ≥ 0")
+		})
+	}
+}
+
+// TestMaxTokensOverride_ClampComposesWithTruncation asserts that a call
+// which clamps the override AND triggers truncation surfaces all three:
+// recovered findings, truncation marker, AND the clamp finding. The clamp
+// must NOT be suppressed on partial-recovery flows.
+func TestMaxTokensOverride_ClampComposesWithTruncation(t *testing.T) {
+	cap := &reviewerCapture{fakeReviewer: fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[` +
+				`{"severity":"major","category":"other","criterion":"recovered","evidence":"e","suggestion":"s"},` +
+				`{"severity":"minor","category":"other","crit`),
+			Model: "claude-sonnet-4-6",
+		},
+		err: providers.ErrResponseTruncated,
+	}}
+	d := newDeps(t, &cap.fakeReviewer)
+	d.Cfg.PerTaskMaxTokens = 4096
+	d.Cfg.MaxTokensCeiling = 16384
+	d.Reviews = providers.Registry{"anthropic": cap}
 	h := &handlers{deps: d}
 
-	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
-		TaskTitle: "T", Goal: "G", MaxTokensOverride: -1,
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:         "T",
+		Goal:              "G",
+		MaxTokensOverride: 32000, // over ceiling → clamp + truncate
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "max_tokens_override must be ≥ 0")
+	require.NoError(t, err)
+	assert.Equal(t, 16384, cap.LastRequest.MaxTokens, "ceiling used")
+	assert.True(t, env.Partial)
+	require.Len(t, env.Findings, 3, "clamp + recovered finding + truncation marker")
+	// Clamp is prepended first.
+	assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
+	// Recovered finding.
+	assert.Equal(t, "recovered", env.Findings[1].Criterion)
+	// Truncation marker.
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[2].Severity)
+	assert.Contains(t, env.Findings[2].Evidence, "complete findings recovered")
 }
 ```
 
 - [ ] **Step 9: Run the override tests**
 
 Run: `go test -race ./internal/mcpsrv/ -run "TestMaxTokensOverride" -v`
-Expected: PASS for all six cases.
+Expected: PASS for all rows of each of the four per-tool tables, the negative-rejection table (4 sub-tests), and the clamp-composes-with-truncation test — 17 sub-tests total.
 
 - [ ] **Step 10: Run the full mcpsrv suite**
 
@@ -1722,22 +1903,35 @@ func TestRenderPlanTasksChunk_QuickMode_IncludesInstruction(t *testing.T) {
 	assert.Contains(t, out.User, anchorQuickModeTasksChunk)
 }
 
-func TestRenderPlan_DefaultMode_OmitsQuickInstruction(t *testing.T) {
+func TestPlanTemplates_DefaultMode_OmitsQuickInstruction(t *testing.T) {
+	planText := "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"
+
 	for _, mode := range []string{"", "thorough"} {
-		out, err := RenderPlan(PlanInput{
-			PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n",
-			Mode:     mode,
+		t.Run("mode="+mode, func(t *testing.T) {
+			out, err := RenderPlan(PlanInput{PlanText: planText, Mode: mode})
+			require.NoError(t, err)
+			assert.NotContains(t, out.User, "**Quick mode.**", "plan.tmpl should not include quick-mode block for mode=%q", mode)
+
+			out, err = RenderPlanFindingsOnly(PlanInput{PlanText: planText, Mode: mode})
+			require.NoError(t, err)
+			assert.NotContains(t, out.User, "**Quick mode.**", "plan_findings_only.tmpl should not include quick-mode block for mode=%q", mode)
+
+			out, err = RenderPlanTasksChunk(PlanChunkInput{
+				PlanText:   planText,
+				ChunkTasks: []planparser.RawTask{{Title: "Task 1: A"}},
+				Mode:       mode,
+			})
+			require.NoError(t, err)
+			assert.NotContains(t, out.User, "**Quick mode.**", "plan_tasks_chunk.tmpl should not include quick-mode block for mode=%q", mode)
 		})
-		require.NoError(t, err)
-		assert.NotContains(t, out.User, "**Quick mode.**", "default/thorough mode should not include quick-mode block (mode=%q)", mode)
 	}
 }
 ```
 
 - [ ] **Step 6: Run the anchor tests to verify they pass**
 
-Run: `go test -race ./internal/prompts/ -run "TestRenderPlan_QuickMode|TestRenderPlanFindingsOnly_QuickMode|TestRenderPlanTasksChunk_QuickMode|TestRenderPlan_DefaultMode" -v`
-Expected: PASS.
+Run: `go test -race ./internal/prompts/ -run "TestRenderPlan_QuickMode|TestRenderPlanFindingsOnly_QuickMode|TestRenderPlanTasksChunk_QuickMode|TestPlanTemplates_DefaultMode" -v`
+Expected: PASS — 3 quick-mode-included tests + 2 negative sub-tests (mode="" and mode="thorough" each covering all three templates) = 5 sub-tests passing.
 
 - [ ] **Step 7: Generate the `*_quick.golden` files**
 
@@ -1799,8 +1993,7 @@ Expected: tests PASS and three new `*_quick.golden` files appear in `internal/pr
 
 - [ ] **Step 8: Inspect each new golden file**
 
-Run: `cat internal/prompts/testdata/plan_basic_quick.golden | head -50`
-Verify the `**Quick mode.**` block is present and the existing structure is intact. Repeat for the other two goldens.
+Use the Read tool to read `internal/prompts/testdata/plan_basic_quick.golden`. Verify the `**Quick mode.**` block is present and the existing structure (ground rules, plan-under-review, what-to-evaluate, output) is intact. Repeat for `plan_findings_only_quick.golden` and `plan_tasks_chunk_quick.golden`.
 
 - [ ] **Step 9: Run the golden tests without `-update` to confirm reproducibility**
 
@@ -2047,8 +2240,10 @@ Expected: PASS — six golden files in `internal/prompts/testdata/` are rewritte
 
 - [ ] **Step 8: Inspect each regenerated golden**
 
-Run: `git diff internal/prompts/testdata/plan_basic.golden | head -60`
-Verify the diff shows ONLY the additions (4th paragraph + next_action sentence). Repeat for each of the six goldens. Make sure no unintended changes (e.g. accidental template variable renamed).
+Run: `git diff internal/prompts/testdata/plan_basic.golden`
+Verify the diff shows ONLY the additions (4th paragraph + next_action sentence) — no other changes (e.g. accidental template variable renamed). Repeat for `plan_findings_only.golden`, `plan_tasks_chunk.golden`, `plan_basic_quick.golden`, `plan_findings_only_quick.golden`, `plan_tasks_chunk_quick.golden`.
+
+If any diff shows unexpected changes (whitespace shift in the wrong section, template variable changed), abort and investigate before committing.
 
 - [ ] **Step 9: Run the full prompts test suite**
 
