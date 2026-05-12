@@ -220,7 +220,8 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 	}
 
 	if size := totalBytes(args.ChangedFiles); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes))
+		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."))
 	}
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.MidModel)
@@ -340,7 +341,7 @@ func truncatedPlanResult() verdict.PlanResult {
 	}
 }
 
-func tooLargeEnvelope(id string, model config.ModelRef, size, limit int) Envelope {
+func tooLargeEnvelope(id string, model config.ModelRef, size, limit int, suggestion string) Envelope {
 	return Envelope{
 		SessionID: id,
 		Verdict:   string(verdict.VerdictFail),
@@ -349,7 +350,7 @@ func tooLargeEnvelope(id string, model config.ModelRef, size, limit int) Envelop
 			Category:   verdict.CategoryTooLarge,
 			Criterion:  "payload",
 			Evidence:   fmt.Sprintf("payload %d bytes exceeds cap %d", size, limit),
-			Suggestion: "Send a unified diff instead of full files, or split the call.",
+			Suggestion: suggestion,
 		}},
 		NextAction: "Reduce the payload and retry.",
 		ModelUsed:  model.String(),
@@ -408,7 +409,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	}
 
 	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes))
+		return envelopeResult(tooLargeEnvelope(sess.ID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a unified diff via final_diff, or split the call into smaller chunks."))
 	}
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PostModel)

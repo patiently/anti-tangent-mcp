@@ -224,6 +224,36 @@ func TestCheckProgress_PayloadTooLarge(t *testing.T) {
 	assert.Equal(t, "fail", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, "payload_too_large", string(env.Findings[0].Category))
+	assert.Contains(t, env.Findings[0].Suggestion, "smaller changed_files set")
+	assert.Contains(t, env.Findings[0].Suggestion, "split")
+	assert.NotContains(t, env.Findings[0].Suggestion, "final_diff")
+	// Evidence must still include actual size and cap values.
+	assert.Contains(t, env.Findings[0].Evidence, "bytes")
+	assert.Contains(t, env.Findings[0].Evidence, "10")
+}
+
+func TestValidateCompletion_PayloadTooLargeSuggestsFinalDiff(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
+	d := newDeps(t, rv)
+	d.Cfg.MaxPayloadBytes = 10
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"}})
+	require.NoError(t, err)
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "implemented",
+		FinalFiles: []FileArg{{Path: "f.go", Content: "this is way too much"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, env.Findings, 1)
+	assert.Equal(t, "payload_too_large", string(env.Findings[0].Category))
+	assert.Contains(t, env.Findings[0].Suggestion, "final_diff")
+	assert.Contains(t, env.Findings[0].Suggestion, "split")
+	// Evidence must still include actual size and cap values.
+	assert.Contains(t, env.Findings[0].Evidence, "bytes")
+	assert.Contains(t, env.Findings[0].Evidence, "10")
 }
 
 func TestValidateCompletion_HappyPath(t *testing.T) {
