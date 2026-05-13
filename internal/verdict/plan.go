@@ -56,6 +56,7 @@ type PlanResult struct {
 	Tasks        []PlanTaskResult `json:"tasks"`
 	NextAction   string           `json:"next_action"`
 	PlanQuality  PlanQuality      `json:"plan_quality"`
+	SummaryBlock string           `json:"summary_block,omitempty"`
 	Partial      bool             `json:"partial,omitempty"`
 }
 

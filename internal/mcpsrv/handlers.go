@@ -30,6 +30,7 @@ type Envelope struct {
 	Partial                    bool              `json:"partial,omitempty"`
 	SessionExpiresAt           *time.Time        `json:"session_expires_at,omitempty"`
 	SessionTTLRemainingSeconds *int              `json:"session_ttl_remaining_seconds,omitempty"`
+	SummaryBlock               string            `json:"summary_block,omitempty"`
 }
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
@@ -208,6 +209,7 @@ func (h *handlers) withSessionTTL(env Envelope, sess *session.Session) Envelope 
 }
 
 func envelopeResult(env Envelope) (*mcp.CallToolResult, Envelope, error) {
+	env.SummaryBlock = formatEnvelopeSummary(env)
 	body, err := json.MarshalIndent(env, "", "  ")
 	if err != nil {
 		return nil, Envelope{}, err
@@ -844,7 +846,17 @@ func tooLargePlanResult(size, limit int) verdict.PlanResult {
 }
 
 // planEnvelopeResult marshals the PlanResult into a CallToolResult (mirrors envelopeResult).
+//
+// Two universal post-processing steps run here so every exit path — happy,
+// partial-recovery, legacy-truncation, too-large, no-headings — gets them
+// for free:
+//
+//  1. verdict.ApplyPlanQualitySanity normalizes plan_quality (handles
+//     synthetic PlanResults that bypass ParsePlan / ParsePlanResultPartial).
+//  2. SummaryBlock is populated with the rendered paste-ready text block.
 func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
+	verdict.ApplyPlanQualitySanity(&pr)
+	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
 	body, err := json.MarshalIndent(struct {
 		verdict.PlanResult
 		ModelUsed string `json:"model_used"`

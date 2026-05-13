@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -1101,4 +1102,100 @@ func TestMaxTokensOverride_ClampSurvivesEarlyExits(t *testing.T) {
 		assert.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion)
 		assert.Equal(t, "payload_too_large", string(pr.PlanFindings[1].Category))
 	})
+}
+
+// ---------------------------------------------------------------------------
+// summary_block population (Task 5)
+//
+// These integration tests verify that every exit path through envelopeResult
+// and planEnvelopeResult ends up with a populated summary_block field. Five
+// tests cover: ValidateTaskSpec happy, ValidateCompletion happy, ValidatePlan
+// happy, CheckProgress notFoundEnvelope (bogus session), and ValidatePlan
+// noHeadingsPlanResult (synthetic, never reaches reviewer).
+// ---------------------------------------------------------------------------
+
+func TestValidateTaskSpec_PopulatesSummaryBlock(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	h := &handlers{deps: newDeps(t, rv)}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:          "T",
+		Goal:               "G",
+		AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, env.SummaryBlock, "happy-path envelope must carry summary_block")
+	assert.Contains(t, env.SummaryBlock, "anti-tangent envelope")
+	assert.Contains(t, env.SummaryBlock, env.SessionID)
+	assert.Contains(t, env.SummaryBlock, "verdict:       pass")
+}
+
+func TestValidateCompletion_PopulatesSummaryBlock(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "implemented",
+		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, env.SummaryBlock, "validate_completion happy-path must carry summary_block")
+	assert.Contains(t, env.SummaryBlock, "anti-tangent envelope")
+	assert.Contains(t, env.SummaryBlock, "verdict:       pass")
+}
+
+func TestValidatePlan_PopulatesSummaryBlock(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	plan := "# Plan\n\n### Task 1: First\n\nSome body.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.NotEmpty(t, pr.SummaryBlock, "validate_plan happy-path must carry summary_block")
+	assert.True(t, strings.HasPrefix(pr.SummaryBlock, "anti-tangent envelope (validate_plan)"),
+		"plan summary must begin with the validate_plan banner, got:\n%s", pr.SummaryBlock)
+	assert.Contains(t, pr.SummaryBlock, "plan_verdict:  pass")
+}
+
+func TestCheckProgress_NotFoundEnvelope_PopulatesSummaryBlock(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5-20251001")}
+	h := &handlers{deps: newDeps(t, rv)}
+
+	_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID: "no-such-session",
+		WorkingOn: "anything",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, env.SummaryBlock, "notFoundEnvelope path must still populate summary_block")
+	assert.Contains(t, env.SummaryBlock, "anti-tangent envelope")
+	assert.Contains(t, env.SummaryBlock, "verdict:       fail")
+	assert.Contains(t, env.SummaryBlock, "session_not_found")
+}
+
+func TestValidatePlan_NoHeadings_PopulatesSummaryBlock(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: "Not a plan, no headings."})
+	require.NoError(t, err)
+	require.NotEmpty(t, pr.SummaryBlock, "noHeadingsPlanResult path must still populate summary_block")
+	assert.True(t, strings.HasPrefix(pr.SummaryBlock, "anti-tangent envelope (validate_plan)"),
+		"plan summary must begin with the validate_plan banner, got:\n%s", pr.SummaryBlock)
+	assert.Contains(t, pr.SummaryBlock, "plan_verdict:  fail")
+	// Synthetic PlanResults get plan_quality from ApplyPlanQualitySanity, which
+	// forces "rough" on any fail verdict.
+	assert.Contains(t, pr.SummaryBlock, "plan_quality:  rough")
 }
