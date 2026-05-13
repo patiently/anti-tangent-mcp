@@ -129,6 +129,97 @@ func TestParsePlan_StripsCodeFences(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// plan_quality sanity-check tests
+// ---------------------------------------------------------------------------
+
+func TestParsePlan_PlanQuality_CriticalOverridesToRough(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict": "warn",
+		"plan_findings": [{
+			"severity":   "critical",
+			"category":   "missing_acceptance_criterion",
+			"criterion":  "Task 1 AC",
+			"evidence":   "no acceptance criteria listed",
+			"suggestion": "add ACs"
+		}],
+		"tasks": [],
+		"next_action": "Address findings.",
+		"plan_quality": "rigorous"
+	}`)
+	pr, err := ParsePlan(raw)
+	if err != nil {
+		t.Fatalf("ParsePlan: %v", err)
+	}
+	if got, want := pr.PlanQuality, PlanQualityRough; got != want {
+		t.Errorf("PlanQuality = %q, want %q (critical finding should override to rough)", got, want)
+	}
+}
+
+func TestParsePlan_PlanQuality_FailVerdictOverridesToRough(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict": "fail",
+		"plan_findings": [],
+		"tasks": [],
+		"next_action": "Plan is unimplementable.",
+		"plan_quality": "actionable"
+	}`)
+	pr, err := ParsePlan(raw)
+	if err != nil {
+		t.Fatalf("ParsePlan: %v", err)
+	}
+	if got, want := pr.PlanQuality, PlanQualityRough; got != want {
+		t.Errorf("PlanQuality = %q, want %q (fail verdict should override to rough)", got, want)
+	}
+}
+
+func TestParsePlan_PlanQuality_EmptyFilledFromVerdict(t *testing.T) {
+	cases := []struct {
+		name        string
+		verdict     string
+		wantQuality PlanQuality
+	}{
+		{"pass→rigorous", "pass", PlanQualityRigorous},
+		{"warn→actionable", "warn", PlanQualityActionable},
+		{"fail→rough", "fail", PlanQualityRough},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(`{
+				"plan_verdict": "` + tc.verdict + `",
+				"plan_findings": [],
+				"tasks": [],
+				"next_action": "go.",
+				"plan_quality": ""
+			}`)
+			pr, err := ParsePlan(raw)
+			if err != nil {
+				t.Fatalf("ParsePlan: %v", err)
+			}
+			if got, want := pr.PlanQuality, tc.wantQuality; got != want {
+				t.Errorf("PlanQuality = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestParsePlan_PlanQuality_InvalidFilledFromVerdict(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict": "warn",
+		"plan_findings": [],
+		"tasks": [],
+		"next_action": "go.",
+		"plan_quality": "sparkly"
+	}`)
+	pr, err := ParsePlan(raw)
+	if err != nil {
+		t.Fatalf("ParsePlan should not error on invalid plan_quality: %v", err)
+	}
+	if got, want := pr.PlanQuality, PlanQualityActionable; got != want {
+		t.Errorf("PlanQuality = %q, want %q (invalid value should fall back to verdict-based default)", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // PlanFindingsOnly tests
 // ---------------------------------------------------------------------------
 

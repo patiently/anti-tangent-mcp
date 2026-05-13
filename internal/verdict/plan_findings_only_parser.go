@@ -38,5 +38,11 @@ func ParsePlanFindingsOnly(raw []byte) (PlanFindingsOnly, error) {
 			return PlanFindingsOnly{}, err
 		}
 	}
+	switch r.PlanQuality {
+	case PlanQualityRough, PlanQualityActionable, PlanQualityRigorous, "":
+		// OK — empty is tolerated; chunked assembler applies fallback.
+	default:
+		r.PlanQuality = ""
+	}
 	return r, nil
 }

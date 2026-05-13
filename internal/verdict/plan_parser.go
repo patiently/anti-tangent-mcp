@@ -50,6 +50,7 @@ func ParsePlan(raw []byte) (PlanResult, error) {
 			}
 		}
 	}
+	ApplyPlanQualitySanity(&r)
 	return r, nil
 }
 
@@ -78,4 +79,58 @@ func validateFinding(f *Finding, where string) error {
 		f.Severity = SeverityMinor
 	}
 	return nil
+}
+
+// ApplyPlanQualitySanity enforces the plan_quality contract:
+//
+//   - any critical finding forces "rough" regardless of what the reviewer emitted
+//   - fail verdict forces "rough"
+//   - empty/invalid value falls back to a verdict-based default:
+//     pass → rigorous, warn → actionable, fail → rough
+//
+// This is defensive: the JSON schema requires plan_quality on the happy
+// path, but raw-response drift (parse miss, prompt drift, missing field)
+// must not produce empty output.
+func ApplyPlanQualitySanity(pr *PlanResult) {
+	if pr.PlanVerdict == VerdictFail {
+		pr.PlanQuality = PlanQualityRough
+		return
+	}
+	hasCritical := false
+	for _, f := range pr.PlanFindings {
+		if f.Severity == SeverityCritical {
+			hasCritical = true
+			break
+		}
+	}
+	if !hasCritical {
+		for _, t := range pr.Tasks {
+			for _, f := range t.Findings {
+				if f.Severity == SeverityCritical {
+					hasCritical = true
+					break
+				}
+			}
+			if hasCritical {
+				break
+			}
+		}
+	}
+	if hasCritical {
+		pr.PlanQuality = PlanQualityRough
+		return
+	}
+	switch pr.PlanQuality {
+	case PlanQualityRough, PlanQualityActionable, PlanQualityRigorous:
+		// reviewer emitted a valid value; trust it.
+	default:
+		switch pr.PlanVerdict {
+		case VerdictPass:
+			pr.PlanQuality = PlanQualityRigorous
+		case VerdictWarn:
+			pr.PlanQuality = PlanQualityActionable
+		case VerdictFail:
+			pr.PlanQuality = PlanQualityRough
+		}
+	}
 }

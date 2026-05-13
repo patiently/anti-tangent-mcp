@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "PlanFindingsOnly",
   "type": "object",
-  "required": ["plan_verdict", "plan_findings", "next_action"],
+  "required": ["plan_verdict", "plan_findings", "next_action", "plan_quality"],
   "additionalProperties": false,
   "properties": {
     "plan_verdict": { "type": "string", "enum": ["pass", "warn", "fail"] },
@@ -10,7 +10,11 @@
       "type": "array",
       "items": { "$ref": "#/definitions/finding" }
     },
-    "next_action": { "type": "string", "minLength": 1 }
+    "next_action": { "type": "string", "minLength": 1 },
+    "plan_quality": {
+      "type": "string",
+      "enum": ["rough", "actionable", "rigorous"]
+    }
   },
   "definitions": {
     "finding": {

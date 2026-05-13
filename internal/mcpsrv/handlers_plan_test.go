@@ -322,6 +322,52 @@ func TestReviewPlanChunked_PostMergeCount_NoErrorWhenCountsMatch(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// plan_quality threading through the chunked path
+// ---------------------------------------------------------------------------
+
+// TestReviewPlanChunked_ThreadsPlanQuality verifies that the plan_quality
+// value emitted by Pass-1 (PlanFindingsOnly) is threaded into the assembled
+// PlanResult by reviewPlanChunked. Pass-2 chunk responses do NOT emit
+// plan_quality (TasksOnly doesn't carry it), so the field must come from
+// Pass-1 unchanged.
+//
+// We use a warn verdict with no critical findings and an "actionable"
+// plan_quality so the sanity check (when later wired into the marshaller
+// in Task 5) would leave the value untouched — the assertion holds
+// regardless of whether the sanity helper has been wired into the
+// envelope yet.
+func TestReviewPlanChunked_ThreadsPlanQuality(t *testing.T) {
+	plan := buildPlanWithNTasks(9)
+	passOneWithQuality := providers.Response{
+		RawJSON: []byte(`{
+			"plan_verdict":"warn",
+			"plan_findings":[],
+			"next_action":"Address findings before dispatch.",
+			"plan_quality":"actionable"
+		}`),
+		Model:        "claude-sonnet-4-6",
+		InputTokens:  10,
+		OutputTokens: 5,
+	}
+	sr := &scriptedReviewer{
+		responses: []providers.Response{
+			passOneWithQuality,
+			chunkResp(t, titlesRange(1, 8)),
+			chunkResp(t, titlesRange(9, 9)),
+		},
+	}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	assert.Equal(t, 3, sr.calls, "Pass1 + 2 chunks = 3 calls")
+	require.Len(t, pr.Tasks, 9)
+	assert.Equal(t, verdict.PlanQualityActionable, pr.PlanQuality,
+		"plan_quality from Pass-1 should thread into the assembled PlanResult")
+}
+
+// ---------------------------------------------------------------------------
 // reviewPlanSingle retry path
 // ---------------------------------------------------------------------------
 

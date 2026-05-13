@@ -24,12 +24,29 @@ func PlanFindingsOnlySchema() []byte {
 	return out
 }
 
+// PlanQuality is a separate axis from PlanVerdict, indicating how close
+// the plan is to ship-ready independent of whether it's dispatchable.
+//
+//	rough      — implementer cannot start; missing pieces / contradictions.
+//	actionable — dispatchable but with gaps an implementer might have to
+//	             ask about; some quality issues that risk rework.
+//	rigorous   — ready to hand to a fresh implementer with high confidence;
+//	             remaining findings are stylistic.
+type PlanQuality string
+
+const (
+	PlanQualityRough      PlanQuality = "rough"
+	PlanQualityActionable PlanQuality = "actionable"
+	PlanQualityRigorous   PlanQuality = "rigorous"
+)
+
 // PlanFindingsOnly is the Pass-1 response shape during chunked plan review.
 // Carries cross-cutting findings and next_action; no per-task data.
 type PlanFindingsOnly struct {
-	PlanVerdict  Verdict   `json:"plan_verdict"`
-	PlanFindings []Finding `json:"plan_findings"`
-	NextAction   string    `json:"next_action"`
+	PlanVerdict  Verdict     `json:"plan_verdict"`
+	PlanFindings []Finding   `json:"plan_findings"`
+	NextAction   string      `json:"next_action"`
+	PlanQuality  PlanQuality `json:"plan_quality"`
 }
 
 // PlanResult is the canonical shape returned by validate_plan.
@@ -38,6 +55,7 @@ type PlanResult struct {
 	PlanFindings []Finding        `json:"plan_findings"`
 	Tasks        []PlanTaskResult `json:"tasks"`
 	NextAction   string           `json:"next_action"`
+	PlanQuality  PlanQuality      `json:"plan_quality"`
 	Partial      bool             `json:"partial,omitempty"`
 }
 

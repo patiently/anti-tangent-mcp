@@ -938,6 +938,7 @@ func (h *handlers) reviewPlanChunked(
 		PlanVerdict:  pf.PlanVerdict,
 		PlanFindings: pf.PlanFindings,
 		NextAction:   pf.NextAction,
+		PlanQuality:  pf.PlanQuality,
 		Tasks:        make([]verdict.PlanTaskResult, 0, len(tasks)),
 	}
 
