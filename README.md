@@ -54,6 +54,10 @@ All four tools accept an optional `max_tokens_override` non-negative int — rep
 
 `validate_plan` additionally accepts an optional `mode` arg of `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings (at most 3 per scope) — useful for small ASAP plans where you don't want round-after-round of stylistic refinement.
 
+### Lightweight protocol mode (v0.3.1+)
+
+For trivial tasks (doc-only edits, mechanical relocations, dependency bumps), the full anti-tangent dispatch protocol is overhead-heavy. As of v0.3.1 the project ships a lightweight dispatch template at [`examples/lightweight-dispatch.md`](examples/lightweight-dispatch.md) that skips `validate_task_spec` and `check_progress`, keeping only `validate_completion` as a sanity gate. See `INTEGRATION.md`'s "Lightweight protocol mode" section for when to use it.
+
 ## Use with Claude Code (`.mcp.json`)
 
 ```json

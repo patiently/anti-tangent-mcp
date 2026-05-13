@@ -490,6 +490,8 @@ Do NOT have the controller call `validate_completion` itself after the subagent 
 
 The two tools' analyses overlap intentionally: the plan gate catches plan-wide and per-task issues at handoff; the implementer gate catches anything that changed between handoff and dispatch (e.g. another agent edited the plan in the meantime) and produces the session that the rest of the implementer's lifecycle uses.
 
+The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`. While `plan_verdict` answers "is this dispatchable?" (pass / warn / fail), `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When you see consecutive `warn` verdicts that aren't changing, watch `plan_quality` for convergence: `actionable → rigorous` is a meaningful improvement even if the verdict stays `warn`. Use `plan_quality` to decide when to stop iterating: most callers can ship at `actionable` for ASAP work, and at `rigorous` for quarterly-rewrite scope.
+
 ### 5.6 Per-call tool args (v0.3.0+)
 
 **`max_tokens_override`** (all four tools): optional non-negative int. Replaces the configured `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` clamp finding is appended to the envelope. Negative values are rejected with `max_tokens_override must be ≥ 0`. Use when you know a particular call needs a larger reviewer budget without modifying global config — handy when paired with partial-findings recovery on truncated responses.
@@ -518,6 +520,9 @@ You'll get a finding with `category: session_not_found`. Default TTL is 4h. Re-c
 
 **My payload is too big.**
 The MCP returns a finding with `category: payload_too_large`. Default cap is 200 KB across `changed_files`, `final_files`, and `final_diff` (the unified-diff body, when present on `validate_completion`). The finding includes a tool-specific suggestion: for `validate_completion`, pass `final_diff` instead of or in addition to `final_files`; for `check_progress`, reduce `changed_files` or split the call. The `ANTI_TANGENT_MAX_PAYLOAD_BYTES` env var controls the cap.
+
+**A `validate_completion` call returned a finding with `category: malformed_evidence`.**
+The server's evidence-shape guard rejected your submission before sending it to the reviewer. The `evidence` field names the specific pattern that matched — typically a truncation marker like `(truncated)`, `[truncated]`, `// ... unchanged`, or a placeholder line consisting only of `...`, or empty `Path` entries in `final_files`. Re-submit with full file contents in `final_files` or a complete unified diff in `final_diff`. The rejection is cached for 5 minutes by canonical content hash, so identical re-submissions are short-circuited. **Note:** if your file legitimately contains one of these literal strings (e.g., a test fixture or documentation file), pass a complete unified diff via `final_diff` instead of pasting the file content via `final_files`.
 
 **A hook returned a finding with `category: other` and `criterion: reviewer_response`.**
 The reviewer's response was cut off at the output token budget. As of v0.3.0, the server runs truncated responses through a tolerant parser and surfaces any complete findings produced before the cap — look for `"partial": true` on the envelope and a `severity: minor` truncation marker. To get the full response on the next call, either raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` / `ANTI_TANGENT_PLAN_MAX_TOKENS` globally, or pass `max_tokens_override` (clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING`, default 16384) for that single call. Pre-0.3.0 servers would emit a single `severity: major` truncation finding and discard any partial output.
