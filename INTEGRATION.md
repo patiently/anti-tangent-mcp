@@ -306,11 +306,27 @@ you're drifting mid-task. Per the 0.3.1 protocol revision this call is
 advisory — most tasks will skip it. When you do call, pass: the
 session_id, a one-sentence `working_on` summary, and the changed files.
 
+**2b. CodeScene mid-task check (OPTIONAL — when codescene-mcp is
+configured in your host).** Call `pre_commit_code_health_safeguard` to
+catch Code Health regressions on uncommitted/staged files. This is
+deterministic and fast (no LLM call) — complementary to the
+LLM-based `check_progress` and higher-signal mid-task. If
+codescene-mcp is not configured, skip this step silently.
+
 **3. Before reporting DONE (REQUIRED).** Call `validate_completion` with
 the session_id, your summary, the final files, and any test evidence.
 **Copy the `summary_block` field from the response verbatim into your DONE report** — it carries the full envelope formatted for paste; you do not need to re-extract JSON fields.
 If the verdict is `fail` or contains `critical`/`major` findings, do
 not report DONE — fix the findings and re-validate.
+
+**3b. CodeScene pre-DONE check (OPTIONAL — when codescene-mcp is
+configured in your host).** Call `analyze_change_set` for the full
+branch-vs-base Code Health view. If the delta shows a regression,
+include the finding in your DONE summary alongside anti-tangent's
+`summary_block` and consider iterating before declaring DONE.
+Anti-tangent remains advisory-only; CodeScene findings are
+codebase-grounded signal that the text-only reviewer can't produce.
+If codescene-mcp is not configured, skip this step silently.
 
 ## Task spec (pass these fields verbatim to validate_task_spec)
 
@@ -334,6 +350,31 @@ Use lightweight mode when ALL of: (a) the task touches ≤ 2 files; (b) the task
 Use the full protocol for: any task that produces new production logic, any task with test-design choices, any task whose ACs require observable invariants.
 
 A reference lightweight dispatch clause is at `examples/lightweight-dispatch.md`.
+
+### CodeScene MCP companion (optional)
+
+Anti-tangent's `## Scope and limits` section above documents what the text-only reviewer structurally cannot catch — codebase-grounded facts like field/symbol existence, function signatures, repo-wide invariants, and adjacent-code conventions. The recommended pairing for that blind spot is the open-source [CodeScene MCP server](https://github.com/codescene-oss/codescene-mcp-server), which exposes deterministic Code Health analysis as MCP tools.
+
+The two tools are complementary, not redundant:
+
+| Surface | anti-tangent-mcp | codescene-mcp |
+| --- | --- | --- |
+| Reasons over | plan text + submitted evidence | actual files on disk |
+| Verdict basis | LLM reviewer (different provider than implementer) | deterministic static analysis |
+| Strength | plan-internal consistency, AC quality, scope drift | Code Health regressions, complexity, cohesion |
+| Cost | one LLM call per hook | local, near-zero |
+
+**Tool-to-phase mapping.** When CodeScene MCP is configured in your host alongside anti-tangent, instruct dispatched implementers to also call:
+
+- During mid-task work (when you'd consider `check_progress`): call CodeScene's `pre_commit_code_health_safeguard`. It analyzes only uncommitted/staged files and is fast enough to run after each meaningful change. The field-data rationale for demoting anti-tangent's `check_progress` to OPTIONAL (low-signal mid-task LLM reviews) does NOT apply to CodeScene — its mid-task call is deterministic and high-signal. Many implementations will want to skip `check_progress` and rely on `pre_commit_code_health_safeguard` instead.
+- Before reporting DONE (alongside `validate_completion`): call CodeScene's `analyze_change_set` for the full branch-vs-base view. If the Code Health delta is negative or a regression is reported, surface it in the DONE summary and consider iterating — anti-tangent itself remains advisory-only, but the implementer-side judgment call benefits from the codebase-grounded second opinion.
+- For drill-down on a flagged issue: `code_health_review`.
+
+**Advisory posture.** Anti-tangent never enforces CodeScene findings server-side. The integration lives at the dispatch-clause / convention layer: a controller that has CodeScene MCP installed updates the dispatch clause to include the companion calls; the implementer cites the findings in its DONE summary. If CodeScene MCP isn't configured in the host, the companion calls are simply skipped — anti-tangent's own protocol is unchanged.
+
+**Lightweight mode.** Tasks dispatched under the lightweight protocol (doc-only edits, mechanical relocations) skip both the anti-tangent lifecycle hooks AND the CodeScene companion calls — there's nothing meaningful for either tool to analyze.
+
+Installation: see the [CodeScene MCP installation guide](https://github.com/codescene-oss/codescene-mcp-server#installation).
 
 ### 4.3 How to address findings
 

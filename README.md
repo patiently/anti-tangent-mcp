@@ -58,6 +58,17 @@ All four tools accept an optional `max_tokens_override` non-negative int — rep
 
 For trivial tasks (doc-only edits, mechanical relocations, dependency bumps), the full anti-tangent dispatch protocol is overhead-heavy. As of v0.3.1 the project ships a lightweight dispatch template at [`examples/lightweight-dispatch.md`](examples/lightweight-dispatch.md) that skips `validate_task_spec` and `check_progress`, keeping only `validate_completion` as a sanity gate. See `INTEGRATION.md`'s "Lightweight protocol mode" section for when to use it.
 
+### Companion tool: CodeScene MCP (optional)
+
+Anti-tangent's reviewer is intentionally text-only: it reasons over plan text and submitted evidence, not the codebase. That bounds what it can catch (see "Scope and limits" in INTEGRATION.md). For the codebase-grounded blind spot — Code Health regressions, complexity creep, low cohesion in actually-modified files — the recommended companion is [CodeScene MCP](https://github.com/codescene-oss/codescene-mcp-server), open-sourced by CodeScene (https://codescene.com).
+
+When CodeScene MCP is configured in your host alongside anti-tangent, dispatched implementers are instructed to call:
+
+- `pre_commit_code_health_safeguard` mid-task — deterministic Code Health check on uncommitted/staged files. Fast, cheap, and complementary to anti-tangent's optional `check_progress`.
+- `analyze_change_set` before reporting DONE — full branch-vs-base Code Health analysis. Cite the delta and any findings in the DONE summary alongside anti-tangent's `summary_block`.
+
+The pairing is **advisory** on the anti-tangent side: anti-tangent never enforces CodeScene findings, and the call is skipped silently when CodeScene MCP isn't configured. See INTEGRATION.md's "CodeScene MCP companion" section for the dispatch-clause integration details.
+
 ## Use with Claude Code (`.mcp.json`)
 
 ```json
