@@ -10,6 +10,8 @@ Every finding's `evidence` field must quote or paraphrase text that literally ap
 
 When you cite a code symbol's signature, an example sibling key, or an adjacent attribute value as an *illustration*, prefix it with `e.g. illustrative —`. The reader does not know whether your illustration matches the codebase, and false confidence is worse than no example.
 
+When the plan asserts something about the codebase that you cannot verify from the plan text alone — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim from the plan. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase.
+
 ## Plan under review
 
 ## Phase 1

@@ -27,6 +27,10 @@ Check three things:
 
 Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
 
+### Unverifiable codebase claims
+
+When the task spec asserts something about the codebase that you cannot verify from the text alone — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase.
+
 Use criterion = "spec" for structural findings, or quote the verbatim AC text for AC-quality findings.
 
 Respond with the verdict JSON only.
