@@ -372,7 +372,7 @@ The two tools are complementary, not redundant:
 
 **Advisory posture.** Anti-tangent never enforces CodeScene findings server-side. The integration lives at the dispatch-clause / convention layer: a controller that has CodeScene MCP installed updates the dispatch clause to include the companion calls; the implementer cites the findings in its DONE summary. If CodeScene MCP isn't configured in the host, the companion calls are simply skipped — anti-tangent's own protocol is unchanged.
 
-**Lightweight mode.** Tasks dispatched under the lightweight protocol (doc-only edits, mechanical relocations) skip both the anti-tangent lifecycle hooks AND the CodeScene companion calls — there's nothing meaningful for either tool to analyze.
+**Lightweight mode.** Tasks dispatched under the lightweight protocol (doc-only edits, mechanical relocations) skip `validate_task_spec`, `check_progress`, and the CodeScene companion calls, while still requiring `validate_completion` as the sanity gate.
 
 Installation: see the [CodeScene MCP installation guide](https://github.com/codescene-oss/codescene-mcp-server#installation).
 
