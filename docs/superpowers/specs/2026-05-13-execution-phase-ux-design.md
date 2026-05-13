@@ -137,7 +137,33 @@ Rules deliberately do NOT include:
 - `NextAction: "Re-submit with complete evidence; current submission appears truncated."`
 - No reviewer call. No model cost.
 
-**Caching.** In-process cache, keyed by `(session_id, sha256(final_diff || sorted_final_files || test_evidence))`, maps to the rejection envelope. TTL = 5 minutes. If a controller re-submits the identical malformed payload within 5 minutes, return the cached envelope instantly. Cleared on server restart (acceptable — these are short-lived dev-loop artifacts).
+**Caching.** In-process cache, keyed by a canonical hash over the full evidence payload. Plain string concatenation produces collisions (e.g. a file with `path="abc",content=""` concatenates identically to `path="",content="abc"`); we use JSON encoding instead. The key is computed as:
+
+```go
+import "crypto/sha256"
+import "encoding/json"
+import "sort"
+
+type cacheKeyInput struct {
+    SessionID    string    `json:"session_id"`
+    FinalDiff    string    `json:"final_diff"`
+    FinalFiles   []FileArg `json:"final_files"` // sorted by Path before marshal
+    TestEvidence string    `json:"test_evidence"`
+}
+
+// inside the guard:
+sortedFiles := append([]FileArg(nil), args.FinalFiles...)
+sort.Slice(sortedFiles, func(i, j int) bool { return sortedFiles[i].Path < sortedFiles[j].Path })
+keyJSON, _ := json.Marshal(cacheKeyInput{
+    SessionID:    args.SessionID,
+    FinalDiff:    args.FinalDiff,
+    FinalFiles:   sortedFiles,
+    TestEvidence: args.TestEvidence,
+})
+key := sha256.Sum256(keyJSON)
+```
+
+`encoding/json.Marshal` produces deterministic output for struct fields (declaration order) and slices (preserved order — files are pre-sorted), so the hash is stable across calls with semantically-identical input. Maps would NOT be deterministic; we use slices throughout. `[16]byte` key (or hex-string) → rejection envelope. TTL = 5 minutes from insertion. Cleared on server restart (acceptable — these are short-lived dev-loop artifacts). Cache size is bounded; eviction is age-based.
 
 **Handler change for lightweight mode.** When `session_id == ""` AND at least one of `final_files`/`final_diff`/`test_evidence` is non-empty, skip the session lookup (no `notFoundEnvelope`) but still apply the evidence-shape guard. The reviewer IS still called with a synthesized `session.TaskSpec`:
 
@@ -394,7 +420,7 @@ const (
 )
 ```
 
-Add to the enum list in `schema.json`, `plan_schema.json`, `plan_findings_only_schema.json`, `tasks_only_schema.json` — same places `unverifiable_codebase_claim` is added.
+**Schema scope.** `malformed_evidence` is added ONLY to `schema.json` (the per-task `Result` shape used by `validate_task_spec` / `check_progress` / `validate_completion`). It is NOT added to `plan_schema.json`, `plan_findings_only_schema.json`, or `tasks_only_schema.json` — those constrain plan-template reviewer output, where a reviewer could otherwise emit a category that is nonsensical for `validate_plan` (plan templates have no evidence to be malformed). The category emits exclusively from the server-side evidence-shape guard in `validate_completion`; even within `schema.json`'s scope, `validate_task_spec` and `check_progress` never emit it in practice.
 
 **Use site.** The evidence-shape rejection envelope in `validate_completion` (§2 above) uses this category. Replaces the misleading reuse of `payload_too_large`, which describes input size, not input shape.
 
@@ -413,10 +439,10 @@ Modify  README.md                         — short blurb pointing at INTEGRATIO
 Create  examples/lightweight-dispatch.md  — reference lightweight clause
 Modify  internal/verdict/verdict.go       — CategoryUnverifiableCodebaseClaim + CategoryMalformedEvidence constants
 Modify  internal/verdict/plan.go          — PlanQuality type/consts + PlanQuality field on PlanResult and PlanFindingsOnly + SummaryBlock field on PlanResult
-Modify  internal/verdict/schema.json      — add unverifiable_codebase_claim + malformed_evidence
-Modify  internal/verdict/plan_schema.json — add unverifiable_codebase_claim + malformed_evidence + plan_quality enum
-Modify  internal/verdict/plan_findings_only_schema.json — add unverifiable_codebase_claim + malformed_evidence + plan_quality enum
-Modify  internal/verdict/tasks_only_schema.json         — add unverifiable_codebase_claim + malformed_evidence
+Modify  internal/verdict/schema.json      — add unverifiable_codebase_claim AND malformed_evidence (per-task shape, used by all three per-task tools; only validate_completion emits malformed_evidence)
+Modify  internal/verdict/plan_schema.json — add unverifiable_codebase_claim ONLY + plan_quality enum (plan shape; malformed_evidence is not emitted on plan paths)
+Modify  internal/verdict/plan_findings_only_schema.json — add unverifiable_codebase_claim ONLY + plan_quality enum
+Modify  internal/verdict/tasks_only_schema.json         — add unverifiable_codebase_claim ONLY
 Modify  internal/verdict/parser.go        — severity floor for unverifiable_codebase_claim
 Modify  internal/verdict/parser_partial.go — same severity floor
 Modify  internal/verdict/plan_parser.go   — severity floor + plan_quality sanity check
@@ -447,7 +473,7 @@ Modify  CHANGELOG.md                      — add ## [0.3.1] - 2026-05-13 block
 | Risk | Mitigation |
 |---|---|
 | Reviewer over-fires `unverifiable_codebase_claim` (every code symbol becomes a finding) | Prompt scopes the instruction to *assertions about codebase facts*, not bare references. Reuses 0.3.0 hypothetical-marker disambiguation. PR-time golden review against a known-good plan. If field reports show drift, tighten the prompt in a 0.3.2 patch. |
-| Reviewer drifts `plan_quality` to off-list strings ("dispatchable", "ready") | Schema enum rejects at parse-time. Server-side fallback fills from verdict-based default. No user-visible breakage; signal degrades to "verdict echo." |
+| Reviewer drifts `plan_quality` to off-list strings ("dispatchable", "ready") or omits the field | Two defensive layers: (a) the JSON-schema enum constrains the happy path — when the reviewer's output validates against `plan_schema.json` / `plan_findings_only_schema.json`, the value is guaranteed to be one of `rough` / `actionable` / `rigorous`; (b) when raw output drifts (parse error, missing field, unexpected string) and bypasses schema validation, the Go parser fallback fills from the verdict-based default (see §5 sanity-check rules). Net: no user-visible breakage; signal degrades to "verdict echo" in the degraded path. |
 | Evidence-shape guard false-positives on legitimate diffs that contain the word "truncated" in a comment body | Substring match is conservative but not zero-risk. False-positive recovery cost: re-submit with the literal removed or rephrased. The rejection finding names the matched pattern and byte offset so the caller can locate it instantly. The (riskier) "diff with zero @@" rule was dropped from the design (would false-fail on mode-only / rename-only / binary diffs) — only the truncation-marker rules remain. |
 | Adding two new `Finding.Category` enum values breaks consumers that have a strict enum-validating client | Schema additions are backward-compat by JSON-schema convention (consumers ignoring unknown enum values continue to work). Go consumers using the typed `Category` constants gain access to the new values; old typed code that switches on the existing enum without a `default` arm needs a `default` (recommended Go practice). CHANGELOG calls this out under `### Added`. |
 | `summary_block` format drifts across releases, breaking caller scripts that grep it | Documented as "human-readable; not a stable machine interface." Format-determinism tests catch unintended drift in PRs. |
