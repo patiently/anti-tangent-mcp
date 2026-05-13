@@ -62,7 +62,7 @@ still misimplement; minor = nit.
 ## Output
 
 Respond with a JSON object matching the provided schema. The JSON object must
-contain exactly the top-level keys plan_verdict, plan_findings, and next_action.
+contain exactly the top-level keys plan_verdict, plan_quality, plan_findings, and next_action.
 Do not return tasks[] or any task objects. Do not emit per-task findings — they
 belong in the per-task calls. Do not include prose outside the JSON.
 

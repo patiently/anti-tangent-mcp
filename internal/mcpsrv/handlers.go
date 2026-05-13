@@ -677,7 +677,7 @@ func checkEvidenceShape(args ValidateCompletionArgs) string {
 		}
 	}
 	for i, f := range args.FinalFiles {
-		if f.Path == "" {
+		if strings.TrimSpace(f.Path) == "" {
 			return fmt.Sprintf("final_files[%d].path is empty", i)
 		}
 	}
@@ -758,9 +758,15 @@ func lookupCachedRejection(key [32]byte) (Envelope, bool) {
 func storeRejection(key [32]byte, env Envelope) {
 	rejectionCacheMu.Lock()
 	defer rejectionCacheMu.Unlock()
+	now := time.Now()
+	for k, v := range rejectionCache {
+		if now.After(v.expiresAt) {
+			delete(rejectionCache, k)
+		}
+	}
 	rejectionCache[key] = rejectionCacheEntry{
 		envelope:  env,
-		expiresAt: time.Now().Add(rejectionCacheTTL),
+		expiresAt: now.Add(rejectionCacheTTL),
 	}
 }
 

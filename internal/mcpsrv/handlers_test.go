@@ -1250,6 +1250,7 @@ func TestValidateCompletion_EvidenceGuard_RejectsTruncationMarkerInFinalFiles(t 
 	if err != nil {
 		t.Fatalf("setup: %v", err)
 	}
+	initialCalls := rv.Calls
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
 		Summary:    "done",
@@ -1260,6 +1261,12 @@ func TestValidateCompletion_EvidenceGuard_RejectsTruncationMarkerInFinalFiles(t 
 	}
 	if env.Verdict != string(verdict.VerdictFail) {
 		t.Errorf("verdict = %s, want fail", env.Verdict)
+	}
+	if len(env.Findings) == 0 || env.Findings[0].Category != verdict.CategoryMalformedEvidence {
+		t.Errorf("expected malformed_evidence finding, got: %+v", env.Findings)
+	}
+	if rv.Calls != initialCalls {
+		t.Errorf("reviewer was called (%d -> %d); guard should have rejected before reviewer", initialCalls, rv.Calls)
 	}
 }
 
@@ -1273,6 +1280,7 @@ func TestValidateCompletion_EvidenceGuard_RejectsEmptyFilePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setup: %v", err)
 	}
+	initialCalls := rv.Calls
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
 		Summary:    "done",
@@ -1283,6 +1291,12 @@ func TestValidateCompletion_EvidenceGuard_RejectsEmptyFilePath(t *testing.T) {
 	}
 	if env.Verdict != string(verdict.VerdictFail) {
 		t.Errorf("verdict = %s, want fail", env.Verdict)
+	}
+	if len(env.Findings) == 0 || env.Findings[0].Category != verdict.CategoryMalformedEvidence {
+		t.Errorf("expected malformed_evidence finding, got: %+v", env.Findings)
+	}
+	if rv.Calls != initialCalls {
+		t.Errorf("reviewer was called (%d -> %d); guard should have rejected before reviewer", initialCalls, rv.Calls)
 	}
 }
 

@@ -290,8 +290,8 @@ Field data from execution-phase usage shows `check_progress` consistently produc
 ```markdown
 ## Drift-protection protocol (anti-tangent-mcp)
 
-Before, during, and after this task, you must use the `validate_task_spec`,
-`check_progress`, and `validate_completion` MCP tools.
+At task start and before DONE, you must use `validate_task_spec` and
+`validate_completion`. Use `check_progress` only when you suspect drift.
 
 **1. At the start (REQUIRED).** Before writing any code, call
 `validate_task_spec` with the structured task fields below. Save the
