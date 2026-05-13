@@ -1199,3 +1199,207 @@ func TestValidatePlan_NoHeadings_PopulatesSummaryBlock(t *testing.T) {
 	// forces "rough" on any fail verdict.
 	assert.Contains(t, pr.SummaryBlock, "plan_quality:  rough")
 }
+
+// ---------------------------------------------------------------------------
+// validate_completion evidence-shape guard + lightweight mode (Task 6)
+//
+// Pre-reviewer guard that rejects malformed evidence (truncation markers in
+// final_diff or final_files, empty Path entries) before the LLM call. Rejections
+// are cached for 5 minutes by canonical content hash. The handler also accepts
+// an empty session_id when at least one piece of evidence is non-empty, by
+// synthesizing a minimal task spec for the reviewer.
+// ---------------------------------------------------------------------------
+
+func TestValidateCompletion_EvidenceGuard_RejectsTruncationMarkerInDiff(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	initialCalls := rv.Calls
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: pre.SessionID,
+		Summary:   "done",
+		FinalDiff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n(truncated)\n+new\n",
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != string(verdict.VerdictFail) {
+		t.Errorf("verdict = %s, want fail", env.Verdict)
+	}
+	if len(env.Findings) == 0 || env.Findings[0].Category != verdict.CategoryMalformedEvidence {
+		t.Errorf("expected malformed_evidence finding, got: %+v", env.Findings)
+	}
+	if rv.Calls != initialCalls {
+		t.Errorf("reviewer was called (%d -> %d); guard should have rejected before reviewer", initialCalls, rv.Calls)
+	}
+}
+
+func TestValidateCompletion_EvidenceGuard_RejectsTruncationMarkerInFinalFiles(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n// ... unchanged\nfunc Foo() {}\n"}},
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != string(verdict.VerdictFail) {
+		t.Errorf("verdict = %s, want fail", env.Verdict)
+	}
+}
+
+func TestValidateCompletion_EvidenceGuard_RejectsEmptyFilePath(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []FileArg{{Path: "", Content: "anything"}},
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != string(verdict.VerdictFail) {
+		t.Errorf("verdict = %s, want fail", env.Verdict)
+	}
+}
+
+func TestValidateCompletion_EvidenceGuard_CompleteDiffPassesThrough(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: pre.SessionID,
+		Summary:   "done",
+		FinalDiff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n",
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != "pass" {
+		t.Errorf("complete diff should pass through to reviewer (pass), got %s", env.Verdict)
+	}
+}
+
+func TestValidateCompletion_EvidenceGuard_ModeOnlyDiffPassesThrough(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	modeOnlyDiff := "diff --git a/script.sh b/script.sh\nold mode 100644\nnew mode 100755\n"
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: pre.SessionID,
+		Summary:   "made script executable",
+		FinalDiff: modeOnlyDiff,
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != "pass" {
+		t.Errorf("mode-only diff should pass through (pass), got verdict=%s findings=%+v", env.Verdict, env.Findings)
+	}
+}
+
+func TestValidateCompletion_EvidenceGuard_CacheHitShortCircuits(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	args := ValidateCompletionArgs{
+		SessionID: pre.SessionID,
+		Summary:   "done",
+		FinalDiff: "diff --git a/x b/x\n@@ -1 +1 @@\n(truncated)\n",
+	}
+	_, env1, err := h.ValidateCompletion(context.Background(), nil, args)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if env1.Verdict != string(verdict.VerdictFail) {
+		t.Fatalf("first call should reject")
+	}
+	callsAfterFirst := rv.Calls
+	_, env2, err := h.ValidateCompletion(context.Background(), nil, args)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if env2.Verdict != string(verdict.VerdictFail) {
+		t.Errorf("second call should also reject (from cache)")
+	}
+	if rv.Calls != callsAfterFirst {
+		t.Errorf("reviewer should not have been called between cached rejections; calls before=%d after=%d", callsAfterFirst, rv.Calls)
+	}
+}
+
+func TestValidateCompletion_LightweightMode_EmptySessionAccepted(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []FileArg{{Path: "doc.md", Content: "updated\n"}},
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion (lightweight): %v", err)
+	}
+	if env.SessionID != "" {
+		t.Errorf("lightweight mode should not surface a session_id, got %q", env.SessionID)
+	}
+	if env.Verdict != "pass" {
+		t.Errorf("lightweight mode reviewer call should pass with stub response, got %s", env.Verdict)
+	}
+}
+
+func TestValidateCompletion_LightweightMode_NoEvidenceErrors(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: "",
+		Summary:   "x",
+	})
+	if err == nil {
+		t.Errorf("expected error when session_id is empty AND no evidence is provided")
+	}
+	if err != nil && !strings.Contains(err.Error(), "at least one of") {
+		t.Errorf("error should mention 'at least one of'; got: %v", err)
+	}
+}

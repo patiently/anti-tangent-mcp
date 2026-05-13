@@ -2,11 +2,14 @@ package mcpsrv
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -631,28 +634,230 @@ func totalCompletionBytes(files []FileArg, finalDiff string) int {
 	return totalBytes(files) + len(finalDiff)
 }
 
+// evidenceTruncationPatterns are case-insensitive substrings that strongly
+// indicate the caller pasted truncated/elided evidence rather than a complete
+// diff or full file contents. The reviewer cannot verify acceptance criteria
+// against placeholder text, so the guard rejects these submissions before the
+// reviewer call to fail-fast with a clear error.
+//
+// The list is intentionally narrow: only patterns that have negligible chance
+// of appearing in legitimate code or diffs. "diff --git with zero @@" is NOT
+// included — it false-fires on mode-only / rename-only / binary diffs.
+var evidenceTruncationPatterns = []string{
+	"(truncated)",
+	"[truncated]",
+	"// ... unchanged",
+	"<!-- truncated -->",
+}
+
+// evidenceEllipsisLine matches a line that contains only `...` (with optional
+// surrounding whitespace). The (?m) flag anchors ^/$ to line boundaries.
+var evidenceEllipsisLine = regexp.MustCompile(`(?m)^\s*\.\.\.\s*$`)
+
+// checkEvidenceShape inspects args for malformed evidence shapes. Returns a
+// non-empty human-readable reason string when a rule fires; empty string when
+// the evidence looks structurally sound. The reason is what populates the
+// rejection finding's Evidence field.
+//
+// Order of checks (fail-fast on the first hit so the reason points at the
+// most-likely cause):
+//  1. final_diff substring + ellipsis-line scan
+//  2. final_files empty Path
+//  3. final_files content substring + ellipsis-line scan
+func checkEvidenceShape(args ValidateCompletionArgs) string {
+	if args.FinalDiff != "" {
+		lower := strings.ToLower(args.FinalDiff)
+		for _, p := range evidenceTruncationPatterns {
+			if idx := strings.Index(lower, p); idx >= 0 {
+				return fmt.Sprintf("final_diff contains truncation marker %q at offset %d", p, idx)
+			}
+		}
+		if loc := evidenceEllipsisLine.FindStringIndex(args.FinalDiff); loc != nil {
+			return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", loc[0])
+		}
+	}
+	for i, f := range args.FinalFiles {
+		if f.Path == "" {
+			return fmt.Sprintf("final_files[%d].path is empty", i)
+		}
+	}
+	for i, f := range args.FinalFiles {
+		lower := strings.ToLower(f.Content)
+		for _, p := range evidenceTruncationPatterns {
+			if idx := strings.Index(lower, p); idx >= 0 {
+				return fmt.Sprintf("final_files[%d].content (path %q) contains truncation marker %q at offset %d", i, f.Path, p, idx)
+			}
+		}
+		if loc := evidenceEllipsisLine.FindStringIndex(f.Content); loc != nil {
+			return fmt.Sprintf("final_files[%d].content (path %q) contains a placeholder line `...` at offset %d", i, f.Path, loc[0])
+		}
+	}
+	return ""
+}
+
+// rejectionCacheEntry is one cached rejection envelope keyed by canonical
+// content hash. The envelope's ReviewMS field is preserved so cache-hit
+// rejections look identical to the original rejection from the caller's POV.
+type rejectionCacheEntry struct {
+	envelope  Envelope
+	expiresAt time.Time
+}
+
+// rejectionCache stores recent malformed-evidence rejections so repeat
+// submissions of the same broken payload don't re-run the (cheap but still
+// non-zero) guard logic and don't pollute logs. In-process, no persistence.
+var (
+	rejectionCacheMu sync.Mutex
+	rejectionCache   = map[[32]byte]rejectionCacheEntry{}
+)
+
+const rejectionCacheTTL = 5 * time.Minute
+
+// evidenceCacheKey returns a deterministic SHA-256 over a canonical JSON
+// encoding of the rejection-relevant args. final_files is pre-sorted by Path
+// so that an order-only difference between two otherwise-identical submissions
+// still hits the cache. Plain string concatenation would risk collisions
+// (e.g. SessionID="a" + FinalDiff="bc" vs SessionID="ab" + FinalDiff="c");
+// JSON-encoded boundaries make those distinct.
+func evidenceCacheKey(args ValidateCompletionArgs) [32]byte {
+	sortedFiles := append([]FileArg(nil), args.FinalFiles...)
+	sort.Slice(sortedFiles, func(i, j int) bool { return sortedFiles[i].Path < sortedFiles[j].Path })
+	keyInput := struct {
+		SessionID    string    `json:"session_id"`
+		FinalDiff    string    `json:"final_diff"`
+		FinalFiles   []FileArg `json:"final_files"`
+		TestEvidence string    `json:"test_evidence"`
+	}{
+		SessionID:    args.SessionID,
+		FinalDiff:    args.FinalDiff,
+		FinalFiles:   sortedFiles,
+		TestEvidence: args.TestEvidence,
+	}
+	keyJSON, _ := json.Marshal(keyInput)
+	return sha256.Sum256(keyJSON)
+}
+
+// lookupCachedRejection returns the cached rejection envelope and true when a
+// non-expired entry exists for key; otherwise zero/false. Expired entries are
+// evicted on lookup.
+func lookupCachedRejection(key [32]byte) (Envelope, bool) {
+	rejectionCacheMu.Lock()
+	defer rejectionCacheMu.Unlock()
+	entry, ok := rejectionCache[key]
+	if !ok {
+		return Envelope{}, false
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(rejectionCache, key)
+		return Envelope{}, false
+	}
+	return entry.envelope, true
+}
+
+// storeRejection caches env under key with a freshly-computed expiry.
+func storeRejection(key [32]byte, env Envelope) {
+	rejectionCacheMu.Lock()
+	defer rejectionCacheMu.Unlock()
+	rejectionCache[key] = rejectionCacheEntry{
+		envelope:  env,
+		expiresAt: time.Now().Add(rejectionCacheTTL),
+	}
+}
+
+// malformedEvidenceEnvelope builds the rejection envelope for a guard hit.
+// Severity is major (not critical) because the caller can almost always fix
+// the submission by re-sending complete evidence; the work isn't necessarily
+// wrong, just unverifiable.
+func malformedEvidenceEnvelope(sessionID, reason, modelUsed string) Envelope {
+	return Envelope{
+		SessionID: sessionID,
+		Verdict:   string(verdict.VerdictFail),
+		Findings: []verdict.Finding{{
+			Severity:   verdict.SeverityMajor,
+			Category:   verdict.CategoryMalformedEvidence,
+			Criterion:  "evidence_shape",
+			Evidence:   reason,
+			Suggestion: "Submit full file contents in final_files, or a complete unified diff (no truncation markers) in final_diff.",
+		}},
+		NextAction: "Re-submit with complete evidence; current submission appears truncated.",
+		ModelUsed:  modelUsed,
+	}
+}
+
+// ValidateCompletion runs the post-implementation reviewer call. Eight-step
+// ordering (preserved here to keep the AC-mapping legible):
+//
+//  1. summary required check
+//  2. at-least-one-evidence check
+//  3. lightweight marker (empty session_id + non-empty evidence)
+//  4. effectiveMaxTokens + clampFinding
+//  5. payload-cap check
+//  6. evidence-shape guard (with rejection cache) — runs BEFORE session lookup
+//  7. session lookup (skipped in lightweight mode)
+//  8. spec selection — synthesized in lightweight mode, sess.Spec otherwise
+//
+// In lightweight mode the handler synthesizes a minimal TaskSpec and does NOT
+// create or update any session in the store. The returned envelope's
+// SessionID/SessionExpiresAt/SessionTTLRemainingSeconds fields stay zero.
 func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolRequest, args ValidateCompletionArgs) (*mcp.CallToolResult, Envelope, error) {
-	if args.SessionID == "" || args.Summary == "" {
-		return nil, Envelope{}, errors.New("session_id and summary are required")
+	// 1. summary required (session_id is no longer required — see step 3).
+	if args.Summary == "" {
+		return nil, Envelope{}, errors.New("summary is required")
 	}
 
+	// 2. at-least-one-evidence: rejects the "totally empty call" case
+	// regardless of whether session_id is set.
 	if len(args.FinalFiles) == 0 && args.FinalDiff == "" && args.TestEvidence == "" {
 		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty")
 	}
 
+	// 3. lightweight marker.
+	lightweight := args.SessionID == ""
+
+	// 4. max-tokens override + clamp finding.
 	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PerTaskMaxTokens, h.deps.Cfg.MaxTokensCeiling)
 	if err != nil {
 		return nil, Envelope{}, err
 	}
 
-	sess, ok := h.deps.Sessions.Get(args.SessionID)
-	if !ok {
-		return envelopeResult(prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel), clamp))
+	// 5. payload-cap check. In lightweight mode the surfaced session_id stays
+	// empty; otherwise we don't have the session yet, so use args.SessionID.
+	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
+		return envelopeResult(prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp))
 	}
 
-	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(prependClamp(tooLargeEnvelope(sess.ID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
-			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp))
+	// 6. evidence-shape guard. Runs BEFORE session lookup so a broken payload
+	// rejects fast regardless of session state. Cache hit → return the same
+	// envelope without re-running the guard or hitting the reviewer.
+	cacheKey := evidenceCacheKey(args)
+	if cached, ok := lookupCachedRejection(cacheKey); ok {
+		return envelopeResult(prependClamp(cached, clamp))
+	}
+	if reason := checkEvidenceShape(args); reason != "" {
+		env := malformedEvidenceEnvelope(args.SessionID, reason, h.deps.Cfg.PostModel.String())
+		storeRejection(cacheKey, env)
+		return envelopeResult(prependClamp(env, clamp))
+	}
+
+	// 7/8. session lookup + spec selection.
+	var sess *session.Session
+	var spec session.TaskSpec
+	var sessID string
+	if lightweight {
+		// Synthesize a minimal spec for the reviewer. No session is created.
+		spec = session.TaskSpec{
+			Title: "(lightweight task)",
+			Goal:  args.Summary,
+		}
+	} else {
+		var ok bool
+		sess, ok = h.deps.Sessions.Get(args.SessionID)
+		if !ok {
+			return envelopeResult(prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel), clamp))
+		}
+		spec = sess.Spec
+		sessID = sess.ID
 	}
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PostModel)
@@ -661,7 +866,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	}
 
 	rendered, err := prompts.RenderPost(prompts.PostInput{
-		Spec:         sess.Spec,
+		Spec:         spec,
 		Summary:      args.Summary,
 		Files:        toPromptFiles(args.FinalFiles),
 		FinalDiff:    args.FinalDiff,
@@ -674,27 +879,34 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
 	if err != nil {
 		if errors.Is(err, providers.ErrResponseTruncated) {
-			if env, ok := recoverPartialFindings(sess.ID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
+			if env, ok := recoverPartialFindings(sessID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
 				env = prependClamp(env, clamp)
-				env = h.withSessionTTL(env, sess)
+				if !lightweight {
+					env = h.withSessionTTL(env, sess)
+				}
 				return envelopeResult(env)
 			}
-			env := truncatedEnvelope(sess.ID, model)
+			env := truncatedEnvelope(sessID, model)
 			env = prependClamp(env, clamp)
-			env = h.withSessionTTL(env, sess)
+			if !lightweight {
+				env = h.withSessionTTL(env, sess)
+			}
 			return envelopeResult(env)
 		}
 		return nil, Envelope{}, err
 	}
 
-	h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
-	// Re-fetch after SetPostFindings so LastAccessed reflects the final mutation.
-	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
-		sess = refreshed
+	if !lightweight {
+		h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
+		// Re-fetch after SetPostFindings so LastAccessed reflects the final mutation.
+		if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
+			sess = refreshed
+		}
+		sessID = sess.ID
 	}
 
 	env := Envelope{
-		SessionID:  sess.ID,
+		SessionID:  sessID,
 		Verdict:    string(result.Verdict),
 		Findings:   result.Findings,
 		NextAction: result.NextAction,
@@ -702,7 +914,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		ReviewMS:   ms,
 	}
 	env = prependClamp(env, clamp)
-	env = h.withSessionTTL(env, sess)
+	if !lightweight {
+		env = h.withSessionTTL(env, sess)
+	}
 	return envelopeResult(env)
 }
 
