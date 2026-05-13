@@ -102,14 +102,15 @@ func (r *openaiReviewer) Review(ctx context.Context, req Request) (Response, err
 	if len(parsed.Choices) == 0 {
 		return Response{}, fmt.Errorf("openai: no choices in response")
 	}
-	if parsed.Choices[0].FinishReason == "length" {
-		return Response{}, fmt.Errorf("openai: %w", ErrResponseTruncated)
-	}
 
-	return Response{
+	out := Response{
 		RawJSON:      []byte(parsed.Choices[0].Message.Content),
 		Model:        parsed.Model,
 		InputTokens:  parsed.Usage.PromptTokens,
 		OutputTokens: parsed.Usage.CompletionTokens,
-	}, nil
+	}
+	if parsed.Choices[0].FinishReason == "length" {
+		return out, fmt.Errorf("openai: %w", ErrResponseTruncated)
+	}
+	return out, nil
 }

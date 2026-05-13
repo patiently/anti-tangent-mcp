@@ -47,6 +47,7 @@ type PostInput struct {
 
 type PlanInput struct {
 	PlanText string
+	Mode     string
 }
 
 const systemPrompt = `You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.`
@@ -89,6 +90,7 @@ func RenderPlan(in PlanInput) (Output, error) {
 type PlanChunkInput struct {
 	PlanText   string
 	ChunkTasks []planparser.RawTask
+	Mode       string
 }
 
 // RenderPlanTasksChunk produces a per-chunk prompt for the chunked validate_plan

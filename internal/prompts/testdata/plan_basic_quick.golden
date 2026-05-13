@@ -12,45 +12,59 @@ When you cite a code symbol's signature, an example sibling key, or an adjacent 
 
 ## Plan under review
 
-## Phase 1
+# Sample Plan
 
-### Task 1: do thing
+### Task 1: Bootstrap
 
-### Task 2: do other thing
+Files:
+- main.go
+
+Step 1: write main.
+
+### Task 2: Add tests
+
+**Goal:** Cover the bootstrap with a smoke test.
+
+**Acceptance criteria:**
+- main_test.go exists
+- go test ./... passes
 
 
-## What to evaluate (this call: per-task analysis, restricted to a subset)
+## What to evaluate
 
-You are reviewing an implementation plan. You have the **full plan** above as
-context, so you can reason about cross-task dependencies — but in this call
-you must emit per-task results for **only the following tasks**, identified
-by their `### Task N: Title` heading:
+You are reviewing an entire implementation plan BEFORE any tasks are dispatched
+to implementing subagents. Your job is twofold for EACH task:
 
-- Task 1: do thing
-- Task 2: do other thing
+1. **Critique what's there.** If a task already has a Goal / Acceptance
+   criteria / Non-goals / Context block, evaluate the same way
+   `validate_task_spec` does: structural completeness, AC quality (testable /
+   specific / unambiguous), unstated assumptions. Emit findings.
 
-For each task in the list above, evaluate:
+2. **Generate what's missing.** If a task does NOT have a structured
+   Goal/AC/Non-goals/Context header, propose one. Synthesize the Goal from
+   the task title and any "Files:" / "Steps:" content already present.
+   Synthesize Acceptance criteria from observable outcomes implied by the
+   steps. Suggest Non-goals only when steps imply scope boundaries; leave
+   empty otherwise. Suggest Context only when there's clear environmental
+   info (paths, deps) the implementer needs. Put the proposed markdown
+   verbatim in suggested_header_block.
 
-1. **Structural completeness**: Goal / Acceptance criteria / (optional Non-goals
-   and Context) blocks present and well-formed.
-2. **Acceptance criteria quality**: each AC is testable, specific, and
-   unambiguous; ACs are observable outcomes, not implementation steps.
-3. **Unstated assumptions**: knowledge a fresh implementer would lack.
+3. **Plan-wide review.** In addition to per-task findings, review the plan
+   as a whole: are tasks out of order, are there duplicate titles, is there
+   an architecture/intro section if one would help? Emit those as
+   plan_findings (separate from any task).
 
-If a task is missing the structured header block entirely, synthesize one in
-`suggested_header_block` (Goal + ACs + optional Non-goals/Context) and explain
-your reasoning in `suggested_header_reason`. If the header is already adequate,
-leave both empty.
+For tasks that already have a perfectly fine structured header, leave
+suggested_header_block empty and emit findings only if quality issues exist.
 
 Severity: critical = unimplementable as written; major = implementer would
 still misimplement; minor = nit.
 
+**Quick mode.** Surface only the most-severe findings — at most 3 per scope (3 plan-level findings, and at most 3 findings per task). Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
+
 ## Output
 
-Respond with a JSON object matching the provided schema. The `tasks` array
-must contain exactly one entry per task in the list above, **in the same
-order**, with `task_title` matching the heading text verbatim, including the `Task N:` prefix. Do NOT emit
-results for any task outside the list. Do NOT emit `plan_findings` — those
-are handled in a separate call. Do not include prose outside the JSON.
+Respond with a JSON object matching the provided schema. Do not include
+prose outside the JSON.
 
 The `next_action` field must name the single highest-leverage finding the author should address next — not generic advice like "address the warnings." If no findings warrant immediate attention, say so explicitly: "no blocking findings; proceed to dispatch."

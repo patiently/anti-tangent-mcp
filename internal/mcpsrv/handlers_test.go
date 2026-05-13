@@ -27,10 +27,7 @@ type fakeReviewer struct {
 func (f *fakeReviewer) Name() string { return f.name }
 func (f *fakeReviewer) Review(ctx context.Context, _ providers.Request) (providers.Response, error) {
 	f.Calls++
-	if f.err != nil {
-		return providers.Response{}, f.err
-	}
-	return f.resp, nil
+	return f.resp, f.err
 }
 
 func passResp(model string) providers.Response {
@@ -349,7 +346,7 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 
 	// No session should be created on truncation.
@@ -379,7 +376,7 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 }
@@ -406,9 +403,141 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
+}
+
+func TestValidateTaskSpec_PartialFindingsRecoveredOnTruncation(t *testing.T) {
+	// Populated RawJSON with one complete finding, then truncation in the
+	// middle of a second finding.
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[` +
+				`{"severity":"major","category":"other","criterion":"ac1","evidence":"e1","suggestion":"s1"},` +
+				`{"severity":"minor","category":"other","crit`),
+			Model: "claude-sonnet-4-6",
+		},
+		err: providers.ErrResponseTruncated,
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "warn", env.Verdict)
+	assert.True(t, env.Partial, "envelope should signal partial recovery")
+	assert.Empty(t, env.SessionID, "validate_task_spec should NOT create a session on partial-recovery flows")
+
+	// One recovered finding + one minor truncation marker = 2 total.
+	require.Len(t, env.Findings, 2)
+	// Recovered finding comes first.
+	assert.Equal(t, "ac1", env.Findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	// Truncation marker is minor and references both env var and override.
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[1].Severity)
+	assert.Equal(t, verdict.CategoryOther, env.Findings[1].Category)
+	assert.Contains(t, env.Findings[1].Evidence, "1 complete findings recovered")
+	assert.Contains(t, env.Findings[1].Suggestion, "max_tokens_override")
+	assert.Contains(t, env.Findings[1].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+
+	// next_action steers the caller to re-run with a higher cap.
+	assert.Contains(t, env.NextAction, "max_tokens_override")
+}
+
+// TestRecoverPartialFindings_PreservesReviewerNextActionWithOverrideHint
+// exercises the defensive AC-MUST branch: when the partial parser yields a
+// non-empty NextAction that does NOT mention max_tokens_override, the helper
+// preserves the reviewer's text AND appends the override hint so the
+// envelope still satisfies the "next_action MUST mention max_tokens_override"
+// requirement. ParseResultPartial's array-truncation path strips trailing
+// keys, so this branch is most reliably reached via a strict-parse path
+// (well-formed JSON paired with a truncation signal from the provider);
+// we test the helper directly here for branch coverage independent of how
+// the partial parser happens to behave in any given scenario.
+func TestRecoverPartialFindings_PreservesReviewerNextActionWithOverrideHint(t *testing.T) {
+	// Well-formed JSON that strict-parses, but with a non-empty next_action
+	// that does NOT mention max_tokens_override.
+	raw := []byte(`{"verdict":"warn","findings":[` +
+		`{"severity":"major","category":"other","criterion":"ac1","evidence":"e1","suggestion":"s1"}` +
+		`],"next_action":"Tighten AC1 wording."}`)
+
+	env, ok := recoverPartialFindings("", config.ModelRef{Provider: "anthropic", Model: "claude-sonnet-4-6"}, raw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	require.True(t, ok)
+	assert.True(t, env.Partial)
+	assert.Contains(t, env.NextAction, "Tighten AC1 wording.")
+	assert.Contains(t, env.NextAction, "max_tokens_override")
+}
+
+func TestCheckProgress_PartialFindingsRecoveredOnTruncation(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G",
+	})
+	require.NoError(t, err)
+
+	h.deps.Reviews = providers.Registry{"anthropic": &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[` +
+				`{"severity":"major","category":"other","criterion":"cp1","evidence":"e1","suggestion":"s1"},` +
+				`{"severity":"minor","category":"other","crit`),
+			Model: "claude-sonnet-4-6",
+		},
+		err: providers.ErrResponseTruncated,
+	}}
+
+	_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID: pre.SessionID, WorkingOn: "x",
+	})
+	require.NoError(t, err)
+	assert.True(t, env.Partial)
+	require.Len(t, env.Findings, 2)
+	assert.Equal(t, "cp1", env.Findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[1].Severity)
+	assert.Contains(t, env.Findings[1].Suggestion, "max_tokens_override")
+	assert.Equal(t, pre.SessionID, env.SessionID, "existing session is preserved on partial recovery")
+}
+
+func TestValidateCompletion_PartialFindingsRecoveredOnTruncation(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+
+	h.deps.Reviews = providers.Registry{"anthropic": &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[` +
+				`{"severity":"critical","category":"other","criterion":"vc1","evidence":"e1","suggestion":"s1"},` +
+				`{"severity":"minor","category":"other","crit`),
+			Model: "claude-sonnet-4-6",
+		},
+		err: providers.ErrResponseTruncated,
+	}}
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+	})
+	require.NoError(t, err)
+	assert.True(t, env.Partial)
+	require.Len(t, env.Findings, 2)
+	assert.Equal(t, "vc1", env.Findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[1].Severity)
+	assert.Contains(t, env.Findings[1].Suggestion, "max_tokens_override")
+	assert.Equal(t, pre.SessionID, env.SessionID, "existing session is preserved on partial recovery")
 }
 
 func TestValidatePlan_TruncatedResponseSurfacesWarn(t *testing.T) {
@@ -424,7 +553,7 @@ func TestValidatePlan_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
-	assert.Equal(t, verdict.SeverityMajor, pr.PlanFindings[0].Severity)
+	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[0].Severity)
 	assert.Contains(t, pr.PlanFindings[0].Suggestion, "ANTI_TANGENT_PLAN_MAX_TOKENS")
 }
 
@@ -494,6 +623,34 @@ func TestValidatePlan_MissingPlanText(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestValidatePlan_InvalidModeRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: "# P\n\n### Task 1: X\n", Mode: "fast",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `mode must be "quick" or "thorough"`)
+}
+
+func TestValidatePlan_ModeQuickPlumbedToPrompt(t *testing.T) {
+	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "openai", resp: planPassResp()}}
+	d := newDeps(t, &cap.fakeReviewer)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": cap}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: "# P\n\n### Task 1: X\n", Mode: "quick",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, cap.LastRequest.User, "**Quick mode.**", "quick mode should plumb through to the rendered prompt")
+}
+
 // captureReviewer records the last providers.Request it receives so tests can
 // assert on fields like MaxTokens.
 type captureReviewer struct {
@@ -552,4 +709,396 @@ func TestValidatePlan_UsesConfiguredPlanMaxTokens(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
 	assert.Equal(t, 8888, cap.LastRequest.MaxTokens, "reviewPlanSingle() should use PlanMaxTokens from config")
+}
+
+// reviewerCapture is a fakeReviewer that also records the last providers.Request
+// so override tests can assert on MaxTokens while preserving the resp/err
+// behavior of fakeReviewer (including error-returning truncation paths).
+type reviewerCapture struct {
+	fakeReviewer
+	LastRequest providers.Request
+}
+
+func (c *reviewerCapture) Review(ctx context.Context, req providers.Request) (providers.Response, error) {
+	c.LastRequest = req
+	c.Calls++
+	return c.resp, c.err
+}
+
+// overrideCase is one row of the max_tokens_override table.
+type overrideCase struct {
+	name      string
+	override  int
+	wantSent  int
+	wantClamp bool
+}
+
+// "zero" and "unset" are the same wire-shape (json:omitempty), so they are
+// covered by the single override=0 case per the plan's Step 8 table.
+var overrideCases = []overrideCase{
+	{"unset uses default", 0, 4096, false},
+	{"in-range uses override", 8000, 8000, false},
+	{"over-ceiling clamps", 32000, 16384, true},
+}
+
+// assertClampFinding asserts the findings list does/does not start with a
+// clamp finding (per spec: prepended once per call, at the head).
+func assertClampFinding(t *testing.T, findings []verdict.Finding, want bool) {
+	t.Helper()
+	if !want {
+		for _, f := range findings {
+			assert.NotEqual(t, "max_tokens_override", f.Criterion, "should not have clamp finding")
+		}
+		return
+	}
+	require.NotEmpty(t, findings)
+	assert.Equal(t, "max_tokens_override", findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, findings[0].Severity)
+}
+
+func TestMaxTokensOverride_ValidateTaskSpec(t *testing.T) {
+	for _, tc := range overrideCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+			d := newDeps(t, &fakeReviewer{name: "anthropic"})
+			d.Cfg.PerTaskMaxTokens = 4096
+			d.Cfg.MaxTokensCeiling = 16384
+			d.Reviews = providers.Registry{"anthropic": cap}
+			h := &handlers{deps: d}
+
+			_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G", MaxTokensOverride: tc.override,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSent, cap.LastRequest.MaxTokens)
+			assertClampFinding(t, env.Findings, tc.wantClamp)
+		})
+	}
+}
+
+func TestMaxTokensOverride_CheckProgress(t *testing.T) {
+	for _, tc := range overrideCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+			d := newDeps(t, &fakeReviewer{name: "anthropic"})
+			d.Cfg.PerTaskMaxTokens = 4096
+			d.Cfg.MaxTokensCeiling = 16384
+			d.Reviews = providers.Registry{"anthropic": cap}
+			h := &handlers{deps: d}
+
+			// Seed the session via a default-tokens ValidateTaskSpec call, then
+			// reset LastRequest so CheckProgress's request is the one under test.
+			_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G",
+			})
+			require.NoError(t, err)
+			cap.LastRequest = providers.Request{}
+
+			_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+				SessionID:         pre.SessionID,
+				WorkingOn:         "x",
+				MaxTokensOverride: tc.override,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSent, cap.LastRequest.MaxTokens)
+			assertClampFinding(t, env.Findings, tc.wantClamp)
+		})
+	}
+}
+
+func TestMaxTokensOverride_ValidateCompletion(t *testing.T) {
+	for _, tc := range overrideCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+			d := newDeps(t, &fakeReviewer{name: "anthropic"})
+			d.Cfg.PerTaskMaxTokens = 4096
+			d.Cfg.MaxTokensCeiling = 16384
+			d.Reviews = providers.Registry{"anthropic": cap}
+			h := &handlers{deps: d}
+
+			_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+			})
+			require.NoError(t, err)
+			cap.LastRequest = providers.Request{}
+
+			_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+				SessionID:         pre.SessionID,
+				Summary:           "done",
+				FinalFiles:        []FileArg{{Path: "f.go", Content: "package f\n"}},
+				MaxTokensOverride: tc.override,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSent, cap.LastRequest.MaxTokens)
+			assertClampFinding(t, env.Findings, tc.wantClamp)
+		})
+	}
+}
+
+func TestMaxTokensOverride_ValidatePlan(t *testing.T) {
+	for _, tc := range overrideCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "openai", resp: planPassResp()}}
+			d := newDeps(t, &fakeReviewer{name: "anthropic"})
+			d.Cfg.PlanMaxTokens = 4096
+			d.Cfg.MaxTokensCeiling = 16384
+			d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+			d.Reviews = providers.Registry{"openai": cap}
+			h := &handlers{deps: d}
+
+			_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+				PlanText:          "# Plan\n\n### Task 1: First\n\nbody.\n",
+				MaxTokensOverride: tc.override,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSent, cap.LastRequest.MaxTokens)
+			assertClampFinding(t, pr.PlanFindings, tc.wantClamp)
+		})
+	}
+}
+
+// TestMaxTokensOverride_NegativeRejected covers all four tools: a negative
+// MaxTokensOverride must be rejected at the handler boundary with the exact
+// error string `max_tokens_override must be ≥ 0`, before any provider call.
+func TestMaxTokensOverride_NegativeRejected(t *testing.T) {
+	negCases := []struct {
+		name string
+		run  func(*handlers) error
+	}{
+		{"ValidateTaskSpec", func(h *handlers) error {
+			_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G", MaxTokensOverride: -1,
+			})
+			return err
+		}},
+		{"CheckProgress", func(h *handlers) error {
+			_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G",
+			})
+			require.NoError(t, err)
+			_, _, err = h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+				SessionID: pre.SessionID, WorkingOn: "x", MaxTokensOverride: -5,
+			})
+			return err
+		}},
+		{"ValidateCompletion", func(h *handlers) error {
+			_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+			})
+			require.NoError(t, err)
+			_, _, err = h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+				SessionID:         pre.SessionID,
+				Summary:           "done",
+				FinalFiles:        []FileArg{{Path: "f.go", Content: "package f\n"}},
+				MaxTokensOverride: -1,
+			})
+			return err
+		}},
+		{"ValidatePlan", func(h *handlers) error {
+			_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+				PlanText: "# Plan\n\n### Task 1: T\n", MaxTokensOverride: -1,
+			})
+			return err
+		}},
+	}
+	for _, tc := range negCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+			d := newDeps(t, rv)
+			d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+			d.Reviews["openai"] = &fakeReviewer{name: "openai", resp: planPassResp()}
+			h := &handlers{deps: d}
+
+			err := tc.run(h)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "max_tokens_override must be ≥ 0")
+		})
+	}
+}
+
+// TestMaxTokensOverride_ClampComposesWithTruncation asserts that a call which
+// clamps the override AND triggers truncation surfaces all three: the clamp
+// finding (prepended), the recovered finding, and the truncation marker.
+// The clamp must NOT be suppressed on partial-recovery flows — exactly the
+// caller who raised the cap is the one who most needs to see the ceiling
+// signal alongside the truncation.
+func TestMaxTokensOverride_ClampComposesWithTruncation(t *testing.T) {
+	cap := &reviewerCapture{fakeReviewer: fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[` +
+				`{"severity":"major","category":"other","criterion":"recovered","evidence":"e","suggestion":"s"},` +
+				`{"severity":"minor","category":"other","crit`),
+			Model: "claude-sonnet-4-6",
+		},
+		err: providers.ErrResponseTruncated,
+	}}
+	d := newDeps(t, &fakeReviewer{name: "anthropic"})
+	d.Cfg.PerTaskMaxTokens = 4096
+	d.Cfg.MaxTokensCeiling = 16384
+	d.Reviews = providers.Registry{"anthropic": cap}
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:         "T",
+		Goal:              "G",
+		MaxTokensOverride: 32000, // over ceiling → clamp + truncate
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 16384, cap.LastRequest.MaxTokens, "ceiling used")
+	assert.True(t, env.Partial)
+	require.Len(t, env.Findings, 3, "clamp + recovered finding + truncation marker")
+	// Clamp is prepended first.
+	assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
+	// Recovered finding.
+	assert.Equal(t, "recovered", env.Findings[1].Criterion)
+	// Truncation marker.
+	assert.Equal(t, verdict.SeverityMinor, env.Findings[2].Severity)
+	assert.Contains(t, env.Findings[2].Evidence, "complete findings recovered")
+}
+
+// TestMaxTokensOverride_ClampSurvivesEarlyExits asserts that the
+// max_tokens_override clamp finding is prepended on every envelope-returning
+// early-exit branch, not just the review-result branches. The AC says the
+// clamp fires "regardless of which exit branch the handler takes" — the four
+// branches covered here previously dropped the clamp silently:
+//   - CheckProgress / ValidateCompletion: notFoundEnvelope (expired session)
+//   - CheckProgress / ValidateCompletion: tooLargeEnvelope (payload over cap)
+//   - ValidatePlan: noHeadingsPlanResult (no `### Task N:` headings)
+//   - ValidatePlan: tooLargePlanResult (plan_text over cap)
+func TestMaxTokensOverride_ClampSurvivesEarlyExits(t *testing.T) {
+	t.Run("CheckProgress session_not_found", func(t *testing.T) {
+		// No reviewer call happens on the not-found branch, but we still
+		// need a registered reviewer for newDeps to construct a valid Deps.
+		d := newDeps(t, &fakeReviewer{name: "anthropic"})
+		d.Cfg.PerTaskMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		h := &handlers{deps: d}
+
+		_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+			SessionID:         "missing",
+			WorkingOn:         "x",
+			MaxTokensOverride: 32000, // over ceiling → clamp
+		})
+		require.NoError(t, err)
+		require.Len(t, env.Findings, 2, "clamp + session_not_found finding")
+		// Clamp is prepended first.
+		assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+		assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
+		// Original session-not-found finding is preserved.
+		assert.Equal(t, "session_not_found", string(env.Findings[1].Category))
+	})
+
+	t.Run("ValidateCompletion session_not_found", func(t *testing.T) {
+		d := newDeps(t, &fakeReviewer{name: "anthropic"})
+		d.Cfg.PerTaskMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		h := &handlers{deps: d}
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			SessionID:         "missing",
+			Summary:           "x",
+			TestEvidence:      "go test PASS",
+			MaxTokensOverride: 32000,
+		})
+		require.NoError(t, err)
+		require.Len(t, env.Findings, 2, "clamp + session_not_found finding")
+		assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+		assert.Equal(t, "session_not_found", string(env.Findings[1].Category))
+	})
+
+	t.Run("CheckProgress payload_too_large", func(t *testing.T) {
+		rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+		d := newDeps(t, rv)
+		d.Cfg.PerTaskMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		d.Cfg.MaxPayloadBytes = 10
+		h := &handlers{deps: d}
+
+		// Seed a session via ValidateTaskSpec (default tokens — no clamp).
+		_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+			TaskTitle: "T", Goal: "G",
+		})
+		require.NoError(t, err)
+
+		_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+			SessionID:         pre.SessionID,
+			WorkingOn:         "x",
+			ChangedFiles:      []FileArg{{Path: "f", Content: "this is way too much"}},
+			MaxTokensOverride: 32000,
+		})
+		require.NoError(t, err)
+		require.Len(t, env.Findings, 2, "clamp + payload_too_large finding")
+		assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+		assert.Equal(t, "payload_too_large", string(env.Findings[1].Category))
+	})
+
+	t.Run("ValidateCompletion payload_too_large", func(t *testing.T) {
+		rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
+		d := newDeps(t, rv)
+		d.Cfg.PerTaskMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		d.Cfg.MaxPayloadBytes = 10
+		h := &handlers{deps: d}
+
+		_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+			TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+		})
+		require.NoError(t, err)
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			SessionID:         pre.SessionID,
+			Summary:           "implemented",
+			FinalFiles:        []FileArg{{Path: "f.go", Content: "this is way too much"}},
+			MaxTokensOverride: 32000,
+		})
+		require.NoError(t, err)
+		require.Len(t, env.Findings, 2, "clamp + payload_too_large finding")
+		assert.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+		assert.Equal(t, "payload_too_large", string(env.Findings[1].Category))
+	})
+
+	t.Run("ValidatePlan no headings", func(t *testing.T) {
+		// noHeadingsPlanResult fires before any reviewer call.
+		d := newDeps(t, &fakeReviewer{name: "anthropic"})
+		d.Cfg.PlanMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+		d.Reviews["openai"] = &fakeReviewer{name: "openai"}
+		h := &handlers{deps: d}
+
+		// Plan body without any `### Task N:` heading.
+		_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+			PlanText:          "# Plan\n\nJust some prose, no task headings.\n",
+			MaxTokensOverride: 32000,
+		})
+		require.NoError(t, err)
+		require.Len(t, pr.PlanFindings, 2, "clamp + no-headings finding")
+		assert.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion)
+		assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[0].Severity)
+		// Original no-headings finding is preserved.
+		assert.Equal(t, "structure", pr.PlanFindings[1].Criterion)
+		assert.Contains(t, pr.PlanFindings[1].Evidence, "no `### Task N:` headings")
+	})
+
+	t.Run("ValidatePlan plan_text too large", func(t *testing.T) {
+		d := newDeps(t, &fakeReviewer{name: "anthropic"})
+		d.Cfg.PlanMaxTokens = 4096
+		d.Cfg.MaxTokensCeiling = 16384
+		d.Cfg.MaxPayloadBytes = 10
+		d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+		d.Reviews["openai"] = &fakeReviewer{name: "openai"}
+		h := &handlers{deps: d}
+
+		// Anything over 10 bytes triggers the payload-too-large branch.
+		_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+			PlanText:          "# Plan\n\n### Task 1: First\n\nplenty of body to exceed the cap easily.\n",
+			MaxTokensOverride: 32000,
+		})
+		require.NoError(t, err)
+		require.Len(t, pr.PlanFindings, 2, "clamp + payload_too_large finding")
+		assert.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion)
+		assert.Equal(t, "payload_too_large", string(pr.PlanFindings[1].Category))
+	})
 }

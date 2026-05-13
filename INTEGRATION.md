@@ -130,12 +130,13 @@ ANTI_TANGENT_PLAN_MODEL=openai:gpt-5    # optional; defaults to ANTI_TANGENT_PRE
 
 ### Output budgets and chunking for `validate_plan` (v0.1.4+)
 
-Three optional env vars tune output-token budgets and the chunking behavior of `validate_plan`:
+Four env vars tune output-token budgets, the chunking behavior of `validate_plan`, and the per-call `max_tokens_override` ceiling:
 
 ```dotenv
 ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # default 4096; output cap for validate_task_spec / check_progress / validate_completion; raise if a stateful hook returns a truncation finding
 ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # default 4096; output cap per reviewer call in validate_plan (single-call and per-chunk); raise if plan validation returns a truncation finding
 ANTI_TANGENT_PLAN_TASKS_PER_CHUNK=8      # default 8; chunking threshold + per-chunk task count
+ANTI_TANGENT_MAX_TOKENS_CEILING=16384    # default 16384; max value accepted for per-call max_tokens_override (v0.3.0+)
 ```
 
 Plans with more than `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` tasks are automatically chunked: one Pass-1 reviewer call for cross-cutting `plan_findings` plus `ceil(n/N)` per-task chunks, each with the full plan as context. The merged response is shape-identical to the single-call path — callers see no difference.
@@ -145,7 +146,7 @@ Operator notes:
 - The `PER_TASK` name covers all three task-scoped lifecycle hooks (validate_task_spec, check_progress, validate_completion) — each reviews exactly one task.
 - `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` doubles as both the chunking threshold (`len(tasks) > N` triggers chunking) and the per-chunk size (chunks of N tasks each). Single knob, single mental model: "above N tasks, batch in groups of N."
 - `ANTI_TANGENT_REQUEST_TIMEOUT` (default `180s`) applies **per reviewer call**, not to the whole chunked invocation. A 25-task plan does ~5 sequential calls (worst case `5 × RequestTimeout` wall-clock). MCP clients may have shorter tool-call deadlines; if you hit those, lower `PLAN_TASKS_PER_CHUNK` (more, smaller calls) rather than raising `REQUEST_TIMEOUT`. When a timeout occurs, the error message includes the configured timeout value and the `ANTI_TANGENT_REQUEST_TIMEOUT` env-var name so you can self-diagnose and adjust.
-- All three env vars reject `0`, negative, and non-integer values at startup with a clear error.
+- All four env vars reject `0`, negative, and non-integer values at startup with a clear error.
 
 #### Supported reviewer models
 
@@ -449,6 +450,16 @@ Do NOT have the controller call `validate_completion` itself after the subagent 
 
 The two tools' analyses overlap intentionally: the plan gate catches plan-wide and per-task issues at handoff; the implementer gate catches anything that changed between handoff and dispatch (e.g. another agent edited the plan in the meantime) and produces the session that the rest of the implementer's lifecycle uses.
 
+### 5.6 Per-call tool args (v0.3.0+)
+
+**`max_tokens_override`** (all four tools): optional non-negative int. Replaces the configured `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` clamp finding is appended to the envelope. Negative values are rejected with `max_tokens_override must be ≥ 0`. Use when you know a particular call needs a larger reviewer budget without modifying global config — handy when paired with partial-findings recovery on truncated responses.
+
+**`mode`** (`validate_plan` only): optional `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings — at most 3 per scope (plan-level + each task) — and omit stylistic nits. Useful for small ASAP plans where rounds 5+ surface only polish. Invalid values are rejected with `mode must be "quick" or "thorough"`.
+
+### 5.7 `partial: true` envelope field (v0.3.0+)
+
+When the reviewer's output was truncated at its `max_tokens` cap but at least one complete finding could be recovered, the response envelope (`Result` for per-task tools, `PlanResult` for `validate_plan`) carries `"partial": true` and the synthetic truncation finding is `severity: minor` rather than `major`. The field is `omitempty` — absent in the common (non-truncated) case, so pre-0.3.0 callers continue to work. If partial recovery fails (no complete finding before the cap hit), the envelope falls back to the legacy single `severity: major` truncation finding with no `partial` field set.
+
 ---
 
 ## 6. FAQ / failure modes
@@ -469,7 +480,7 @@ You'll get a finding with `category: session_not_found`. Default TTL is 4h. Re-c
 The MCP returns a finding with `category: payload_too_large`. Default cap is 200 KB across `changed_files`, `final_files`, and `final_diff` (the unified-diff body, when present on `validate_completion`). The finding includes a tool-specific suggestion: for `validate_completion`, pass `final_diff` instead of or in addition to `final_files`; for `check_progress`, reduce `changed_files` or split the call. The `ANTI_TANGENT_MAX_PAYLOAD_BYTES` env var controls the cap.
 
 **A hook returned a finding with `category: other` and `criterion: reviewer_response`.**
-The reviewer's response was cut off at the output token budget. Raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` (for stateful hooks: `validate_task_spec`, `check_progress`, `validate_completion`) or `ANTI_TANGENT_PLAN_MAX_TOKENS` (for `validate_plan`) and retry. The finding's `evidence` reads `reviewer response truncated at max_tokens limit`.
+The reviewer's response was cut off at the output token budget. As of v0.3.0, the server runs truncated responses through a tolerant parser and surfaces any complete findings produced before the cap — look for `"partial": true` on the envelope and a `severity: minor` truncation marker. To get the full response on the next call, either raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` / `ANTI_TANGENT_PLAN_MAX_TOKENS` globally, or pass `max_tokens_override` (clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING`, default 16384) for that single call. Pre-0.3.0 servers would emit a single `severity: major` truncation finding and discard any partial output.
 
 **`validate_task_spec` is asking for ACs my plan doesn't have.**
 That's the spec quality gate working as designed. Either (a) add the missing ACs to the plan and re-validate, or (b) acknowledge the gap in the next `working_on` description so the reviewer knows to expect implementer-discretion choices.

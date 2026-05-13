@@ -132,6 +132,40 @@ func TestLoad_TokenBudgetsAndChunkSize_Overrides(t *testing.T) {
 	assert.Equal(t, 12, cfg.PlanTasksPerChunk)
 }
 
+func TestLoad_MaxTokensCeiling(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    int
+		wantErr bool
+	}{
+		{"default when unset", "", 16384, false},
+		{"valid override", "32768", 32768, false},
+		{"invalid string rejected", "abc", 0, true},
+		{"zero rejected", "0", 0, true},
+		{"negative rejected", "-1", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := Load(func(k string) string {
+				switch k {
+				case "ANTHROPIC_API_KEY":
+					return "k"
+				case "ANTI_TANGENT_MAX_TOKENS_CEILING":
+					return tt.value
+				}
+				return ""
+			})
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.MaxTokensCeiling)
+		})
+	}
+}
+
 func TestLoad_TokenBudgetsAndChunkSize_Reject(t *testing.T) {
 	cases := []map[string]string{
 		// ANTI_TANGENT_PER_TASK_MAX_TOKENS

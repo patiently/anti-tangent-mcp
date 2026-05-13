@@ -38,6 +38,7 @@ type PlanResult struct {
 	PlanFindings []Finding        `json:"plan_findings"`
 	Tasks        []PlanTaskResult `json:"tasks"`
 	NextAction   string           `json:"next_action"`
+	Partial      bool             `json:"partial,omitempty"`
 }
 
 // PlanTaskResult is the per-task analysis carried inside PlanResult.Tasks.

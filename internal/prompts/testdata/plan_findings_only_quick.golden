@@ -16,41 +16,46 @@ When you cite a code symbol's signature, an example sibling key, or an adjacent 
 
 ### Task 1: do thing
 
-### Task 2: do other thing
+**Goal:** thing
+
+**Acceptance criteria:**
+- thing happens
 
 
-## What to evaluate (this call: per-task analysis, restricted to a subset)
+## What to evaluate
 
-You are reviewing an implementation plan. You have the **full plan** above as
-context, so you can reason about cross-task dependencies — but in this call
-you must emit per-task results for **only the following tasks**, identified
-by their `### Task N: Title` heading:
+You are reviewing an entire implementation plan BEFORE any tasks are dispatched.
+Your job in THIS call is **plan-level analysis only** — cross-cutting findings
+that require visibility into the whole plan. Per-task analysis happens in
+separate follow-up calls; do not emit per-task data here.
 
-- Task 1: do thing
-- Task 2: do other thing
+Specifically:
 
-For each task in the list above, evaluate:
-
-1. **Structural completeness**: Goal / Acceptance criteria / (optional Non-goals
-   and Context) blocks present and well-formed.
-2. **Acceptance criteria quality**: each AC is testable, specific, and
-   unambiguous; ACs are observable outcomes, not implementation steps.
-3. **Unstated assumptions**: knowledge a fresh implementer would lack.
-
-If a task is missing the structured header block entirely, synthesize one in
-`suggested_header_block` (Goal + ACs + optional Non-goals/Context) and explain
-your reasoning in `suggested_header_reason`. If the header is already adequate,
-leave both empty.
+1. **plan_verdict** — overall: `pass`, `warn`, or `fail` based on plan-wide
+   issues only (not per-task quality).
+2. **plan_findings** — cross-cutting issues only. Examples:
+   - Two tasks have overlapping or contradictory acceptance criteria.
+   - A task depends on something not produced by any earlier task.
+   - The plan is missing an architecture/intro section that an implementer
+     would need.
+   - Duplicate task titles.
+   - Tasks out of logical order (e.g. tests written before the code they test
+     when the codebase is TDD-strict, or deployment before testing).
+   Do NOT emit findings about individual task quality (vague AC on one task,
+   missing Non-goals on one task, etc.) — those are evaluated separately.
+3. **next_action** — one sentence telling the controller what to do next,
+   given the plan-level verdict.
 
 Severity: critical = unimplementable as written; major = implementer would
 still misimplement; minor = nit.
 
+**Quick mode.** Surface only the most-severe findings — at most 3 plan-level findings. Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
+
 ## Output
 
-Respond with a JSON object matching the provided schema. The `tasks` array
-must contain exactly one entry per task in the list above, **in the same
-order**, with `task_title` matching the heading text verbatim, including the `Task N:` prefix. Do NOT emit
-results for any task outside the list. Do NOT emit `plan_findings` — those
-are handled in a separate call. Do not include prose outside the JSON.
+Respond with a JSON object matching the provided schema. The JSON object must
+contain exactly the top-level keys plan_verdict, plan_findings, and next_action.
+Do not return tasks[] or any task objects. Do not emit per-task findings — they
+belong in the per-task calls. Do not include prose outside the JSON.
 
 The `next_action` field must name the single highest-leverage finding the author should address next — not generic advice like "address the warnings." If no findings warrant immediate attention, say so explicitly: "no blocking findings; proceed to dispatch."
