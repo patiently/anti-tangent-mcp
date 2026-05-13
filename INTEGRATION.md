@@ -6,11 +6,30 @@ This document has three audiences:
 
 - **Plan authors** — get a recommended task format that maps directly to `validate_task_spec` inputs (one-time read while drafting).
 - **Controllers** (orchestrators that dispatch implementing subagents — superpowers' `subagent-driven-development`, hone-ai's equivalent, or a hand-rolled loop) — get a **required plan-handoff gate** plus a paste-in dispatch clause to thread the protocol into each subagent prompt.
-- **Implementing subagents** — get a paste-in lifecycle clause that mandates pre + post calls, recommends mid calls, and tells them how to handle findings.
+- **Implementing subagents** — get a paste-in lifecycle clause that mandates pre + post calls, treats mid calls as optional (call only when you suspect drift), and tells them how to handle findings.
 
 The integration is **system-agnostic**: it works with superpowers, hone-ai, vanilla Claude Code with a project-level `CLAUDE.md`, Cursor, or any harness that supports MCP servers. It ships as a single markdown document; you paste the relevant chunks where they need to go.
 
 > **When does anti-tangent-mcp earn its keep?** Its value compounds when (a) tasks are specced before being implemented, (b) the implementer is an LLM that can drift, and (c) the implementer LLM differs from the reviewer LLM. Without all three, anti-tangent is just extra latency.
+
+---
+
+## Scope and limits
+
+**What `anti-tangent-mcp` is good at.** Plan-internal consistency: contradictions between ACs, missing observable assertions, scope creep relative to non-goals, structural completeness of task headers, hedge language in acceptance criteria.
+
+**What it structurally cannot catch.** The reviewer reasons over the plan text and submitted evidence — *not* the codebase. It will not detect:
+
+- Field/symbol names that don't exist in the codebase.
+- Function signatures or insertion points that don't exist.
+- Repo-wide invariants encoded elsewhere (e.g. a constant containing characters another module's validator rejects).
+- Existing conventions in adjacent code.
+- CI/test policy declared in `CLAUDE.md` / `AGENTS.md`.
+- Type-system facts (required fields with no default).
+
+**Pair with a codebase-aware review for any plan that lands in real code.** A text-only reviewer paired with a codebase-aware pass catches both classes of bugs; either alone has a known blind spot.
+
+When the reviewer encounters a plan or task-spec statement about codebase facts it cannot verify text-only, as of v0.3.1 it flags an `unverifiable_codebase_claim` finding rather than silently passing. These are explicitly *not failures* — they're a checklist for the human or a codebase-aware follow-up review. A plan that converges to `pass` with several `unverifiable_codebase_claim` findings is still implementable; treat the findings as "things to grep before dispatching."
 
 ---
 
@@ -253,12 +272,18 @@ If you're an implementing subagent (or you're writing a system prompt for one), 
 | Phase | Tool | Required? | When to call |
 |---|---|---|---|
 | Start | `validate_task_spec` | **Yes** | Once, before writing any code |
-| During | `check_progress` | Recommended | After each meaningful chunk; at any moment of uncertainty |
+| During | `check_progress` | Optional | When you suspect drift mid-task; otherwise skip |
 | End | `validate_completion` | **Yes** | Before reporting DONE |
 
 One task = one session = one subagent. The session_id returned by `validate_task_spec` lives in the implementer's context for the lifetime of the task; it is not handed off to anyone else.
 
 (Note: the controller may have separately called `validate_task_spec` against the same task at the plan-handoff gate — see §5.1. That created a different session that's already gone. The implementer always creates its own fresh session at task start.)
+
+#### `check_progress` per-tool note
+
+**Status:** OPTIONAL / advisory (was RECOMMENDED prior to v0.3.1).
+
+Field data from execution-phase usage shows `check_progress` consistently produces low-signal findings — mid-implementation context is inherently ambiguous (tests not yet written, function not yet finished, assertion not yet reached). The fast-model default magnifies the issue. Call it when *you* sense drift mid-task; do not treat it as a mandatory gate. The strong-model `validate_completion` post-impl call is far higher signal for a typical task.
 
 ### 4.2 The implementer-prompt clause (paste this into every dispatch)
 
@@ -276,13 +301,14 @@ returned `session_id` — you'll thread it through subsequent calls.
   to proceed, stop and ask the controller for clarification rather than
   guessing.
 
-**2. During work (RECOMMENDED).** After each meaningful change (a new
-file, a non-trivial logic block, finishing one acceptance criterion),
-call `check_progress` with: the session_id, a one-sentence `working_on`
-summary, and the changed files. Address findings before continuing.
+**2. During work (OPTIONAL).** Call `check_progress` ONLY if you suspect
+you're drifting mid-task. Per the 0.3.1 protocol revision this call is
+advisory — most tasks will skip it. When you do call, pass: the
+session_id, a one-sentence `working_on` summary, and the changed files.
 
 **3. Before reporting DONE (REQUIRED).** Call `validate_completion` with
 the session_id, your summary, the final files, and any test evidence.
+**Copy the `summary_block` field from the response verbatim into your DONE report** — it carries the full envelope formatted for paste; you do not need to re-extract JSON fields.
 If the verdict is `fail` or contains `critical`/`major` findings, do
 not report DONE — fix the findings and re-validate.
 
@@ -294,6 +320,20 @@ not report DONE — fix the findings and re-validate.
 - non_goals:            <from "Non-goals:" bullets if present>
 - context:              <from "Context:" if present>
 ```
+
+### Lightweight protocol mode (v0.3.1+)
+
+For trivial tasks — doc-only edits, single-file mechanical relocations, dependency bumps — the full dispatch clause is overhead-heavy (~50 lines of boilerplate for ~15 lines of actual work). Controllers may use a **lightweight clause** for these tasks:
+
+- **Skip** `validate_task_spec` (the spec is fully prescriptive; no design choices for the reviewer to shape).
+- **Skip** `check_progress` (already optional in full mode).
+- **Keep** `validate_completion` as a sanity gate before reporting DONE. The handler accepts an empty `session_id` when at least one of `final_files` / `final_diff` / `test_evidence` is non-empty.
+
+Use lightweight mode when ALL of: (a) the task touches ≤ 2 files; (b) the task is mechanical (no new logic, no test-design choices); (c) the spec includes the literal text or diff to write.
+
+Use the full protocol for: any task that produces new production logic, any task with test-design choices, any task whose ACs require observable invariants.
+
+A reference lightweight dispatch clause is at `examples/lightweight-dispatch.md`.
 
 ### 4.3 How to address findings
 
