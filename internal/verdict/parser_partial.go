@@ -75,6 +75,7 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 	var pr PlanResult
 	if err := json.Unmarshal(trimmed, &pr); err == nil {
 		applyPlanSeverityFloor(&pr)
+		ApplyPlanQualitySanity(&pr)
 		return pr, true
 	}
 
@@ -86,6 +87,7 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 		return PlanResult{}, false
 	}
 	applyPlanSeverityFloor(&pr)
+	ApplyPlanQualitySanity(&pr)
 	pr.Partial = true
 	return pr, true
 }

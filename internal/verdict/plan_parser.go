@@ -81,6 +81,7 @@ func validateFinding(f *Finding, where string) error {
 	return nil
 }
 
+// Rules apply in order; the first matching rule wins and later rules are not evaluated.
 // ApplyPlanQualitySanity enforces the plan_quality contract:
 //
 //   - any critical finding forces "rough" regardless of what the reviewer emitted

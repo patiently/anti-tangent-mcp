@@ -384,3 +384,26 @@ func TestParseTasksOnly_RejectsInvalid(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestParsePlanResultPartial_AppliesPlanQualitySanity(t *testing.T) {
+	// Truncated reviewer output with a critical finding — partial parser
+	// must apply ApplyPlanQualitySanity for parity with strict ParsePlan,
+	// flooring plan_quality to "rough" even if the truncated payload
+	// claimed otherwise.
+	raw := []byte(`{
+		"plan_verdict": "warn",
+		"plan_findings": [{
+			"severity":   "critical",
+			"category":   "missing_acceptance_criterion",
+			"criterion":  "Task 1 AC",
+			"evidence":   "no acceptance criteria listed",
+			"suggestion": "add ACs"
+		}],
+		"tasks": [],
+		"next_action": "Address findings.",
+		"plan_quality": "rigorous"`) // <-- intentionally truncated, no closing }
+	pr, _ := ParsePlanResultPartial(raw)
+	if got, want := pr.PlanQuality, PlanQualityRough; got != want {
+		t.Errorf("PlanQuality = %q, want %q (critical finding should override even in partial recovery)", got, want)
+	}
+}
