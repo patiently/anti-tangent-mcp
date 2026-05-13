@@ -30,7 +30,20 @@ const (
 	CategoryQuality        Category = "quality"
 	CategorySessionMissing Category = "session_not_found"
 	CategoryTooLarge       Category = "payload_too_large"
-	CategoryOther          Category = "other"
+	// CategoryUnverifiableCodebaseClaim is emitted by the reviewer when a
+	// plan or task-spec statement asserts a codebase fact (field name,
+	// signature, file existence, repo convention) that cannot be verified
+	// from text alone. Parser-side severity floor (see Parse) forces these
+	// findings to SeverityMinor — the reviewer can't know if the claim is
+	// wrong, only that it can't check.
+	CategoryUnverifiableCodebaseClaim Category = "unverifiable_codebase_claim"
+	// CategoryMalformedEvidence is server-only. It is emitted exclusively
+	// by the validate_completion evidence-shape guard, which constructs
+	// the envelope directly without round-tripping through Parse(). It is
+	// intentionally NOT included in validCategory and NOT included in any
+	// JSON schema, so a reviewer cannot emit it.
+	CategoryMalformedEvidence Category = "malformed_evidence"
+	CategoryOther             Category = "other"
 )
 
 type Finding struct {

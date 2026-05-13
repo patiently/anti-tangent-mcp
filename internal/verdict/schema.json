@@ -27,6 +27,7 @@
               "quality",
               "session_not_found",
               "payload_too_large",
+              "unverifiable_codebase_claim",
               "other"
             ]
           },

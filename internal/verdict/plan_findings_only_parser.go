@@ -33,8 +33,8 @@ func ParsePlanFindingsOnly(raw []byte) (PlanFindingsOnly, error) {
 	if strings.TrimSpace(r.NextAction) == "" {
 		return PlanFindingsOnly{}, fmt.Errorf("plan_findings_only: next_action must be non-empty")
 	}
-	for i, f := range r.PlanFindings {
-		if err := validateFinding(f, fmt.Sprintf("plan_findings[%d]", i)); err != nil {
+	for i := range r.PlanFindings {
+		if err := validateFinding(&r.PlanFindings[i], fmt.Sprintf("plan_findings[%d]", i)); err != nil {
 			return PlanFindingsOnly{}, err
 		}
 	}
