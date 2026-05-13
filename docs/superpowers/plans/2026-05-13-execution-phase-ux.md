@@ -275,7 +275,7 @@ Refs #12."
 **Acceptance criteria:**
 - `internal/verdict/verdict.go` exports `CategoryUnverifiableCodebaseClaim` and `CategoryMalformedEvidence` constants.
 - `internal/verdict/parser.go`'s `validCategory` recognizes both new constants.
-- All four JSON schemas update their `category` enum lists per the spec's "Schema scope" rules: `schema.json` adds both; `plan_schema.json`, `plan_findings_only_schema.json`, `tasks_only_schema.json` add `unverifiable_codebase_claim` only.
+- JSON schemas update per the spec's strict scoping: `schema.json` and the three plan-shape schemas add `unverifiable_codebase_claim` to their `category` enums. **`malformed_evidence` is NOT added to any JSON schema and is NOT added to `validCategory`** — the constant exists in `verdict.go` purely for server-side construction (the `validate_completion` guard builds the envelope directly; it never passes through `Parse()`). This prevents reviewers from emitting a server-only category.
 - Parser-side severity floor: when a finding has `category: unverifiable_codebase_claim` and `severity != minor`, the parser silently corrects to `severity: minor` (no error). Applies in `parser.go`, `parser_partial.go`, and `plan_parser.go`.
 - `internal/verdict/parser_test.go` has 1+ new test asserting the severity floor.
 - `go test -race ./internal/verdict/...` is green; `go test -race ./...` is green.
@@ -334,9 +334,10 @@ func TestParse_UnverifiableCodebaseClaim_SeverityFloorToMinor(t *testing.T) {
 	}
 }
 
-func TestParse_MalformedEvidenceCategory_Accepted(t *testing.T) {
-	// malformed_evidence is emitted by the server-side guard, but the
-	// parser must accept it (no severity floor; can be major).
+func TestParse_MalformedEvidenceCategory_RejectedFromReviewerOutput(t *testing.T) {
+	// malformed_evidence is emitted ONLY by the server-side validate_completion
+	// guard, never by the reviewer. If a reviewer somehow emits it, the
+	// parser must reject it as an invalid category.
 	raw := []byte(`{
 		"verdict": "fail",
 		"findings": [{
@@ -348,15 +349,12 @@ func TestParse_MalformedEvidenceCategory_Accepted(t *testing.T) {
 		}],
 		"next_action": "Re-submit with complete evidence."
 	}`)
-	r, err := Parse(raw)
-	if err != nil {
-		t.Fatalf("Parse returned error: %v", err)
+	_, err := Parse(raw)
+	if err == nil {
+		t.Fatalf("Parse should reject reviewer-emitted malformed_evidence (server-only category)")
 	}
-	if got, want := r.Findings[0].Category, CategoryMalformedEvidence; got != want {
-		t.Errorf("category = %q, want %q", got, want)
-	}
-	if got, want := r.Findings[0].Severity, SeverityMajor; got != want {
-		t.Errorf("severity = %q, want %q (no floor on this category)", got, want)
+	if !strings.Contains(err.Error(), "category") {
+		t.Errorf("error should mention invalid category; got %v", err)
 	}
 }
 ```
@@ -385,7 +383,9 @@ const (
 )
 ```
 
-- [ ] **Step 4: Update `validCategory` in `parser.go` to recognize both new constants**
+- [ ] **Step 4: Update `validCategory` in `parser.go` to recognize `unverifiable_codebase_claim` ONLY (NOT `malformed_evidence`)**
+
+`malformed_evidence` is server-only — emitted by the `validate_completion` evidence-shape guard which builds envelopes directly (never round-trips through `Parse()`). The reviewer must not be able to emit it; the parser rejects it.
 
 In `internal/verdict/parser.go`, replace the existing `validCategory` function with:
 
@@ -395,12 +395,14 @@ func validCategory(c Category) bool {
 	case CategoryMissingAC, CategoryScopeDrift, CategoryAmbiguousSpec,
 		CategoryUnaddressed, CategoryQuality, CategorySessionMissing,
 		CategoryTooLarge, CategoryUnverifiableCodebaseClaim,
-		CategoryMalformedEvidence, CategoryOther:
+		CategoryOther:
 		return true
 	}
 	return false
 }
 ```
+
+Note: `CategoryMalformedEvidence` is intentionally NOT in `validCategory`. The constant is defined in `verdict.go` so server-side code in `internal/mcpsrv/handlers.go` (the evidence-shape guard) can use it when constructing rejection envelopes directly, without going through the parser.
 
 - [ ] **Step 5: Add the severity floor in `parser.go`**
 
@@ -511,7 +513,7 @@ for i := range r.Findings {
 
 …and analogously for `pr.PlanFindings` and each `pr.Tasks[i].Findings`.
 
-- [ ] **Step 9: Update `internal/verdict/schema.json` enum**
+- [ ] **Step 9: Update `internal/verdict/schema.json` enum (add `unverifiable_codebase_claim` ONLY, NOT `malformed_evidence`)**
 
 Open `internal/verdict/schema.json`. Locate the `category` enum array (lines roughly 19-28). Replace it with:
 
@@ -525,10 +527,11 @@ Open `internal/verdict/schema.json`. Locate the `category` enum array (lines rou
               "session_not_found",
               "payload_too_large",
               "unverifiable_codebase_claim",
-              "malformed_evidence",
               "other"
             ]
 ```
+
+(`malformed_evidence` is intentionally absent — the schema constrains reviewer-emitted JSON, and reviewers never emit this category.)
 
 - [ ] **Step 10: Update `internal/verdict/plan_schema.json` enum (unverifiable_codebase_claim ONLY, no malformed_evidence)**
 
@@ -614,9 +617,12 @@ Refs #12."
 **Files:**
 - Modify: `internal/verdict/plan.go`
 - Modify: `internal/verdict/plan_parser.go`
+- Modify: `internal/verdict/plan_findings_only_parser.go` (parse + validate `PlanQuality` for chunked Pass 1)
 - Modify: `internal/verdict/plan_schema.json`
 - Modify: `internal/verdict/plan_findings_only_schema.json`
 - Modify: `internal/verdict/plan_parser_test.go`
+- Modify: `internal/mcpsrv/handlers.go` (thread `pf.PlanQuality` into the chunked-assembled `PlanResult` in `reviewPlanChunked`)
+- Modify: `internal/mcpsrv/handlers_plan_test.go` (chunked-path plan_quality threading test)
 
 - [ ] **Step 1: Write the failing parser sanity-check tests**
 
@@ -770,10 +776,10 @@ type PlanFindingsOnly struct {
 
 - [ ] **Step 4: Add a helper for the sanity check + fallback in `plan_parser.go`**
 
-In `internal/verdict/plan_parser.go`, add this helper (recommended location: near the bottom, after `validateFinding`):
+In `internal/verdict/plan_parser.go`, add this helper (recommended location: near the bottom, after `validateFinding`). **Exported** — `handlers.go`'s `planEnvelopeResult` calls it from a different package in Task 5:
 
 ```go
-// applyPlanQualitySanity enforces the plan_quality contract:
+// ApplyPlanQualitySanity enforces the plan_quality contract:
 //
 //   - any critical finding forces "rough" regardless of what the reviewer emitted
 //   - fail verdict forces "rough"
@@ -783,7 +789,7 @@ In `internal/verdict/plan_parser.go`, add this helper (recommended location: nea
 // This is defensive: the JSON schema requires plan_quality on the happy
 // path, but raw-response drift (parse miss, prompt drift, missing field)
 // must not produce empty output.
-func applyPlanQualitySanity(pr *PlanResult) {
+func ApplyPlanQualitySanity(pr *PlanResult) {
 	// 1. fail verdict floors to rough.
 	if pr.PlanVerdict == VerdictFail {
 		pr.PlanQuality = PlanQualityRough
@@ -837,7 +843,7 @@ In `internal/verdict/plan_parser.go`, at the end of `ParsePlan` (right before th
 
 ```go
 	// ... existing validation loop ...
-	applyPlanQualitySanity(&r)
+	ApplyPlanQualitySanity(&r)
 	return r, nil
 ```
 
@@ -879,17 +885,107 @@ Expected: `0` — chunked Pass 2+ never emits `plan_quality`.
 Run: `go test -race ./internal/verdict/...`
 Expected: PASS — all existing tests still pass, new sanity-check tests pass.
 
-- [ ] **Step 11: Run the full project test suite to verify no cross-package regressions**
+- [ ] **Step 11: Update `ParsePlanFindingsOnly` to parse + validate `PlanQuality`**
+
+Open `internal/verdict/plan_findings_only_parser.go`. Locate `ParsePlanFindingsOnly`. Add the same enum validation and fallback that `ParsePlan` does, scoped to the `PlanFindingsOnly` shape. After the existing per-finding validation loop, add:
+
+```go
+	// Validate plan_quality enum (defensive — reviewer should emit; we
+	// tolerate omission/invalid and let the assembling caller in
+	// reviewPlanChunked apply the verdict-based fallback via the shared
+	// sanity helper).
+	switch r.PlanQuality {
+	case PlanQualityRough, PlanQualityActionable, PlanQualityRigorous, "":
+		// OK — empty is tolerated; chunked assembler will apply fallback.
+	default:
+		// Reviewer drift; clear so the assembler applies the fallback.
+		r.PlanQuality = ""
+	}
+```
+
+(This keeps `ParsePlanFindingsOnly` lenient — same defensive policy as `ParsePlan`.)
+
+- [ ] **Step 12: Update `reviewPlanChunked` to thread `pf.PlanQuality` + apply sanity check**
+
+In `internal/mcpsrv/handlers.go`, locate `reviewPlanChunked`. Find the point where it assembles a `PlanResult` from the parsed `PlanFindingsOnly` (search for `pf.PlanVerdict` or similar). The current code likely does something like:
+
+```go
+result := verdict.PlanResult{
+	PlanVerdict:  pf.PlanVerdict,
+	PlanFindings: pf.PlanFindings,
+	NextAction:   pf.NextAction,
+}
+```
+
+Update to:
+
+```go
+result := verdict.PlanResult{
+	PlanVerdict:  pf.PlanVerdict,
+	PlanFindings: pf.PlanFindings,
+	NextAction:   pf.NextAction,
+	PlanQuality:  pf.PlanQuality,
+}
+```
+
+The chunked path does NOT need to call `applyPlanQualitySanity` directly — Task 5's `planEnvelopeResult` change (next task) calls it inside the marshaller so every PlanResult exit path gets it. But verify that ordering: Task 5 Step 7 makes `planEnvelopeResult` apply the sanity check.
+
+- [ ] **Step 13: Add a chunked-path threading test**
+
+Add to `internal/mcpsrv/handlers_plan_test.go`:
+
+```go
+func TestValidatePlan_Chunked_PlanQualityThreadedFromPass1(t *testing.T) {
+	// Use a stub scripted reviewer that returns plan_quality:"actionable"
+	// in Pass 1 and a tasks-only response in Pass 2. The assembled
+	// PlanResult must carry "actionable", not empty/invalid.
+	scripts := []providers.Response{
+		{
+			// Pass 1: plan_findings_only
+			RawJSON: []byte(`{"plan_verdict":"warn","plan_findings":[{"severity":"minor","category":"quality","criterion":"c","evidence":"e","suggestion":"s"}],"next_action":"go","plan_quality":"actionable"}`),
+			Model:   "claude-opus-4-7",
+		},
+		{
+			// Pass 2: tasks_only (single chunk with all tasks)
+			RawJSON: []byte(`{"tasks":[{"task_index":1,"task_title":"Task 1: x","verdict":"warn","findings":[],"suggested_header_block":"","suggested_header_reason":""}]}`),
+			Model:   "claude-opus-4-7",
+		},
+	}
+	rv := newScriptedReviewer("anthropic", scripts)
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "anthropic", Model: "claude-opus-4-7"}
+	d.Cfg.PlanTasksPerChunk = 1
+	h := &handlers{deps: d}
+
+	plan := "# Plan\n\n### Task 1: x\n\nbody.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	if err != nil {
+		t.Fatalf("ValidatePlan: %v", err)
+	}
+	if pr.PlanQuality != verdict.PlanQualityActionable {
+		t.Errorf("plan_quality = %q, want actionable (threaded from Pass 1)", pr.PlanQuality)
+	}
+}
+```
+
+(If `newScriptedReviewer` doesn't exist, look at how existing chunked-path tests script multi-response reviewers and follow that pattern; or define it as a small helper.)
+
+- [ ] **Step 14: Run the full verdict + mcpsrv test suite**
+
+Run: `go test -race ./internal/verdict/... ./internal/mcpsrv/...`
+Expected: PASS.
+
+- [ ] **Step 15: Run the full project test suite to verify no cross-package regressions**
 
 Run: `go test -race ./...`
 Expected: PASS — note: `handlers_plan_test.go` tests that consume `PlanResult` JSON may show the new `plan_quality` field; they should still pass because they assert on specific fields (verdict, findings, etc.) not on full JSON shape.
 
 If any test fails on JSON-equality comparison (full-string match against expected JSON), update the expected JSON to include the new `plan_quality` field.
 
-- [ ] **Step 12: Commit**
+- [ ] **Step 16: Commit**
 
 ```bash
-git add internal/verdict/plan.go internal/verdict/plan_parser.go internal/verdict/plan_schema.json internal/verdict/plan_findings_only_schema.json internal/verdict/plan_parser_test.go
+git add internal/verdict/plan.go internal/verdict/plan_parser.go internal/verdict/plan_findings_only_parser.go internal/verdict/plan_schema.json internal/verdict/plan_findings_only_schema.json internal/verdict/plan_parser_test.go internal/mcpsrv/handlers.go internal/mcpsrv/handlers_plan_test.go
 git commit -m "feat(verdict): plan_quality field with sanity check
 
 PlanResult and PlanFindingsOnly gain a plan_quality field
@@ -1165,10 +1261,11 @@ Refs #12."
 **Goal:** Add `SummaryBlock` fields to `verdict.Result` (for per-task envelopes) and `verdict.PlanResult` (for the plan envelope), implement `formatEnvelopeSummary` and `formatPlanSummary` helpers in a new `internal/mcpsrv/summary.go`, and populate the field INSIDE `envelopeResult` and `planEnvelopeResult` so every exit path — happy paths, partial-recovery paths, legacy-truncation paths, `notFoundEnvelope`, `tooLargeEnvelope`, `noHeadingsPlanResult`, `truncatedPlanResult`, evidence-shape rejection (Task 6) — populates the field automatically.
 
 **Acceptance criteria:**
-- `internal/verdict/verdict.go` exports a `SummaryBlock string` field on `Result` with `json:"summary_block,omitempty"`.
-- `internal/verdict/plan.go` exports a `SummaryBlock string` field on `PlanResult` with `json:"summary_block,omitempty"`.
+- `mcpsrv.Envelope` (in `internal/mcpsrv/handlers.go`) gains a `SummaryBlock string` field with `json:"summary_block,omitempty"`. Per-task tools return Envelopes, not `verdict.Result`, so the field belongs here.
+- `verdict.PlanResult` (in `internal/verdict/plan.go`) gains a `SummaryBlock string` field with `json:"summary_block,omitempty"`. The plan tool returns `PlanResult` directly (via `planEnvelopeResult`), so the field goes on the response type.
+- **`verdict.Result` does NOT gain `SummaryBlock`.** Result is an intermediate parse target for reviewer JSON; it is never the response shape returned to the MCP caller. Adding it there would relax `verdict.Parse` to accept a `summary_block` field from the reviewer (against the schema's `additionalProperties: false`), which is undesired.
 - `internal/mcpsrv/summary.go` exports `formatEnvelopeSummary(Envelope) string` and `formatPlanSummary(PlanResult, modelUsed string, reviewMS int64) string` per the spec's format spec (plain text, deterministic order, 120-char evidence truncation with `…` suffix).
-- `envelopeResult` populates `env.SummaryBlock = formatEnvelopeSummary(env)` before marshaling; `planEnvelopeResult` populates `pr.SummaryBlock = formatPlanSummary(pr, modelUsed, reviewMS)` before marshaling.
+- `envelopeResult` populates `env.SummaryBlock = formatEnvelopeSummary(env)` before marshaling; `planEnvelopeResult` populates `pr.SummaryBlock = formatPlanSummary(pr, modelUsed, reviewMS)` AND calls `verdict.ApplyPlanQualitySanity(&pr)` before marshaling (so synthetic plan envelopes get the same sanity treatment as parsed ones — fixes #2 from the review).
 - `internal/mcpsrv/summary_test.go` has 6+ format-determinism tests with inline expected strings, 1 truncation test, 1 empty-envelope omitempty test.
 - 4+ handler integration tests confirm `summary_block` is populated on the happy path of each tool.
 - 4+ early-return tests confirm `summary_block` is ALSO populated for `notFoundEnvelope`, `tooLargeEnvelope`, `noHeadingsPlanResult`, evidence-shape rejection (the last is verified after Task 6 lands the guard; in this task, write the test against the existing reject envelope shape).
@@ -1181,26 +1278,27 @@ Refs #12."
 **Context:** Spec §3. The wrappers `envelopeResult` (`handlers.go:210`) and `planEnvelopeResult` (`handlers.go:847`) are the choke points where MCP `*CallToolResult` is marshalled. By populating `SummaryBlock` INSIDE these wrappers, every caller (success, partial-recovery, legacy-truncation, every early-return envelope) gets the field automatically — no per-handler wiring. Format: plain text, single-line findings truncated at 120 chars, stable field order, no markdown/ANSI/emoji.
 
 **Files:**
-- Modify: `internal/verdict/verdict.go` (add `SummaryBlock` field to `Result`)
 - Modify: `internal/verdict/plan.go` (add `SummaryBlock` field to `PlanResult`)
+- Modify: `internal/verdict/plan_parser.go` (rename `applyPlanQualitySanity` → exported `ApplyPlanQualitySanity` so handlers can call it from `planEnvelopeResult`; OR keep unexported and add a thin exported wrapper).
 - Create: `internal/mcpsrv/summary.go`
 - Create: `internal/mcpsrv/summary_test.go`
-- Modify: `internal/mcpsrv/handlers.go` (`envelopeResult`, `planEnvelopeResult` populate; nothing else)
+- Modify: `internal/mcpsrv/handlers.go` (add `Envelope.SummaryBlock` field; `envelopeResult` populates summary_block; `planEnvelopeResult` populates summary_block AND applies plan_quality sanity check)
 - Modify: `internal/mcpsrv/handlers_test.go` (new integration tests)
 
-- [ ] **Step 1: Add `SummaryBlock` to `Result`**
+- [ ] **Step 1: Add `SummaryBlock` to `mcpsrv.Envelope`**
 
-In `internal/verdict/verdict.go`, update the `Result` struct:
+In `internal/mcpsrv/handlers.go`, locate the `Envelope` struct (near the top of the file). Add a new field:
 
 ```go
-type Result struct {
-	Verdict      Verdict   `json:"verdict"`
-	Findings     []Finding `json:"findings"`
-	NextAction   string    `json:"next_action"`
-	Partial      bool      `json:"partial,omitempty"`
-	SummaryBlock string    `json:"summary_block,omitempty"`
+type Envelope struct {
+	// ... existing fields ...
+	SummaryBlock string `json:"summary_block,omitempty"`
 }
 ```
+
+Place the new field after the existing optional fields (`Partial`, `SessionExpiresAt`, `SessionTTLRemainingSeconds`, etc.) so JSON output ordering stays predictable.
+
+**Do NOT add `SummaryBlock` to `verdict.Result`.** Result is an intermediate parse target for reviewer JSON. The schema's `additionalProperties: false` plus the Go parser's `DisallowUnknownFields` policy means even a leaked `summary_block` on the reviewer side would error — and we don't want to relax that. The Envelope is the response shape; that's where the field goes.
 
 - [ ] **Step 2: Add `SummaryBlock` to `PlanResult`**
 
@@ -1503,12 +1601,18 @@ func envelopeResult(env Envelope) (*mcp.CallToolResult, Envelope, error) {
 }
 ```
 
-- [ ] **Step 7: Populate `summary_block` inside `planEnvelopeResult`**
+- [ ] **Step 7: Populate `summary_block` AND apply `plan_quality` sanity check inside `planEnvelopeResult`**
 
 In `internal/mcpsrv/handlers.go`, locate `planEnvelopeResult` (around line 847). Update to:
 
 ```go
 func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
+	// Apply plan_quality sanity check on EVERY exit path. Synthetic
+	// PlanResults (noHeadingsPlanResult, tooLargePlanResult,
+	// truncatedPlanResult, evidence-shape rejection, etc.) skip the
+	// parser, so the sanity helper has to run here to fill the field
+	// from the verdict-based default.
+	verdict.ApplyPlanQualitySanity(&pr)
 	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
 	body, err := json.MarshalIndent(struct {
 		verdict.PlanResult
@@ -1524,25 +1628,14 @@ func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp
 }
 ```
 
-- [ ] **Step 8: Check that `Envelope` struct has `SummaryBlock` field**
+This requires `verdict.ApplyPlanQualitySanity` to be exported. In `internal/verdict/plan_parser.go`, rename `applyPlanQualitySanity` → `ApplyPlanQualitySanity`. The function called inside `ParsePlan` (Task 3 Step 5) now also uses the exported name.
 
-In `internal/mcpsrv/handlers.go`, locate the `Envelope` struct definition. If it doesn't already have a `SummaryBlock` field, add it:
-
-```go
-type Envelope struct {
-	// ... existing fields ...
-	SummaryBlock string `json:"summary_block,omitempty"`
-}
-```
-
-(Check the existing struct first — match the order of existing optional fields.)
-
-- [ ] **Step 9: Run the format-determinism tests**
+- [ ] **Step 8: Run the format-determinism tests**
 
 Run: `go test -race ./internal/mcpsrv/ -run "TestFormatEnvelopeSummary|TestFormatPlanSummary" -v`
 Expected: PASS — all 6 tests.
 
-- [ ] **Step 10: Add handler integration tests for the happy path**
+- [ ] **Step 9: Add handler integration tests for the happy path**
 
 Add to `internal/mcpsrv/handlers_test.go`:
 
@@ -1669,32 +1762,37 @@ func TestValidatePlan_NoHeadingsResult_PopulatesSummaryBlock(t *testing.T) {
 }
 ```
 
-- [ ] **Step 11: Run the new integration tests**
+- [ ] **Step 10: Run the new integration tests**
 
 Run: `go test -race ./internal/mcpsrv/ -run "_PopulatesSummaryBlock" -v`
 Expected: all 5 PASS.
 
-- [ ] **Step 12: Run full test suite**
+- [ ] **Step 11: Run full test suite**
 
 Run: `go test -race ./...`
 Expected: PASS. Existing JSON-equality-based handler tests may surface the new `summary_block` field in marshalled output; if any fail, update their expected JSON or weaken to substring assertions.
 
-- [ ] **Step 13: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add internal/verdict/verdict.go internal/verdict/plan.go internal/mcpsrv/summary.go internal/mcpsrv/summary_test.go internal/mcpsrv/handlers.go internal/mcpsrv/handlers_test.go
+git add internal/verdict/plan.go internal/verdict/plan_parser.go internal/mcpsrv/summary.go internal/mcpsrv/summary_test.go internal/mcpsrv/handlers.go internal/mcpsrv/handlers_test.go
 git commit -m "feat(mcpsrv): summary_block field populated inside envelope marshallers
 
-Adds Envelope.SummaryBlock and PlanResult.SummaryBlock (both
-json:'summary_block,omitempty'). New formatEnvelopeSummary and
-formatPlanSummary helpers in summary.go build a plain-text,
-deterministic, paste-ready envelope for implementer DONE reports.
+Adds mcpsrv.Envelope.SummaryBlock and verdict.PlanResult.SummaryBlock
+(both json:'summary_block,omitempty'). verdict.Result intentionally
+does NOT get the field — it's an intermediate parse target, not the
+response shape. New formatEnvelopeSummary and formatPlanSummary
+helpers in summary.go build a plain-text, deterministic, paste-ready
+envelope for implementer DONE reports.
 
 Population happens INSIDE envelopeResult and planEnvelopeResult so
 every exit path (happy, partial-recovery, legacy-truncation,
 notFoundEnvelope, tooLargeEnvelope, noHeadingsPlanResult,
 truncatedPlanResult, eventual evidence-shape rejection) carries the
-field automatically.
+field automatically. planEnvelopeResult also runs the plan_quality
+sanity check via the now-exported verdict.ApplyPlanQualitySanity, so
+synthetic PlanResults (which skip ParsePlan) get the same enum
+sanitization as parsed ones.
 
 Refs #12."
 ```
@@ -2095,72 +2193,80 @@ func malformedEvidenceEnvelope(sessionID, reason, modelUsed string) Envelope {
 
 - [ ] **Step 4: Wire the guard + cache + lightweight-mode allowance into `ValidateCompletion`**
 
-In `internal/mcpsrv/handlers.go`, locate the `ValidateCompletion` handler (around line 632). The current top of the handler looks like:
+In `internal/mcpsrv/handlers.go`, locate the `ValidateCompletion` handler (around line 632). The current top includes (in order): (1) `args.SessionID == ""` validation, (2) `args.Summary == ""` validation, (3) `effectiveMaxTokens` computation with clamp finding, (4) `totalCompletionBytes` payload-size check returning `tooLargeEnvelope` with clamp, (5) session lookup returning `notFoundEnvelope` with clamp, (6) prompt rendering, (7) reviewer call. Preserve all of these — the rewrite reorders for lightweight mode but does not drop any.
+
+**Explicit ordering for the rewritten handler** (top of `ValidateCompletion`):
 
 ```go
 func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolRequest, args ValidateCompletionArgs) (*mcp.CallToolResult, Envelope, error) {
-	if args.SessionID == "" || args.Summary == "" {
-		return nil, Envelope{}, errors.New("session_id and summary are required")
-	}
-	...
-	sess, ok := h.deps.Sessions.Get(args.SessionID)
-	...
-}
-```
-
-Replace the top of the handler with:
-
-```go
-func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolRequest, args ValidateCompletionArgs) (*mcp.CallToolResult, Envelope, error) {
+	// 1. Summary is always required.
 	if args.Summary == "" {
 		return nil, Envelope{}, errors.New("summary is required")
 	}
 
-	// At least one of final_files, final_diff, test_evidence must be non-empty (unchanged from 0.2.0).
+	// 2. At least one of final_files, final_diff, test_evidence must be
+	//    non-empty (unchanged from 0.2.0). If session_id is also empty,
+	//    this error fires before lightweight mode is even considered —
+	//    a "completely empty" call cannot proceed.
 	if len(args.FinalFiles) == 0 && args.FinalDiff == "" && args.TestEvidence == "" {
 		return nil, Envelope{}, errors.New("at least one of final_files, final_diff, or test_evidence must be non-empty")
 	}
 
-	// Lightweight protocol mode: empty session_id is accepted when at least
-	// one piece of evidence is present (validated above). Synthesize a
-	// minimal spec for the reviewer and skip the session lookup.
+	// 3. Lightweight mode marker. Empty session_id + evidence present
+	//    → lightweight; reviewer is called with a synthesized spec.
 	lightweight := args.SessionID == ""
-	if !lightweight {
-		// Existing per-session flow: session_id is required.
-		// (Original handler required both session_id and summary; we kept summary above.)
+
+	// 4. Compute effective max_tokens + clamp finding (preserves the
+	//    0.3.0 max_tokens_override flow). Clamp is applied to all
+	//    early-return envelopes via prependClamp below.
+	maxTokens, clampFinding, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PostModel, h.deps.Cfg.PostMaxTokens)
+	if err != nil {
+		return nil, Envelope{}, err
 	}
 
-	// Evidence-shape guard with cache.
+	// 5. Payload cap (preserves the 0.2.0 MaxPayloadBytes check). On
+	//    overflow, return tooLargeEnvelope. In lightweight mode, sess is
+	//    nil so we pass an empty session ID into the envelope.
+	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
+		sessID := ""
+		if !lightweight {
+			sessID = args.SessionID
+		}
+		return envelopeResult(prependClamp(
+			tooLargeEnvelope(sessID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
+				"Send a unified diff via final_diff, or split the call into smaller chunks."),
+			clampFinding,
+		))
+	}
+
+	// 6. Evidence-shape guard with rejection cache. Runs BEFORE session
+	//    lookup so a malformed lightweight-mode submission is rejected
+	//    cleanly, without an unrelated session error.
 	cacheKey := evidenceCacheKey(args)
 	if cachedEnv, ok := lookupCachedRejection(cacheKey); ok {
-		return envelopeResult(cachedEnv)
+		return envelopeResult(prependClamp(cachedEnv, clampFinding))
 	}
 	if reason := checkEvidenceShape(args); reason != "" {
 		rejection := malformedEvidenceEnvelope(args.SessionID, reason, h.deps.Cfg.PostModel.String())
 		storeRejection(cacheKey, rejection)
-		return envelopeResult(rejection)
+		return envelopeResult(prependClamp(rejection, clampFinding))
 	}
 
-	// Session lookup (lightweight mode skips this).
+	// 7. Session lookup (lightweight mode skips this).
 	var sess *session.Session
 	if !lightweight {
 		var ok bool
 		sess, ok = h.deps.Sessions.Get(args.SessionID)
 		if !ok {
-			return envelopeResult(prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel), verdict.Finding{}))
+			return envelopeResult(prependClamp(
+				notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel),
+				clampFinding,
+			))
 		}
 	}
 
-	// ... existing body continues from here. Replace direct uses of
-	// `sess` with conditional handling: lightweight mode uses a
-	// synthesized spec instead of sess.Spec.
-	...
-}
-```
-
-Then, in the body of the handler, replace the construction of the reviewer input — wherever it does `sess.Spec` — with a conditional:
-
-```go
+	// 8. Determine the spec the reviewer sees: lightweight mode
+	//    synthesizes; per-session mode reads from the session.
 	var spec session.TaskSpec
 	if lightweight {
 		spec = session.TaskSpec{
@@ -2173,13 +2279,49 @@ Then, in the body of the handler, replace the construction of the reviewer input
 	} else {
 		spec = sess.Spec
 	}
+
+	// ... existing body continues from here, using `spec`, `maxTokens`,
+	// and `clampFinding`. Replace any reference to `sess.Spec` with
+	// `spec`; gate any reference to `sess.ID`, `sess.LastAccessed`,
+	// `sess.PreFindings` on `!lightweight`. The reviewer call below uses
+	// `maxTokens`. The final envelope construction uses `sessID = ""` in
+	// lightweight mode and `sess.ID` otherwise. prependClamp wraps the
+	// final envelope just as it does in the existing code path.
+}
 ```
 
-And use `spec` in place of `sess.Spec` for the rest of the handler.
+(`PostMaxTokens` and `effectiveMaxTokens` already exist in the 0.3.0 codebase — this rewrite preserves their use unchanged.)
 
-For the session-id field on the returned envelope: in lightweight mode, return an envelope with `SessionID: ""`. Check existing return paths and conditionally set the session_id only when `!lightweight`.
+In the body of the handler that comes after the rewrite shown above, find every place where `sess.Spec` / `sess.ID` / `sess.LastAccessed` / `sess.PreFindings` is referenced, and guard each with the lightweight check:
 
-(You will need to carefully thread this through the existing handler body — look for every place `sess.Spec`, `sess.ID`, `sess.LastAccessed`, and `sess.PreFindings` are used and add appropriate `if !lightweight` guards.)
+- Replace `sess.Spec` → `spec` (defined above).
+- Replace `sess.ID` (used in the final Envelope construction) → conditional: `sessID := ""; if !lightweight { sessID = sess.ID }`.
+- Skip any session.Store update calls (e.g. `s.UpdateLastAccessed`) when `lightweight` is true.
+- Skip the `sess.PreFindings` lookup when `lightweight` is true (treat as empty).
+
+The final envelope construction (after the reviewer call) becomes:
+
+```go
+	sessID := ""
+	if !lightweight {
+		sessID = sess.ID
+	}
+	env := Envelope{
+		SessionID:                  sessID,
+		Verdict:                    string(result.Verdict),
+		Findings:                   result.Findings,
+		NextAction:                 result.NextAction,
+		ModelUsed:                  resp.Model,
+		ReviewMS:                   ms,
+		Partial:                    result.Partial,
+		SessionExpiresAt:           sessExpiresAt,           // nil in lightweight mode
+		SessionTTLRemainingSeconds: sessTTL,                  // nil in lightweight mode
+	}
+	env = prependClamp(env, clampFinding)
+	return envelopeResult(env)
+```
+
+(Initialize `sessExpiresAt` and `sessTTL` as `nil` at the top of the handler, then populate them only when `!lightweight` after the session lookup.)
 
 - [ ] **Step 5: Run the new tests**
 
@@ -2229,7 +2371,7 @@ Refs #12."
 **Goal:** Add the `## [0.3.1] - 2026-05-13` CHANGELOG block, add a README paragraph pointing at the new lightweight-mode capability, add an INTEGRATION.md troubleshooting entry for the new `malformed_evidence` category, and add the `plan_quality` description to the `validate_plan` per-tool section.
 
 **Acceptance criteria:**
-- `CHANGELOG.md` has a new `## [0.3.1] - 2026-05-13` block above the `## [0.3.0]` entry, with `### Added`, `### Changed`, and `### Documentation` subsections (omit empty subsections per Keep a Changelog 1.0.0; the repo's CLAUDE.md previously required all 6 — the 0.3.0 PR's CodeRabbit found this; align with repo convention by including `### Removed`, `### Deprecated`, `### Security` with `_None._` placeholders).
+- `CHANGELOG.md` has a new `## [0.3.1] - 2026-05-13` block above the `## [0.3.0]` entry. Per repo convention (see `CLAUDE.md` Keep-a-Changelog discipline; established by the 0.3.0 PR's CodeRabbit feedback), the entry includes ALL SIX subsections — `### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Deprecated`, `### Security` — using `_None._` placeholders where empty. Plus a `### Documentation` subsection for the INTEGRATION.md scope-and-limits + lightweight-mode docs.
 - `README.md` mentions lightweight protocol mode and links to `examples/lightweight-dispatch.md`.
 - `INTEGRATION.md` has a troubleshooting paragraph for `malformed_evidence` near the existing `payload_too_large` troubleshooting block.
 - `INTEGRATION.md`'s `validate_plan` per-tool section has a paragraph describing the new `plan_quality` field.
@@ -2371,10 +2513,10 @@ Expected: PASS — local release artifacts build successfully (validates the bin
 
 - §1 Documentation (scope-and-limits, check_progress demote, lightweight mode): Task 1 ✓
 - §2 evidence-shape guard: Task 6 ✓
-- §3 summary_block: Task 5 ✓
-- §4 unverifiable_codebase_claim: Task 2 (schema + parser severity floor) + Task 4 (prompt edits in 4 templates) ✓
-- §5 plan_quality: Task 3 (schema + parser sanity check) + Task 4 (prompt edits in 2 templates) ✓
-- §6 malformed_evidence: Task 2 (schema add to schema.json only) + Task 6 (use site) ✓
+- §3 summary_block: Task 5 (Envelope + PlanResult only; not verdict.Result) ✓
+- §4 unverifiable_codebase_claim: Task 2 (constant + schema + parser severity floor + validCategory) + Task 4 (prompt edits in 4 templates) ✓
+- §5 plan_quality: Task 3 (schema + ParsePlan + ParsePlanFindingsOnly + chunked-path threading + exported sanity helper) + Task 4 (prompt edits in 2 templates) + Task 5 (sanity helper called from planEnvelopeResult so synthetic results get sanitized) ✓
+- §6 malformed_evidence: Task 2 (constant in verdict.go only; NOT in schema.json or validCategory — server-side only) + Task 6 (use site in the validate_completion guard) ✓
 
 **Type/signature consistency:**
 
