@@ -119,10 +119,10 @@ report DONE — fix the findings and re-validate.
 
 **Detection rules** (conservative — high-confidence flags only):
 
-1. `final_diff` contains a truncation marker. Regex match against case-insensitive `(truncated)`, `[truncated]`, `// ... unchanged`, `<!-- truncated -->`, or `^\s*\.\.\.\s*$` on its own line between hunks.
+1. `final_diff` contains a truncation marker. Case-insensitive substring match anywhere in the diff body against any of: `(truncated)`, `[truncated]`, `// ... unchanged`, `<!-- truncated -->`. PLUS a line-anchored regex `(?m)^\s*\.\.\.\s*$` (a line consisting only of `...` and optional whitespace, surrounded by `\n` or string boundaries). Rule fires on the FIRST match; the rejection finding reports which pattern matched and the byte offset.
 2. `final_diff` starts with `diff --git` but contains zero `@@` hunk headers (header-only stub).
 3. `final_files` entries with empty `Path`.
-4. `final_files` entries with `Content` containing the same truncation markers from rule 1.
+4. `final_files` entries with `Content` matching the same patterns from rule 1.
 
 Rules deliberately do NOT include file-count mismatches, "did the diff capture every file the implementer touched", or short-content heuristics — all would false-positive on legitimate small fixes.
 
@@ -135,7 +135,19 @@ Rules deliberately do NOT include file-count mismatches, "did the diff capture e
 
 **Caching.** In-process cache, keyed by `(session_id, sha256(final_diff || sorted_final_files || test_evidence))`, maps to the rejection envelope. TTL = 5 minutes. If a controller re-submits the identical malformed payload within 5 minutes, return the cached envelope instantly. Cleared on server restart (acceptable — these are short-lived dev-loop artifacts).
 
-**Handler change for lightweight mode.** When `session_id == ""` AND the lightweight-mode payload (at least one of `final_files`/`final_diff`/`test_evidence`) is present, skip the session lookup but still apply the evidence-shape guard. Synthesize a minimal envelope at the end with empty `session_id`. The `validate_completion` reviewer is still called (it doesn't need a session — `Spec` becomes synthesized from `summary` only, with empty AC list). This is the smallest change to support lightweight mode without breaking the per-task lifecycle elsewhere.
+**Handler change for lightweight mode.** When `session_id == ""` AND at least one of `final_files`/`final_diff`/`test_evidence` is non-empty, skip the session lookup (no `notFoundEnvelope`) but still apply the evidence-shape guard. The reviewer IS still called with a synthesized `session.TaskSpec`:
+
+```go
+spec := session.TaskSpec{
+    Title:              "(lightweight task)",
+    Goal:               args.Summary,
+    AcceptanceCriteria: nil, // empty — caller is asserting "just check the evidence is well-formed and the summary matches"
+    NonGoals:           nil,
+    Context:            "",
+}
+```
+
+The reviewer sees the summary as the goal and the submitted evidence as the work — it can still emit `quality` findings, ASCII / em-dash flags, etc., but cannot fail for "AC X not addressed" because there are no ACs. The returned envelope has `session_id: ""` (no session created). This is the smallest change to support lightweight mode without breaking the per-task lifecycle elsewhere. The existing "at least one of final_files/final_diff/test_evidence must be non-empty" rule from 0.2.0 still applies — a completely empty `validate_completion` call still errors. Reject test: empty `session_id` + empty payload → error as today.
 
 **Testing.**
 
