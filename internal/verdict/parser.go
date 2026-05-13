@@ -29,7 +29,8 @@ func Parse(raw []byte) (Result, error) {
 	if r.NextAction == "" {
 		return Result{}, fmt.Errorf("decode result: next_action is required")
 	}
-	for i, f := range r.Findings {
+	for i := range r.Findings {
+		f := r.Findings[i]
 		switch f.Severity {
 		case SeverityCritical, SeverityMajor, SeverityMinor:
 		default:
@@ -38,15 +39,25 @@ func Parse(raw []byte) (Result, error) {
 		if !validCategory(f.Category) {
 			return Result{}, fmt.Errorf("finding[%d]: invalid category %q", i, f.Category)
 		}
+		// Severity floor: unverifiable_codebase_claim findings are always
+		// minor — the reviewer can't know if the claim is wrong, only that
+		// it can't check.
+		if f.Category == CategoryUnverifiableCodebaseClaim && f.Severity != SeverityMinor {
+			r.Findings[i].Severity = SeverityMinor
+		}
 	}
 	return r, nil
 }
 
+// validCategory recognizes every category a reviewer is allowed to emit.
+// CategoryMalformedEvidence is intentionally absent: it is server-only,
+// emitted by the validate_completion evidence-shape guard which builds
+// the envelope directly (never round-tripping through Parse()).
 func validCategory(c Category) bool {
 	switch c {
 	case CategoryMissingAC, CategoryScopeDrift, CategoryAmbiguousSpec,
 		CategoryUnaddressed, CategoryQuality, CategorySessionMissing,
-		CategoryTooLarge, CategoryOther:
+		CategoryTooLarge, CategoryUnverifiableCodebaseClaim, CategoryOther:
 		return true
 	}
 	return false

@@ -25,7 +25,8 @@ func ParseTasksOnly(raw []byte) (TasksOnly, error) {
 	if len(r.Tasks) == 0 {
 		return TasksOnly{}, fmt.Errorf("tasks_only: tasks array must be non-empty")
 	}
-	for i, t := range r.Tasks {
+	for i := range r.Tasks {
+		t := &r.Tasks[i]
 		switch t.Verdict {
 		case VerdictPass, VerdictWarn, VerdictFail:
 		default:
@@ -34,8 +35,8 @@ func ParseTasksOnly(raw []byte) (TasksOnly, error) {
 		if strings.TrimSpace(t.TaskTitle) == "" {
 			return TasksOnly{}, fmt.Errorf("tasks_only: tasks[%d]: task_title must be non-empty", i)
 		}
-		for j, f := range t.Findings {
-			if err := validateFinding(f, fmt.Sprintf("tasks[%d].findings[%d]", i, j)); err != nil {
+		for j := range t.Findings {
+			if err := validateFinding(&t.Findings[j], fmt.Sprintf("tasks[%d].findings[%d]", i, j)); err != nil {
 				return TasksOnly{}, err
 			}
 		}

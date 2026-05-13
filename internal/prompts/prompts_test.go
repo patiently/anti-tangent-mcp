@@ -343,3 +343,86 @@ func TestRenderPlanFindingsOnly_QuickMode_Golden(t *testing.T) {
 	require.NoError(t, err)
 	golden(t, "plan_findings_only_quick", out.System+"\n---USER---\n"+out.User)
 }
+
+const (
+	anchorUnverifiableCategory = "unverifiable_codebase_claim"
+	anchorUnverifiableGuidance = "verify against the actual code"
+	anchorPlanQualityCategory  = "plan_quality"
+	anchorPreUnverifiableHead  = "### Unverifiable codebase claims"
+)
+
+func TestRenderPlan_UnverifiableCodebaseClaim_InstructionPresent(t *testing.T) {
+	out, err := RenderPlan(PlanInput{PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorUnverifiableCategory, "plan.tmpl should mention unverifiable_codebase_claim category")
+	assert.Contains(t, out.User, anchorUnverifiableGuidance, "plan.tmpl should include the 'verify against the actual code' guidance")
+}
+
+func TestRenderPlanFindingsOnly_UnverifiableCodebaseClaim_InstructionPresent(t *testing.T) {
+	out, err := RenderPlanFindingsOnly(PlanInput{PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorUnverifiableCategory, "plan_findings_only.tmpl should mention unverifiable_codebase_claim category")
+	assert.Contains(t, out.User, anchorUnverifiableGuidance, "plan_findings_only.tmpl should include the 'verify against the actual code' guidance")
+}
+
+func TestRenderPlanTasksChunk_UnverifiableCodebaseClaim_InstructionPresent(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n",
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: A"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorUnverifiableCategory, "plan_tasks_chunk.tmpl should mention unverifiable_codebase_claim category")
+	assert.Contains(t, out.User, anchorUnverifiableGuidance, "plan_tasks_chunk.tmpl should include the 'verify against the actual code' guidance")
+}
+
+func TestRenderPre_UnverifiableCodebaseClaim_InstructionPresent(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorUnverifiableCategory, "pre.tmpl should mention unverifiable_codebase_claim category")
+	assert.Contains(t, out.User, anchorPreUnverifiableHead, "pre.tmpl should include the new section heading")
+}
+
+func TestRenderMid_DoesNotMentionUnverifiableCodebaseClaim(t *testing.T) {
+	out, err := RenderMid(MidInput{
+		Spec:      sampleSpec(),
+		WorkingOn: "writing the handler",
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, anchorUnverifiableCategory, "mid.tmpl should NOT include unverifiable_codebase_claim (it receives code)")
+}
+
+func TestRenderPost_DoesNotMentionUnverifiableCodebaseClaim(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:    sampleSpec(),
+		Summary: "implemented X",
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, anchorUnverifiableCategory, "post.tmpl should NOT include unverifiable_codebase_claim (it receives code)")
+}
+
+func TestRenderPlan_PlanQuality_InstructionPresent(t *testing.T) {
+	out, err := RenderPlan(PlanInput{PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorPlanQualityCategory, "plan.tmpl should mention plan_quality")
+	for _, v := range []string{"rough", "actionable", "rigorous"} {
+		assert.Contains(t, out.User, v, "plan.tmpl should mention %q quality value", v)
+	}
+}
+
+func TestRenderPlanFindingsOnly_PlanQuality_InstructionPresent(t *testing.T) {
+	out, err := RenderPlanFindingsOnly(PlanInput{PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorPlanQualityCategory, "plan_findings_only.tmpl should mention plan_quality")
+	for _, v := range []string{"rough", "actionable", "rigorous"} {
+		assert.Contains(t, out.User, v, "plan_findings_only.tmpl should mention %q quality value", v)
+	}
+}
+
+func TestRenderPlanTasksChunk_DoesNotMentionPlanQuality(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n",
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: A"}},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "**plan_quality**", "plan_tasks_chunk.tmpl should NOT include the **plan_quality** emission instruction (chunked Pass 2+ doesn't emit it)")
+}

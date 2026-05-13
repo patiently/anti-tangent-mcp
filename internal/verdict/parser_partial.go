@@ -6,6 +6,26 @@ import (
 	"math"
 )
 
+// applySeverityFloor enforces the category-based severity floors that
+// match the strict parser's behavior, so partial-recovery output is
+// consistent with strict output. Currently the only floor is
+// unverifiable_codebase_claim → minor (the reviewer can't know if the
+// claim is wrong, only that it can't check).
+func applySeverityFloor(f Finding) Finding {
+	if f.Category == CategoryUnverifiableCodebaseClaim && f.Severity != SeverityMinor {
+		f.Severity = SeverityMinor
+	}
+	return f
+}
+
+// applySeverityFloorAll applies applySeverityFloor in-place to every
+// element of fs.
+func applySeverityFloorAll(fs []Finding) {
+	for i := range fs {
+		fs[i] = applySeverityFloor(fs[i])
+	}
+}
+
 // ParseResultPartial parses a possibly-truncated reviewer response into a
 // Result. It first attempts a strict json.Unmarshal; on failure, it walks
 // the raw bytes to recover any complete Finding objects inside the
@@ -22,6 +42,7 @@ func ParseResultPartial(raw []byte) (Result, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	var r Result
 	if err := json.Unmarshal(trimmed, &r); err == nil {
+		applySeverityFloorAll(r.Findings)
 		return r, true
 	}
 
@@ -37,6 +58,7 @@ func ParseResultPartial(raw []byte) (Result, bool) {
 	if len(r.Findings) == 0 {
 		return Result{}, false
 	}
+	applySeverityFloorAll(r.Findings)
 	r.Partial = true
 	return r, true
 }
@@ -52,6 +74,8 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 	trimmed := bytes.TrimSpace(raw)
 	var pr PlanResult
 	if err := json.Unmarshal(trimmed, &pr); err == nil {
+		applyPlanSeverityFloor(&pr)
+		ApplyPlanQualitySanity(&pr)
 		return pr, true
 	}
 
@@ -62,8 +86,20 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 	if len(pr.Tasks) == 0 && len(pr.PlanFindings) == 0 {
 		return PlanResult{}, false
 	}
+	applyPlanSeverityFloor(&pr)
+	ApplyPlanQualitySanity(&pr)
 	pr.Partial = true
 	return pr, true
+}
+
+// applyPlanSeverityFloor walks every findings slice inside pr and applies
+// the per-category severity floor, so partial-recovery output is
+// consistent with the strict ParsePlan path.
+func applyPlanSeverityFloor(pr *PlanResult) {
+	applySeverityFloorAll(pr.PlanFindings)
+	for i := range pr.Tasks {
+		applySeverityFloorAll(pr.Tasks[i].Findings)
+	}
 }
 
 // repairOuterArray finds `"<key>":[ ... ` at depth 1 of the outer

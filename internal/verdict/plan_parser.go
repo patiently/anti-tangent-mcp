@@ -27,12 +27,13 @@ func ParsePlan(raw []byte) (PlanResult, error) {
 	if r.NextAction == "" {
 		return PlanResult{}, fmt.Errorf("decode plan result: next_action is required")
 	}
-	for i, f := range r.PlanFindings {
-		if err := validateFinding(f, fmt.Sprintf("plan_findings[%d]", i)); err != nil {
+	for i := range r.PlanFindings {
+		if err := validateFinding(&r.PlanFindings[i], fmt.Sprintf("plan_findings[%d]", i)); err != nil {
 			return PlanResult{}, err
 		}
 	}
-	for i, t := range r.Tasks {
+	for i := range r.Tasks {
+		t := &r.Tasks[i]
 		prefix := fmt.Sprintf("task[%d]", i)
 		if err := validatePlanVerdict(t.Verdict, prefix+".verdict"); err != nil {
 			return PlanResult{}, err
@@ -43,12 +44,13 @@ func ParsePlan(raw []byte) (PlanResult, error) {
 		if t.TaskTitle == "" {
 			return PlanResult{}, fmt.Errorf("plan: %s.task_title is required", prefix)
 		}
-		for j, f := range t.Findings {
-			if err := validateFinding(f, fmt.Sprintf("%s.findings[%d]", prefix, j)); err != nil {
+		for j := range t.Findings {
+			if err := validateFinding(&t.Findings[j], fmt.Sprintf("%s.findings[%d]", prefix, j)); err != nil {
 				return PlanResult{}, err
 			}
 		}
 	}
+	ApplyPlanQualitySanity(&r)
 	return r, nil
 }
 
@@ -60,7 +62,11 @@ func validatePlanVerdict(v Verdict, where string) error {
 	return fmt.Errorf("plan: invalid %s %q", where, v)
 }
 
-func validateFinding(f Finding, where string) error {
+// validateFinding validates severity and category. It also applies the
+// unverifiable_codebase_claim severity floor in-place (forcing such
+// findings to SeverityMinor) so plan-shape parsers behave identically
+// to the per-task parser.
+func validateFinding(f *Finding, where string) error {
 	switch f.Severity {
 	case SeverityCritical, SeverityMajor, SeverityMinor:
 	default:
@@ -69,5 +75,63 @@ func validateFinding(f Finding, where string) error {
 	if !validCategory(f.Category) {
 		return fmt.Errorf("plan: %s.category invalid %q", where, f.Category)
 	}
+	if f.Category == CategoryUnverifiableCodebaseClaim && f.Severity != SeverityMinor {
+		f.Severity = SeverityMinor
+	}
 	return nil
+}
+
+// Rules apply in order; the first matching rule wins and later rules are not evaluated.
+// ApplyPlanQualitySanity enforces the plan_quality contract:
+//
+//   - any critical finding forces "rough" regardless of what the reviewer emitted
+//   - fail verdict forces "rough"
+//   - empty/invalid value falls back to a verdict-based default:
+//     pass → rigorous, warn → actionable, fail → rough
+//
+// This is defensive: the JSON schema requires plan_quality on the happy
+// path, but raw-response drift (parse miss, prompt drift, missing field)
+// must not produce empty output.
+func ApplyPlanQualitySanity(pr *PlanResult) {
+	if pr.PlanVerdict == VerdictFail {
+		pr.PlanQuality = PlanQualityRough
+		return
+	}
+	hasCritical := false
+	for _, f := range pr.PlanFindings {
+		if f.Severity == SeverityCritical {
+			hasCritical = true
+			break
+		}
+	}
+	if !hasCritical {
+		for _, t := range pr.Tasks {
+			for _, f := range t.Findings {
+				if f.Severity == SeverityCritical {
+					hasCritical = true
+					break
+				}
+			}
+			if hasCritical {
+				break
+			}
+		}
+	}
+	if hasCritical {
+		pr.PlanQuality = PlanQualityRough
+		return
+	}
+	switch pr.PlanQuality {
+	case PlanQualityRough, PlanQualityActionable, PlanQualityRigorous:
+		// reviewer emitted a valid value; trust it.
+	default:
+		switch pr.PlanVerdict {
+		case VerdictPass:
+			pr.PlanQuality = PlanQualityRigorous
+		case VerdictWarn:
+			pr.PlanQuality = PlanQualityActionable
+		case VerdictFail:
+			pr.PlanQuality = PlanQualityRough
+		}
+	}
 }

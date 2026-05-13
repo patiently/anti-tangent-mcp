@@ -10,6 +10,8 @@ Every finding's `evidence` field must quote or paraphrase text that literally ap
 
 When you cite a code symbol's signature, an example sibling key, or an adjacent attribute value as an *illustration*, prefix it with `e.g. illustrative —`. The reader does not know whether your illustration matches the codebase, and false confidence is worse than no example.
 
+When the plan asserts something about the codebase that you cannot verify from the plan text alone — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim from the plan. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase.
+
 ## Plan under review
 
 ## Phase 1
@@ -49,12 +51,18 @@ Specifically:
 Severity: critical = unimplementable as written; major = implementer would
 still misimplement; minor = nit.
 
+**plan_quality** — emit one of `"rough"`, `"actionable"`, or `"rigorous"`:
+
+- `rough`: implementer cannot start; spec is missing critical pieces, or contradictions block coherent dispatch.
+- `actionable`: spec is dispatchable but has meaningful gaps an implementer would have to ask clarifying questions about, or quality issues that risk rework.
+- `rigorous`: spec is ready to hand to a fresh implementer with high confidence; remaining findings are stylistic or expected-of-the-process.
+
 **Quick mode.** Surface only the most-severe findings — at most 3 plan-level findings. Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
 
 ## Output
 
 Respond with a JSON object matching the provided schema. The JSON object must
-contain exactly the top-level keys plan_verdict, plan_findings, and next_action.
+contain exactly the top-level keys plan_verdict, plan_quality, plan_findings, and next_action.
 Do not return tasks[] or any task objects. Do not emit per-task findings — they
 belong in the per-task calls. Do not include prose outside the JSON.
 

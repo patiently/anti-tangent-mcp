@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -1101,4 +1102,318 @@ func TestMaxTokensOverride_ClampSurvivesEarlyExits(t *testing.T) {
 		assert.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion)
 		assert.Equal(t, "payload_too_large", string(pr.PlanFindings[1].Category))
 	})
+}
+
+// ---------------------------------------------------------------------------
+// summary_block population (Task 5)
+//
+// These integration tests verify that every exit path through envelopeResult
+// and planEnvelopeResult ends up with a populated summary_block field. Five
+// tests cover: ValidateTaskSpec happy, ValidateCompletion happy, ValidatePlan
+// happy, CheckProgress notFoundEnvelope (bogus session), and ValidatePlan
+// noHeadingsPlanResult (synthetic, never reaches reviewer).
+// ---------------------------------------------------------------------------
+
+func TestValidateTaskSpec_PopulatesSummaryBlock(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	h := &handlers{deps: newDeps(t, rv)}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:          "T",
+		Goal:               "G",
+		AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, env.SummaryBlock, "happy-path envelope must carry summary_block")
+	assert.Contains(t, env.SummaryBlock, "anti-tangent envelope")
+	assert.Contains(t, env.SummaryBlock, env.SessionID)
+	assert.Contains(t, env.SummaryBlock, "verdict:       pass")
+}
+
+func TestValidateCompletion_PopulatesSummaryBlock(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "implemented",
+		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, env.SummaryBlock, "validate_completion happy-path must carry summary_block")
+	assert.Contains(t, env.SummaryBlock, "anti-tangent envelope")
+	assert.Contains(t, env.SummaryBlock, "verdict:       pass")
+}
+
+func TestValidatePlan_PopulatesSummaryBlock(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	plan := "# Plan\n\n### Task 1: First\n\nSome body.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.NotEmpty(t, pr.SummaryBlock, "validate_plan happy-path must carry summary_block")
+	assert.True(t, strings.HasPrefix(pr.SummaryBlock, "anti-tangent envelope (validate_plan)"),
+		"plan summary must begin with the validate_plan banner, got:\n%s", pr.SummaryBlock)
+	assert.Contains(t, pr.SummaryBlock, "plan_verdict:  pass")
+}
+
+func TestCheckProgress_NotFoundEnvelope_PopulatesSummaryBlock(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5-20251001")}
+	h := &handlers{deps: newDeps(t, rv)}
+
+	_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID: "no-such-session",
+		WorkingOn: "anything",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, env.SummaryBlock, "notFoundEnvelope path must still populate summary_block")
+	assert.Contains(t, env.SummaryBlock, "anti-tangent envelope")
+	assert.Contains(t, env.SummaryBlock, "verdict:       fail")
+	assert.Contains(t, env.SummaryBlock, "session_not_found")
+}
+
+func TestValidatePlan_NoHeadings_PopulatesSummaryBlock(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: "Not a plan, no headings."})
+	require.NoError(t, err)
+	require.NotEmpty(t, pr.SummaryBlock, "noHeadingsPlanResult path must still populate summary_block")
+	assert.True(t, strings.HasPrefix(pr.SummaryBlock, "anti-tangent envelope (validate_plan)"),
+		"plan summary must begin with the validate_plan banner, got:\n%s", pr.SummaryBlock)
+	assert.Contains(t, pr.SummaryBlock, "plan_verdict:  fail")
+	// Synthetic PlanResults get plan_quality from ApplyPlanQualitySanity, which
+	// forces "rough" on any fail verdict.
+	assert.Contains(t, pr.SummaryBlock, "plan_quality:  rough")
+}
+
+// ---------------------------------------------------------------------------
+// validate_completion evidence-shape guard + lightweight mode (Task 6)
+//
+// Pre-reviewer guard that rejects malformed evidence (truncation markers in
+// final_diff or final_files, empty Path entries) before the LLM call. Rejections
+// are cached for 5 minutes by canonical content hash. The handler also accepts
+// an empty session_id when at least one piece of evidence is non-empty, by
+// synthesizing a minimal task spec for the reviewer.
+// ---------------------------------------------------------------------------
+
+func TestValidateCompletion_EvidenceGuard_RejectsTruncationMarkerInDiff(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	initialCalls := rv.Calls
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: pre.SessionID,
+		Summary:   "done",
+		FinalDiff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n(truncated)\n+new\n",
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != string(verdict.VerdictFail) {
+		t.Errorf("verdict = %s, want fail", env.Verdict)
+	}
+	if len(env.Findings) == 0 || env.Findings[0].Category != verdict.CategoryMalformedEvidence {
+		t.Errorf("expected malformed_evidence finding, got: %+v", env.Findings)
+	}
+	if rv.Calls != initialCalls {
+		t.Errorf("reviewer was called (%d -> %d); guard should have rejected before reviewer", initialCalls, rv.Calls)
+	}
+}
+
+func TestValidateCompletion_EvidenceGuard_RejectsTruncationMarkerInFinalFiles(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	initialCalls := rv.Calls
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n// ... unchanged\nfunc Foo() {}\n"}},
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != string(verdict.VerdictFail) {
+		t.Errorf("verdict = %s, want fail", env.Verdict)
+	}
+	if len(env.Findings) == 0 || env.Findings[0].Category != verdict.CategoryMalformedEvidence {
+		t.Errorf("expected malformed_evidence finding, got: %+v", env.Findings)
+	}
+	if rv.Calls != initialCalls {
+		t.Errorf("reviewer was called (%d -> %d); guard should have rejected before reviewer", initialCalls, rv.Calls)
+	}
+}
+
+func TestValidateCompletion_EvidenceGuard_RejectsEmptyFilePath(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	initialCalls := rv.Calls
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []FileArg{{Path: "", Content: "anything"}},
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != string(verdict.VerdictFail) {
+		t.Errorf("verdict = %s, want fail", env.Verdict)
+	}
+	if len(env.Findings) == 0 || env.Findings[0].Category != verdict.CategoryMalformedEvidence {
+		t.Errorf("expected malformed_evidence finding, got: %+v", env.Findings)
+	}
+	if rv.Calls != initialCalls {
+		t.Errorf("reviewer was called (%d -> %d); guard should have rejected before reviewer", initialCalls, rv.Calls)
+	}
+}
+
+func TestValidateCompletion_EvidenceGuard_CompleteDiffPassesThrough(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: pre.SessionID,
+		Summary:   "done",
+		FinalDiff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n",
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != "pass" {
+		t.Errorf("complete diff should pass through to reviewer (pass), got %s", env.Verdict)
+	}
+}
+
+func TestValidateCompletion_EvidenceGuard_ModeOnlyDiffPassesThrough(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	modeOnlyDiff := "diff --git a/script.sh b/script.sh\nold mode 100644\nnew mode 100755\n"
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: pre.SessionID,
+		Summary:   "made script executable",
+		FinalDiff: modeOnlyDiff,
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != "pass" {
+		t.Errorf("mode-only diff should pass through (pass), got verdict=%s findings=%+v", env.Verdict, env.Findings)
+	}
+}
+
+func TestValidateCompletion_EvidenceGuard_CacheHitShortCircuits(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	args := ValidateCompletionArgs{
+		SessionID: pre.SessionID,
+		Summary:   "done",
+		FinalDiff: "diff --git a/x b/x\n@@ -1 +1 @@\n(truncated)\n",
+	}
+	_, env1, err := h.ValidateCompletion(context.Background(), nil, args)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if env1.Verdict != string(verdict.VerdictFail) {
+		t.Fatalf("first call should reject")
+	}
+	callsAfterFirst := rv.Calls
+	_, env2, err := h.ValidateCompletion(context.Background(), nil, args)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if env2.Verdict != string(verdict.VerdictFail) {
+		t.Errorf("second call should also reject (from cache)")
+	}
+	if rv.Calls != callsAfterFirst {
+		t.Errorf("reviewer should not have been called between cached rejections; calls before=%d after=%d", callsAfterFirst, rv.Calls)
+	}
+}
+
+func TestValidateCompletion_LightweightMode_EmptySessionAccepted(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []FileArg{{Path: "doc.md", Content: "updated\n"}},
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion (lightweight): %v", err)
+	}
+	if env.SessionID != "" {
+		t.Errorf("lightweight mode should not surface a session_id, got %q", env.SessionID)
+	}
+	if env.Verdict != "pass" {
+		t.Errorf("lightweight mode reviewer call should pass with stub response, got %s", env.Verdict)
+	}
+}
+
+func TestValidateCompletion_LightweightMode_NoEvidenceErrors(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: "",
+		Summary:   "x",
+	})
+	if err == nil {
+		t.Errorf("expected error when session_id is empty AND no evidence is provided")
+	}
+	if err != nil && !strings.Contains(err.Error(), "at least one of") {
+		t.Errorf("error should mention 'at least one of'; got: %v", err)
+	}
 }
