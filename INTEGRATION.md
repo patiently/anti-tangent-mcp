@@ -35,7 +35,7 @@ When the reviewer encounters a plan or task-spec statement about codebase facts 
 
 - Pre-flight grep before calling `validate_task_spec` when the task names codebase references.
 - Use `pinned_by` to name existing tests/docs/commands that pin "unchanged behavior" ACs.
-- Do not add plan prose like "all file references were verified"; that assertion is itself unverifiable to the reviewer.
+- Do not paste self-review claims like "all file references were verified" into the plan text — the reviewer cannot confirm such claims and will flag them as `unverifiable_codebase_claim`.
 - State commit-policy carve-outs literally in the plan text. The reviewer reads only `plan_text`, not repo-level policy files.
 - For doc deliverables, submit full content via `final_files`; diffs or prose summaries are often insufficient evidence.
 
@@ -359,37 +359,6 @@ Use the full protocol for: any task that produces new production logic, any task
 
 A reference lightweight dispatch clause is at `examples/lightweight-dispatch.md`.
 
-### Enabling CodeScene companion tools
-
-Anti-tangent does not call CodeScene automatically. To make the optional CodeScene companion steps available, configure CodeScene MCP in the same MCP host that runs anti-tangent.
-
-Consumer setup checklist:
-- Install or run the CodeScene MCP package: `npx -y @codescene/codehealth-mcp`.
-- Set `CS_ACCESS_TOKEN` in the environment available to the MCP host.
-- Add a CodeScene MCP server entry to your host configuration. The exact file differs by host, but the server entry should be equivalent to:
-
-```json
-{
-  "mcpServers": {
-    "codescene": {
-      "command": "npx",
-      "args": ["-y", "@codescene/codehealth-mcp"],
-      "env": {
-        "CS_ACCESS_TOKEN": "${CS_ACCESS_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-Keep anti-tangent and CodeScene as separate MCP servers. Anti-tangent remains the text-only plan/task/completion reviewer; CodeScene supplies deterministic code-health checks over the working tree.
-
-Recommended cadence for the dispatch clause once CodeScene MCP is wired in:
-
-- Call `pre_commit_code_health_safeguard` for each task that touches production code.
-- Call `analyze_change_set` during the branch verification sweep or before final handoff.
-- Call `code_health_review` when a safeguard returns `degraded` and you need refactor-trigger context for a sibling-ticket recommendation.
-
 ### CodeScene MCP companion (optional)
 
 Anti-tangent's `## Scope and limits` section above documents what the text-only reviewer structurally cannot catch — codebase-grounded facts like field/symbol existence, function signatures, repo-wide invariants, and adjacent-code conventions. The recommended pairing for that blind spot is the open-source [CodeScene MCP server](https://github.com/codescene-oss/codescene-mcp-server), which exposes deterministic Code Health analysis as MCP tools.
@@ -413,7 +382,29 @@ The two tools are complementary, not redundant:
 
 **Lightweight mode.** Tasks dispatched under the lightweight protocol (doc-only edits, mechanical relocations) skip `validate_task_spec`, `check_progress`, and the CodeScene companion calls, while still requiring `validate_completion` as the sanity gate.
 
-Installation: see the [CodeScene MCP installation guide](https://github.com/codescene-oss/codescene-mcp-server#installation).
+**Enabling CodeScene companion tools.** Anti-tangent does not call CodeScene automatically. To make the companion steps available, configure CodeScene MCP in the same MCP host that runs anti-tangent.
+
+Consumer setup checklist:
+
+- Install or run the CodeScene MCP package: `npx -y @codescene/codehealth-mcp`.
+- Set `CS_ACCESS_TOKEN` in the environment available to the MCP host.
+- Add a CodeScene MCP server entry to your host configuration. The exact file differs by host, but the server entry should be equivalent to:
+
+```json
+{
+  "mcpServers": {
+    "codescene": {
+      "command": "npx",
+      "args": ["-y", "@codescene/codehealth-mcp"],
+      "env": {
+        "CS_ACCESS_TOKEN": "${CS_ACCESS_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Keep anti-tangent and CodeScene as separate MCP servers. See the [CodeScene MCP installation guide](https://github.com/codescene-oss/codescene-mcp-server#installation) for the upstream host-specific config shapes. Once the server is wired in, the dispatch clause in §4.2 already covers the recommended cadence (Step 2b / Step 3b); `code_health_review` is available as a drill-down when a safeguard returns `degraded`.
 
 ### 4.3 How to address findings
 
