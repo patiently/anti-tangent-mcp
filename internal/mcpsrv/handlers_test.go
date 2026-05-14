@@ -1579,6 +1579,34 @@ func TestValidateCompletion_LightweightMode_EmptySessionAccepted(t *testing.T) {
 	}
 }
 
+func TestReferencedPathsMissingEvidence(t *testing.T) {
+	args := ValidateCompletionArgs{
+		Summary:    "Created docs/audit.md and reports/result.yaml.",
+		FinalFiles: []FileArg{{Path: "docs/audit.md", Content: "# Audit\n"}},
+		FinalDiff:  "diff --git a/other.txt b/other.txt\n",
+	}
+	assert.Equal(t, []string{"reports/result.yaml"}, referencedPathsMissingEvidence(args))
+}
+
+func TestValidateCompletion_RendersReferencedPathEvidenceNote(t *testing.T) {
+	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+	d := newDeps(t, &cap.fakeReviewer)
+	d.Reviews = providers.Registry{"anthropic": cap}
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+
+	_, _, err = h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:    pre.SessionID,
+		Summary:      "Created docs/audit.md.",
+		TestEvidence: "not run; docs only",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, cap.LastRequest.User, "summary references these paths")
+	assert.Contains(t, cap.LastRequest.User, "docs/audit.md")
+}
+
 func TestValidateCompletion_LightweightMode_NoEvidenceErrors(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
 	d := newDeps(t, rv)

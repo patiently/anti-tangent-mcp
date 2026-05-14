@@ -461,3 +461,21 @@ func TestRenderPost_WithPinnedByIncludesAnchors(t *testing.T) {
 	assert.Contains(t, out.User, "HealthHandlerTest.TestOK")
 	assert.Contains(t, out.User, "caller-supplied anchors")
 }
+
+func TestRenderPost_WithMissingReferencedPathsIncludesEvidenceNote(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:                           sampleSpec(),
+		Summary:                        "Wrote docs/audit.md and updated implementation.",
+		ReferencedPathsMissingEvidence: []string{"docs/audit.md"},
+		TestEvidence:                   "go test ./... PASS",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "summary references these paths")
+	assert.Contains(t, out.User, "docs/audit.md")
+}
+
+func TestRenderPost_WithoutMissingReferencedPathsOmitsEvidenceNote(t *testing.T) {
+	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "No referenced deliverable."})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "summary references these paths")
+}
