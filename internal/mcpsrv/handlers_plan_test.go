@@ -2,6 +2,7 @@ package mcpsrv
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -587,4 +588,159 @@ func TestReviewPlanChunked_Pass2Truncation_PreservesPass1Findings(t *testing.T) 
 
 	// NextAction must mention max_tokens_override (mitigation hint contract).
 	assert.Contains(t, pr.NextAction, "max_tokens_override")
+}
+
+// ---------------------------------------------------------------------------
+// Task 3 — unverifiable rollup + verdict calibration
+// ---------------------------------------------------------------------------
+
+func TestValidatePlan_RollsUpTaskUnverifiableFindings(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict":"warn",
+		"plan_quality":"actionable",
+		"plan_findings":[],
+		"tasks":[
+			{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt:10 and Foo.bar","suggestion":"verify against the actual code before dispatching"}],"suggested_header_block":"","suggested_header_reason":""},
+			{"task_index":2,"task_title":"Task 2: two","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 2 cites Baz.qux","suggestion":"verify against the actual code before dispatching"}],"suggested_header_block":"","suggested_header_reason":""}
+		],
+		"next_action":"Verify codebase claims."
+	}`)
+	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(2)})
+	require.NoError(t, err)
+	require.Len(t, pr.PlanFindings, 1)
+	assert.Equal(t, verdict.CategoryUnverifiableCodebaseClaim, pr.PlanFindings[0].Category)
+	assert.Equal(t, "codebase_reference_checklist", pr.PlanFindings[0].Criterion)
+	assert.Contains(t, pr.PlanFindings[0].Evidence, "Task 1")
+	assert.Contains(t, pr.PlanFindings[0].Evidence, "Foo.kt:10")
+	assert.Contains(t, pr.PlanFindings[0].Evidence, "Task 2")
+	assert.Contains(t, pr.PlanFindings[0].Evidence, "Baz.qux")
+	assert.Empty(t, pr.Tasks[0].Findings)
+	assert.Empty(t, pr.Tasks[1].Findings)
+}
+
+func TestValidatePlan_UnverifiableOnlyCalibratesToPass(t *testing.T) {
+	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Verify codebase claims."}`)
+	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+	assert.Equal(t, verdict.PlanQualityActionable, pr.PlanQuality)
+	assert.Contains(t, pr.NextAction, "No blocking plan-quality findings")
+}
+
+// TestValidatePlan_UnverifiableOnly_PreservesRigorousQuality covers the
+// rigorous-preservation branch in calibratePlanVerdictForUnverifiableOnly:
+// when the reviewer already emitted plan_quality:"rigorous", calibration
+// must NOT downgrade it to actionable — even though the verdict still
+// force-passes. Spec section 4 calls this out explicitly.
+func TestValidatePlan_UnverifiableOnly_PreservesRigorousQuality(t *testing.T) {
+	raw := []byte(`{"plan_verdict":"warn","plan_quality":"rigorous","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Verify codebase claims."}`)
+	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+	assert.Equal(t, verdict.PlanQualityRigorous, pr.PlanQuality,
+		"rigorous plan_quality from reviewer must survive unverifiable-only calibration")
+}
+
+func TestValidatePlan_MixedFindingsDoNotCalibrateToPass(t *testing.T) {
+	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"major","category":"ambiguous_spec","criterion":"AC","evidence":"AC is vague","suggestion":"rewrite"},{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Rewrite AC."}`)
+	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
+	require.Len(t, pr.Tasks, 1)
+	require.Len(t, pr.Tasks[0].Findings, 1)
+	assert.Equal(t, verdict.CategoryAmbiguousSpec, pr.Tasks[0].Findings[0].Category)
+}
+
+func TestValidatePlan_PreservesPlanLevelUnverifiableBesideTaskRollup(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict":"warn",
+		"plan_quality":"actionable",
+		"plan_findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"plan","evidence":"Plan-level claim cites package ownership","suggestion":"verify"}],
+		"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}],
+		"next_action":"Verify codebase claims."
+	}`)
+	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	require.NoError(t, err)
+	require.Len(t, pr.PlanFindings, 2)
+	assert.Equal(t, "plan", pr.PlanFindings[0].Criterion)
+	assert.Equal(t, "codebase_reference_checklist", pr.PlanFindings[1].Criterion)
+	assert.Contains(t, pr.PlanFindings[1].Evidence, "Task 1")
+}
+
+func TestValidatePlan_ChunkedUnverifiableFindingsRollUp(t *testing.T) {
+	chunkWithFinding := func(titles []string, findingPosition int, evidence string) providers.Response {
+		t.Helper()
+		type item struct {
+			TaskIndex             int               `json:"task_index"`
+			TaskTitle             string            `json:"task_title"`
+			Verdict               string            `json:"verdict"`
+			Findings              []verdict.Finding `json:"findings"`
+			SuggestedHeaderBlock  string            `json:"suggested_header_block"`
+			SuggestedHeaderReason string            `json:"suggested_header_reason"`
+		}
+		items := make([]item, 0, len(titles))
+		for i, title := range titles {
+			findings := []verdict.Finding{}
+			if i == findingPosition {
+				findings = []verdict.Finding{{
+					Severity:   verdict.SeverityMinor,
+					Category:   verdict.CategoryUnverifiableCodebaseClaim,
+					Criterion:  "spec",
+					Evidence:   evidence,
+					Suggestion: "verify",
+				}}
+			}
+			items = append(items, item{TaskIndex: i + 1, TaskTitle: title, Verdict: "warn", Findings: findings})
+		}
+		raw, err := json.Marshal(struct {
+			Tasks []item `json:"tasks"`
+		}{items})
+		require.NoError(t, err)
+		return providers.Response{RawJSON: raw, Model: "claude-sonnet-4-6"}
+	}
+
+	rv := &scriptedReviewer{responses: []providers.Response{
+		passOneResp(),
+		chunkWithFinding(titlesRange(1, 8), 0, "Task 1 cites Foo.kt"),
+		chunkWithFinding(titlesRange(9, 9), 0, "Task 9 cites Baz.kt"),
+	}}
+	d := newDepsWithScripted(t, rv, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(9)})
+	require.NoError(t, err)
+	require.Len(t, pr.PlanFindings, 1)
+	assert.Equal(t, "codebase_reference_checklist", pr.PlanFindings[0].Criterion)
+	assert.Contains(t, pr.PlanFindings[0].Evidence, "Task 1")
+	assert.Contains(t, pr.PlanFindings[0].Evidence, "Task 9")
 }

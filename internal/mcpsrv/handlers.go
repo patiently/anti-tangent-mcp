@@ -1132,6 +1132,91 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 	return r, modelUsed, time.Since(start).Milliseconds(), nil, nil
 }
 
+// rollupEvidencePerTaskMax bounds each per-task entry in the rolled-up
+// codebase_reference_checklist evidence. Spec §3 picked 240 separately from
+// summary.go's summaryEvidenceMax (120) so the human checklist has enough
+// room (~2 compact lines of paths/symbols) without letting one task dominate.
+const rollupEvidencePerTaskMax = 240
+
+// normalizePlanUnverifiableFindings collects every task-level finding whose
+// category is unverifiable_codebase_claim, removes them from their tasks, and
+// appends ONE plan-level codebase_reference_checklist finding whose evidence
+// lists the affected tasks with their original evidence text (per-task
+// truncated at rollupEvidencePerTaskMax). Reviewer-emitted plan-level
+// unverifiable findings are intentionally left in place — see spec §3.
+//
+// Pointer receiver: the helper mutates the supplied PlanResult in place.
+// Each task's Findings is reassigned to a freshly-allocated slice so the
+// caller's original backing array is not aliased and silently rewritten.
+func normalizePlanUnverifiableFindings(pr *verdict.PlanResult) {
+	var evidence []string
+	for i := range pr.Tasks {
+		// Allocate a fresh slice rather than reusing the input backing array
+		// (Findings[:0] + assign-back would mutate the caller's view).
+		kept := make([]verdict.Finding, 0, len(pr.Tasks[i].Findings))
+		for _, f := range pr.Tasks[i].Findings {
+			if f.Category != verdict.CategoryUnverifiableCodebaseClaim {
+				kept = append(kept, f)
+				continue
+			}
+			evidence = append(evidence, fmt.Sprintf("Task %d: %s", pr.Tasks[i].TaskIndex, truncate(f.Evidence, rollupEvidencePerTaskMax)))
+		}
+		pr.Tasks[i].Findings = kept
+	}
+	if len(evidence) == 0 {
+		return
+	}
+	pr.PlanFindings = append(pr.PlanFindings, verdict.Finding{
+		Severity:   verdict.SeverityMinor,
+		Category:   verdict.CategoryUnverifiableCodebaseClaim,
+		Criterion:  "codebase_reference_checklist",
+		Evidence:   strings.Join(evidence, "\n"),
+		Suggestion: "Pre-flight these references with grep or codebase-aware review before dispatch. Do not treat this checklist as a plan-quality defect if the references were already verified.",
+	})
+}
+
+// calibratePlanVerdictForUnverifiableOnly force-passes a plan whose only
+// findings are minor unverifiable_codebase_claim entries (after rollup).
+// plan_quality stays at rigorous if the reviewer already emitted that;
+// otherwise it lands at actionable. The next_action is rewritten to make
+// the "checklist, not blocker" framing explicit. See spec §4.
+//
+// Pointer receiver: mutates in place (matches normalize counterpart).
+func calibratePlanVerdictForUnverifiableOnly(pr *verdict.PlanResult) {
+	if !allPlanFindingsAreMinorUnverifiable(*pr) {
+		return
+	}
+	pr.PlanVerdict = verdict.VerdictPass
+	if pr.PlanQuality != verdict.PlanQualityRigorous {
+		pr.PlanQuality = verdict.PlanQualityActionable
+	}
+	pr.NextAction = "No blocking plan-quality findings remain; pre-flight the rolled-up codebase references before dispatch."
+}
+
+// allPlanFindingsAreMinorUnverifiable returns true iff every finding across
+// pr.PlanFindings and pr.Tasks[].Findings has severity=minor AND
+// category=unverifiable_codebase_claim, AND at least one such finding exists.
+// (Empty input returns false — calibration only fires when there is something
+// to calibrate.)
+func allPlanFindingsAreMinorUnverifiable(pr verdict.PlanResult) bool {
+	found := false
+	for _, f := range pr.PlanFindings {
+		found = true
+		if f.Severity != verdict.SeverityMinor || f.Category != verdict.CategoryUnverifiableCodebaseClaim {
+			return false
+		}
+	}
+	for _, task := range pr.Tasks {
+		for _, f := range task.Findings {
+			found = true
+			if f.Severity != verdict.SeverityMinor || f.Category != verdict.CategoryUnverifiableCodebaseClaim {
+				return false
+			}
+		}
+	}
+	return found
+}
+
 func noHeadingsPlanResult() verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictFail,
@@ -1172,6 +1257,13 @@ func tooLargePlanResult(size, limit int) verdict.PlanResult {
 //     synthetic PlanResults that bypass ParsePlan / ParsePlanResultPartial).
 //  2. SummaryBlock is populated with the rendered paste-ready text block.
 func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
+	// Order is load-bearing: rollup first so calibration sees no remaining
+	// task-level unverifiable findings; calibrate before ApplyPlanQualitySanity
+	// so a rigorous unverifiable-only plan can stay rigorous (sanity would
+	// overwrite an empty quality value but trusts a reviewer-emitted
+	// rigorous one).
+	normalizePlanUnverifiableFindings(&pr)
+	calibratePlanVerdictForUnverifiableOnly(&pr)
 	verdict.ApplyPlanQualitySanity(&pr)
 	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
 	body, err := json.MarshalIndent(struct {

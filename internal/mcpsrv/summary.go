@@ -57,7 +57,7 @@ func formatPlanSummary(pr verdict.PlanResult, modelUsed string, reviewMS int64) 
 	crit, maj, min := countSeverities(pr.PlanFindings)
 	fmt.Fprintf(&b, "  plan_findings: %d (%d/%d/%d)\n", len(pr.PlanFindings), crit, maj, min)
 	for _, f := range pr.PlanFindings {
-		fmt.Fprintf(&b, "    - [%s][%s] %s — %s\n", f.Severity, f.Category, f.Criterion, truncate(f.Evidence, summaryEvidenceMax))
+		fmt.Fprintf(&b, "    - [%s][%s] %s — %s\n", f.Severity, f.Category, f.Criterion, formatFindingEvidence(f.Evidence, "      "))
 	}
 	fmt.Fprintf(&b, "  tasks: %d\n", len(pr.Tasks))
 	for _, t := range pr.Tasks {
@@ -65,7 +65,7 @@ func formatPlanSummary(pr verdict.PlanResult, modelUsed string, reviewMS int64) 
 		fmt.Fprintf(&b, "    Task %d: %s  [%s]  findings: %d (%d/%d/%d)\n",
 			t.TaskIndex, t.TaskTitle, t.Verdict, len(t.Findings), tCrit, tMaj, tMin)
 		for _, f := range t.Findings {
-			fmt.Fprintf(&b, "      - [%s] %s — %s\n", f.Severity, f.Criterion, truncate(f.Evidence, summaryEvidenceMax))
+			fmt.Fprintf(&b, "      - [%s] %s — %s\n", f.Severity, f.Criterion, formatFindingEvidence(f.Evidence, "        "))
 		}
 	}
 	fmt.Fprintf(&b, "  next_action:   %s\n", pr.NextAction)
@@ -79,8 +79,25 @@ func writeFindingsSummary(b *strings.Builder, findings []verdict.Finding, indent
 	crit, maj, min := countSeverities(findings)
 	fmt.Fprintf(b, "%sfindings:      %d total (%d critical, %d major, %d minor)\n", indent, len(findings), crit, maj, min)
 	for _, f := range findings {
-		fmt.Fprintf(b, "%s  - [%s][%s] %s — %s\n", indent, f.Severity, f.Category, f.Criterion, truncate(f.Evidence, summaryEvidenceMax))
+		fmt.Fprintf(b, "%s  - [%s][%s] %s — %s\n", indent, f.Severity, f.Category, f.Criterion, formatFindingEvidence(f.Evidence, indent+"    "))
 	}
+}
+
+// formatFindingEvidence renders a finding's Evidence for the paste-ready
+// summary block. Single-line evidence is truncated at summaryEvidenceMax
+// runes (unchanged behavior). Multi-line evidence — used today by the
+// validate_plan unverifiable-claim rollup which lists one task per line — is
+// truncated per-line, and continuation lines are prefixed with contIndent so
+// they sit visually under the bullet text instead of flushing to column 0.
+func formatFindingEvidence(evidence, contIndent string) string {
+	if !strings.Contains(evidence, "\n") {
+		return truncate(evidence, summaryEvidenceMax)
+	}
+	lines := strings.Split(evidence, "\n")
+	for i, ln := range lines {
+		lines[i] = truncate(ln, summaryEvidenceMax)
+	}
+	return strings.Join(lines, "\n"+contIndent)
 }
 
 // countSeverities tallies critical/major/minor findings. Any other severity
