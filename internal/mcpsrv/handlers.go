@@ -410,13 +410,13 @@ func normalizePhase(phase string) (string, error) {
 
 func normalizePinnedBy(entries []string) ([]string, error) {
 	out := make([]string, 0, len(entries))
-	for _, entry := range entries {
+	for i, entry := range entries {
 		trimmed := strings.TrimSpace(entry)
 		if trimmed == "" {
 			continue
 		}
 		if len([]rune(trimmed)) > maxPinnedByChars {
-			return nil, fmt.Errorf("pinned_by[%d] must be at most %d characters", len(out), maxPinnedByChars)
+			return nil, fmt.Errorf("pinned_by[%d] must be at most %d characters", i, maxPinnedByChars)
 		}
 		out = append(out, trimmed)
 		if len(out) > maxPinnedByEntries {

@@ -220,6 +220,23 @@ func TestValidateTaskSpec_PinnedByLimitsRejected(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pinned_by[0] must be at most 500 characters")
 	assert.Equal(t, 0, rv.Calls)
+
+	// 500 multibyte runes (1000 bytes) must pass — the cap is on runes, not bytes.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		PinnedBy:  []string{strings.Repeat("é", 500)},
+	})
+	require.NoError(t, err)
+
+	// 501 multibyte runes must fail at the same boundary as ASCII.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		PinnedBy:  []string{strings.Repeat("é", 501)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pinned_by[0] must be at most 500 characters")
 }
 
 func TestCheckProgress_HappyPath(t *testing.T) {
