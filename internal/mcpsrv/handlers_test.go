@@ -1588,6 +1588,14 @@ func TestReferencedPathsMissingEvidence(t *testing.T) {
 	assert.Equal(t, []string{"reports/result.yaml"}, referencedPathsMissingEvidence(args))
 }
 
+func TestReferencedPathsMissingEvidence_DedupsRepeatedReferences(t *testing.T) {
+	args := ValidateCompletionArgs{
+		Summary:      "Created docs/audit.md. Then re-edited docs/audit.md.",
+		TestEvidence: "ran tests",
+	}
+	assert.Equal(t, []string{"docs/audit.md"}, referencedPathsMissingEvidence(args))
+}
+
 func TestValidateCompletion_RendersReferencedPathEvidenceNote(t *testing.T) {
 	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
 	d := newDeps(t, &cap.fakeReviewer)
