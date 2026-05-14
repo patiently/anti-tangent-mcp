@@ -632,8 +632,17 @@ func TestValidatePlan_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
-	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[0].Severity)
+	// No-analysis truncation is major (not minor) so callers can't mistake it
+	// for a cosmetic concern; plan_quality drops to rough because no analysis
+	// occurred, and the suggestion / next_action are self-contained retry
+	// instructions naming all three knobs.
+	assert.Equal(t, verdict.SeverityMajor, pr.PlanFindings[0].Severity)
+	assert.Equal(t, verdict.PlanQualityRough, pr.PlanQuality)
 	assert.Contains(t, pr.PlanFindings[0].Suggestion, "ANTI_TANGENT_PLAN_MAX_TOKENS")
+	assert.Contains(t, pr.PlanFindings[0].Suggestion, "max_tokens_override")
+	assert.Contains(t, pr.PlanFindings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+	assert.Contains(t, pr.NextAction, "max_tokens_override >= 16000")
+	assert.Contains(t, pr.NextAction, "ANTI_TANGENT_PLAN_MAX_TOKENS")
 }
 
 func planPassResp() providers.Response {
@@ -788,6 +797,53 @@ func TestValidatePlan_UsesConfiguredPlanMaxTokens(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
 	assert.Equal(t, 8888, cap.LastRequest.MaxTokens, "reviewPlanSingle() should use PlanMaxTokens from config")
+}
+
+// TestValidatePlan_UsesAdaptivePlanMaxTokensWhenUnset asserts that without
+// max_tokens_override, validate_plan scales its output budget by task count:
+// max(cfg.PlanMaxTokens, min(cfg.MaxTokensCeiling, 2000 + 800*taskCount)). For
+// an 8-task plan with PlanMaxTokens=4096 and ceiling=16384 the floor is 8400,
+// which exceeds PlanMaxTokens and is below the ceiling, so 8400 is what gets
+// sent to the provider.
+func TestValidatePlan_UsesAdaptivePlanMaxTokensWhenUnset(t *testing.T) {
+	cap := &captureReviewer{
+		name: "openai",
+		Response: providers.Response{
+			RawJSON: []byte(`{"plan_verdict":"pass","plan_findings":[],"tasks":[{"task_index":0,"task_title":"T1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"go"}`),
+			Model:   "gpt-5",
+		},
+	}
+	d := newDeps(t, &fakeReviewer{name: "anthropic"})
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Cfg.PlanMaxTokens = 4096
+	d.Cfg.MaxTokensCeiling = 16384
+	d.Reviews = providers.Registry{"openai": cap}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(8)})
+	require.NoError(t, err)
+	assert.Equal(t, 8400, cap.LastRequest.MaxTokens)
+}
+
+// TestValidatePlan_ExplicitOverrideBeatsAdaptivePlanMaxTokens asserts that the
+// adaptive floor never overrides an explicit, in-range max_tokens_override.
+// 5000 is between PlanMaxTokens (4096) and the adaptive floor for 8 tasks
+// (8400), so the override must win regardless.
+func TestValidatePlan_ExplicitOverrideBeatsAdaptivePlanMaxTokens(t *testing.T) {
+	cap := &captureReviewer{name: "openai", Response: planPassResp()}
+	d := newDeps(t, &fakeReviewer{name: "anthropic"})
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Cfg.PlanMaxTokens = 4096
+	d.Cfg.MaxTokensCeiling = 16384
+	d.Reviews = providers.Registry{"openai": cap}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:          buildPlanWithNTasks(8),
+		MaxTokensOverride: 5000,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 5000, cap.LastRequest.MaxTokens)
 }
 
 // reviewerCapture is a fakeReviewer that also records the last providers.Request

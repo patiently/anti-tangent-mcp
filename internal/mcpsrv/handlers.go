@@ -458,6 +458,32 @@ func effectiveMaxTokens(override, defaultMaxTokens, ceiling int) (int, verdict.F
 	return ceiling, finding, nil
 }
 
+// effectivePlanMaxTokens computes the max-tokens value to send for a
+// validate_plan reviewer call. When an explicit max_tokens_override is
+// supplied it preserves the existing override/clamp semantics by delegating
+// to effectiveMaxTokens. When no override is supplied it returns a
+// task-count-scaled floor of
+//
+//	max(cfg.PlanMaxTokens, min(cfg.MaxTokensCeiling, 2000 + 800*taskCount))
+//
+// — i.e. plan output scales roughly with task count (one block per task plus
+// plan-level findings/summary), but the ceiling still caps cost and the
+// configured PlanMaxTokens still acts as a floor. Adaptive bumps emit no
+// clamp finding because they are not caller errors.
+func effectivePlanMaxTokens(args ValidatePlanArgs, cfg config.Config, taskCount int) (int, verdict.Finding, error) {
+	if args.MaxTokensOverride != 0 {
+		return effectiveMaxTokens(args.MaxTokensOverride, cfg.PlanMaxTokens, cfg.MaxTokensCeiling)
+	}
+	floor := 2000 + 800*taskCount
+	if floor > cfg.MaxTokensCeiling {
+		floor = cfg.MaxTokensCeiling
+	}
+	if floor < cfg.PlanMaxTokens {
+		floor = cfg.PlanMaxTokens
+	}
+	return floor, verdict.Finding{}, nil
+}
+
 // prependClamp inserts the clamp finding at the head of the envelope's
 // findings list if clamp is non-zero. Idempotent on the empty-clamp case.
 // Centralises the clamp-composition rule so every handler flow (success,
@@ -527,18 +553,32 @@ func recoverPartialFindings(id string, model config.ModelRef, rawJSON []byte, en
 	}, true
 }
 
+// truncatedPlanResult builds the synthetic PlanResult returned when a
+// validate_plan reviewer call truncates AND no usable findings/tasks could be
+// recovered from the partial bytes (the "no-analysis" path).
+//
+// Severity is major (not minor) because the caller received zero plan analysis
+// and would otherwise mistake the result for a cosmetic concern. PlanQuality
+// is set explicitly to rough so that ApplyPlanQualitySanity — which otherwise
+// defaults a Warn verdict to actionable — does not silently upgrade a
+// no-analysis response. The Suggestion and NextAction name all three retry
+// knobs so the caller can self-diagnose without rereading docs.
+//
+// Partial-recovery truncation markers (emitted by recoverPartialPlanFindings)
+// remain minor on purpose: those callers received at least some review signal.
 func truncatedPlanResult() verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictWarn,
+		PlanQuality: verdict.PlanQualityRough,
 		PlanFindings: []verdict.Finding{{
-			Severity:   verdict.SeverityMinor,
+			Severity:   verdict.SeverityMajor,
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
-			Suggestion: "Raise ANTI_TANGENT_PLAN_MAX_TOKENS or pass max_tokens_override and retry.",
+			Suggestion: "Retry with max_tokens_override >= 16000, set ANTI_TANGENT_PLAN_MAX_TOKENS in the MCP server env, or raise ANTI_TANGENT_MAX_TOKENS_CEILING if overrides are clamped.",
 		}},
 		Tasks:      []verdict.PlanTaskResult{},
-		NextAction: "Retry with a higher max_tokens_override (or raise the plan max-tokens cap).",
+		NextAction: "Retry with max_tokens_override >= 16000, or set ANTI_TANGENT_PLAN_MAX_TOKENS in the MCP server env. If overrides are clamped, raise ANTI_TANGENT_MAX_TOKENS_CEILING.",
 	}
 }
 
@@ -993,6 +1033,17 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	tasks, _ := planparser.SplitTasks(args.PlanText)
 	if len(tasks) == 0 {
 		return planEnvelopeResult(prependPlanClamp(noHeadingsPlanResult(), clamp), h.deps.Cfg.PlanModel.String(), 0)
+	}
+
+	// Adaptive plan budget: apply only when no override was supplied. The
+	// early effectiveMaxTokens call above already validated/clamped explicit
+	// overrides and attached the clamp finding for payload-too-large and
+	// no-headings early exits; we must not disturb that path.
+	if args.MaxTokensOverride == 0 {
+		maxTokens, clamp, err = effectivePlanMaxTokens(args, h.deps.Cfg, len(tasks))
+		if err != nil {
+			return nil, verdict.PlanResult{}, err
+		}
 	}
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PlanModel)
