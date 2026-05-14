@@ -43,6 +43,8 @@ type ValidateTaskSpecArgs struct {
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
 	NonGoals           []string `json:"non_goals,omitempty"`
 	Context            string   `json:"context,omitempty"`
+	PinnedBy           []string `json:"pinned_by,omitempty"`
+	Phase              string   `json:"phase,omitempty"`
 	ModelOverride      string   `json:"model_override,omitempty"`
 	MaxTokensOverride  int      `json:"max_tokens_override,omitempty"`
 }
@@ -65,6 +67,15 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, errors.New("task_title and goal are required")
 	}
 
+	phase, err := normalizePhase(args.Phase)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+	pinnedBy, err := normalizePinnedBy(args.PinnedBy)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+
 	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PerTaskMaxTokens, h.deps.Cfg.MaxTokensCeiling)
 	if err != nil {
 		return nil, Envelope{}, err
@@ -81,6 +92,8 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		AcceptanceCriteria: args.AcceptanceCriteria,
 		NonGoals:           args.NonGoals,
 		Context:            args.Context,
+		PinnedBy:           pinnedBy,
+		Phase:              phase,
 	}
 
 	rendered, err := prompts.RenderPre(prompts.PreInput{Spec: spec})
@@ -376,6 +389,41 @@ func truncatedEnvelope(id string, model config.ModelRef) Envelope {
 		NextAction: "Retry with a higher max_tokens_override (or raise the configured max-tokens cap).",
 		ModelUsed:  model.String(),
 	}
+}
+
+const (
+	maxPinnedByEntries = 50
+	maxPinnedByChars   = 500
+)
+
+func normalizePhase(phase string) (string, error) {
+	phase = strings.TrimSpace(phase)
+	switch phase {
+	case "", "pre":
+		return "pre", nil
+	case "post":
+		return "post", nil
+	default:
+		return "", errors.New(`phase must be "pre" or "post"`)
+	}
+}
+
+func normalizePinnedBy(entries []string) ([]string, error) {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		if len([]rune(trimmed)) > maxPinnedByChars {
+			return nil, fmt.Errorf("pinned_by[%d] must be at most %d characters", len(out), maxPinnedByChars)
+		}
+		out = append(out, trimmed)
+		if len(out) > maxPinnedByEntries {
+			return nil, fmt.Errorf("pinned_by must contain at most %d entries", maxPinnedByEntries)
+		}
+	}
+	return out, nil
 }
 
 // effectiveMaxTokens returns the max-tokens value to send to the provider,

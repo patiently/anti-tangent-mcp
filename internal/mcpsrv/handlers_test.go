@@ -161,6 +161,67 @@ func TestValidateTaskSpec_MissingFields(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestValidateTaskSpec_InvalidPhaseRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		Phase:     "during",
+	})
+	require.Error(t, err)
+	assert.EqualError(t, err, `phase must be "pre" or "post"`)
+	assert.Equal(t, 0, rv.Calls)
+}
+
+func TestValidateTaskSpec_PinnedByTrimmedAndStored(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		PinnedBy:  []string{"  TestA.pins_behavior  ", "", "   ", "docs/spec.md"},
+		Phase:     "post",
+	})
+	require.NoError(t, err)
+
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	assert.Equal(t, []string{"TestA.pins_behavior", "docs/spec.md"}, sess.Spec.PinnedBy)
+	assert.Equal(t, "post", sess.Spec.Phase)
+}
+
+func TestValidateTaskSpec_PinnedByLimitsRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	tooMany := make([]string, 51)
+	for i := range tooMany {
+		tooMany[i] = "Test.pins_behavior"
+	}
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		PinnedBy:  tooMany,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pinned_by must contain at most 50 entries")
+
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		PinnedBy:  []string{strings.Repeat("x", 501)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pinned_by[0] must be at most 500 characters")
+	assert.Equal(t, 0, rv.Calls)
+}
+
 func TestCheckProgress_HappyPath(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5-20251001")}
 	d := newDeps(t, rv)
