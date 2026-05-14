@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -743,4 +744,53 @@ func TestValidatePlan_ChunkedUnverifiableFindingsRollUp(t *testing.T) {
 	assert.Equal(t, "codebase_reference_checklist", pr.PlanFindings[0].Criterion)
 	assert.Contains(t, pr.PlanFindings[0].Evidence, "Task 1")
 	assert.Contains(t, pr.PlanFindings[0].Evidence, "Task 9")
+}
+
+// TestValidatePlan_MultipleUnverifiableUnderSameTaskJoinedWithSemicolon
+// pins the spec §3 "one compact line per affected task" wording: when a
+// single task emits more than one unverifiable_codebase_claim, the rollup
+// must list "Task N: ..." once with intra-task evidence joined by "; ",
+// not duplicate the Task N: prefix per finding.
+func TestValidatePlan_MultipleUnverifiableUnderSameTaskJoinedWithSemicolon(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict":"warn",
+		"plan_quality":"actionable",
+		"plan_findings":[],
+		"tasks":[
+			{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[
+				{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Foo.kt:10","suggestion":"verify"},
+				{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Bar.kt:20","suggestion":"verify"}
+			],"suggested_header_block":"","suggested_header_reason":""}
+		],
+		"next_action":"Verify."
+	}`)
+	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	require.NoError(t, err)
+	require.Len(t, pr.PlanFindings, 1)
+	assert.Equal(t, 1, strings.Count(pr.PlanFindings[0].Evidence, "Task 1:"))
+	assert.Contains(t, pr.PlanFindings[0].Evidence, "Foo.kt:10; Bar.kt:20")
+}
+
+// TestValidatePlan_EmptyFindingsDoNotCalibrateToPass locks in the
+// allPlanFindingsAreMinorUnverifiable sentinel: a plan with zero
+// findings must NOT be force-passed by the calibration helper. The
+// reviewer's verdict survives untouched.
+func TestValidatePlan_EmptyFindingsDoNotCalibrateToPass(t *testing.T) {
+	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Reviewer warned but emitted no findings."}`)
+	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
+	assert.NotContains(t, pr.NextAction, "No blocking plan-quality findings")
 }

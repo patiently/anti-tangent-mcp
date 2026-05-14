@@ -1149,28 +1149,37 @@ const rollupEvidencePerTaskMax = 240
 // Each task's Findings is reassigned to a freshly-allocated slice so the
 // caller's original backing array is not aliased and silently rewritten.
 func normalizePlanUnverifiableFindings(pr *verdict.PlanResult) {
-	var evidence []string
+	var lines []string
 	for i := range pr.Tasks {
 		// Allocate a fresh slice rather than reusing the input backing array
 		// (Findings[:0] + assign-back would mutate the caller's view).
 		kept := make([]verdict.Finding, 0, len(pr.Tasks[i].Findings))
+		var perTask []string
 		for _, f := range pr.Tasks[i].Findings {
 			if f.Category != verdict.CategoryUnverifiableCodebaseClaim {
 				kept = append(kept, f)
 				continue
 			}
-			evidence = append(evidence, fmt.Sprintf("Task %d: %s", pr.Tasks[i].TaskIndex, truncate(f.Evidence, rollupEvidencePerTaskMax)))
+			perTask = append(perTask, f.Evidence)
 		}
 		pr.Tasks[i].Findings = kept
+		if len(perTask) > 0 {
+			// Spec §3: "one compact line per affected task." Multiple
+			// unverifiable findings under the same task join with "; " so
+			// the human checklist shows one task once, not duplicated.
+			lines = append(lines, fmt.Sprintf("Task %d: %s",
+				pr.Tasks[i].TaskIndex,
+				truncate(strings.Join(perTask, "; "), rollupEvidencePerTaskMax)))
+		}
 	}
-	if len(evidence) == 0 {
+	if len(lines) == 0 {
 		return
 	}
 	pr.PlanFindings = append(pr.PlanFindings, verdict.Finding{
 		Severity:   verdict.SeverityMinor,
 		Category:   verdict.CategoryUnverifiableCodebaseClaim,
 		Criterion:  "codebase_reference_checklist",
-		Evidence:   strings.Join(evidence, "\n"),
+		Evidence:   strings.Join(lines, "\n"),
 		Suggestion: "Pre-flight these references with grep or codebase-aware review before dispatch. Do not treat this checklist as a plan-quality defect if the references were already verified.",
 	})
 }
@@ -1258,10 +1267,9 @@ func tooLargePlanResult(size, limit int) verdict.PlanResult {
 //  2. SummaryBlock is populated with the rendered paste-ready text block.
 func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
 	// Order is load-bearing: rollup first so calibration sees no remaining
-	// task-level unverifiable findings; calibrate before ApplyPlanQualitySanity
-	// so a rigorous unverifiable-only plan can stay rigorous (sanity would
-	// overwrite an empty quality value but trusts a reviewer-emitted
-	// rigorous one).
+	// task-level unverifiable findings; calibrate before sanity because
+	// calibration owns the verdict→quality mapping for the unverifiable-only
+	// case (sanity is then a passthrough on the already-valid values).
 	normalizePlanUnverifiableFindings(&pr)
 	calibratePlanVerdictForUnverifiableOnly(&pr)
 	verdict.ApplyPlanQualitySanity(&pr)
