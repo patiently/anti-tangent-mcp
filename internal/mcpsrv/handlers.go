@@ -58,7 +58,8 @@ func validateTaskSpecTool() *mcp.Tool {
 		Name: "validate_task_spec",
 		Description: "Validate that a task specification is clear and implementable BEFORE you start coding. " +
 			"Returns findings on missing/ambiguous goals, weak acceptance criteria, and unstated assumptions. " +
-			"Call this once at the start of every task.",
+			"Call this once at the start of every task. " +
+			"Optional pinned_by entries can name existing tests/docs/commands that pin behavior; optional phase=post is for post-hoc/session-recovery reviews only.",
 	}
 }
 
@@ -715,7 +716,8 @@ func validatePlanTool() *mcp.Tool {
 		Name: "validate_plan",
 		Description: "Validate an implementation plan as a whole BEFORE dispatching subagents to implement individual tasks. " +
 			"Returns per-task findings and ready-to-paste structured headers (Goal / Acceptance criteria / Non-goals / Context) for tasks that lack them. " +
-			"Call this once at plan-handoff time; the per-task `validate_task_spec` is still called by each implementing subagent at task start.",
+			"Call this once at plan-handoff time; the per-task `validate_task_spec` is still called by each implementing subagent at task start. " +
+			"If repo policy has carve-outs such as docs-only commit exceptions, state them literally in plan_text — the reviewer cannot read external CLAUDE.md policy.",
 	}
 }
 

@@ -54,6 +54,17 @@ All four tools accept an optional `max_tokens_override` non-negative int — rep
 
 `validate_plan` additionally accepts an optional `mode` arg of `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings (at most 3 per scope) — useful for small ASAP plans where you don't want round-after-round of stylistic refinement.
 
+`validate_plan` scales its default output budget by task count when no `max_tokens_override` is supplied. If reviewer output still truncates before any usable analysis, the response is a `warn` with a `major` truncation finding and retry guidance naming `max_tokens_override`, `ANTI_TANGENT_PLAN_MAX_TOKENS`, and `ANTI_TANGENT_MAX_TOKENS_CEILING`.
+
+Task-level `unverifiable_codebase_claim` findings are rolled into one plan-level checklist. If that checklist is the only remaining finding category, `plan_verdict` is `pass` and `plan_quality` is `actionable`; callers should still pre-flight the references before dispatch.
+
+### `validate_task_spec` arguments (v0.3.3+)
+
+In addition to the existing `task_title` / `goal` / `acceptance_criteria` / `non_goals` / `context` fields:
+
+- `pinned_by` (optional): existing tests, docs, commands, or static checks that pin referenced behavior. The reviewer treats these as caller-supplied anchors, not independently verified codebase facts.
+- `phase` (optional): `pre` (default) or `post`. Use `post` only for post-hoc/session-recovery reviews; normal protocol still calls this at task start.
+
 ### Lightweight protocol mode (v0.3.1+)
 
 For trivial tasks (doc-only edits, mechanical relocations, dependency bumps), the full anti-tangent dispatch protocol is overhead-heavy. As of v0.3.1 the project ships a lightweight dispatch template at [`examples/lightweight-dispatch.md`](examples/lightweight-dispatch.md) that skips `validate_task_spec` and `check_progress`, keeping only `validate_completion` as a sanity gate. See `INTEGRATION.md`'s "Lightweight protocol mode" section for when to use it.

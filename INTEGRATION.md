@@ -31,6 +31,14 @@ The integration is **system-agnostic**: it works with superpowers, hone-ai, vani
 
 When the reviewer encounters a plan or task-spec statement about codebase facts it cannot verify text-only, as of v0.3.1 it flags an `unverifiable_codebase_claim` finding rather than silently passing. These are explicitly *not failures* — they're a checklist for the human or a codebase-aware follow-up review. A plan that converges to `pass` with several `unverifiable_codebase_claim` findings is still implementable; treat the findings as "things to grep before dispatching."
 
+### Reducing text-only review noise
+
+- Pre-flight grep before calling `validate_task_spec` when the task names codebase references.
+- Use `pinned_by` to name existing tests/docs/commands that pin "unchanged behavior" ACs.
+- Do not add plan prose like "all file references were verified"; that assertion is itself unverifiable to the reviewer.
+- State commit-policy carve-outs literally in the plan text. The reviewer reads only `plan_text`, not repo-level policy files.
+- For doc deliverables, submit full content via `final_files`; diffs or prose summaries are often insufficient evidence.
+
 ---
 
 ## 1. When the protocol applies
@@ -351,6 +359,37 @@ Use the full protocol for: any task that produces new production logic, any task
 
 A reference lightweight dispatch clause is at `examples/lightweight-dispatch.md`.
 
+### Enabling CodeScene companion tools
+
+Anti-tangent does not call CodeScene automatically. To make the optional CodeScene companion steps available, configure CodeScene MCP in the same MCP host that runs anti-tangent.
+
+Consumer setup checklist:
+- Install or run the CodeScene MCP package: `npx -y @codescene/codehealth-mcp`.
+- Set `CS_ACCESS_TOKEN` in the environment available to the MCP host.
+- Add a CodeScene MCP server entry to your host configuration. The exact file differs by host, but the server entry should be equivalent to:
+
+```json
+{
+  "mcpServers": {
+    "codescene": {
+      "command": "npx",
+      "args": ["-y", "@codescene/codehealth-mcp"],
+      "env": {
+        "CS_ACCESS_TOKEN": "${CS_ACCESS_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Keep anti-tangent and CodeScene as separate MCP servers. Anti-tangent remains the text-only plan/task/completion reviewer; CodeScene supplies deterministic code-health checks over the working tree.
+
+Recommended cadence for the dispatch clause once CodeScene MCP is wired in:
+
+- Call `pre_commit_code_health_safeguard` for each task that touches production code.
+- Call `analyze_change_set` during the branch verification sweep or before final handoff.
+- Call `code_health_review` when a safeguard returns `degraded` and you need refactor-trigger context for a sibling-ticket recommendation.
+
 ### CodeScene MCP companion (optional)
 
 Anti-tangent's `## Scope and limits` section above documents what the text-only reviewer structurally cannot catch — codebase-grounded facts like field/symbol existence, function signatures, repo-wide invariants, and adjacent-code conventions. The recommended pairing for that blind spot is the open-source [CodeScene MCP server](https://github.com/codescene-oss/codescene-mcp-server), which exposes deterministic Code Health analysis as MCP tools.
@@ -542,6 +581,29 @@ The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`. While
 ### 5.7 `partial: true` envelope field (v0.3.0+)
 
 When the reviewer's output was truncated at its `max_tokens` cap but at least one complete finding could be recovered, the response envelope (`Result` for per-task tools, `PlanResult` for `validate_plan`) carries `"partial": true` and the synthetic truncation finding is `severity: minor` rather than `major`. The field is `omitempty` — absent in the common (non-truncated) case, so pre-0.3.0 callers continue to work. If partial recovery fails (no complete finding before the cap hit), the envelope falls back to the legacy single `severity: major` truncation finding with no `partial` field set.
+
+### 5.8 Using v0.3.3 review-context features
+
+Use `pinned_by` when a terse acceptance criterion is backed by existing tests, docs, commands, or static checks:
+
+```json
+{
+  "task_title": "Preserve retry behavior",
+  "goal": "Change request parsing without changing retry semantics.",
+  "acceptance_criteria": ["Existing retry behavior remains unchanged."],
+  "pinned_by": [
+    "RetryHandlerTest.retries_transient_errors",
+    "go test ./internal/retry -run RetryHandler",
+    "docs/retry-contract.md"
+  ]
+}
+```
+
+Use `phase: "post"` only to recover a task session after implementation already happened; normal task execution still calls `validate_task_spec` before coding.
+
+For `validate_plan`, normally omit `max_tokens_override`. v0.3.3 scales the default budget by task count. If a no-analysis truncation response asks for a retry, pass a higher `max_tokens_override` or raise `ANTI_TANGENT_PLAN_MAX_TOKENS` / `ANTI_TANGENT_MAX_TOKENS_CEILING`. Treat `codebase_reference_checklist` as a pre-flight checklist, not as a blocking plan-quality defect by itself.
+
+For `validate_completion`, submit doc/generated deliverables through `final_files`, complete code changes through `final_diff`, and command outputs through `test_evidence`. If the summary names a `.md`, `.txt`, `.json`, `.yaml`, or `.yml` path that is missing from evidence, the reviewer prompt will call that out.
 
 ---
 

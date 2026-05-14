@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-05-14
+
+### Added
+- `validate_task_spec` accepts optional `pinned_by` entries for existing tests/docs/static checks that pin behavior, plus optional `phase` (`pre` default, `post` for post-hoc recovery reviews).
+- `validate_completion` prompts now highlight summary-referenced doc/artifact paths that are missing from `final_files` and `final_diff` evidence.
+
+### Changed
+- `validate_plan` now scales its default output-token budget by task count when no `max_tokens_override` is supplied, bounded by `ANTI_TANGENT_MAX_TOKENS_CEILING`.
+- No-analysis `validate_plan` truncation responses now emit a `major` finding with self-contained retry guidance.
+- Task-level `unverifiable_codebase_claim` findings from `validate_plan` are rolled up into a single plan-level checklist finding.
+- Plans whose only findings are minor `unverifiable_codebase_claim` checklist items now return `plan_verdict: pass` with `plan_quality: actionable`.
+
+### Documentation
+- `INTEGRATION.md` documents pre-flight grep discipline, `final_files` for doc deliverables, avoiding unverifiable self-review claims in plan prose, literal commit-policy carve-outs, CodeScene MCP setup requirements, and recommended CodeScene cadence.
+
 ## [0.3.2] - 2026-05-13
 
 ### Added
