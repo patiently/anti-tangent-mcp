@@ -846,6 +846,49 @@ func TestValidatePlan_ExplicitOverrideBeatsAdaptivePlanMaxTokens(t *testing.T) {
 	assert.Equal(t, 5000, cap.LastRequest.MaxTokens)
 }
 
+// TestValidatePlan_AdaptivePlanMaxTokensClampedByCeiling covers the upper
+// bound: when 2000 + 800*taskCount exceeds MaxTokensCeiling, the ceiling
+// wins. 8 tasks → adaptive 8400; ceiling 6000 → 6000 sent. We use 8 tasks
+// here rather than ≥18 to stay on the single-pass review path (chunking
+// kicks in past PlanTasksPerChunk and uses a different reviewer schema).
+func TestValidatePlan_AdaptivePlanMaxTokensClampedByCeiling(t *testing.T) {
+	cap := &captureReviewer{
+		name: "openai",
+		Response: providers.Response{
+			RawJSON: []byte(`{"plan_verdict":"pass","plan_findings":[],"tasks":[{"task_index":0,"task_title":"T1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"go"}`),
+			Model:   "gpt-5",
+		},
+	}
+	d := newDeps(t, &fakeReviewer{name: "anthropic"})
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Cfg.PlanMaxTokens = 4096
+	d.Cfg.MaxTokensCeiling = 6000
+	d.Reviews = providers.Registry{"openai": cap}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(8)})
+	require.NoError(t, err)
+	assert.Equal(t, 6000, cap.LastRequest.MaxTokens)
+}
+
+// TestValidatePlan_AdaptivePlanMaxTokensFloorBelowPlanMaxTokens covers the
+// lower bound: for tiny plans the adaptive floor is below PlanMaxTokens, so
+// the configured PlanMaxTokens default wins. 1 task → adaptive 2800, default
+// 4096 → 4096 sent.
+func TestValidatePlan_AdaptivePlanMaxTokensFloorBelowPlanMaxTokens(t *testing.T) {
+	cap := &captureReviewer{name: "openai", Response: planPassResp()}
+	d := newDeps(t, &fakeReviewer{name: "anthropic"})
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Cfg.PlanMaxTokens = 4096
+	d.Cfg.MaxTokensCeiling = 16384
+	d.Reviews = providers.Registry{"openai": cap}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	require.NoError(t, err)
+	assert.Equal(t, 4096, cap.LastRequest.MaxTokens)
+}
+
 // reviewerCapture is a fakeReviewer that also records the last providers.Request
 // so override tests can assert on MaxTokens while preserving the resp/err
 // behavior of fakeReviewer (including error-returning truncation paths).

@@ -458,30 +458,31 @@ func effectiveMaxTokens(override, defaultMaxTokens, ceiling int) (int, verdict.F
 	return ceiling, finding, nil
 }
 
-// effectivePlanMaxTokens computes the max-tokens value to send for a
-// validate_plan reviewer call. When an explicit max_tokens_override is
-// supplied it preserves the existing override/clamp semantics by delegating
-// to effectiveMaxTokens. When no override is supplied it returns a
-// task-count-scaled floor of
-//
-//	max(cfg.PlanMaxTokens, min(cfg.MaxTokensCeiling, 2000 + 800*taskCount))
-//
-// — i.e. plan output scales roughly with task count (one block per task plus
-// plan-level findings/summary), but the ceiling still caps cost and the
-// configured PlanMaxTokens still acts as a floor. Adaptive bumps emit no
-// clamp finding because they are not caller errors.
-func effectivePlanMaxTokens(args ValidatePlanArgs, cfg config.Config, taskCount int) (int, verdict.Finding, error) {
-	if args.MaxTokensOverride != 0 {
-		return effectiveMaxTokens(args.MaxTokensOverride, cfg.PlanMaxTokens, cfg.MaxTokensCeiling)
-	}
-	floor := 2000 + 800*taskCount
+// Adaptive default plan budget: base + per-task increment, bounded by the
+// configured PlanMaxTokens floor and MaxTokensCeiling cap. Plan output scales
+// roughly with task count (one block per task plus plan-level findings and
+// summary), so a single 4096-token default fits small plans but truncates
+// large ones. Constants are sourced from design §1.
+const (
+	planAdaptiveBase        = 2000
+	planAdaptivePerTask     = 800
+)
+
+// adaptivePlanMaxTokens returns the max-tokens value for a validate_plan
+// reviewer call WHEN no caller-supplied max_tokens_override is set. The
+// formula is max(cfg.PlanMaxTokens, min(cfg.MaxTokensCeiling, base + per*tasks)).
+// Adaptive bumps do not emit a clamp finding because they are not caller
+// errors — callers asking for explicit overrides still route through
+// effectiveMaxTokens at the ValidatePlan boundary.
+func adaptivePlanMaxTokens(cfg config.Config, taskCount int) int {
+	floor := planAdaptiveBase + planAdaptivePerTask*taskCount
 	if floor > cfg.MaxTokensCeiling {
 		floor = cfg.MaxTokensCeiling
 	}
 	if floor < cfg.PlanMaxTokens {
 		floor = cfg.PlanMaxTokens
 	}
-	return floor, verdict.Finding{}, nil
+	return floor
 }
 
 // prependClamp inserts the clamp finding at the head of the envelope's
@@ -1040,10 +1041,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// overrides and attached the clamp finding for payload-too-large and
 	// no-headings early exits; we must not disturb that path.
 	if args.MaxTokensOverride == 0 {
-		maxTokens, clamp, err = effectivePlanMaxTokens(args, h.deps.Cfg, len(tasks))
-		if err != nil {
-			return nil, verdict.PlanResult{}, err
-		}
+		maxTokens = adaptivePlanMaxTokens(h.deps.Cfg, len(tasks))
 	}
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PlanModel)
