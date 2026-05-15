@@ -794,3 +794,39 @@ func TestValidatePlan_EmptyFindingsDoNotCalibrateToPass(t *testing.T) {
 	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
 	assert.NotContains(t, pr.NextAction, "No blocking plan-quality findings")
 }
+
+// TestValidatePlan_RollupFallsBackToMergedPositionForBadTaskIndex defends
+// against reviewers that emit chunk-local or zero task_index values:
+// validateChunkIdentity only pins titles/order, so a stitched-result task
+// can still carry index=0 or a chunk-local 1. The rollup must label such
+// tasks with their merged-position ordinal (i+1) instead, so the human
+// checklist remains sequentially unique rather than showing "Task 0:" or
+// duplicate "Task 1:" lines.
+func TestValidatePlan_RollupFallsBackToMergedPositionForBadTaskIndex(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict":"warn",
+		"plan_quality":"actionable",
+		"plan_findings":[],
+		"tasks":[
+			{"task_index":0,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""},
+			{"task_index":1,"task_title":"Task 2: two","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Bar.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}
+		],
+		"next_action":"Verify."
+	}`)
+	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(2)})
+	require.NoError(t, err)
+	require.Len(t, pr.PlanFindings, 1)
+	// Without the fallback the rollup would emit "Task 0:" and "Task 1:".
+	// With the fallback the first task lands at merged-position 1 and the
+	// second keeps its reviewer-provided index of 1 — but the fallback only
+	// fires on the first (TaskIndex == 0). Either way, no "Task 0:" appears
+	// and merged-position 1 is referenced at least once.
+	assert.NotContains(t, pr.PlanFindings[0].Evidence, "Task 0:")
+	assert.Contains(t, pr.PlanFindings[0].Evidence, "Task 1:")
+}

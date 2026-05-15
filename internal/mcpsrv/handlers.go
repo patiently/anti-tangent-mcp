@@ -1222,8 +1222,17 @@ func normalizePlanUnverifiableFindings(pr *verdict.PlanResult) {
 			// Spec §3: "one compact line per affected task." Multiple
 			// unverifiable findings under the same task join with "; " so
 			// the human checklist shows one task once, not duplicated.
+			//
+			// Chunked-path defense: validateChunkIdentity checks titles/order,
+			// not task_index, so a chunk-local or zero index can survive.
+			// Fall back to the merged-task position when the reviewer-provided
+			// index is missing or invalid.
+			taskNum := pr.Tasks[i].TaskIndex
+			if taskNum <= 0 {
+				taskNum = i + 1
+			}
 			lines = append(lines, fmt.Sprintf("Task %d: %s",
-				pr.Tasks[i].TaskIndex,
+				taskNum,
 				truncate(strings.Join(perTask, "; "), rollupEvidencePerTaskMax)))
 		}
 	}
