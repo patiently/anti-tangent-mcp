@@ -84,6 +84,13 @@ type planReviewErrInputs struct {
 	Model      config.ModelRef
 	PartialRaw []byte
 	Clamp      verdict.Finding
+	// ModelUsed and ReviewMS preserve the real reviewer identifier and elapsed
+	// time captured before the truncation. The chunked path can record these
+	// from earlier successful reviewer calls (Pass-1 + completed chunks); when
+	// non-empty they survive the recovery envelope. Pre-truncation Pass-1
+	// failures leave them empty/zero and the helper falls back to Model.String().
+	ModelUsed string
+	ReviewMS  int64
 	// Prior carries any partial state already collected before the truncation
 	// point (for the chunked path: Pass-1 plan_findings plus complete chunks).
 	// See recoverPartialPlanFindings for the merge semantics.
@@ -115,7 +122,11 @@ func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolRes
 		pr = truncatedPlanResult()
 	}
 	pr = prependPlanClamp(pr, in.Clamp)
-	r, p, err := planEnvelopeResult(pr, in.Model.String(), 0)
+	modelUsed := in.ModelUsed
+	if modelUsed == "" {
+		modelUsed = in.Model.String()
+	}
+	r, p, err := planEnvelopeResult(pr, modelUsed, in.ReviewMS)
 	return r, p, true, err
 }
 

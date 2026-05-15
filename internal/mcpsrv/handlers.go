@@ -993,6 +993,8 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if r, p, handled, retErr := h.handlePlanReviewErr(planReviewErrInputs{
 		Err:        err,
 		Model:      model,
+		ModelUsed:  modelUsed,
+		ReviewMS:   ms,
 		PartialRaw: partialRaw,
 		Clamp:      clamp,
 		Prior:      pr,
