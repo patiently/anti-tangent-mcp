@@ -96,7 +96,13 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}
 
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, cc.Model, cc.Rendered, cc.MaxTokens)
-	if r, env, handled, retErr := h.handlePerTaskReviewErr(err, "", cc.Model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS", cc.Clamp, nil); handled {
+	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
+		Err:        err,
+		Model:      cc.Model,
+		PartialRaw: partialRaw,
+		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
+		Clamp:      cc.Clamp,
+	}); handled {
 		return r, env, retErr
 	}
 
@@ -282,7 +288,15 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 	}
 
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
-	if r, env, handled, retErr := h.handlePerTaskReviewErr(err, sess.ID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS", clamp, sess); handled {
+	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
+		Err:        err,
+		SessionID:  sess.ID,
+		Model:      model,
+		PartialRaw: partialRaw,
+		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
+		Clamp:      clamp,
+		Sess:       sess,
+	}); handled {
 		return r, env, retErr
 	}
 
@@ -892,7 +906,15 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
 	// In lightweight mode sess is nil so the helper skips TTL application;
 	// otherwise sess carries the resolved session and TTL fields are filled in.
-	if r, env, handled, retErr := h.handlePerTaskReviewErr(err, sessID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS", clamp, sess); handled {
+	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
+		Err:        err,
+		SessionID:  sessID,
+		Model:      model,
+		PartialRaw: partialRaw,
+		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
+		Clamp:      clamp,
+		Sess:       sess,
+	}); handled {
 		return r, env, retErr
 	}
 
@@ -968,7 +990,13 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// cleanly-closed Pass-2 chunk task results. Threading it through as
 	// `prior` ensures those aren't dropped if the truncating chunk's bytes
 	// yield further recovery.
-	if r, p, handled, retErr := h.handlePlanReviewErr(err, model, partialRaw, clamp, pr); handled {
+	if r, p, handled, retErr := h.handlePlanReviewErr(planReviewErrInputs{
+		Err:        err,
+		Model:      model,
+		PartialRaw: partialRaw,
+		Clamp:      clamp,
+		Prior:      pr,
+	}); handled {
 		return r, p, retErr
 	}
 	pr = prependPlanClamp(pr, clamp)

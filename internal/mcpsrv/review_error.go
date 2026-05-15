@@ -76,43 +76,63 @@ func (h *handlers) resolveModelAndRender(
 	return model, rendered, nil
 }
 
+// planReviewErrInputs bundles the inputs to handlePlanReviewErr. Carrying
+// these on a struct keeps the helper signature narrow (1 arg vs. 5) and
+// matches CodeScene's "max arguments = 4" code-health threshold.
+type planReviewErrInputs struct {
+	Err        error
+	Model      config.ModelRef
+	PartialRaw []byte
+	Clamp      verdict.Finding
+	// Prior carries any partial state already collected before the truncation
+	// point (for the chunked path: Pass-1 plan_findings plus complete chunks).
+	// See recoverPartialPlanFindings for the merge semantics.
+	Prior verdict.PlanResult
+}
+
 // handlePlanReviewErr is the ValidatePlan analog of handlePerTaskReviewErr.
 // Collapses the truncation-recovery + error-propagation pattern after the
 // plan reviewer call (either reviewPlanSingle or reviewPlanChunked).
 //
 // Returns (result, planResult, handled, err):
-//   - reviewErr == nil               → handled=false; caller proceeds normally.
-//   - reviewErr is a truncation err  → handled=true; result/planResult carry
+//   - in.Err == nil               → handled=false; caller proceeds normally.
+//   - in.Err is a truncation err  → handled=true; result/planResult carry
 //     the partial-recovery or truncated envelope with clamp applied.
-//   - reviewErr is anything else     → handled=true; result/planResult are
-//     zero values and err is the propagated reviewErr.
+//   - in.Err is anything else     → handled=true; result/planResult are
+//     zero values and err is the propagated in.Err.
 //
-// Always returning handled=true on non-nil reviewErr lets the call site drop
+// Always returning handled=true on non-nil in.Err lets the call site drop
 // the residual `if err != nil` branch — just `if handled { return ... }`.
-//
-// `prior` carries any partial state already collected before the truncation
-// point (for the chunked path: Pass-1 plan_findings plus complete chunks).
-// See recoverPartialPlanFindings for the merge semantics.
-func (h *handlers) handlePlanReviewErr(
-	reviewErr error,
-	model config.ModelRef,
-	partialRaw []byte,
-	clamp verdict.Finding,
-	prior verdict.PlanResult,
-) (*mcp.CallToolResult, verdict.PlanResult, bool, error) {
-	if reviewErr == nil {
+func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolResult, verdict.PlanResult, bool, error) {
+	if in.Err == nil {
 		return nil, verdict.PlanResult{}, false, nil
 	}
-	if !errors.Is(reviewErr, providers.ErrResponseTruncated) {
-		return nil, verdict.PlanResult{}, true, reviewErr
+	if !errors.Is(in.Err, providers.ErrResponseTruncated) {
+		return nil, verdict.PlanResult{}, true, in.Err
 	}
-	pr, ok := recoverPartialPlanFindings(partialRaw, prior)
+	pr, ok := recoverPartialPlanFindings(in.PartialRaw, in.Prior)
 	if !ok {
 		pr = truncatedPlanResult()
 	}
-	pr = prependPlanClamp(pr, clamp)
-	r, p, err := planEnvelopeResult(pr, model.String(), 0)
+	pr = prependPlanClamp(pr, in.Clamp)
+	r, p, err := planEnvelopeResult(pr, in.Model.String(), 0)
 	return r, p, true, err
+}
+
+// perTaskReviewErrInputs bundles the inputs to handlePerTaskReviewErr.
+// Carrying these on a struct keeps the helper signature narrow (1 arg vs. 7)
+// and matches CodeScene's "max arguments = 4" code-health threshold.
+type perTaskReviewErrInputs struct {
+	Err        error
+	SessionID  string
+	Model      config.ModelRef
+	PartialRaw []byte
+	EnvVar     string
+	Clamp      verdict.Finding
+	// Sess is nil for pre-session flows (ValidateTaskSpec, lightweight
+	// ValidateCompletion); otherwise the resolved *session.Session so the
+	// envelope carries SessionExpiresAt / SessionTTLRemainingSeconds.
+	Sess *session.Session
 }
 
 // handlePerTaskReviewErr collapses the truncation-recovery + error-propagation
@@ -120,41 +140,29 @@ func (h *handlers) handlePlanReviewErr(
 // after h.review(...).
 //
 // Returns (result, env, handled, err):
-//   - reviewErr == nil               → handled=false; caller proceeds normally.
-//   - reviewErr is a truncation err  → handled=true; result/env carry the
-//     partial-recovery or truncated envelope with clamp and (when sess is
+//   - in.Err == nil               → handled=false; caller proceeds normally.
+//   - in.Err is a truncation err  → handled=true; result/env carry the
+//     partial-recovery or truncated envelope with clamp and (when in.Sess is
 //     non-nil) session-TTL fields applied.
-//   - reviewErr is anything else     → handled=true; result/env are zero
-//     values and err is the propagated reviewErr.
+//   - in.Err is anything else     → handled=true; result/env are zero
+//     values and err is the propagated in.Err.
 //
-// Always returning handled=true on non-nil reviewErr lets the call site drop
+// Always returning handled=true on non-nil in.Err lets the call site drop
 // the residual `if err != nil` branch — just `if handled { return ... }`.
-//
-// Pass sess=nil for pre-session flows (ValidateTaskSpec, lightweight
-// ValidateCompletion); pass the resolved *session.Session otherwise so the
-// envelope carries SessionExpiresAt / SessionTTLRemainingSeconds.
-func (h *handlers) handlePerTaskReviewErr(
-	reviewErr error,
-	sessionID string,
-	model config.ModelRef,
-	partialRaw []byte,
-	envVar string,
-	clamp verdict.Finding,
-	sess *session.Session,
-) (*mcp.CallToolResult, Envelope, bool, error) {
-	if reviewErr == nil {
+func (h *handlers) handlePerTaskReviewErr(in perTaskReviewErrInputs) (*mcp.CallToolResult, Envelope, bool, error) {
+	if in.Err == nil {
 		return nil, Envelope{}, false, nil
 	}
-	if !errors.Is(reviewErr, providers.ErrResponseTruncated) {
-		return nil, Envelope{}, true, reviewErr
+	if !errors.Is(in.Err, providers.ErrResponseTruncated) {
+		return nil, Envelope{}, true, in.Err
 	}
-	env, ok := recoverPartialFindings(sessionID, model, partialRaw, envVar)
+	env, ok := recoverPartialFindings(in.SessionID, in.Model, in.PartialRaw, in.EnvVar)
 	if !ok {
-		env = truncatedEnvelope(sessionID, model)
+		env = truncatedEnvelope(in.SessionID, in.Model)
 	}
-	env = prependClamp(env, clamp)
-	if sess != nil {
-		env = h.withSessionTTL(env, sess)
+	env = prependClamp(env, in.Clamp)
+	if in.Sess != nil {
+		env = h.withSessionTTL(env, in.Sess)
 	}
 	r, e, err := envelopeResult(env)
 	return r, e, true, err
