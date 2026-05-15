@@ -17,6 +17,8 @@ Service is a Gin app on port 8080.
 
 ## What to evaluate
 
+If a pinned_by section is present, treat those entries as caller-supplied anchors for existing behavior. They are not codebase facts you can independently verify, but neither are they vague — do not penalize an AC merely because a pinned_by entry names a file, class, method, command, or document. For ACs like "existing behavior remains unchanged," judge whether the completion evidence plausibly preserved the pinned behavior before asking for more AC wording.
+
 This is the FINAL review. Walk every acceptance criterion explicitly. For each AC, either:
 
 - find a passing implementation and cite it (no finding required), OR

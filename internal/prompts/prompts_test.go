@@ -426,3 +426,56 @@ func TestRenderPlanTasksChunk_DoesNotMentionPlanQuality(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, out.User, "**plan_quality**", "plan_tasks_chunk.tmpl should NOT include the **plan_quality** emission instruction (chunked Pass 2+ doesn't emit it)")
 }
+
+func TestRenderPre_WithPinnedByIncludesAnchors(t *testing.T) {
+	spec := sampleSpec()
+	spec.PinnedBy = []string{"HealthHandlerTest.TestOK", "go test ./internal/http"}
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Pinned by:")
+	assert.Contains(t, out.User, "HealthHandlerTest.TestOK")
+	assert.Contains(t, out.User, "caller-supplied anchors")
+}
+
+func TestRenderPre_WithoutPinnedByOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Pinned by:")
+}
+
+func TestRenderPre_PostPhaseIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.Phase = "post"
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Phase: post-hoc")
+	assert.Contains(t, out.User, "implementation-alignment")
+}
+
+func TestRenderPost_WithPinnedByIncludesAnchors(t *testing.T) {
+	spec := sampleSpec()
+	spec.PinnedBy = []string{"HealthHandlerTest.TestOK", "go test ./internal/http"}
+	out, err := RenderPost(PostInput{Spec: spec, Summary: "implemented", TestEvidence: "go test PASS"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Pinned by:")
+	assert.Contains(t, out.User, "HealthHandlerTest.TestOK")
+	assert.Contains(t, out.User, "caller-supplied anchors")
+}
+
+func TestRenderPost_WithMissingReferencedPathsIncludesEvidenceNote(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:                           sampleSpec(),
+		Summary:                        "Wrote docs/audit.md and updated implementation.",
+		ReferencedPathsMissingEvidence: []string{"docs/audit.md"},
+		TestEvidence:                   "go test ./... PASS",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "summary references these paths")
+	assert.Contains(t, out.User, "docs/audit.md")
+}
+
+func TestRenderPost_WithoutMissingReferencedPathsOmitsEvidenceNote(t *testing.T) {
+	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "No referenced deliverable."})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "summary references these paths")
+}

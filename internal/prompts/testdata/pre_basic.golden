@@ -25,6 +25,8 @@ Check three things:
 2. Acceptance-criterion quality — is each AC testable, specific, and unambiguous? For any vague AC, propose a concrete rewrite in the suggestion.
 3. Implicit assumptions — list any assumptions a fresh implementer would have to make. Each becomes a finding so the spec author can either pin them down or explicitly mark them as implementer's discretion.
 
+If a pinned_by section is present, treat those entries as caller-supplied anchors for existing behavior. They are not codebase facts you can independently verify. Do not emit `unverifiable_codebase_claim` merely because a pinned_by entry names a file, class, method, command, or document. For ACs like "existing behavior remains unchanged," prefer a minor `quality` suggestion to enumerate the behavior only when pinned_by is empty or unrelated.
+
 Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
 
 ### Unverifiable codebase claims

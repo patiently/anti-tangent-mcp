@@ -38,11 +38,12 @@ type MidInput struct {
 }
 
 type PostInput struct {
-	Spec         session.TaskSpec
-	Summary      string
-	Files        []File
-	FinalDiff    string
-	TestEvidence string
+	Spec                           session.TaskSpec
+	Summary                        string
+	Files                          []File
+	FinalDiff                      string
+	TestEvidence                   string
+	ReferencedPathsMissingEvidence []string
 }
 
 type PlanInput struct {

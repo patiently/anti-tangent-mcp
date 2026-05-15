@@ -161,6 +161,84 @@ func TestValidateTaskSpec_MissingFields(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestValidateTaskSpec_InvalidPhaseRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		Phase:     "during",
+	})
+	require.Error(t, err)
+	assert.EqualError(t, err, `phase must be "pre" or "post"`)
+	assert.Equal(t, 0, rv.Calls)
+}
+
+func TestValidateTaskSpec_PinnedByTrimmedAndStored(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		PinnedBy:  []string{"  TestA.pins_behavior  ", "", "   ", "docs/spec.md"},
+		Phase:     "post",
+	})
+	require.NoError(t, err)
+
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	assert.Equal(t, []string{"TestA.pins_behavior", "docs/spec.md"}, sess.Spec.PinnedBy)
+	assert.Equal(t, "post", sess.Spec.Phase)
+}
+
+func TestValidateTaskSpec_PinnedByLimitsRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	tooMany := make([]string, 51)
+	for i := range tooMany {
+		tooMany[i] = "Test.pins_behavior"
+	}
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		PinnedBy:  tooMany,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pinned_by must contain at most 50 entries")
+
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		PinnedBy:  []string{strings.Repeat("x", 501)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pinned_by[0] must be at most 500 characters")
+	assert.Equal(t, 0, rv.Calls)
+
+	// 500 multibyte runes (1000 bytes) must pass — the cap is on runes, not bytes.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		PinnedBy:  []string{strings.Repeat("é", 500)},
+	})
+	require.NoError(t, err)
+
+	// 501 multibyte runes must fail at the same boundary as ASCII.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+		PinnedBy:  []string{strings.Repeat("é", 501)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pinned_by[0] must be at most 500 characters")
+}
+
 func TestCheckProgress_HappyPath(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5-20251001")}
 	d := newDeps(t, rv)
@@ -554,8 +632,17 @@ func TestValidatePlan_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
-	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[0].Severity)
+	// No-analysis truncation is major (not minor) so callers can't mistake it
+	// for a cosmetic concern; plan_quality drops to rough because no analysis
+	// occurred, and the suggestion / next_action are self-contained retry
+	// instructions naming all three knobs.
+	assert.Equal(t, verdict.SeverityMajor, pr.PlanFindings[0].Severity)
+	assert.Equal(t, verdict.PlanQualityRough, pr.PlanQuality)
 	assert.Contains(t, pr.PlanFindings[0].Suggestion, "ANTI_TANGENT_PLAN_MAX_TOKENS")
+	assert.Contains(t, pr.PlanFindings[0].Suggestion, "max_tokens_override")
+	assert.Contains(t, pr.PlanFindings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+	assert.Contains(t, pr.NextAction, "max_tokens_override >= 16000")
+	assert.Contains(t, pr.NextAction, "ANTI_TANGENT_PLAN_MAX_TOKENS")
 }
 
 func planPassResp() providers.Response {
@@ -710,6 +797,90 @@ func TestValidatePlan_UsesConfiguredPlanMaxTokens(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
 	assert.Equal(t, 8888, cap.LastRequest.MaxTokens, "reviewPlanSingle() should use PlanMaxTokens from config")
+}
+
+// TestValidatePlan_AdaptiveMaxTokensTable exercises the four (taskCount,
+// override, planMax, ceiling) corners of validate_plan's adaptive budget rule.
+// Each subtest name preserves the rationale of the original standalone test it
+// replaced; the rationale comments before each case describe the boundary the
+// case pins. The shared sub-runner builds a captureReviewer + Deps + handler
+// once so the boilerplate doesn't repeat per case.
+func TestValidatePlan_AdaptiveMaxTokensTable(t *testing.T) {
+	// Each case asserts the MaxTokens value the provider receives for a plan
+	// of taskCount tasks under the given PlanMaxTokens/MaxTokensCeiling config
+	// and (optional) caller-supplied override.
+	cases := []struct {
+		// name carries the original-test rationale so failures stay legible.
+		name string
+		// taskCount drives buildPlanWithNTasks; affects only the adaptive
+		// formula (2000 + 800*taskCount).
+		taskCount     int
+		override      int
+		planMax       int
+		ceiling       int
+		wantMaxTokens int
+	}{
+		{
+			// adaptive-formula path: 8 tasks → 2000 + 800*8 = 8400; above
+			// PlanMaxTokens (4096), below ceiling (16384), so 8400 wins.
+			name:          "UsesAdaptivePlanMaxTokensWhenUnset",
+			taskCount:     8,
+			override:      0,
+			planMax:       4096,
+			ceiling:       16384,
+			wantMaxTokens: 8400,
+		},
+		{
+			// 5000 is between PlanMaxTokens (4096) and adaptive 8400 for 8
+			// tasks: the explicit override must still win.
+			name:          "ExplicitOverrideBeatsAdaptivePlanMaxTokens",
+			taskCount:     8,
+			override:      5000,
+			planMax:       4096,
+			ceiling:       16384,
+			wantMaxTokens: 5000,
+		},
+		{
+			// Upper bound: when adaptive 8400 exceeds ceiling 6000, ceiling
+			// wins. 8 tasks keeps us on the single-pass review path so the
+			// captureReviewer sees exactly one call.
+			name:          "AdaptivePlanMaxTokensClampedByCeiling",
+			taskCount:     8,
+			override:      0,
+			planMax:       4096,
+			ceiling:       6000,
+			wantMaxTokens: 6000,
+		},
+		{
+			// Lower bound: for tiny plans the adaptive floor (2000 + 800*1 =
+			// 2800) is below PlanMaxTokens (4096), so PlanMaxTokens wins.
+			name:          "AdaptivePlanMaxTokensFloorBelowPlanMaxTokens",
+			taskCount:     1,
+			override:      0,
+			planMax:       4096,
+			ceiling:       16384,
+			wantMaxTokens: 4096,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cap := &captureReviewer{name: "openai", Response: planPassResp()}
+			d := newDeps(t, &fakeReviewer{name: "anthropic"})
+			d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+			d.Cfg.PlanMaxTokens = tc.planMax
+			d.Cfg.MaxTokensCeiling = tc.ceiling
+			d.Reviews = providers.Registry{"openai": cap}
+			h := &handlers{deps: d}
+
+			_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+				PlanText:          buildPlanWithNTasks(tc.taskCount),
+				MaxTokensOverride: tc.override,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantMaxTokens, cap.LastRequest.MaxTokens)
+		})
+	}
 }
 
 // reviewerCapture is a fakeReviewer that also records the last providers.Request
@@ -1400,6 +1571,42 @@ func TestValidateCompletion_LightweightMode_EmptySessionAccepted(t *testing.T) {
 	if env.Verdict != "pass" {
 		t.Errorf("lightweight mode reviewer call should pass with stub response, got %s", env.Verdict)
 	}
+}
+
+func TestReferencedPathsMissingEvidence(t *testing.T) {
+	args := ValidateCompletionArgs{
+		Summary:    "Created docs/audit.md and reports/result.yaml.",
+		FinalFiles: []FileArg{{Path: "docs/audit.md", Content: "# Audit\n"}},
+		FinalDiff:  "diff --git a/other.txt b/other.txt\n",
+	}
+	assert.Equal(t, []string{"reports/result.yaml"}, referencedPathsMissingEvidence(args))
+}
+
+func TestReferencedPathsMissingEvidence_DedupsRepeatedReferences(t *testing.T) {
+	args := ValidateCompletionArgs{
+		Summary:      "Created docs/audit.md. Then re-edited docs/audit.md.",
+		TestEvidence: "ran tests",
+	}
+	assert.Equal(t, []string{"docs/audit.md"}, referencedPathsMissingEvidence(args))
+}
+
+func TestValidateCompletion_RendersReferencedPathEvidenceNote(t *testing.T) {
+	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+	d := newDeps(t, &cap.fakeReviewer)
+	d.Reviews = providers.Registry{"anthropic": cap}
+	h := &handlers{deps: d}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+
+	_, _, err = h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:    pre.SessionID,
+		Summary:      "Created docs/audit.md.",
+		TestEvidence: "not run; docs only",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, cap.LastRequest.User, "summary references these paths")
+	assert.Contains(t, cap.LastRequest.User, "docs/audit.md")
 }
 
 func TestValidateCompletion_LightweightMode_NoEvidenceErrors(t *testing.T) {

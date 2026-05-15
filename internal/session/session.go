@@ -15,6 +15,8 @@ type TaskSpec struct {
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
 	NonGoals           []string `json:"non_goals,omitempty"`
 	Context            string   `json:"context,omitempty"`
+	PinnedBy           []string `json:"pinned_by,omitempty"`
+	Phase              string   `json:"phase,omitempty"`
 }
 
 type ModelDefaults struct {

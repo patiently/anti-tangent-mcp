@@ -43,6 +43,8 @@ type ValidateTaskSpecArgs struct {
 	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
 	NonGoals           []string `json:"non_goals,omitempty"`
 	Context            string   `json:"context,omitempty"`
+	PinnedBy           []string `json:"pinned_by,omitempty"`
+	Phase              string   `json:"phase,omitempty"`
 	ModelOverride      string   `json:"model_override,omitempty"`
 	MaxTokensOverride  int      `json:"max_tokens_override,omitempty"`
 }
@@ -56,7 +58,8 @@ func validateTaskSpecTool() *mcp.Tool {
 		Name: "validate_task_spec",
 		Description: "Validate that a task specification is clear and implementable BEFORE you start coding. " +
 			"Returns findings on missing/ambiguous goals, weak acceptance criteria, and unstated assumptions. " +
-			"Call this once at the start of every task.",
+			"Call this once at the start of every task. " +
+			"Optional pinned_by entries can name existing tests/docs/commands that pin behavior; optional phase=post is for post-hoc/session-recovery reviews only.",
 	}
 }
 
@@ -65,12 +68,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, errors.New("task_title and goal are required")
 	}
 
-	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PerTaskMaxTokens, h.deps.Cfg.MaxTokensCeiling)
-	if err != nil {
-		return nil, Envelope{}, err
-	}
-
-	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PreModel)
+	inputs, err := normalizeTaskSpecInputs(args)
 	if err != nil {
 		return nil, Envelope{}, err
 	}
@@ -81,25 +79,31 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		AcceptanceCriteria: args.AcceptanceCriteria,
 		NonGoals:           args.NonGoals,
 		Context:            args.Context,
+		PinnedBy:           inputs.PinnedBy,
+		Phase:              inputs.Phase,
 	}
 
-	rendered, err := prompts.RenderPre(prompts.PreInput{Spec: spec})
+	cc, err := h.resolvePreCallContext(
+		args.MaxTokensOverride,
+		h.deps.Cfg.PerTaskMaxTokens,
+		args.ModelOverride,
+		h.deps.Cfg.PreModel,
+		func() (prompts.Output, error) { return prompts.RenderPre(prompts.PreInput{Spec: spec}) },
+		"render pre prompt",
+	)
 	if err != nil {
-		return nil, Envelope{}, fmt.Errorf("render pre prompt: %w", err)
-	}
-
-	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
-	if err != nil {
-		if errors.Is(err, providers.ErrResponseTruncated) {
-			if env, ok := recoverPartialFindings("", model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
-				env = prependClamp(env, clamp)
-				return envelopeResult(env)
-			}
-			env := truncatedEnvelope("", model)
-			env = prependClamp(env, clamp)
-			return envelopeResult(env)
-		}
 		return nil, Envelope{}, err
+	}
+
+	result, modelUsed, ms, partialRaw, err := h.review(ctx, cc.Model, cc.Rendered, cc.MaxTokens)
+	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
+		Err:        err,
+		Model:      cc.Model,
+		PartialRaw: partialRaw,
+		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
+		Clamp:      cc.Clamp,
+	}); handled {
+		return r, env, retErr
 	}
 
 	// Create the session only after the review succeeds so failed reviews
@@ -119,7 +123,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
-	env = prependClamp(env, clamp)
+	env = prependClamp(env, cc.Clamp)
 	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
@@ -265,36 +269,35 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."), clamp))
 	}
 
-	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.MidModel)
+	model, rendered, err := h.resolveModelAndRender(
+		args.ModelOverride,
+		h.deps.Cfg.MidModel,
+		func() (prompts.Output, error) {
+			return prompts.RenderMid(prompts.MidInput{
+				Spec:          sess.Spec,
+				PriorFindings: priorFindings(sess),
+				WorkingOn:     args.WorkingOn,
+				Files:         toPromptFiles(args.ChangedFiles),
+				Questions:     args.Questions,
+			})
+		},
+		"render mid prompt",
+	)
 	if err != nil {
 		return nil, Envelope{}, err
-	}
-
-	rendered, err := prompts.RenderMid(prompts.MidInput{
-		Spec:          sess.Spec,
-		PriorFindings: priorFindings(sess),
-		WorkingOn:     args.WorkingOn,
-		Files:         toPromptFiles(args.ChangedFiles),
-		Questions:     args.Questions,
-	})
-	if err != nil {
-		return nil, Envelope{}, fmt.Errorf("render mid prompt: %w", err)
 	}
 
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
-	if err != nil {
-		if errors.Is(err, providers.ErrResponseTruncated) {
-			if env, ok := recoverPartialFindings(sess.ID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
-				env = prependClamp(env, clamp)
-				env = h.withSessionTTL(env, sess)
-				return envelopeResult(env)
-			}
-			env := truncatedEnvelope(sess.ID, model)
-			env = prependClamp(env, clamp)
-			env = h.withSessionTTL(env, sess)
-			return envelopeResult(env)
-		}
-		return nil, Envelope{}, err
+	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
+		Err:        err,
+		SessionID:  sess.ID,
+		Model:      model,
+		PartialRaw: partialRaw,
+		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
+		Clamp:      clamp,
+		Sess:       sess,
+	}); handled {
+		return r, env, retErr
 	}
 
 	h.deps.Sessions.AppendCheckpoint(sess.ID, session.Checkpoint{
@@ -479,18 +482,32 @@ func recoverPartialFindings(id string, model config.ModelRef, rawJSON []byte, en
 	}, true
 }
 
+// truncatedPlanResult builds the synthetic PlanResult returned when a
+// validate_plan reviewer call truncates AND no usable findings/tasks could be
+// recovered from the partial bytes (the "no-analysis" path).
+//
+// Severity is major (not minor) because the caller received zero plan analysis
+// and would otherwise mistake the result for a cosmetic concern. PlanQuality
+// is set explicitly to rough so that ApplyPlanQualitySanity — which otherwise
+// defaults a Warn verdict to actionable — does not silently upgrade a
+// no-analysis response. The Suggestion and NextAction name all three retry
+// knobs so the caller can self-diagnose without rereading docs.
+//
+// Partial-recovery truncation markers (emitted by recoverPartialPlanFindings)
+// remain minor on purpose: those callers received at least some review signal.
 func truncatedPlanResult() verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictWarn,
+		PlanQuality: verdict.PlanQualityRough,
 		PlanFindings: []verdict.Finding{{
-			Severity:   verdict.SeverityMinor,
+			Severity:   verdict.SeverityMajor,
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
-			Suggestion: "Raise ANTI_TANGENT_PLAN_MAX_TOKENS or pass max_tokens_override and retry.",
+			Suggestion: "Retry with max_tokens_override >= 16000, set ANTI_TANGENT_PLAN_MAX_TOKENS in the MCP server env, or raise ANTI_TANGENT_MAX_TOKENS_CEILING if overrides are clamped.",
 		}},
 		Tasks:      []verdict.PlanTaskResult{},
-		NextAction: "Retry with a higher max_tokens_override (or raise the plan max-tokens cap).",
+		NextAction: "Retry with max_tokens_override >= 16000, or set ANTI_TANGENT_PLAN_MAX_TOKENS in the MCP server env. If overrides are clamped, raise ANTI_TANGENT_MAX_TOKENS_CEILING.",
 	}
 }
 
@@ -626,7 +643,8 @@ func validatePlanTool() *mcp.Tool {
 		Name: "validate_plan",
 		Description: "Validate an implementation plan as a whole BEFORE dispatching subagents to implement individual tasks. " +
 			"Returns per-task findings and ready-to-paste structured headers (Goal / Acceptance criteria / Non-goals / Context) for tasks that lack them. " +
-			"Call this once at plan-handoff time; the per-task `validate_task_spec` is still called by each implementing subagent at task start.",
+			"Call this once at plan-handoff time; the per-task `validate_task_spec` is still called by each implementing subagent at task start. " +
+			"If repo policy has carve-outs such as docs-only commit exceptions, state them literally in plan_text — the reviewer cannot read external CLAUDE.md policy.",
 	}
 }
 
@@ -866,40 +884,38 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		sessID = sess.ID
 	}
 
-	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PostModel)
+	model, rendered, err := h.resolveModelAndRender(
+		args.ModelOverride,
+		h.deps.Cfg.PostModel,
+		func() (prompts.Output, error) {
+			return prompts.RenderPost(prompts.PostInput{
+				Spec:                           spec,
+				Summary:                        args.Summary,
+				Files:                          toPromptFiles(args.FinalFiles),
+				FinalDiff:                      args.FinalDiff,
+				TestEvidence:                   args.TestEvidence,
+				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
+			})
+		},
+		"render post prompt",
+	)
 	if err != nil {
 		return nil, Envelope{}, err
-	}
-
-	rendered, err := prompts.RenderPost(prompts.PostInput{
-		Spec:         spec,
-		Summary:      args.Summary,
-		Files:        toPromptFiles(args.FinalFiles),
-		FinalDiff:    args.FinalDiff,
-		TestEvidence: args.TestEvidence,
-	})
-	if err != nil {
-		return nil, Envelope{}, fmt.Errorf("render post prompt: %w", err)
 	}
 
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
-	if err != nil {
-		if errors.Is(err, providers.ErrResponseTruncated) {
-			if env, ok := recoverPartialFindings(sessID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
-				env = prependClamp(env, clamp)
-				if !lightweight {
-					env = h.withSessionTTL(env, sess)
-				}
-				return envelopeResult(env)
-			}
-			env := truncatedEnvelope(sessID, model)
-			env = prependClamp(env, clamp)
-			if !lightweight {
-				env = h.withSessionTTL(env, sess)
-			}
-			return envelopeResult(env)
-		}
-		return nil, Envelope{}, err
+	// In lightweight mode sess is nil so the helper skips TTL application;
+	// otherwise sess carries the resolved session and TTL fields are filled in.
+	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
+		Err:        err,
+		SessionID:  sessID,
+		Model:      model,
+		PartialRaw: partialRaw,
+		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
+		Clamp:      clamp,
+		Sess:       sess,
+	}); handled {
+		return r, env, retErr
 	}
 
 	if !lightweight {
@@ -947,6 +963,14 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return planEnvelopeResult(prependPlanClamp(noHeadingsPlanResult(), clamp), h.deps.Cfg.PlanModel.String(), 0)
 	}
 
+	// Adaptive plan budget: apply only when no override was supplied. The
+	// early effectiveMaxTokens call above already validated/clamped explicit
+	// overrides and attached the clamp finding for payload-too-large and
+	// no-headings early exits; we must not disturb that path.
+	if args.MaxTokensOverride == 0 {
+		maxTokens = adaptivePlanMaxTokens(h.deps.Cfg, len(tasks))
+	}
+
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PlanModel)
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
@@ -961,22 +985,21 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	} else {
 		pr, modelUsed, ms, partialRaw, err = h.reviewPlanChunked(ctx, model, args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk, maxTokens, args.Mode)
 	}
-	if err != nil {
-		if errors.Is(err, providers.ErrResponseTruncated) {
-			// `pr` carries any partial state already collected before the
-			// truncation point — for the chunked path that means Pass-1
-			// plan_findings plus any cleanly-closed Pass-2 chunk task
-			// results. Pass it as `prior` so those aren't dropped if the
-			// truncating chunk's bytes yield further recovery.
-			if recovered, ok := recoverPartialPlanFindings(partialRaw, pr); ok {
-				recovered = prependPlanClamp(recovered, clamp)
-				return planEnvelopeResult(recovered, model.String(), 0)
-			}
-			truncated := truncatedPlanResult()
-			truncated = prependPlanClamp(truncated, clamp)
-			return planEnvelopeResult(truncated, model.String(), 0)
-		}
-		return nil, verdict.PlanResult{}, err
+	// `pr` carries any partial state already collected before the truncation
+	// point — for the chunked path that means Pass-1 plan_findings plus any
+	// cleanly-closed Pass-2 chunk task results. Threading it through as
+	// `prior` ensures those aren't dropped if the truncating chunk's bytes
+	// yield further recovery.
+	if r, p, handled, retErr := h.handlePlanReviewErr(planReviewErrInputs{
+		Err:        err,
+		Model:      model,
+		ModelUsed:  modelUsed,
+		ReviewMS:   ms,
+		PartialRaw: partialRaw,
+		Clamp:      clamp,
+		Prior:      pr,
+	}); handled {
+		return r, p, retErr
 	}
 	pr = prependPlanClamp(pr, clamp)
 	return planEnvelopeResult(pr, modelUsed, ms)
@@ -1075,6 +1098,12 @@ func tooLargePlanResult(size, limit int) verdict.PlanResult {
 //     synthetic PlanResults that bypass ParsePlan / ParsePlanResultPartial).
 //  2. SummaryBlock is populated with the rendered paste-ready text block.
 func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
+	// Order is load-bearing: rollup first so calibration sees no remaining
+	// task-level unverifiable findings; calibrate before sanity because
+	// calibration owns the verdict→quality mapping for the unverifiable-only
+	// case (sanity is then a passthrough on the already-valid values).
+	normalizePlanUnverifiableFindings(&pr)
+	calibratePlanVerdictForUnverifiableOnly(&pr)
 	verdict.ApplyPlanQualitySanity(&pr)
 	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
 	body, err := json.MarshalIndent(struct {
