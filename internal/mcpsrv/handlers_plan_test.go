@@ -595,6 +595,24 @@ func TestReviewPlanChunked_Pass2Truncation_PreservesPass1Findings(t *testing.T) 
 // Task 3 — unverifiable rollup + verdict calibration
 // ---------------------------------------------------------------------------
 
+// runValidatePlanWithReviewerJSON drives ValidatePlan against a fakeReviewer
+// that returns the supplied raw JSON. Returns the resulting PlanResult and any
+// error, so callers can focus on their AC-specific assertions. taskCount sets
+// the number of `### Task N:` headings in the synthetic plan text — it must
+// match the task_index values the reviewer JSON references.
+func runValidatePlanWithReviewerJSON(t *testing.T, raw []byte, taskCount int) (verdict.PlanResult, error) {
+	t.Helper()
+	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: buildPlanWithNTasks(taskCount),
+	})
+	return pr, err
+}
+
 func TestValidatePlan_RollsUpTaskUnverifiableFindings(t *testing.T) {
 	raw := []byte(`{
 		"plan_verdict":"warn",
@@ -606,13 +624,7 @@ func TestValidatePlan_RollsUpTaskUnverifiableFindings(t *testing.T) {
 		],
 		"next_action":"Verify codebase claims."
 	}`)
-	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
-	d := newDeps(t, rv)
-	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
-	d.Reviews = providers.Registry{"openai": rv}
-	h := &handlers{deps: d}
-
-	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(2)})
+	pr, err := runValidatePlanWithReviewerJSON(t, raw, 2)
 	require.NoError(t, err)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, verdict.CategoryUnverifiableCodebaseClaim, pr.PlanFindings[0].Category)
@@ -627,13 +639,7 @@ func TestValidatePlan_RollsUpTaskUnverifiableFindings(t *testing.T) {
 
 func TestValidatePlan_UnverifiableOnlyCalibratesToPass(t *testing.T) {
 	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Verify codebase claims."}`)
-	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
-	d := newDeps(t, rv)
-	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
-	d.Reviews = providers.Registry{"openai": rv}
-	h := &handlers{deps: d}
-
-	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
 	assert.Equal(t, verdict.PlanQualityActionable, pr.PlanQuality)
@@ -647,13 +653,7 @@ func TestValidatePlan_UnverifiableOnlyCalibratesToPass(t *testing.T) {
 // force-passes. Spec section 4 calls this out explicitly.
 func TestValidatePlan_UnverifiableOnly_PreservesRigorousQuality(t *testing.T) {
 	raw := []byte(`{"plan_verdict":"warn","plan_quality":"rigorous","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Verify codebase claims."}`)
-	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
-	d := newDeps(t, rv)
-	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
-	d.Reviews = providers.Registry{"openai": rv}
-	h := &handlers{deps: d}
-
-	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
 	assert.Equal(t, verdict.PlanQualityRigorous, pr.PlanQuality,
@@ -662,13 +662,7 @@ func TestValidatePlan_UnverifiableOnly_PreservesRigorousQuality(t *testing.T) {
 
 func TestValidatePlan_MixedFindingsDoNotCalibrateToPass(t *testing.T) {
 	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"major","category":"ambiguous_spec","criterion":"AC","evidence":"AC is vague","suggestion":"rewrite"},{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Rewrite AC."}`)
-	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
-	d := newDeps(t, rv)
-	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
-	d.Reviews = providers.Registry{"openai": rv}
-	h := &handlers{deps: d}
-
-	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
 	require.Len(t, pr.Tasks, 1)
@@ -684,13 +678,7 @@ func TestValidatePlan_PreservesPlanLevelUnverifiableBesideTaskRollup(t *testing.
 		"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}],
 		"next_action":"Verify codebase claims."
 	}`)
-	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
-	d := newDeps(t, rv)
-	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
-	d.Reviews = providers.Registry{"openai": rv}
-	h := &handlers{deps: d}
-
-	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
 	require.Len(t, pr.PlanFindings, 2)
 	assert.Equal(t, "plan", pr.PlanFindings[0].Criterion)
@@ -764,13 +752,7 @@ func TestValidatePlan_MultipleUnverifiableUnderSameTaskJoinedWithSemicolon(t *te
 		],
 		"next_action":"Verify."
 	}`)
-	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
-	d := newDeps(t, rv)
-	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
-	d.Reviews = providers.Registry{"openai": rv}
-	h := &handlers{deps: d}
-
-	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, 1, strings.Count(pr.PlanFindings[0].Evidence, "Task 1:"))
@@ -783,13 +765,7 @@ func TestValidatePlan_MultipleUnverifiableUnderSameTaskJoinedWithSemicolon(t *te
 // reviewer's verdict survives untouched.
 func TestValidatePlan_EmptyFindingsDoNotCalibrateToPass(t *testing.T) {
 	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Reviewer warned but emitted no findings."}`)
-	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
-	d := newDeps(t, rv)
-	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
-	d.Reviews = providers.Registry{"openai": rv}
-	h := &handlers{deps: d}
-
-	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)})
+	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
 	assert.NotContains(t, pr.NextAction, "No blocking plan-quality findings")
@@ -813,13 +789,7 @@ func TestValidatePlan_RollupFallsBackToMergedPositionForBadTaskIndex(t *testing.
 		],
 		"next_action":"Verify."
 	}`)
-	rv := &fakeReviewer{name: "openai", resp: providers.Response{RawJSON: raw, Model: "gpt-5"}}
-	d := newDeps(t, rv)
-	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
-	d.Reviews = providers.Registry{"openai": rv}
-	h := &handlers{deps: d}
-
-	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(2)})
+	pr, err := runValidatePlanWithReviewerJSON(t, raw, 2)
 	require.NoError(t, err)
 	require.Len(t, pr.PlanFindings, 1)
 	// Without the fallback the rollup would emit "Task 0:" and "Task 1:".

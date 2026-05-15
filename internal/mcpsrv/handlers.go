@@ -68,11 +68,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, errors.New("task_title and goal are required")
 	}
 
-	phase, err := normalizePhase(args.Phase)
-	if err != nil {
-		return nil, Envelope{}, err
-	}
-	pinnedBy, err := normalizePinnedBy(args.PinnedBy)
+	inputs, err := normalizeTaskSpecInputs(args)
 	if err != nil {
 		return nil, Envelope{}, err
 	}
@@ -93,8 +89,8 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		AcceptanceCriteria: args.AcceptanceCriteria,
 		NonGoals:           args.NonGoals,
 		Context:            args.Context,
-		PinnedBy:           pinnedBy,
-		Phase:              phase,
+		PinnedBy:           inputs.PinnedBy,
+		Phase:              inputs.Phase,
 	}
 
 	rendered, err := prompts.RenderPre(prompts.PreInput{Spec: spec})
@@ -392,41 +388,6 @@ func truncatedEnvelope(id string, model config.ModelRef) Envelope {
 	}
 }
 
-const (
-	maxPinnedByEntries = 50
-	maxPinnedByChars   = 500
-)
-
-func normalizePhase(phase string) (string, error) {
-	phase = strings.TrimSpace(phase)
-	switch phase {
-	case "", "pre":
-		return "pre", nil
-	case "post":
-		return "post", nil
-	default:
-		return "", errors.New(`phase must be "pre" or "post"`)
-	}
-}
-
-func normalizePinnedBy(entries []string) ([]string, error) {
-	out := make([]string, 0, len(entries))
-	for i, entry := range entries {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			continue
-		}
-		if len([]rune(trimmed)) > maxPinnedByChars {
-			return nil, fmt.Errorf("pinned_by[%d] must be at most %d characters", i, maxPinnedByChars)
-		}
-		out = append(out, trimmed)
-		if len(out) > maxPinnedByEntries {
-			return nil, fmt.Errorf("pinned_by must contain at most %d entries", maxPinnedByEntries)
-		}
-	}
-	return out, nil
-}
-
 // effectiveMaxTokens returns the max-tokens value to send to the provider,
 // the optional clamp finding (zero value if no clamp occurred), and an
 // error if the override is invalid.
@@ -457,33 +418,6 @@ func effectiveMaxTokens(override, defaultMaxTokens, ceiling int) (int, verdict.F
 		Suggestion: "Raise ANTI_TANGENT_MAX_TOKENS_CEILING if you need a larger budget.",
 	}
 	return ceiling, finding, nil
-}
-
-// Adaptive default plan budget: base + per-task increment, bounded by the
-// configured PlanMaxTokens floor and MaxTokensCeiling cap. Plan output scales
-// roughly with task count (one block per task plus plan-level findings and
-// summary), so a single 4096-token default fits small plans but truncates
-// large ones. Constants are sourced from design §1.
-const (
-	planAdaptiveBase        = 2000
-	planAdaptivePerTask     = 800
-)
-
-// adaptivePlanMaxTokens returns the max-tokens value for a validate_plan
-// reviewer call WHEN no caller-supplied max_tokens_override is set. The
-// formula is max(cfg.PlanMaxTokens, min(cfg.MaxTokensCeiling, base + per*tasks)).
-// Adaptive bumps do not emit a clamp finding because they are not caller
-// errors — callers asking for explicit overrides still route through
-// effectiveMaxTokens at the ValidatePlan boundary.
-func adaptivePlanMaxTokens(cfg config.Config, taskCount int) int {
-	floor := planAdaptiveBase + planAdaptivePerTask*taskCount
-	if floor > cfg.MaxTokensCeiling {
-		floor = cfg.MaxTokensCeiling
-	}
-	if floor < cfg.PlanMaxTokens {
-		floor = cfg.PlanMaxTokens
-	}
-	return floor
 }
 
 // prependClamp inserts the clamp finding at the head of the envelope's
@@ -723,58 +657,6 @@ func validatePlanTool() *mcp.Tool {
 
 func totalCompletionBytes(files []FileArg, finalDiff string) int {
 	return totalBytes(files) + len(finalDiff)
-}
-
-// referencedEvidencePathRE matches doc/artifact path tokens that might be named
-// in the implementer's summary. The extension list is intentionally narrow:
-// source-code extensions (.go, .kt, .py, .ts) are excluded because they almost
-// always appear in diffs even when not deliverables — including them would
-// produce noisy hints. Doc/config formats are far more likely to be deliverables
-// that need explicit evidence.
-var referencedEvidencePathRE = regexp.MustCompile(`[A-Za-z0-9_./-]+\.(?:md|txt|json|ya?ml)\b`)
-
-// referencedPathsMissingEvidence returns the deduplicated set of doc/artifact
-// paths named in args.Summary that are NOT present in either args.FinalFiles
-// (exact Path match) or args.FinalDiff (substring match). The result is used
-// by ValidateCompletion to render an advisory note in the post-review prompt
-// — it never mutates findings, never rejects the request, and never affects
-// the verdict. It only nudges the reviewer to require full evidence if a
-// listed path is a deliverable.
-func referencedPathsMissingEvidence(args ValidateCompletionArgs) []string {
-	candidates := referencedEvidencePathRE.FindAllString(args.Summary, -1)
-	if len(candidates) == 0 {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	missing := make([]string, 0, len(candidates))
-	for _, path := range candidates {
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		if pathPresentInEvidence(path, args) {
-			continue
-		}
-		missing = append(missing, path)
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	return missing
-}
-
-// pathPresentInEvidence reports whether path appears as a final_files entry
-// (exact Path equality) or anywhere in the final_diff text (substring). The
-// final_diff substring match is intentionally permissive — diff headers,
-// rename old/new paths, and contextual filename mentions all count as
-// "evidence was provided."
-func pathPresentInEvidence(path string, args ValidateCompletionArgs) bool {
-	for _, f := range args.FinalFiles {
-		if f.Path == path {
-			return true
-		}
-	}
-	return strings.Contains(args.FinalDiff, path)
 }
 
 // evidenceTruncationPatterns are case-insensitive substrings that strongly
@@ -1185,109 +1067,6 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 		modelUsed = model.String()
 	}
 	return r, modelUsed, time.Since(start).Milliseconds(), nil, nil
-}
-
-// rollupEvidencePerTaskMax bounds each per-task entry in the rolled-up
-// codebase_reference_checklist evidence. Spec §3 picked 240 separately from
-// summary.go's summaryEvidenceMax (120) so the human checklist has enough
-// room (~2 compact lines of paths/symbols) without letting one task dominate.
-const rollupEvidencePerTaskMax = 240
-
-// normalizePlanUnverifiableFindings collects every task-level finding whose
-// category is unverifiable_codebase_claim, removes them from their tasks, and
-// appends ONE plan-level codebase_reference_checklist finding whose evidence
-// lists the affected tasks with their original evidence text (per-task
-// truncated at rollupEvidencePerTaskMax). Reviewer-emitted plan-level
-// unverifiable findings are intentionally left in place — see spec §3.
-//
-// Pointer receiver: the helper mutates the supplied PlanResult in place.
-// Each task's Findings is reassigned to a freshly-allocated slice so the
-// caller's original backing array is not aliased and silently rewritten.
-func normalizePlanUnverifiableFindings(pr *verdict.PlanResult) {
-	var lines []string
-	for i := range pr.Tasks {
-		// Allocate a fresh slice rather than reusing the input backing array
-		// (Findings[:0] + assign-back would mutate the caller's view).
-		kept := make([]verdict.Finding, 0, len(pr.Tasks[i].Findings))
-		var perTask []string
-		for _, f := range pr.Tasks[i].Findings {
-			if f.Category != verdict.CategoryUnverifiableCodebaseClaim {
-				kept = append(kept, f)
-				continue
-			}
-			perTask = append(perTask, f.Evidence)
-		}
-		pr.Tasks[i].Findings = kept
-		if len(perTask) > 0 {
-			// Spec §3: "one compact line per affected task." Multiple
-			// unverifiable findings under the same task join with "; " so
-			// the human checklist shows one task once, not duplicated.
-			//
-			// Chunked-path defense: validateChunkIdentity checks titles/order,
-			// not task_index, so a chunk-local or zero index can survive.
-			// Fall back to the merged-task position when the reviewer-provided
-			// index is missing or invalid.
-			taskNum := pr.Tasks[i].TaskIndex
-			if taskNum <= 0 {
-				taskNum = i + 1
-			}
-			lines = append(lines, fmt.Sprintf("Task %d: %s",
-				taskNum,
-				truncate(strings.Join(perTask, "; "), rollupEvidencePerTaskMax)))
-		}
-	}
-	if len(lines) == 0 {
-		return
-	}
-	pr.PlanFindings = append(pr.PlanFindings, verdict.Finding{
-		Severity:   verdict.SeverityMinor,
-		Category:   verdict.CategoryUnverifiableCodebaseClaim,
-		Criterion:  "codebase_reference_checklist",
-		Evidence:   strings.Join(lines, "\n"),
-		Suggestion: "Pre-flight these references with grep or codebase-aware review before dispatch. Do not treat this checklist as a plan-quality defect if the references were already verified.",
-	})
-}
-
-// calibratePlanVerdictForUnverifiableOnly force-passes a plan whose only
-// findings are minor unverifiable_codebase_claim entries (after rollup).
-// plan_quality stays at rigorous if the reviewer already emitted that;
-// otherwise it lands at actionable. The next_action is rewritten to make
-// the "checklist, not blocker" framing explicit. See spec §4.
-//
-// Pointer receiver: mutates in place (matches normalize counterpart).
-func calibratePlanVerdictForUnverifiableOnly(pr *verdict.PlanResult) {
-	if !allPlanFindingsAreMinorUnverifiable(*pr) {
-		return
-	}
-	pr.PlanVerdict = verdict.VerdictPass
-	if pr.PlanQuality != verdict.PlanQualityRigorous {
-		pr.PlanQuality = verdict.PlanQualityActionable
-	}
-	pr.NextAction = "No blocking plan-quality findings remain; pre-flight the rolled-up codebase references before dispatch."
-}
-
-// allPlanFindingsAreMinorUnverifiable returns true iff every finding across
-// pr.PlanFindings and pr.Tasks[].Findings has severity=minor AND
-// category=unverifiable_codebase_claim, AND at least one such finding exists.
-// (Empty input returns false — calibration only fires when there is something
-// to calibrate.)
-func allPlanFindingsAreMinorUnverifiable(pr verdict.PlanResult) bool {
-	found := false
-	for _, f := range pr.PlanFindings {
-		found = true
-		if f.Severity != verdict.SeverityMinor || f.Category != verdict.CategoryUnverifiableCodebaseClaim {
-			return false
-		}
-	}
-	for _, task := range pr.Tasks {
-		for _, f := range task.Findings {
-			found = true
-			if f.Severity != verdict.SeverityMinor || f.Category != verdict.CategoryUnverifiableCodebaseClaim {
-				return false
-			}
-		}
-	}
-	return found
 }
 
 func noHeadingsPlanResult() verdict.PlanResult {
