@@ -73,16 +73,6 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, err
 	}
 
-	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PerTaskMaxTokens, h.deps.Cfg.MaxTokensCeiling)
-	if err != nil {
-		return nil, Envelope{}, err
-	}
-
-	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PreModel)
-	if err != nil {
-		return nil, Envelope{}, err
-	}
-
 	spec := session.TaskSpec{
 		Title:              args.TaskTitle,
 		Goal:               args.Goal,
@@ -93,23 +83,21 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		Phase:              inputs.Phase,
 	}
 
-	rendered, err := prompts.RenderPre(prompts.PreInput{Spec: spec})
+	cc, err := h.resolvePreCallContext(
+		args.MaxTokensOverride,
+		h.deps.Cfg.PerTaskMaxTokens,
+		args.ModelOverride,
+		h.deps.Cfg.PreModel,
+		func() (prompts.Output, error) { return prompts.RenderPre(prompts.PreInput{Spec: spec}) },
+		"render pre prompt",
+	)
 	if err != nil {
-		return nil, Envelope{}, fmt.Errorf("render pre prompt: %w", err)
+		return nil, Envelope{}, err
 	}
 
-	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
-	if err != nil {
-		if errors.Is(err, providers.ErrResponseTruncated) {
-			if env, ok := recoverPartialFindings("", model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
-				env = prependClamp(env, clamp)
-				return envelopeResult(env)
-			}
-			env := truncatedEnvelope("", model)
-			env = prependClamp(env, clamp)
-			return envelopeResult(env)
-		}
-		return nil, Envelope{}, err
+	result, modelUsed, ms, partialRaw, err := h.review(ctx, cc.Model, cc.Rendered, cc.MaxTokens)
+	if r, env, handled, retErr := h.handlePerTaskReviewErr(err, "", cc.Model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS", cc.Clamp, nil); handled {
+		return r, env, retErr
 	}
 
 	// Create the session only after the review succeeds so failed reviews
@@ -129,7 +117,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
-	env = prependClamp(env, clamp)
+	env = prependClamp(env, cc.Clamp)
 	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
@@ -275,36 +263,27 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."), clamp))
 	}
 
-	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.MidModel)
+	model, rendered, err := h.resolveModelAndRender(
+		args.ModelOverride,
+		h.deps.Cfg.MidModel,
+		func() (prompts.Output, error) {
+			return prompts.RenderMid(prompts.MidInput{
+				Spec:          sess.Spec,
+				PriorFindings: priorFindings(sess),
+				WorkingOn:     args.WorkingOn,
+				Files:         toPromptFiles(args.ChangedFiles),
+				Questions:     args.Questions,
+			})
+		},
+		"render mid prompt",
+	)
 	if err != nil {
 		return nil, Envelope{}, err
-	}
-
-	rendered, err := prompts.RenderMid(prompts.MidInput{
-		Spec:          sess.Spec,
-		PriorFindings: priorFindings(sess),
-		WorkingOn:     args.WorkingOn,
-		Files:         toPromptFiles(args.ChangedFiles),
-		Questions:     args.Questions,
-	})
-	if err != nil {
-		return nil, Envelope{}, fmt.Errorf("render mid prompt: %w", err)
 	}
 
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
-	if err != nil {
-		if errors.Is(err, providers.ErrResponseTruncated) {
-			if env, ok := recoverPartialFindings(sess.ID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
-				env = prependClamp(env, clamp)
-				env = h.withSessionTTL(env, sess)
-				return envelopeResult(env)
-			}
-			env := truncatedEnvelope(sess.ID, model)
-			env = prependClamp(env, clamp)
-			env = h.withSessionTTL(env, sess)
-			return envelopeResult(env)
-		}
-		return nil, Envelope{}, err
+	if r, env, handled, retErr := h.handlePerTaskReviewErr(err, sess.ID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS", clamp, sess); handled {
+		return r, env, retErr
 	}
 
 	h.deps.Sessions.AppendCheckpoint(sess.ID, session.Checkpoint{
@@ -891,41 +870,30 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		sessID = sess.ID
 	}
 
-	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PostModel)
+	model, rendered, err := h.resolveModelAndRender(
+		args.ModelOverride,
+		h.deps.Cfg.PostModel,
+		func() (prompts.Output, error) {
+			return prompts.RenderPost(prompts.PostInput{
+				Spec:                           spec,
+				Summary:                        args.Summary,
+				Files:                          toPromptFiles(args.FinalFiles),
+				FinalDiff:                      args.FinalDiff,
+				TestEvidence:                   args.TestEvidence,
+				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
+			})
+		},
+		"render post prompt",
+	)
 	if err != nil {
 		return nil, Envelope{}, err
-	}
-
-	rendered, err := prompts.RenderPost(prompts.PostInput{
-		Spec:                           spec,
-		Summary:                        args.Summary,
-		Files:                          toPromptFiles(args.FinalFiles),
-		FinalDiff:                      args.FinalDiff,
-		TestEvidence:                   args.TestEvidence,
-		ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
-	})
-	if err != nil {
-		return nil, Envelope{}, fmt.Errorf("render post prompt: %w", err)
 	}
 
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
-	if err != nil {
-		if errors.Is(err, providers.ErrResponseTruncated) {
-			if env, ok := recoverPartialFindings(sessID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS"); ok {
-				env = prependClamp(env, clamp)
-				if !lightweight {
-					env = h.withSessionTTL(env, sess)
-				}
-				return envelopeResult(env)
-			}
-			env := truncatedEnvelope(sessID, model)
-			env = prependClamp(env, clamp)
-			if !lightweight {
-				env = h.withSessionTTL(env, sess)
-			}
-			return envelopeResult(env)
-		}
-		return nil, Envelope{}, err
+	// In lightweight mode sess is nil so the helper skips TTL application;
+	// otherwise sess carries the resolved session and TTL fields are filled in.
+	if r, env, handled, retErr := h.handlePerTaskReviewErr(err, sessID, model, partialRaw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS", clamp, sess); handled {
+		return r, env, retErr
 	}
 
 	if !lightweight {
@@ -995,22 +963,13 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	} else {
 		pr, modelUsed, ms, partialRaw, err = h.reviewPlanChunked(ctx, model, args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk, maxTokens, args.Mode)
 	}
-	if err != nil {
-		if errors.Is(err, providers.ErrResponseTruncated) {
-			// `pr` carries any partial state already collected before the
-			// truncation point — for the chunked path that means Pass-1
-			// plan_findings plus any cleanly-closed Pass-2 chunk task
-			// results. Pass it as `prior` so those aren't dropped if the
-			// truncating chunk's bytes yield further recovery.
-			if recovered, ok := recoverPartialPlanFindings(partialRaw, pr); ok {
-				recovered = prependPlanClamp(recovered, clamp)
-				return planEnvelopeResult(recovered, model.String(), 0)
-			}
-			truncated := truncatedPlanResult()
-			truncated = prependPlanClamp(truncated, clamp)
-			return planEnvelopeResult(truncated, model.String(), 0)
-		}
-		return nil, verdict.PlanResult{}, err
+	// `pr` carries any partial state already collected before the truncation
+	// point — for the chunked path that means Pass-1 plan_findings plus any
+	// cleanly-closed Pass-2 chunk task results. Threading it through as
+	// `prior` ensures those aren't dropped if the truncating chunk's bytes
+	// yield further recovery.
+	if r, p, handled, retErr := h.handlePlanReviewErr(err, model, partialRaw, clamp, pr); handled {
+		return r, p, retErr
 	}
 	pr = prependPlanClamp(pr, clamp)
 	return planEnvelopeResult(pr, modelUsed, ms)
