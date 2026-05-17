@@ -853,6 +853,7 @@ func TestValidatePlan_CachePassingResult(t *testing.T) {
 	assert.Equal(t, verdict.VerdictPass, second.PlanVerdict)
 	assert.Equal(t, 1, rv.Calls, "cache hit must not call reviewer")
 	assert.Equal(t, "[cached <=3m] Proceed with implementation.", second.NextAction)
+	assert.Equal(t, first.SummaryBlock, second.SummaryBlock, "cache hit must return the stored finalized summary block")
 	assert.Equal(t, int64(0), planEnvelopeReviewMS(t, out))
 }
 

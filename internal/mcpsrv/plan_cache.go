@@ -64,7 +64,6 @@ func lookupPlanPassCache(key [32]byte) (verdict.PlanResult, string, bool) {
 	}
 	pr := entry.result
 	pr.NextAction = "[cached <=3m] " + pr.NextAction
-	pr.SummaryBlock = formatPlanSummary(pr, entry.modelUsed, 0)
 	return pr, entry.modelUsed, true
 }
 
