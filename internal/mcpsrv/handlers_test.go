@@ -1677,6 +1677,21 @@ func TestValidateCompletion_LightweightMode_EmptySessionAccepted(t *testing.T) {
 	}
 }
 
+func TestValidateCompletion_LightweightMode_OmitsMajorPreFindings(t *testing.T) {
+	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+	d := newDeps(t, &cap.fakeReviewer)
+	d.Reviews = providers.Registry{"anthropic": cap}
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []FileArg{{Path: "doc.md", Content: "updated\n"}},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, cap.LastRequest.User, "Major pre-task findings to verify:")
+}
+
 func TestReferencedPathsMissingEvidence(t *testing.T) {
 	args := ValidateCompletionArgs{
 		Summary:    "Created docs/audit.md and reports/result.yaml.",
@@ -1711,6 +1726,40 @@ func TestValidateCompletion_RendersReferencedPathEvidenceNote(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, cap.LastRequest.User, "summary references these paths")
 	assert.Contains(t, cap.LastRequest.User, "docs/audit.md")
+}
+
+func TestValidateCompletion_RendersMajorPreFindings(t *testing.T) {
+	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic"}}
+	d := newDeps(t, &cap.fakeReviewer)
+	d.Reviews = providers.Registry{"anthropic": cap}
+	h := &handlers{deps: d}
+
+	cap.resp = providers.Response{
+		RawJSON: []byte(`{
+			"verdict":"warn",
+			"findings":[
+				{"severity":"major","category":"ambiguous_spec","criterion":"AC","evidence":"Pre-task review found AC did not specify load.","suggestion":"Clarify load."},
+				{"severity":"minor","category":"quality","criterion":"spec","evidence":"Minor pre-finding should not render.","suggestion":"Consider wording."}
+			],
+			"next_action":"continue"
+		}`),
+		Model: "claude-sonnet-4-6",
+	}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	require.NoError(t, err)
+
+	cap.resp = passResp("claude-sonnet-4-6")
+	_, _, err = h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:    pre.SessionID,
+		Summary:      "Implemented AC with explicit load coverage.",
+		TestEvidence: "PASS: TestACUnderLoad",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, cap.LastRequest.User, "Major pre-task findings to verify:")
+	assert.Contains(t, cap.LastRequest.User, "Pre-task review found AC did not specify load.")
+	assert.NotContains(t, cap.LastRequest.User, "Minor pre-finding should not render.")
 }
 
 func TestValidateCompletion_LightweightMode_NoEvidenceErrors(t *testing.T) {

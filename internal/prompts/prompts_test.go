@@ -101,6 +101,24 @@ func TestRenderPost(t *testing.T) {
 	golden(t, "post_basic", out.System+"\n---USER---\n"+out.User)
 }
 
+func TestRenderPost_WithMajorPreFindingsIncludesMitigationGuidance(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:    sampleSpec(),
+		Summary: "Clarified the load profile and added a benchmark-backed test.",
+		MajorPreFindings: []verdict.Finding{{
+			Severity:  verdict.SeverityMajor,
+			Category:  verdict.CategoryAmbiguousSpec,
+			Criterion: "Responds in under 50ms p95",
+			Evidence:  "Pre-task review found the load profile was undefined.",
+		}},
+		TestEvidence: "PASS: TestHealthP95UnderLoad",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Major pre-task findings to verify:")
+	assert.Contains(t, out.User, "Pre-task review found the load profile was undefined.")
+	assert.Contains(t, out.User, "explicitly mitigates")
+}
+
 func TestRenderPlan(t *testing.T) {
 	plan := `# Sample Plan
 

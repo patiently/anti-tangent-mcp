@@ -811,6 +811,16 @@ func malformedEvidenceEnvelope(sessionID, reason, modelUsed string) Envelope {
 	}
 }
 
+func majorFindings(findings []verdict.Finding) []verdict.Finding {
+	var major []verdict.Finding
+	for _, finding := range findings {
+		if finding.Severity == verdict.SeverityMajor {
+			major = append(major, finding)
+		}
+	}
+	return major
+}
+
 // ValidateCompletion runs the post-implementation reviewer call. Eight-step
 // ordering (preserved here to keep the AC-mapping legible):
 //
@@ -871,6 +881,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	var sess *session.Session
 	var spec session.TaskSpec
 	var sessID string
+	var majorPreFindings []verdict.Finding
 	if lightweight {
 		// Synthesize a minimal spec for the reviewer. No session is created.
 		spec = session.TaskSpec{
@@ -885,6 +896,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		}
 		spec = sess.Spec
 		sessID = sess.ID
+		majorPreFindings = majorFindings(sess.PreFindings)
 	}
 
 	model, rendered, err := h.resolveModelAndRender(
@@ -897,6 +909,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				Files:                          toPromptFiles(args.FinalFiles),
 				FinalDiff:                      args.FinalDiff,
 				TestEvidence:                   args.TestEvidence,
+				MajorPreFindings:               majorPreFindings,
 				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
 			})
 		},

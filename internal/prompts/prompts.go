@@ -43,6 +43,7 @@ type PostInput struct {
 	Files                          []File
 	FinalDiff                      string
 	TestEvidence                   string
+	MajorPreFindings               []verdict.Finding
 	ReferencedPathsMissingEvidence []string
 }
 

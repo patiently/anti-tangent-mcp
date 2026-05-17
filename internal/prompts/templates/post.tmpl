@@ -14,7 +14,18 @@ Context:
 {{end}}{{if .Spec.PinnedBy}}
 Pinned by:
 {{range .Spec.PinnedBy}}- {{.}}
-{{end}}{{end}}
+{{end}}{{end}}{{if .MajorPreFindings}}
+## Major pre-task findings to verify:
+
+Check whether the implementer's summary, final evidence, or test evidence explicitly mitigates each major pre-task finding below. If a major pre-task finding remains unresolved and is relevant to acceptance-criterion completion, emit a completion finding mapped to the relevant AC or `spec`.
+{{range .MajorPreFindings}}
+- Severity: {{.Severity}}
+  Category: {{.Category}}
+  Criterion: {{.Criterion}}
+  Evidence: {{.Evidence}}
+  Suggestion: {{.Suggestion}}
+{{end}}
+{{end}}
 ## What to evaluate
 
 If a pinned_by section is present, treat those entries as caller-supplied anchors for existing behavior. They are not codebase facts you can independently verify, but neither are they vague — do not penalize an AC merely because a pinned_by entry names a file, class, method, command, or document. For ACs like "existing behavior remains unchanged," judge whether the completion evidence plausibly preserved the pinned behavior before asking for more AC wording.
