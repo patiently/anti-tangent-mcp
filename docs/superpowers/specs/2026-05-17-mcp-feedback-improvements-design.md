@@ -53,7 +53,7 @@ Behavior:
    - `severity: minor`
    - `category: unverifiable_codebase_claim`
    - `criterion: codebase_reference_checklist`
-   - `evidence`: the original evidence strings joined with `; ` and truncated to a deterministic cap.
+   - `evidence`: the original evidence strings joined with `; ` and truncated with the existing `rollupEvidencePerTaskMax = 240` cap.
    - `suggestion`: `Pre-flight these references with grep or codebase-aware review before implementation. If they were already verified, treat this as a checklist rather than a spec-quality defect.`
 
 4. Store the normalized findings in the session's `PreFindings` so completion and summaries see the same compact shape the caller saw.
@@ -63,7 +63,7 @@ Verdict handling:
 - Keep the reviewer-emitted verdict unchanged for `validate_task_spec`.
 - Do not force-pass unverifiable-only per-task specs. A `warn` on pre-task validation is an acceptable nudge that implementation should consciously verify references.
 
-Rationale: plan-level rollup already proved useful, but implementers still saw repeated per-task file:line and symbol claims. This keeps the useful checklist while reducing finding count.
+Rationale: plan-level rollup already proved useful, but implementers still saw repeated per-task file:line and symbol claims. This keeps the useful checklist while reducing finding count. The plan-level rollup can force-pass unverifiable-only plans because the controller is doing a dispatchability check; the per-task hook should keep the warning because the implementer is now at the codebase and is the right actor to verify references before editing.
 
 ### 2. Controller-verified references
 
@@ -80,19 +80,19 @@ Semantics:
 
 - Entries are caller-supplied attestations that specific paths, symbols, line anchors, commands, or adjacent patterns were checked before dispatch.
 - The server does not verify them.
-- The reviewer should not emit `unverifiable_codebase_claim` for references that are plainly covered by these entries.
+- The reviewer should not emit `unverifiable_codebase_claim` for references covered by the deterministic substring rule below.
 - If the reviewer still sees a contradiction or ambiguity, it should emit the appropriate non-unverifiable finding.
 
 Prompt rendering:
 
 - Render a `Controller-verified references:` section in `pre.tmpl` when non-empty.
 - State that these entries are trusted only as caller-provided context, not as codebase truth independently known by the reviewer.
-- Tell the reviewer to avoid re-flagging covered claims as unverifiable, but not to suppress real spec defects.
+- Tell the reviewer to suppress an `unverifiable_codebase_claim` for claim C only when some entry in `controller_verified_references` is a substring of C, or C is a substring of some entry. Do not suppress logical contradictions, missing ACs, or ambiguity findings.
 
 Validation:
 
 - Trim whitespace and drop empty entries.
-- Apply the same defensive limits as `pinned_by`: bounded count and bounded characters per entry.
+- Apply the same defensive limits as `pinned_by`: at most `maxPinnedByEntries = 50` non-empty entries and at most `maxPinnedByChars = 500` Unicode code points per entry.
 
 Relationship to `pinned_by`:
 
@@ -129,10 +129,18 @@ Backward compatibility:
 - `omitempty` keeps responses compact when false/empty.
 - Controllers may ignore the fields.
 
+Schema updates:
+
+- Add both fields to `internal/verdict/plan_schema.json` and `internal/verdict/tasks_only_schema.json` task item `properties`.
+- Do not add either field to the task item `required` lists.
+- Keep `additionalProperties: false`; otherwise provider structured-output validation will reject reviewer JSON that includes the new fields.
+- Update `PlanTaskResult` with matching optional Go fields.
+
 Integration behavior:
 
 - If a task is marked lightweight-eligible, controllers may dispatch it under lightweight mode: skip `validate_task_spec` and `check_progress`, still require `validate_completion` with evidence.
 - The annotation is advisory. The controller may override it based on local risk.
+- Require a non-empty `lightweight_reason` whenever `lightweight_eligible` is true; false/empty remains the default.
 
 ### 4. In-memory `validate_plan` pass cache
 
@@ -144,7 +152,8 @@ Cache key:
 - `mode`
 - effective reviewer model
 - effective max-token budget
-- schema/cache version string so behavior changes invalidate old entries
+- hash of the rendered prompt content (`prompts.Output.System` plus `prompts.Output.User`)
+- schema/cache version string as a defense-in-depth invalidator
 
 Cache value:
 
@@ -155,13 +164,13 @@ Cache value:
 Behavior:
 
 - Cache only results whose final normalized `plan_verdict == pass`.
-- TTL: 10 minutes.
+- TTL: 3 minutes.
 - Cache hit returns the cached result with `review_ms: 0`.
-- Add a visible note without changing schema, preferably in `next_action`: `Returned cached pass result for identical plan_text/model/mode/max_tokens within 10 minutes.`
+- Preserve the reviewer-emitted `next_action` by prepending a visible cache marker, for example: `[cached <=3m] <original next_action>`.
 - Do not cache errors, truncation, `warn`, or `fail` results.
 - Do not persist across process restarts.
 
-Rationale: repeated validation of an unchanged already-passing plan burns 30-60 seconds and one LLM call without adding signal. An in-memory pass cache respects the no-persistence non-goal.
+Rationale: repeated validation of an unchanged already-passing plan burns 30-60 seconds and one LLM call without adding signal. The repeated call usually happens within seconds or a couple of minutes, so a 3-minute TTL catches the common waste while reducing stale-result risk during active prompt or plan iteration. Including rendered prompt content in the key means edits to `plan.tmpl`, `plan_findings_only.tmpl`, or `plan_tasks_chunk.tmpl` naturally miss the cache without relying only on a manual version bump.
 
 ### 5. Test-only task prompt tuning
 
@@ -183,9 +192,11 @@ Do not add a new tool. Add integration guidance:
 - The mitigation should say whether the spec was clarified, the plan body resolved it, codebase inspection resolved it, or the finding was intentionally accepted.
 - `validate_completion` remains the required post-implementation gate.
 
-Potential prompt nudge:
+Post-hook requirement:
 
-- In `post.tmpl`, remind the reviewer that prior major pre-findings should be considered during completion if they appear unresolved in the submitted evidence or summary.
+- Thread prior `major` pre-findings from the session into `post.tmpl` in a compact `Major pre-task findings to verify:` section.
+- Instruct the reviewer to check whether the summary, final evidence, or test evidence explicitly mitigates each major pre-finding.
+- If a major pre-finding appears unresolved and could affect AC completion, the reviewer should emit a completion finding mapped to the relevant AC or to `spec`.
 
 Rationale: this creates a lightweight structured answer to “what was your mitigation plan?” without increasing MCP surface area.
 
@@ -202,6 +213,21 @@ Anti-tangent guidance:
 - Explain `lightweight_eligible` and how controllers can override it.
 - Shorten the dispatch clause by moving verbose protocol details into the skill/template docs and leaving task-specific fields plus mandatory gates in the prompt.
 - Add one-line retry examples for truncation findings using `max_tokens_override` before asking callers to reason through env vars.
+
+Short dispatch target shape:
+
+```markdown
+## Drift protection
+
+Use anti-tangent per the standard dispatch protocol. For this task:
+- Call `validate_task_spec` before edits unless `lightweight_eligible: true` is explicitly set by the controller.
+- Call `validate_completion` before DONE and paste its `summary_block`.
+- If CodeScene MCP is configured, run `pre_commit_code_health_safeguard` after meaningful code changes.
+- If any major pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
+
+Task spec fields for validate_task_spec:
+...
+```
 
 ### 8. CodeScene companion guidance
 
@@ -242,15 +268,16 @@ Public-repo hygiene:
 - Unit test that non-unverifiable findings are preserved and verdict is not force-passed.
 - Unit/golden test `controller_verified_references` rendering and input normalization.
 - Schema/parser test that `PlanTaskResult` accepts old JSON without lightweight fields and new JSON with fields.
-- Unit test lightweight eligibility fields survive `validate_plan` response parsing and summary formatting.
-- Unit test plan cache hit, miss by changed plan text, miss by changed mode/model/budget, and non-caching of warn/fail.
-- Golden test test-only prompt guidance.
+- Unit test lightweight eligibility fields survive `validate_plan` response parsing and summary formatting, including schema tests for `plan_schema.json` and `tasks_only_schema.json`.
+- Unit test plan cache hit, miss by changed plan text, miss by changed mode/model/budget/rendered prompt, expiry-after-TTL miss, `review_ms: 0` on hit, and non-caching of warn/fail.
+- Unit/golden test `controller_verified_references` whitespace and empty-entry normalization using the same 50-entry / 500-character limits as `pinned_by`.
+- Golden test test-only prompt guidance. Treat the “prefer one consolidated finding” behavior as field-verified reviewer guidance rather than a deterministic unit-test assertion.
 - Documentation review for dispatch-clause examples and CodeScene issue drafts.
 - Run `go test -race ./...`.
 
 ## Rollout
 
-- Ship as a backward-compatible minor or patch release depending on whether maintainers treat `PlanTaskResult` fields and `ValidateTaskSpecArgs` fields as feature surface or patch UX.
+- Ship as `0.4.0` because optional `ValidateTaskSpecArgs` fields and optional `PlanTaskResult` fields are new feature surface even though they are backward-compatible.
 - Update `CHANGELOG.md` while implementing.
 - Keep all new fields optional.
 - Keep existing lightweight mode behavior unchanged; the new plan annotation only helps controllers choose it.
@@ -258,6 +285,6 @@ Public-repo hygiene:
 ## Risks
 
 - `controller_verified_references` could suppress a useful reminder when the controller verification was stale or wrong. Mitigation: docs must say it is caller-supplied context, not proof, and reviewers should still flag contradictions.
-- Lightweight eligibility is heuristic. Mitigation: advisory only, with conservative prompt criteria and controller override.
+- Lightweight eligibility is heuristic. A false `lightweight_eligible: true` can cause the controller to skip `validate_task_spec` and `check_progress` on a task that needed them. Mitigation: default false, require non-empty `lightweight_reason` when true, require all three prompt criteria to hold, and keep controller override explicit.
 - Plan pass cache could hide changed reviewer behavior during rapid prompt iteration. Mitigation: short TTL and schema/cache version in the key.
 - CodeScene guidance could be read as anti-tangent owning CodeScene behavior. Mitigation: separate companion guidance from upstream issue drafts and state that anti-tangent never calls CodeScene itself.
