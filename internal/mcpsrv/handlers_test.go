@@ -87,6 +87,50 @@ func TestValidateTaskSpec_HappyPath(t *testing.T) {
 	assert.Contains(t, tc.Text, env.SessionID)
 }
 
+func TestValidateTaskSpec_RollsUpUnverifiableFindings(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: providers.Response{
+		RawJSON: []byte(`{
+			"verdict":"warn",
+			"findings":[
+				{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"internal/example.go defines Foo","suggestion":"verify against the actual code before dispatching."},
+				{"severity":"major","category":"ambiguous_spec","criterion":"AC1","evidence":"AC1 has two interpretations","suggestion":"clarify AC1"},
+				{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"docs/example.md documents Bar","suggestion":"verify against the actual code before dispatching."}
+			],
+			"next_action":"clarify"
+		}`),
+		Model: "claude-sonnet-4-6",
+	}}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:          "T",
+		Goal:               "G",
+		AcceptanceCriteria: []string{"AC1"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "warn", env.Verdict)
+	require.Len(t, env.Findings, 2)
+
+	assert.Equal(t, verdict.CategoryAmbiguousSpec, env.Findings[0].Category)
+	assert.Equal(t, "AC1", env.Findings[0].Criterion)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
+	assert.Equal(t, "AC1 has two interpretations", env.Findings[0].Evidence)
+	assert.Equal(t, "clarify AC1", env.Findings[0].Suggestion)
+
+	rolledUp := env.Findings[1]
+	assert.Equal(t, verdict.CategoryUnverifiableCodebaseClaim, rolledUp.Category)
+	assert.Equal(t, verdict.SeverityMinor, rolledUp.Severity)
+	assert.Equal(t, "codebase_reference_checklist", rolledUp.Criterion)
+	assert.Contains(t, rolledUp.Evidence, "internal/example.go defines Foo")
+	assert.Contains(t, rolledUp.Evidence, "docs/example.md documents Bar")
+	assert.Equal(t, "Pre-flight these references with grep or codebase-aware review before implementation. If they were already verified, treat this as a checklist rather than a spec-quality defect.", rolledUp.Suggestion)
+
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	assert.Equal(t, env.Findings, sess.PreFindings)
+}
+
 func TestEnvelope_SessionTTLFieldsSerializeCorrectly(t *testing.T) {
 	t.Run("fields present when set", func(t *testing.T) {
 		ts := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)

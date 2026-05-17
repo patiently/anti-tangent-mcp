@@ -107,6 +107,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}); handled {
 		return r, env, retErr
 	}
+	result.Findings = normalizeTaskSpecUnverifiableFindings(result.Findings)
 
 	// Create the session only after the review succeeds so failed reviews
 	// don't leave orphan sessions in the store waiting for TTL eviction.
