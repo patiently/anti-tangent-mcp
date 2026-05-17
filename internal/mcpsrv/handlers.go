@@ -995,7 +995,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}
-	cacheKey := planPassCacheKey(args.PlanText, args.Mode, model.String(), maxTokens, rendered)
+	cacheKey := planPassCacheKey(args.PlanText, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
 	if cached, cachedModelUsed, ok := lookupPlanPassCache(cacheKey); ok {
 		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
 	}

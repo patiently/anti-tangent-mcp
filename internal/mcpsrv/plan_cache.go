@@ -30,21 +30,23 @@ type planCachePrompt struct {
 	User   string `json:"user"`
 }
 
-func planPassCacheKey(planText, mode, model string, maxTokens int, rendered renderedPlanReview) [32]byte {
+func planPassCacheKey(planText, mode, model string, maxTokens, maxTokensOverride int, rendered renderedPlanReview) [32]byte {
 	keyInput := struct {
-		Version   string            `json:"version"`
-		PlanText  string            `json:"plan_text"`
-		Mode      string            `json:"mode"`
-		Model     string            `json:"model"`
-		MaxTokens int               `json:"max_tokens"`
-		Prompts   []planCachePrompt `json:"prompts"`
+		Version           string            `json:"version"`
+		PlanText          string            `json:"plan_text"`
+		Mode              string            `json:"mode"`
+		Model             string            `json:"model"`
+		MaxTokens         int               `json:"max_tokens"`
+		MaxTokensOverride int               `json:"max_tokens_override"`
+		Prompts           []planCachePrompt `json:"prompts"`
 	}{
-		Version:   planPassCacheVersion,
-		PlanText:  planText,
-		Mode:      mode,
-		Model:     model,
-		MaxTokens: maxTokens,
-		Prompts:   rendered.cachePrompts(),
+		Version:           planPassCacheVersion,
+		PlanText:          planText,
+		Mode:              mode,
+		Model:             model,
+		MaxTokens:         maxTokens,
+		MaxTokensOverride: maxTokensOverride,
+		Prompts:           rendered.cachePrompts(),
 	}
 	keyJSON, _ := json.Marshal(keyInput)
 	return sha256.Sum256(keyJSON)
@@ -64,6 +66,7 @@ func lookupPlanPassCache(key [32]byte) (verdict.PlanResult, string, bool) {
 	}
 	pr := entry.result
 	pr.NextAction = "[cached <=3m] " + pr.NextAction
+	pr.SummaryBlock = formatPlanSummary(pr, entry.modelUsed, 0)
 	return pr, entry.modelUsed, true
 }
 

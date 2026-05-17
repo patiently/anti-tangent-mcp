@@ -834,6 +834,25 @@ func planEnvelopeReviewMS(t *testing.T, out *mcp.CallToolResult) int64 {
 	return body.ReviewMS
 }
 
+func planEnvelopeBody(t *testing.T, out *mcp.CallToolResult) struct {
+	verdict.PlanResult
+	ModelUsed string `json:"model_used"`
+	ReviewMS  int64  `json:"review_ms"`
+} {
+	t.Helper()
+	require.NotNil(t, out)
+	require.Len(t, out.Content, 1)
+	text, ok := out.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	var body struct {
+		verdict.PlanResult
+		ModelUsed string `json:"model_used"`
+		ReviewMS  int64  `json:"review_ms"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text.Text), &body))
+	return body
+}
+
 func TestValidatePlan_CachePassingResult(t *testing.T) {
 	resetPlanPassCacheForTest()
 	t.Cleanup(resetPlanPassCacheForTest)
@@ -853,8 +872,41 @@ func TestValidatePlan_CachePassingResult(t *testing.T) {
 	assert.Equal(t, verdict.VerdictPass, second.PlanVerdict)
 	assert.Equal(t, 1, rv.Calls, "cache hit must not call reviewer")
 	assert.Equal(t, "[cached <=3m] Proceed with implementation.", second.NextAction)
-	assert.Equal(t, first.SummaryBlock, second.SummaryBlock, "cache hit must return the stored finalized summary block")
-	assert.Equal(t, int64(0), planEnvelopeReviewMS(t, out))
+	body := planEnvelopeBody(t, out)
+	assert.Equal(t, int64(0), body.ReviewMS)
+	assert.Contains(t, body.SummaryBlock, "review_ms:     0")
+	assert.Contains(t, body.SummaryBlock, "next_action:   [cached <=3m] Proceed with implementation.")
+	assert.Equal(t, second.SummaryBlock, body.SummaryBlock)
+}
+
+func TestValidatePlan_CacheKeyIncludesClampState(t *testing.T) {
+	resetPlanPassCacheForTest()
+	t.Cleanup(resetPlanPassCacheForTest)
+
+	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+	d := newDeps(t, rv)
+	d.Cfg.MaxTokensCeiling = 16384
+	h := &handlers{deps: d}
+	planText := buildPlanWithNTasks(1)
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:          planText,
+		MaxTokensOverride: 32000,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.PlanFindings)
+	assert.Equal(t, "max_tokens_override", first.PlanFindings[0].Criterion)
+	assert.Equal(t, 1, rv.Calls)
+
+	_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:          planText,
+		MaxTokensOverride: 16384,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, rv.Calls, "same effective maxTokens with different clamp state must not share a cache entry")
+	for _, finding := range second.PlanFindings {
+		assert.NotEqual(t, "max_tokens_override", finding.Criterion, "exact-ceiling override must not inherit clamp finding")
+	}
 }
 
 func TestValidatePlan_DoesNotCacheWarnResult(t *testing.T) {
