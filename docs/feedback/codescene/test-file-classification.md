@@ -4,6 +4,13 @@
 
 Code Health checks can be easier to interpret when users know how test files are classified and whether test-only changes are expected to be quiet, lower priority, or reported like production-code changes.
 
+## Reproduction Shape
+
+1. Add a large test-only change that includes fixtures, mocks, or generated-looking setup data.
+2. Run the CodeScene MCP check for the current task or change set.
+3. Observe that the test-only addition stays quiet or produces no prominent findings.
+4. Try to determine whether quiet output means the test files were intentionally classified as low-signal, excluded by default, or not recognized by the classifier.
+
 ## Suggested Documentation
 
 Document the expected treatment of test files in CodeScene MCP output, including:
