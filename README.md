@@ -62,15 +62,15 @@ As of v0.4.0, `validate_plan` task results may include `lightweight_eligible` an
 
 Identical passing `validate_plan` calls are cached in memory for 3 minutes. The cache identity includes the rendered prompt, model, mode, and token budget; cache hits return `review_ms: 0` and preserve the original `next_action` behind a `[cached <=3m]` prefix.
 
-### `validate_task_spec` arguments (v0.3.3+)
+### `validate_task_spec` arguments (v0.3.3+ / v0.4.0+)
 
 In addition to the existing `task_title` / `goal` / `acceptance_criteria` / `non_goals` / `context` fields:
 
 - `pinned_by` (optional): existing tests, docs, commands, or static checks that pin referenced behavior. The reviewer treats these as caller-supplied anchors, not independently verified codebase facts.
-- `controller_verified_references` (optional): paths, symbols, line anchors, commands, or adjacent patterns that the controller already verified before dispatch. The reviewer treats these as caller-supplied attestations and suppresses matching `unverifiable_codebase_claim` findings only by deterministic substring match; contradictions, missing acceptance criteria, and ambiguity still surface.
+- `controller_verified_references` (optional, v0.4.0+): paths, symbols, line anchors, commands, or adjacent patterns that the controller already verified before dispatch. The reviewer treats these as caller-supplied attestations and suppresses matching `unverifiable_codebase_claim` findings only by deterministic substring match; contradictions, missing acceptance criteria, and ambiguity still surface.
 - `phase` (optional): `pre` (default) or `post`. Use `post` only for post-hoc/session-recovery reviews; normal protocol still calls this at task start.
 
-`validate_task_spec` rolls multiple `unverifiable_codebase_claim` findings for one task into a single `codebase_reference_checklist` finding so implementers get one compact checklist instead of repeated text-only-reference noise.
+`validate_task_spec` rolls task-level `unverifiable_codebase_claim` findings into a single `codebase_reference_checklist` finding so implementers get one consistent checklist shape instead of raw text-only-reference findings.
 
 ### Lightweight protocol mode (v0.3.1+)
 
