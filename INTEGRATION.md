@@ -407,6 +407,8 @@ The two tools are complementary, not redundant:
 
 On already-degraded files, read each CodeScene finding's `value` versus `value_before` before reacting to a top-level failed gate. A file can remain over threshold because it was already degraded before the current task; the task-relevant signal is whether the current change worsened the metric or crossed a threshold.
 
+The repository also keeps anonymized upstream-feedback drafts under docs/feedback/codescene/. These are public-safe issue bodies for CodeScene maintainers; they document companion-tool friction but do not change anti-tangent runtime behavior.
+
 **Advisory posture.** Anti-tangent never enforces CodeScene findings server-side. The integration lives at the dispatch-clause / convention layer: a controller that has CodeScene MCP installed updates the dispatch clause to include the companion calls; the implementer cites the findings in its DONE summary. If CodeScene MCP isn't configured in the host, the companion calls are simply skipped — anti-tangent's own protocol is unchanged.
 
 **Lightweight mode.** Tasks dispatched under the lightweight protocol (doc-only edits, mechanical relocations) skip `validate_task_spec`, `check_progress`, and the CodeScene companion calls, while still requiring `validate_completion` as the sanity gate.
