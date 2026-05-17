@@ -194,6 +194,16 @@ func TestRenderPlan_IncludesReviewerGroundRules(t *testing.T) {
 	assert.Contains(t, out.User, anchorConcreteEvidenceRule)
 }
 
+func TestRenderPlan_IncludesLightweightGuidance(t *testing.T) {
+	out, err := RenderPlan(PlanInput{PlanText: "# Sample plan\n\n### Task 1: Docs\n\n**Goal:** Update docs\n"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "lightweight_eligible")
+	assert.Contains(t, out.User, "lightweight_reason")
+	assert.Contains(t, out.User, "the task touches at most two files or is docs/config/data-only")
+	assert.Contains(t, out.User, "mechanical with no production-design or test-design choices")
+	assert.Contains(t, out.User, "Reason required when true, empty when false")
+}
+
 func TestRenderPlanFindingsOnly_IncludesReviewerGroundRules(t *testing.T) {
 	out, err := RenderPlanFindingsOnly(PlanInput{PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"})
 	require.NoError(t, err)
@@ -213,6 +223,19 @@ func TestRenderPlanTasksChunk_IncludesReviewerGroundRules(t *testing.T) {
 	assert.Contains(t, out.User, anchorEpistemicBoundary)
 	assert.Contains(t, out.User, anchorUnstatedAssumptionRule)
 	assert.Contains(t, out.User, anchorConcreteEvidenceRule)
+}
+
+func TestRenderPlanTasksChunk_IncludesLightweightGuidance(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   "# Sample plan\n\n### Task 1: Docs\n\n**Goal:** Update docs\n",
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: Docs"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "lightweight_eligible")
+	assert.Contains(t, out.User, "lightweight_reason")
+	assert.Contains(t, out.User, "the task touches at most two files or is docs/config/data-only")
+	assert.Contains(t, out.User, "mechanical with no production-design or test-design choices")
+	assert.Contains(t, out.User, "Reason required when true, empty when false")
 }
 
 const (

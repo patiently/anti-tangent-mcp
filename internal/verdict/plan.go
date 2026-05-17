@@ -68,6 +68,8 @@ type PlanTaskResult struct {
 	Findings              []Finding `json:"findings"`
 	SuggestedHeaderBlock  string    `json:"suggested_header_block"`
 	SuggestedHeaderReason string    `json:"suggested_header_reason"`
+	LightweightEligible   bool      `json:"lightweight_eligible,omitempty"`
+	LightweightReason     string    `json:"lightweight_reason,omitempty"`
 }
 
 //go:embed tasks_only_schema.json

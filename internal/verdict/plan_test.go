@@ -41,6 +41,64 @@ func TestPlanResult_RoundTripsJSON(t *testing.T) {
 	assert.Equal(t, r, back)
 }
 
+func TestPlanTaskResult_LightweightFieldsRoundTripJSON(t *testing.T) {
+	r := PlanTaskResult{
+		TaskIndex:             0,
+		TaskTitle:             "Task 1: Docs",
+		Verdict:               VerdictPass,
+		Findings:              []Finding{},
+		SuggestedHeaderBlock:  "",
+		SuggestedHeaderReason: "",
+		LightweightEligible:   true,
+		LightweightReason:     "docs-only task with exact text to insert",
+	}
+
+	b, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"lightweight_eligible":true`)
+	assert.Contains(t, string(b), `"lightweight_reason":"docs-only task with exact text to insert"`)
+
+	var back PlanTaskResult
+	require.NoError(t, json.Unmarshal(b, &back))
+	assert.Equal(t, r, back)
+}
+
+func TestParsePlan_LightweightFieldsOptionalForOlderReviewerJSON(t *testing.T) {
+	in := []byte(`{
+		"plan_verdict":"pass",
+		"plan_findings":[],
+		"tasks":[
+			{"task_index":0,"task_title":"Task 1: Docs","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}
+		],
+		"next_action":"go",
+		"plan_quality":"rigorous"
+	}`)
+
+	r, err := ParsePlan(in)
+	require.NoError(t, err)
+	require.Len(t, r.Tasks, 1)
+	assert.False(t, r.Tasks[0].LightweightEligible)
+	assert.Empty(t, r.Tasks[0].LightweightReason)
+}
+
+func TestPlanSchemas_AllowOptionalLightweightTaskFields(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+	}{
+		{name: "plan", raw: PlanSchema()},
+		{name: "tasks_only", raw: TasksOnlySchema()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			props, required := taskSchemaPropertiesAndRequired(t, tc.raw)
+			assert.Contains(t, props, "lightweight_eligible")
+			assert.Contains(t, props, "lightweight_reason")
+			assert.NotContains(t, required, "lightweight_eligible")
+			assert.NotContains(t, required, "lightweight_reason")
+		})
+	}
+}
+
 func TestPlanSchema_DefensiveCopy(t *testing.T) {
 	a := PlanSchema()
 	b := PlanSchema()
@@ -48,6 +106,23 @@ func TestPlanSchema_DefensiveCopy(t *testing.T) {
 	// Mutate a; b must remain unchanged (proving Schema() returns a copy).
 	a[0] = 'X'
 	assert.NotEqual(t, a[0], b[0])
+}
+
+func taskSchemaPropertiesAndRequired(t *testing.T, raw []byte) (map[string]any, []any) {
+	t.Helper()
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal(raw, &schema))
+	props, ok := schema["properties"].(map[string]any)
+	require.True(t, ok)
+	tasks, ok := props["tasks"].(map[string]any)
+	require.True(t, ok)
+	items, ok := tasks["items"].(map[string]any)
+	require.True(t, ok)
+	taskProps, ok := items["properties"].(map[string]any)
+	require.True(t, ok)
+	required, ok := items["required"].([]any)
+	require.True(t, ok)
+	return taskProps, required
 }
 
 func TestParsePlan_Valid(t *testing.T) {
