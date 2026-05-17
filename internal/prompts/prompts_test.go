@@ -60,6 +60,14 @@ func TestRenderPre_WithControllerVerifiedReferencesIncludesGuidance(t *testing.T
 	assert.Contains(t, out.User, "Do not suppress logical contradictions, missing acceptance criteria, or ambiguity findings")
 }
 
+func TestRenderPre_IncludesTestOnlyGuidance(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "For explicitly test-only tasks")
+	assert.Contains(t, out.User, "missing invocation counts")
+	assert.Contains(t, out.User, "one consolidated finding")
+}
+
 func TestRenderPre_WithoutControllerVerifiedReferencesOmitsSection(t *testing.T) {
 	out, err := RenderPre(PreInput{Spec: sampleSpec()})
 	require.NoError(t, err)
