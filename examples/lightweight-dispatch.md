@@ -1,6 +1,6 @@
 # Lightweight dispatch clause (anti-tangent-mcp, v0.3.1+)
 
-> Use this template for trivial tasks (doc-only edits, single-file mechanical relocations, dependency bumps). For any task that produces new production logic or has test-design choices, use the full dispatch clause from `INTEGRATION.md` instead.
+> Use this template for trivial tasks (doc-only edits, single-file mechanical relocations, dependency bumps). `validate_plan` may annotate a task with `lightweight_eligible: true` and `lightweight_reason`, but that annotation is advisory. Use the full dispatch clause from `INTEGRATION.md` for any task that produces production logic, has test-design choices, or involves ambiguous state transitions.
 
 What lightweight mode skips:
 

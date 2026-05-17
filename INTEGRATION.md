@@ -35,9 +35,18 @@ When the reviewer encounters a plan or task-spec statement about codebase facts 
 
 - Pre-flight grep before calling `validate_task_spec` when the task names codebase references.
 - Use `pinned_by` to name existing tests/docs/commands that pin "unchanged behavior" ACs.
+- Use `controller_verified_references` for specific paths, symbols, line anchors, commands, or adjacent patterns the controller already verified before dispatch.
 - Do not paste self-review claims like "all file references were verified" into the plan text — the reviewer cannot confirm such claims and will flag them as `unverifiable_codebase_claim`.
 - State commit-policy carve-outs literally in the plan text. The reviewer reads only `plan_text`, not repo-level policy files.
 - For doc deliverables, submit full content via `final_files`; diffs or prose summaries are often insufficient evidence.
+
+### Choosing `pinned_by`, `context`, and `controller_verified_references`
+
+Use `context` for background a fresh implementer needs to understand the task: product constraints, repo policy carve-outs, prior decisions, or why a non-obvious approach is required. It helps the reviewer judge ambiguity, but it is not a claim that a specific code reference exists.
+
+Use `pinned_by` for anchors that preserve behavior: existing tests, docs, commands, or static checks that pin a terse AC such as "retry behavior remains unchanged." The reviewer treats these entries as caller-supplied anchors, not independently verified codebase facts.
+
+Use `controller_verified_references` for codebase references the controller has already checked before dispatch: paths, symbols, line anchors, commands, or adjacent patterns. The pre-task reviewer suppresses `unverifiable_codebase_claim` only when the task claim and a controller-verified entry match by deterministic substring; contradictions, missing ACs, and ambiguity still surface.
 
 ---
 
@@ -314,9 +323,9 @@ you're drifting mid-task. Per the 0.3.1 protocol revision this call is
 advisory — most tasks will skip it. When you do call, pass: the
 session_id, a one-sentence `working_on` summary, and the changed files.
 
-**2b. CodeScene mid-task check (OPTIONAL — when codescene-mcp is
-configured in your host).** Call `pre_commit_code_health_safeguard` to
-catch Code Health regressions on uncommitted/staged files. This is
+**2b. CodeScene mid-task check (RECOMMENDED — when codescene-mcp is
+configured in your host).** Call `pre_commit_code_health_safeguard` after
+meaningful code changes to catch Code Health regressions on uncommitted/staged files. This is
 deterministic and fast (no LLM call) — complementary to the
 LLM-based `check_progress` and higher-signal mid-task. If
 codescene-mcp is not configured, skip this step silently.
@@ -343,6 +352,24 @@ If codescene-mcp is not configured, skip this step silently.
 - acceptance_criteria:  <from "Acceptance criteria:" bullets>
 - non_goals:            <from "Non-goals:" bullets if present>
 - context:              <from "Context:" if present>
+- pinned_by:            <optional anchors for existing behavior>
+- controller_verified_references: <optional references the controller already verified>
+```
+
+If any `severity: major` pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE so `validate_completion` and the controller can see how the risk was handled.
+
+### 4.2a Short dispatch target shape
+
+For agents that already have the full protocol in their system prompt or local instructions, controllers can dispatch a shorter task-specific clause:
+
+```markdown
+## Drift protection
+
+Use anti-tangent per the standard dispatch protocol. For this task:
+- Call `validate_task_spec` before edits unless `lightweight_eligible: true` is explicitly set by the controller.
+- Call `validate_completion` before DONE and paste its `summary_block`.
+- If CodeScene MCP is configured, run `pre_commit_code_health_safeguard` after meaningful code changes.
+- If any major pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
 ```
 
 ### Lightweight protocol mode (v0.3.1+)
@@ -353,7 +380,7 @@ For trivial tasks — doc-only edits, single-file mechanical relocations, depend
 - **Skip** `check_progress` (already optional in full mode).
 - **Keep** `validate_completion` as a sanity gate before reporting DONE. The handler accepts an empty `session_id` when at least one of `final_files` / `final_diff` / `test_evidence` is non-empty.
 
-Use lightweight mode when ALL of: (a) the task touches ≤ 2 files; (b) the task is mechanical (no new logic, no test-design choices); (c) the spec includes the literal text or diff to write.
+Use lightweight mode when ALL of: (a) the task touches ≤ 2 files or is docs/config/data-only; (b) the task is mechanical (no new logic, no test-design choices); (c) the spec includes the literal text, exact diff, exact command, or exact insertion shape. `validate_plan` may annotate tasks with `lightweight_eligible` and `lightweight_reason`, but those fields are advisory controller hints rather than permission to skip judgment.
 
 Use the full protocol for: any task that produces new production logic, any task with test-design choices, any task whose ACs require observable invariants.
 
@@ -374,9 +401,11 @@ The two tools are complementary, not redundant:
 
 **Tool-to-phase mapping.** When CodeScene MCP is configured in your host alongside anti-tangent, instruct dispatched implementers to also call:
 
-- During mid-task work (when you'd consider `check_progress`): call CodeScene's `pre_commit_code_health_safeguard`. It analyzes only uncommitted/staged files and is fast enough to run after each meaningful change. The field-data rationale for demoting anti-tangent's `check_progress` to OPTIONAL (low-signal mid-task LLM reviews) does NOT apply to CodeScene — its mid-task call is deterministic and high-signal. Many implementations will want to skip `check_progress` and rely on `pre_commit_code_health_safeguard` instead.
+- During mid-task work: call CodeScene's `pre_commit_code_health_safeguard` after meaningful code changes. It analyzes only uncommitted/staged files and is fast enough to run repeatedly. The field-data rationale for demoting anti-tangent's `check_progress` to OPTIONAL (low-signal mid-task LLM reviews) does NOT apply to CodeScene — its mid-task call is deterministic and high-signal. Many implementations should skip anti-tangent `check_progress` unless they suspect drift, while still running `pre_commit_code_health_safeguard` when CodeScene is configured.
 - Before reporting DONE (alongside `validate_completion`): call CodeScene's `analyze_change_set` for the full branch-vs-base view. If the Code Health delta is negative or a regression is reported, surface it in the DONE summary and consider iterating — anti-tangent itself remains advisory-only, but the implementer-side judgment call benefits from the codebase-grounded second opinion.
 - For drill-down on a flagged issue: `code_health_review`.
+
+On already-degraded files, read each CodeScene finding's `value` versus `value_before` before reacting to a top-level failed gate. A file can remain over threshold because it was already degraded before the current task; the task-relevant signal is whether the current change worsened the metric or crossed a threshold.
 
 **Advisory posture.** Anti-tangent never enforces CodeScene findings server-side. The integration lives at the dispatch-clause / convention layer: a controller that has CodeScene MCP installed updates the dispatch clause to include the companion calls; the implementer cites the findings in its DONE summary. If CodeScene MCP isn't configured in the host, the companion calls are simply skipped — anti-tangent's own protocol is unchanged.
 
@@ -517,7 +546,7 @@ When you are about to execute a multi-task plan — whether you do the work your
 **Procedure:**
 
 1. Call `validate_plan` once with the full plan markdown. Capture the `PlanResult`.
-2. **Surface results to the user.** Show `plan_verdict`, plan-level findings, and per-task verdicts/findings. For any task whose `suggested_header_block` is non-empty, show the proposed header and ask the human to adopt or revise.
+2. **Surface results to the user.** Show `plan_verdict`, plan-level findings, and per-task verdicts/findings. For any task whose `suggested_header_block` is non-empty, show the proposed header and ask the human to adopt or revise. If task results include `lightweight_eligible` / `lightweight_reason`, treat them as advisory hints for choosing the full or lightweight dispatch clause.
 3. **Apply the proposed header blocks** (the controller may apply automatically when verdicts are `pass`/`warn` and the human approves; always defer to the human for `fail`).
 4. If anything material changed (headers added, ACs rewritten), call `validate_plan` again to confirm. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified).
 5. **Only proceed to dispatch when the plan-level gate passes.**
@@ -569,11 +598,13 @@ The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`. While
 
 **`mode`** (`validate_plan` only): optional `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings — at most 3 per scope (plan-level + each task) — and omit stylistic nits. Useful for small ASAP plans where rounds 5+ surface only polish. Invalid values are rejected with `mode must be "quick" or "thorough"`.
 
+Passing `validate_plan` results are cached in memory for 3 minutes when the rendered prompt, model, mode, and token budget are identical. Cache hits do not call the reviewer, return `review_ms: 0`, and prefix the preserved original `next_action` with `[cached <=3m]`.
+
 ### 5.7 `partial: true` envelope field (v0.3.0+)
 
 When the reviewer's output was truncated at its `max_tokens` cap but at least one complete finding could be recovered, the response envelope (`Result` for per-task tools, `PlanResult` for `validate_plan`) carries `"partial": true` and the synthetic truncation finding is `severity: minor` rather than `major`. The field is `omitempty` — absent in the common (non-truncated) case, so pre-0.3.0 callers continue to work. If partial recovery fails (no complete finding before the cap hit), the envelope falls back to the legacy single `severity: major` truncation finding with no `partial` field set.
 
-### 5.8 Using v0.3.3 review-context features
+### 5.8 Using review-context features
 
 Use `pinned_by` when a terse acceptance criterion is backed by existing tests, docs, commands, or static checks:
 
@@ -591,6 +622,23 @@ Use `pinned_by` when a terse acceptance criterion is backed by existing tests, d
 ```
 
 Use `phase: "post"` only to recover a task session after implementation already happened; normal task execution still calls `validate_task_spec` before coding.
+
+Use `controller_verified_references` when the controller has already grep-verified specific file paths, symbols, line anchors, commands, or adjacent patterns and wants to reduce text-only reviewer noise:
+
+```json
+{
+  "task_title": "Update parser call site",
+  "goal": "Wire the new parser option into the existing command path.",
+  "acceptance_criteria": ["cmd/import.go passes ParserOptions.Strict through to ParseFile."],
+  "controller_verified_references": [
+    "cmd/import.go",
+    "ParserOptions.Strict",
+    "ParseFile"
+  ]
+}
+```
+
+These entries are attestations from the caller. They suppress matching `unverifiable_codebase_claim` findings by substring match only; they do not suppress real contradictions or ambiguity.
 
 For `validate_plan`, normally omit `max_tokens_override`. v0.3.3 scales the default budget by task count. If a no-analysis truncation response asks for a retry, pass a higher `max_tokens_override` or raise `ANTI_TANGENT_PLAN_MAX_TOKENS` / `ANTI_TANGENT_MAX_TOKENS_CEILING`. Treat `codebase_reference_checklist` as a pre-flight checklist, not as a blocking plan-quality defect by itself.
 
