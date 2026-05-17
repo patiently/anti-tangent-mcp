@@ -47,6 +47,25 @@ func TestRenderPre(t *testing.T) {
 	golden(t, "pre_basic", out.System+"\n---USER---\n"+out.User)
 }
 
+func TestRenderPre_WithControllerVerifiedReferencesIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.ControllerVerifiedReferences = []string{"internal/foo.go:12", "Foo.Bar"}
+
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Controller-verified references:")
+	assert.Contains(t, out.User, "- internal/foo.go:12")
+	assert.Contains(t, out.User, "- Foo.Bar")
+	assert.Contains(t, out.User, "some entry in controller_verified_references is a substring of C")
+	assert.Contains(t, out.User, "Do not suppress logical contradictions, missing acceptance criteria, or ambiguity findings")
+}
+
+func TestRenderPre_WithoutControllerVerifiedReferencesOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Controller-verified references:")
+}
+
 func TestRenderMid(t *testing.T) {
 	out, err := RenderMid(MidInput{
 		Spec: sampleSpec(),

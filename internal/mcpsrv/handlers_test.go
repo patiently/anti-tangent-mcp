@@ -239,6 +239,65 @@ func TestValidateTaskSpec_PinnedByLimitsRejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "pinned_by[0] must be at most 500 characters")
 }
 
+func TestValidateTaskSpec_ControllerVerifiedReferencesTrimmedAndStored(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:                    "T",
+		Goal:                         "G",
+		ControllerVerifiedReferences: []string{"  internal/foo.go:12  ", "", "   ", "Foo.Bar"},
+	})
+	require.NoError(t, err)
+
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	assert.Equal(t, []string{"internal/foo.go:12", "Foo.Bar"}, sess.Spec.ControllerVerifiedReferences)
+}
+
+func TestValidateTaskSpec_ControllerVerifiedReferencesLimitsRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	tooMany := make([]string, 51)
+	for i := range tooMany {
+		tooMany[i] = "internal/foo.go"
+	}
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:                    "T",
+		Goal:                         "G",
+		ControllerVerifiedReferences: tooMany,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controller_verified_references must contain at most 50 entries")
+
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:                    "T",
+		Goal:                         "G",
+		ControllerVerifiedReferences: []string{strings.Repeat("x", 501)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controller_verified_references[0] must be at most 500 characters")
+	assert.Equal(t, 0, rv.Calls)
+
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:                    "T",
+		Goal:                         "G",
+		ControllerVerifiedReferences: []string{strings.Repeat("é", 500)},
+	})
+	require.NoError(t, err)
+
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:                    "T",
+		Goal:                         "G",
+		ControllerVerifiedReferences: []string{strings.Repeat("é", 501)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controller_verified_references[0] must be at most 500 characters")
+}
+
 func TestCheckProgress_HappyPath(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-haiku-4-5-20251001")}
 	d := newDeps(t, rv)

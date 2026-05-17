@@ -38,15 +38,16 @@ type Envelope struct {
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
 type ValidateTaskSpecArgs struct {
-	TaskTitle          string   `json:"task_title"           jsonschema:"required"`
-	Goal               string   `json:"goal"                 jsonschema:"required"`
-	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
-	NonGoals           []string `json:"non_goals,omitempty"`
-	Context            string   `json:"context,omitempty"`
-	PinnedBy           []string `json:"pinned_by,omitempty"`
-	Phase              string   `json:"phase,omitempty"`
-	ModelOverride      string   `json:"model_override,omitempty"`
-	MaxTokensOverride  int      `json:"max_tokens_override,omitempty"`
+	TaskTitle                    string   `json:"task_title"           jsonschema:"required"`
+	Goal                         string   `json:"goal"                 jsonschema:"required"`
+	AcceptanceCriteria           []string `json:"acceptance_criteria,omitempty"`
+	NonGoals                     []string `json:"non_goals,omitempty"`
+	Context                      string   `json:"context,omitempty"`
+	PinnedBy                     []string `json:"pinned_by,omitempty"`
+	ControllerVerifiedReferences []string `json:"controller_verified_references,omitempty"`
+	Phase                        string   `json:"phase,omitempty"`
+	ModelOverride                string   `json:"model_override,omitempty"`
+	MaxTokensOverride            int      `json:"max_tokens_override,omitempty"`
 }
 
 type handlers struct {
@@ -74,13 +75,14 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}
 
 	spec := session.TaskSpec{
-		Title:              args.TaskTitle,
-		Goal:               args.Goal,
-		AcceptanceCriteria: args.AcceptanceCriteria,
-		NonGoals:           args.NonGoals,
-		Context:            args.Context,
-		PinnedBy:           inputs.PinnedBy,
-		Phase:              inputs.Phase,
+		Title:                        args.TaskTitle,
+		Goal:                         args.Goal,
+		AcceptanceCriteria:           args.AcceptanceCriteria,
+		NonGoals:                     args.NonGoals,
+		Context:                      args.Context,
+		PinnedBy:                     inputs.PinnedBy,
+		ControllerVerifiedReferences: inputs.ControllerVerifiedReferences,
+		Phase:                        inputs.Phase,
 	}
 
 	cc, err := h.resolvePreCallContext(
