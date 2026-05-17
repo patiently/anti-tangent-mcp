@@ -65,6 +65,8 @@ func TestRenderPre_IncludesTestOnlyGuidance(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out.User, "For explicitly test-only tasks")
 	assert.Contains(t, out.User, "missing invocation counts")
+	assert.Contains(t, out.User, "when call-count behavior matters")
+	assert.Contains(t, out.User, "when a no-change or no-call invariant is intended")
 	assert.Contains(t, out.User, "one consolidated finding")
 }
 
