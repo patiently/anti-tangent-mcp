@@ -40,6 +40,7 @@ func passResp(model string) providers.Response {
 }
 
 func newDeps(t *testing.T, rv *fakeReviewer) Deps {
+	resetPlanPassCacheForTest()
 	cfg, err := config.Load(func(k string) string {
 		switch k {
 		case "ANTHROPIC_API_KEY":

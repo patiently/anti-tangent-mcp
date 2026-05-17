@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -799,4 +801,95 @@ func TestValidatePlan_RollupFallsBackToMergedPositionForBadTaskIndex(t *testing.
 	// and merged-position 1 is referenced at least once.
 	assert.NotContains(t, pr.PlanFindings[0].Evidence, "Task 0:")
 	assert.Contains(t, pr.PlanFindings[0].Evidence, "Task 1:")
+}
+
+// ---------------------------------------------------------------------------
+// Task 4 — validate_plan pass-result cache
+// ---------------------------------------------------------------------------
+
+func passPlanResp(nextAction string) providers.Response {
+	return providers.Response{
+		RawJSON: []byte(`{"plan_verdict":"pass","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: t1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":` + strconv.Quote(nextAction) + `}`),
+		Model:   "claude-sonnet-4-6",
+	}
+}
+
+func warnPlanResp(nextAction string) providers.Response {
+	return providers.Response{
+		RawJSON: []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[{"severity":"major","category":"ambiguous_spec","criterion":"AC","evidence":"AC is vague","suggestion":"Clarify it."}],"tasks":[{"task_index":1,"task_title":"Task 1: t1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":` + strconv.Quote(nextAction) + `}`),
+		Model:   "claude-sonnet-4-6",
+	}
+}
+
+func planEnvelopeReviewMS(t *testing.T, out *mcp.CallToolResult) int64 {
+	t.Helper()
+	require.NotNil(t, out)
+	require.Len(t, out.Content, 1)
+	text, ok := out.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	var body struct {
+		ReviewMS int64 `json:"review_ms"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text.Text), &body))
+	return body.ReviewMS
+}
+
+func TestValidatePlan_CachePassingResult(t *testing.T) {
+	resetPlanPassCacheForTest()
+	t.Cleanup(resetPlanPassCacheForTest)
+
+	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	args := ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)}
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, first.PlanVerdict)
+	assert.Equal(t, 1, rv.Calls)
+
+	out, second, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, second.PlanVerdict)
+	assert.Equal(t, 1, rv.Calls, "cache hit must not call reviewer")
+	assert.Equal(t, "[cached <=3m] Proceed with implementation.", second.NextAction)
+	assert.Equal(t, int64(0), planEnvelopeReviewMS(t, out))
+}
+
+func TestValidatePlan_DoesNotCacheWarnResult(t *testing.T) {
+	resetPlanPassCacheForTest()
+	t.Cleanup(resetPlanPassCacheForTest)
+
+	rv := &fakeReviewer{name: "anthropic", resp: warnPlanResp("Clarify AC.")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	args := ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)}
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictWarn, first.PlanVerdict)
+	_, second, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictWarn, second.PlanVerdict)
+	assert.Equal(t, 2, rv.Calls, "warn results must not be cached")
+}
+
+func TestPlanPassCache_ExpiredEntryMisses(t *testing.T) {
+	resetPlanPassCacheForTest()
+	t.Cleanup(resetPlanPassCacheForTest)
+
+	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	args := ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	expirePlanPassCacheForTest()
+
+	_, second, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, second.PlanVerdict)
+	assert.Equal(t, 2, rv.Calls, "expired cache entry must miss")
+	assert.NotContains(t, second.NextAction, "[cached <=3m]")
 }
