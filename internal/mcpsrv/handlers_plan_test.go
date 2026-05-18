@@ -1078,3 +1078,29 @@ func TestPlanPassCache_ExpiredEntryMisses(t *testing.T) {
 	assert.Equal(t, 2, rv.Calls, "expired cache entry must miss")
 	assert.NotContains(t, second.NextAction, "[cached <=3m]")
 }
+
+func TestValidatePlan_PopulatesNormativeTestBodies(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{
+				"plan_verdict":"pass",
+				"plan_findings":[],
+				"tasks":[
+					{"task_index":1,"task_title":"Task 1: with bodies","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}
+				],
+				"next_action":"proceed",
+				"plan_quality":"actionable"
+			}`),
+			Model: "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	plan := "# Plan\n\n### Task 1: with bodies\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n\n**NORMATIVE TEST BODIES (verbatim):**\n\n```kotlin\n@Test fun t() { /* body */ }\n```\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.Len(t, pr.Tasks, 1)
+	assert.Equal(t, []string{"@Test fun t() { /* body */ }"}, pr.Tasks[0].NormativeTestBodies)
+}

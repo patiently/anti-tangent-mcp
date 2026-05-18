@@ -1048,6 +1048,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}); handled {
 		return r, p, retErr
 	}
+	populateNormativeTestBodies(&pr, tasks)
 	pr = prependPlanClamp(pr, clamp)
 	pr = finalizePlanResult(pr, modelUsed, ms)
 	h.planCache().store(cacheKey, pr, modelUsed)
@@ -1161,6 +1162,21 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 		modelUsed = model.String()
 	}
 	return r, modelUsed, time.Since(start).Milliseconds(), nil, nil
+}
+
+// populateNormativeTestBodies fills in pr.Tasks[i].NormativeTestBodies from
+// the matching planparser.RawTask body. Match is by 1-based TaskIndex; tasks
+// whose index is out of range are left alone (defensive — chunked-path
+// reviewer responses occasionally drift on task_index, and we'd rather emit
+// no extraction for that task than panic or misattribute).
+func populateNormativeTestBodies(pr *verdict.PlanResult, tasks []planparser.RawTask) {
+	for i := range pr.Tasks {
+		idx := pr.Tasks[i].TaskIndex - 1 // 1-based -> 0-based
+		if idx < 0 || idx >= len(tasks) {
+			continue
+		}
+		pr.Tasks[i].NormativeTestBodies = planparser.ExtractNormativeTestBodies(tasks[idx].Body)
+	}
 }
 
 func noHeadingsPlanResult() verdict.PlanResult {
