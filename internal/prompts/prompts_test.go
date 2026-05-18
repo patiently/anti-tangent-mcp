@@ -652,3 +652,38 @@ func TestRenderPost_WithoutMissingReferencedPathsOmitsEvidenceNote(t *testing.T)
 	require.NoError(t, err)
 	assert.NotContains(t, out.User, "summary references these paths")
 }
+
+func TestRenderPost_WithExplicitExitContractsIncludesSection(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:                  sampleSpec(),
+		Summary:               "implemented X",
+		FinalDiff:             "diff --git",
+		ExitContracts:         []string{"Defines handlerName"},
+		ExitContractsInferred: false,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Exit contracts (explicit — author-authored, must be satisfied):")
+	assert.Contains(t, out.User, "- Defines handlerName")
+	assert.Contains(t, out.User, "criterion: exit_contract")
+	assert.Contains(t, out.User, "explicit")
+}
+
+func TestRenderPost_WithInferredExitContractsIncludesSection(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:                  sampleSpec(),
+		Summary:               "implemented X",
+		FinalDiff:             "diff --git",
+		ExitContracts:         []string{"Exports DECLINE_NODE"},
+		ExitContractsInferred: true,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Exit contracts (reviewer-inferred — verify but do not gate harshly):")
+	assert.Contains(t, out.User, "- Exports DECLINE_NODE")
+	assert.Contains(t, out.User, "cap at `severity: minor`")
+}
+
+func TestRenderPost_WithoutExitContractsOmitsSection(t *testing.T) {
+	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "x", FinalDiff: "diff"})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Exit contracts (")
+}

@@ -49,6 +49,12 @@ func normalizeBoundedStringList(field string, entries []string, maxEntries, maxC
 	return out, nil
 }
 
+// normalizeCompletionExitContracts trims and bounds the optional
+// exit_contracts list submitted to validate_completion.
+func normalizeCompletionExitContracts(entries []string) ([]string, error) {
+	return normalizeBoundedStringList("exit_contracts", entries, maxPinnedByEntries, maxPinnedByChars)
+}
+
 // taskSpecInputs holds the post-validation normalized form of the optional
 // task-spec inputs.
 type taskSpecInputs struct {

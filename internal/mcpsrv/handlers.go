@@ -645,13 +645,15 @@ func validateCompletionTool() *mcp.Tool {
 }
 
 type ValidateCompletionArgs struct {
-	SessionID         string    `json:"session_id"  jsonschema:"required"`
-	Summary           string    `json:"summary"     jsonschema:"required"`
-	FinalFiles        []FileArg `json:"final_files,omitempty"`
-	FinalDiff         string    `json:"final_diff,omitempty"`
-	TestEvidence      string    `json:"test_evidence,omitempty"`
-	ModelOverride     string    `json:"model_override,omitempty"`
-	MaxTokensOverride int       `json:"max_tokens_override,omitempty"`
+	SessionID             string    `json:"session_id"  jsonschema:"required"`
+	Summary               string    `json:"summary"     jsonschema:"required"`
+	FinalFiles            []FileArg `json:"final_files,omitempty"`
+	FinalDiff             string    `json:"final_diff,omitempty"`
+	TestEvidence          string    `json:"test_evidence,omitempty"`
+	ExitContracts         []string  `json:"exit_contracts,omitempty"`
+	ExitContractsInferred bool      `json:"exit_contracts_inferred,omitempty"`
+	ModelOverride         string    `json:"model_override,omitempty"`
+	MaxTokensOverride     int       `json:"max_tokens_override,omitempty"`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
@@ -885,6 +887,14 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp))
 	}
 
+	// 5b. exit_contracts normalization. Runs after the payload-cap check
+	// (input size already bounded) and before the evidence-shape guard so a
+	// malformed exit_contracts list rejects fast regardless of session state.
+	exitContracts, err := normalizeCompletionExitContracts(args.ExitContracts)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+
 	// 6. evidence-shape guard. Runs BEFORE session lookup so a broken payload
 	// rejects fast regardless of session state. Cache hit → return the same
 	// envelope without re-running the guard or hitting the reviewer.
@@ -932,6 +942,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				TestEvidence:                   args.TestEvidence,
 				MajorPreFindings:               majorPreFindings,
 				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
+				ExitContracts:                  exitContracts,
+				ExitContractsInferred:          args.ExitContractsInferred,
 			})
 		},
 		"render post prompt",

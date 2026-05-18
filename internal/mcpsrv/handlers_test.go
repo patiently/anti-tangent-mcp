@@ -2175,3 +2175,37 @@ func TestValidateTaskSpec_TestabilityExtractionsEmptyIsNoop(t *testing.T) {
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryScopeDrift, env.Findings[0].Category)
 }
+
+func TestNormalizeCompletionExitContracts_TrimsAndDropsEmpties(t *testing.T) {
+	out, err := normalizeCompletionExitContracts([]string{"  contract A  ", "", "\tcontract B\n", "   "})
+	require.NoError(t, err)
+	require.Equal(t, []string{"contract A", "contract B"}, out)
+}
+
+func TestValidateCompletion_ExitContractsLimitsRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	tooMany := make([]string, 51)
+	for i := range tooMany {
+		tooMany[i] = "contract"
+	}
+	_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:     "anything",
+		Summary:       "s",
+		FinalDiff:     "diff",
+		ExitContracts: tooMany,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exit_contracts must contain at most 50 entries")
+
+	_, _, err = h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:     "anything",
+		Summary:       "s",
+		FinalDiff:     "diff",
+		ExitContracts: []string{strings.Repeat("x", 501)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exit_contracts[0] must be at most 500 characters")
+}
