@@ -46,7 +46,7 @@ Use `context` for background a fresh implementer needs to understand the task: p
 
 Use `pinned_by` for anchors that preserve behavior: existing tests, docs, commands, or static checks that pin a terse AC such as "retry behavior remains unchanged." The reviewer treats these entries as caller-supplied anchors, not independently verified codebase facts.
 
-Use `controller_verified_references` for codebase references the controller has already checked before dispatch: paths, symbols, line anchors, commands, or adjacent patterns. The pre-task reviewer suppresses `unverifiable_codebase_claim` only when the task claim and a controller-verified entry match by deterministic substring; contradictions, missing ACs, and ambiguity still surface.
+Use `controller_verified_references` for codebase references the controller has already checked before dispatch: paths, symbols, line anchors, commands, or adjacent patterns. The pre-task reviewer suppresses `unverifiable_codebase_claim` only when the task claim and a controller-verified entry match by deterministic substring; contradictions, missing ACs, ambiguity, and `convention_deviation` findings are NOT suppressed. CVR is a single-category suppression — use `testability_extractions` to suppress `scope_drift` on intentional helper extractions and `codebase_conventions` to actively trigger `convention_deviation` findings.
 
 ---
 
@@ -278,9 +278,40 @@ A common style mistake is a vague AC like `should be fast`. `validate_task_spec`
 
 Acceptance criteria describe *what done looks like*, not *how to get there*. Implementation steps belong in the "Steps:" / "Files:" portion of the task, where they always lived. Mixing them produces brittle ACs that the reviewer flags as either redundant or hyper-specific.
 
+### 3.6 Normative test bodies (binding test code in plans)
+
+When a task's plan markdown pastes verbatim test code that the implementer should land as written — not as advisory illustration — wrap each test body in a fenced code block immediately following the literal header:
+
+````markdown
+**NORMATIVE TEST BODIES (verbatim):**
+
+```kotlin
+@Test fun whenInputIsX_thenOutputIsY() {
+    val result = subject.process(X)
+    assertThat(result.decision).isEqualTo(DECLINE)
+    assertThat(result.handlerName).isEqualTo(WINDDOWN_NODE_NAME)
+}
+```
+````
+
+`validate_plan` extracts each fenced block server-side (deterministic markdown parsing, not reviewer-driven) and populates `PlanTaskResult.NormativeTestBodies`. Controllers thread that list into `validate_task_spec`'s `normative_test_bodies` input on dispatch. The reviewer is then instructed to treat each entry as binding test scope — equivalent in authority to a bullet under Acceptance criteria — so the `validate_task_spec`-only view of the task (Goal / AC / Non-goals / Context) does not blindly flag "test scope unclear" when the plan's per-step code block already pins it.
+
+Adjacent fenced blocks (separated only by whitespace) extract as separate entries. When a body exceeds 4000 Unicode code points, the server truncates it and appends a `// truncated` marker so the reviewer sees the body was clipped. If you need to pin a body that legitimately exceeds 4000 code points, paraphrase or excerpt with the leading comment marker `// excerpt:` (or analogous language-appropriate comment) — the reviewer treats `// excerpt:` entries as partial coverage rather than full bodies.
+
+### 3.7 `.trimIndent()` raw-string caveat
+
+When a plan snippet is wrapped in `.trimIndent()` (or any equivalent raw-string trimming construct), multi-line phrases render newlines exactly where they sit in source. A phrase that wraps mid-sentence in the plan markdown for readability will land as a newline at runtime — anti-tangent cannot catch this; the reviewer reads only the source text, not the rendered string.
+
+Two rules for plan authors:
+
+- Keep example phrases on a single source line, even if it makes the markdown wider. Wrapping for prose readability is fine for surrounding commentary, but example strings that the implementation will compare against must be one line in source.
+- Where ACs assert on the rendered output, phrase the AC against the *rendered* string, not the source layout. For example, "the output contains the phrase `please decline politely`" beats "the output contains the phrase `please decline\npolitely`" — the second hides a regression behind plan-layout choices.
+
 ---
 
 ## 4. For implementers — the lifecycle protocol
+
+> **Before reaching for the full protocol, check lightweight eligibility.** Many tasks qualify for lightweight mode (skip `validate_task_spec`, skip `check_progress`, keep `validate_completion` as the sanity gate). The full clause below adds ~50 lines of dispatch boilerplate; lightweight is ~15 lines. Lightweight applies when ALL of: (a) the task touches at most two files OR is docs/config/data-only; (b) the task is mechanical with no production-design or test-design choices; (c) the spec includes the literal text, exact diff, exact command, or exact insertion shape. `validate_plan` may pre-annotate tasks with `lightweight_eligible: true` and a `lightweight_reason` — treat those as advisory controller hints rather than permission to skip judgment. See [Lightweight protocol mode](#lightweight-protocol-mode-v031) below for the reference clause.
 
 If you're an implementing subagent (or you're writing a system prompt for one), this section is what to follow.
 
@@ -371,6 +402,12 @@ Use anti-tangent per the standard dispatch protocol. For this task:
 - If CodeScene MCP is configured, run `pre_commit_code_health_safeguard` after meaningful code changes.
 - If any major pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
 ```
+
+### 4.2b Language-scoping prose caveat
+
+The text-only reviewer can surface `ambiguous_spec` findings around closure/scoping semantics — Kotlin `var` captured by a lambda, Python nested-scope `nonlocal`, JavaScript `let` vs `const` in arrow bodies, etc. — when the prose AC reads ambiguously even though the verbatim code block in the plan is unambiguous.
+
+Implementer mitigation: trust the verbatim plan code block. Paste it as-is, run the tests, and only deviate from the code if the *tests* disagree with the prose. Do not re-interpret the prose against your own model of the language's scoping rules — the plan author's code block already encodes the intent. If you genuinely cannot reconcile the code and the prose, stop and ask the controller; do not silently rewrite either.
 
 ### Lightweight protocol mode (v0.3.1+)
 
