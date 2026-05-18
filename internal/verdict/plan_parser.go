@@ -63,9 +63,8 @@ func validatePlanVerdict(v Verdict, where string) error {
 }
 
 // validateFinding validates severity and category. It also applies the
-// unverifiable_codebase_claim severity floor in-place (forcing such
-// findings to SeverityMinor) so plan-shape parsers behave identically
-// to the per-task parser.
+// per-category severity floor in-place so plan-shape parsers behave
+// identically to the per-task parser.
 func validateFinding(f *Finding, where string) error {
 	switch f.Severity {
 	case SeverityCritical, SeverityMajor, SeverityMinor:
@@ -75,12 +74,7 @@ func validateFinding(f *Finding, where string) error {
 	if !validCategory(f.Category) {
 		return fmt.Errorf("plan: %s.category invalid %q", where, f.Category)
 	}
-	if f.Category == CategoryUnverifiableCodebaseClaim && f.Severity != SeverityMinor {
-		f.Severity = SeverityMinor
-	}
-	if f.Category == CategoryConventionDeviation && f.Severity != SeverityMinor {
-		f.Severity = SeverityMinor
-	}
+	*f = applySeverityFloor(*f)
 	return nil
 }
 

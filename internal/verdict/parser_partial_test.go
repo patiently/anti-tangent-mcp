@@ -93,6 +93,22 @@ func TestParseResultPartial_TruncatedAtTrailingWhitespace(t *testing.T) {
 	assert.Equal(t, Verdict("pass"), got.Verdict)
 }
 
+func TestParseResultPartial_ConventionDeviation_SeverityFloorToMinor(t *testing.T) {
+	// Truncated reviewer response carrying a `critical` convention_deviation
+	// finding inside an unclosed findings[]. Partial recovery should floor
+	// the severity to `minor`, matching the strict parser's behavior.
+	raw := []byte(`{"verdict":"warn","findings":[` +
+		`{"severity":"critical","category":"convention_deviation","criterion":"codebase_convention","evidence":"e","suggestion":"s"},` +
+		`{"severity":"min`)
+
+	got, ok := ParseResultPartial(raw)
+	require.True(t, ok, "should recover the one complete convention_deviation finding")
+	assert.True(t, got.Partial)
+	require.Len(t, got.Findings, 1)
+	assert.Equal(t, CategoryConventionDeviation, got.Findings[0].Category)
+	assert.Equal(t, SeverityMinor, got.Findings[0].Severity, "partial recovery should floor convention_deviation to minor")
+}
+
 func TestParsePlanResultPartial_TruncatedInsideTaskFindings_RecoversSyntheticTask(t *testing.T) {
 	// Two complete tasks; the third task has task_title and verdict parsed,
 	// findings[] opened with one complete finding inside, then truncation

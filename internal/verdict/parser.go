@@ -39,15 +39,10 @@ func Parse(raw []byte) (Result, error) {
 		if !validCategory(f.Category) {
 			return Result{}, fmt.Errorf("finding[%d]: invalid category %q", i, f.Category)
 		}
-		// Severity floor: unverifiable_codebase_claim and convention_deviation
-		// findings are always minor — the reviewer can't know if the claim/
-		// deviation is wrong, only that it can't fully verify.
-		if f.Category == CategoryUnverifiableCodebaseClaim && f.Severity != SeverityMinor {
-			r.Findings[i].Severity = SeverityMinor
-		}
-		if f.Category == CategoryConventionDeviation && f.Severity != SeverityMinor {
-			r.Findings[i].Severity = SeverityMinor
-		}
+		// Severity floor: see applySeverityFloor in parser_partial.go for the
+		// list of categories that get capped at minor (the reviewer can't
+		// know if the claim/deviation is wrong).
+		r.Findings[i] = applySeverityFloor(r.Findings[i])
 	}
 	return r, nil
 }

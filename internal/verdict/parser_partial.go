@@ -8,11 +8,14 @@ import (
 
 // applySeverityFloor enforces the category-based severity floors that
 // match the strict parser's behavior, so partial-recovery output is
-// consistent with strict output. Currently the only floor is
-// unverifiable_codebase_claim → minor (the reviewer can't know if the
-// claim is wrong, only that it can't check).
+// consistent with strict output. Floored categories:
+//   - unverifiable_codebase_claim → minor (reviewer can't verify the claim)
+//   - convention_deviation → minor (reviewer can't know if implementation will deviate)
 func applySeverityFloor(f Finding) Finding {
 	if f.Category == CategoryUnverifiableCodebaseClaim && f.Severity != SeverityMinor {
+		f.Severity = SeverityMinor
+	}
+	if f.Category == CategoryConventionDeviation && f.Severity != SeverityMinor {
 		f.Severity = SeverityMinor
 	}
 	return f

@@ -207,8 +207,14 @@ func TestParsePlan_ConventionDeviation_SeverityFloorToMinor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePlan: %v", err)
 	}
+	if len(r.PlanFindings) != 1 {
+		t.Fatalf("expected 1 plan finding, got %d", len(r.PlanFindings))
+	}
 	if got, want := r.PlanFindings[0].Severity, SeverityMinor; got != want {
 		t.Errorf("plan-side severity = %q, want %q (server should floor)", got, want)
+	}
+	if got, want := r.PlanFindings[0].Category, CategoryConventionDeviation; got != want {
+		t.Errorf("plan-side category = %q, want %q", got, want)
 	}
 }
 
