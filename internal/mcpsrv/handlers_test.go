@@ -2059,3 +2059,119 @@ func TestValidateTaskSpec_NormativeTestBodiesLimitsRejected(t *testing.T) {
 	})
 	require.NoError(t, err)
 }
+
+func TestValidateTaskSpec_TestabilityExtractionsSuppressScopeDrift(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: providers.Response{
+		RawJSON: []byte(`{
+			"verdict":"warn",
+			"findings":[
+				{"severity":"minor","category":"scope_drift","criterion":"spec","evidence":"buildDeclineWinddownHandlerOutput is extracted as a top-level helper","suggestion":"keep helpers inline"},
+				{"severity":"major","category":"scope_drift","criterion":"spec","evidence":"adds an unrelated retry wrapper","suggestion":"remove the wrapper"},
+				{"severity":"minor","category":"ambiguous_spec","criterion":"AC1","evidence":"runHiringAreaRecheck closure semantics unclear","suggestion":"pin the closure"}
+			],
+			"next_action":"address findings"
+		}`),
+		Model: "claude-sonnet-4-6",
+	}}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:              "T",
+		Goal:                   "G",
+		AcceptanceCriteria:     []string{"AC1"},
+		TestabilityExtractions: []string{"buildDeclineWinddownHandlerOutput", "runHiringAreaRecheck"},
+	})
+	require.NoError(t, err)
+
+	// The first scope_drift (matches buildDeclineWinddownHandlerOutput) is suppressed.
+	// The second scope_drift (unrelated) survives.
+	// The ambiguous_spec finding survives even though its evidence names a different
+	// extraction — suppression is scope_drift-only.
+	require.Len(t, env.Findings, 2)
+	assert.Equal(t, verdict.CategoryScopeDrift, env.Findings[0].Category)
+	assert.Equal(t, "adds an unrelated retry wrapper", env.Findings[0].Evidence)
+	assert.Equal(t, verdict.CategoryAmbiguousSpec, env.Findings[1].Category)
+}
+
+func TestValidateTaskSpec_TestabilityExtractionsReverseSubstringDrop(t *testing.T) {
+	// Reviewer evidence is a substring of the extraction entry (the inverse
+	// match direction). The finding must still be dropped.
+	rv := &fakeReviewer{name: "anthropic", resp: providers.Response{
+		RawJSON: []byte(`{
+			"verdict":"warn",
+			"findings":[
+				{"severity":"minor","category":"scope_drift","criterion":"spec","evidence":"buildDecline","suggestion":"keep helpers inline"}
+			],
+			"next_action":"address findings"
+		}`),
+		Model: "claude-sonnet-4-6",
+	}}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:              "T",
+		Goal:                   "G",
+		TestabilityExtractions: []string{"buildDeclineWinddownHandlerOutput"},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, env.Findings)
+}
+
+func TestValidateTaskSpec_TestabilityExtractionsRollupOrdering(t *testing.T) {
+	// Suppression runs BEFORE the unverifiable rollup, so a suppressed
+	// scope_drift never enters the rolled-up checklist. The unrelated
+	// unverifiable_codebase_claim must still be rolled up normally.
+	rv := &fakeReviewer{name: "anthropic", resp: providers.Response{
+		RawJSON: []byte(`{
+			"verdict":"warn",
+			"findings":[
+				{"severity":"minor","category":"scope_drift","criterion":"spec","evidence":"buildDeclineWinddownHandlerOutput is extracted","suggestion":"keep helpers inline"},
+				{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"internal/example.go defines Foo","suggestion":"verify against the actual code before dispatching."}
+			],
+			"next_action":"address findings"
+		}`),
+		Model: "claude-sonnet-4-6",
+	}}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:              "T",
+		Goal:                   "G",
+		TestabilityExtractions: []string{"buildDeclineWinddownHandlerOutput"},
+	})
+	require.NoError(t, err)
+
+	// scope_drift suppressed; unverifiable rolled up into a single checklist entry.
+	require.Len(t, env.Findings, 1)
+	assert.Equal(t, verdict.CategoryUnverifiableCodebaseClaim, env.Findings[0].Category)
+	assert.Equal(t, "codebase_reference_checklist", env.Findings[0].Criterion)
+	assert.Contains(t, env.Findings[0].Evidence, "internal/example.go defines Foo")
+	// Confirm the suppressed scope_drift evidence is NOT in the rolled-up checklist.
+	assert.NotContains(t, env.Findings[0].Evidence, "buildDeclineWinddownHandlerOutput")
+}
+
+func TestValidateTaskSpec_TestabilityExtractionsEmptyIsNoop(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: providers.Response{
+		RawJSON: []byte(`{
+			"verdict":"warn",
+			"findings":[
+				{"severity":"minor","category":"scope_drift","criterion":"spec","evidence":"adds unrelated helper","suggestion":"keep scoped"}
+			],
+			"next_action":"address findings"
+		}`),
+		Model: "claude-sonnet-4-6",
+	}}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T",
+		Goal:      "G",
+	})
+	require.NoError(t, err)
+	require.Len(t, env.Findings, 1)
+	assert.Equal(t, verdict.CategoryScopeDrift, env.Findings[0].Category)
+}

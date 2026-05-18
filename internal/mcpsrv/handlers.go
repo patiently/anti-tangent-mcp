@@ -125,6 +125,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}); handled {
 		return r, env, retErr
 	}
+	result.Findings = suppressTestabilityExtractionScopeDrift(result.Findings, inputs.TestabilityExtractions)
 	result.Findings = normalizeTaskSpecUnverifiableFindings(result.Findings)
 
 	// Create the session only after the review succeeds so failed reviews
