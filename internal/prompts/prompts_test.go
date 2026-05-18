@@ -593,6 +593,38 @@ func TestRenderPre_WithoutNormativeTestBodiesOmitsSection(t *testing.T) {
 	assert.NotContains(t, out.User, "Normative test bodies (caller-supplied, treat as binding AC):")
 }
 
+const (
+	anchorExitContractsInstruction          = "exit_contracts"
+	anchorExitContractsInferredFlag         = "exit_contracts_inferred"
+	anchorExitContractsExplicitHeader       = "**Exit contracts:**"
+	anchorExitContractsMaxGuidance          = "at most 20 contracts"
+	anchorNormativeServerSideInstruction    = "populated server-side"
+	anchorNormativeDoNotEmitInstruction     = "Do NOT emit `normative_test_bodies`"
+)
+
+func TestRenderPlan_ExitContractsInstructionPresent(t *testing.T) {
+	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n\n### Task 1: A\n\n**Goal:** Test\n"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorExitContractsInstruction, "plan.tmpl should ask reviewer to populate exit_contracts")
+	assert.Contains(t, out.User, anchorExitContractsInferredFlag, "plan.tmpl should ask reviewer to set exit_contracts_inferred")
+	assert.Contains(t, out.User, anchorExitContractsExplicitHeader, "plan.tmpl should mention the explicit **Exit contracts:** plan-side syntax")
+	assert.Contains(t, out.User, anchorExitContractsMaxGuidance, "plan.tmpl should bound contracts per task")
+	assert.Contains(t, out.User, anchorNormativeServerSideInstruction, "plan.tmpl should tell reviewer NOT to emit normative_test_bodies (server-populated)")
+	assert.Contains(t, out.User, anchorNormativeDoNotEmitInstruction, "plan.tmpl should explicitly forbid emitting normative_test_bodies")
+}
+
+func TestRenderPlanTasksChunk_ExitContractsInstructionPresent(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   "# Plan\n\n### Task 1: A\n\n**Goal:** Test\n",
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: A"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorExitContractsInstruction, "plan_tasks_chunk.tmpl should ask reviewer to populate exit_contracts")
+	assert.Contains(t, out.User, anchorExitContractsInferredFlag, "plan_tasks_chunk.tmpl should ask reviewer to set exit_contracts_inferred")
+	assert.Contains(t, out.User, anchorExitContractsExplicitHeader, "plan_tasks_chunk.tmpl should mention the explicit **Exit contracts:** plan-side syntax")
+	assert.Contains(t, out.User, anchorExitContractsMaxGuidance, "plan_tasks_chunk.tmpl should bound contracts per task")
+}
+
 func TestRenderPost_WithPinnedByIncludesAnchors(t *testing.T) {
 	spec := sampleSpec()
 	spec.PinnedBy = []string{"HealthHandlerTest.TestOK", "go test ./internal/http"}

@@ -20,7 +20,9 @@
           "suggested_header_block":  { "type": "string" },
           "suggested_header_reason": { "type": "string" },
           "lightweight_eligible":    { "type": "boolean" },
-          "lightweight_reason":      { "type": "string" }
+          "lightweight_reason":      { "type": "string" },
+          "exit_contracts":          { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "exit_contracts_inferred": { "type": "boolean" }
         }
       }
     }

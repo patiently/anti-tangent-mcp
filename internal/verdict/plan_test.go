@@ -489,6 +489,56 @@ func TestParseTasksOnly_RejectsInvalid(t *testing.T) {
 	})
 }
 
+func TestParsePlan_ExitContractsRoundTrip(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict":"pass",
+		"plan_findings":[],
+		"tasks":[
+			{
+				"task_index":1,
+				"task_title":"Task 1: emit",
+				"verdict":"pass",
+				"findings":[],
+				"suggested_header_block":"",
+				"suggested_header_reason":"",
+				"exit_contracts":["Defines handlerName constant","Exports DECLINE_NODE_NAME"],
+				"exit_contracts_inferred":true
+			}
+		],
+		"next_action":"proceed",
+		"plan_quality":"actionable"
+	}`)
+	pr, err := ParsePlan(raw)
+	require.NoError(t, err)
+	require.Len(t, pr.Tasks, 1)
+	assert.Equal(t, []string{"Defines handlerName constant", "Exports DECLINE_NODE_NAME"}, pr.Tasks[0].ExitContracts)
+	assert.True(t, pr.Tasks[0].ExitContractsInferred)
+}
+
+func TestParsePlan_ExitContractsAbsent_BackCompat(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict":"pass",
+		"plan_findings":[],
+		"tasks":[
+			{
+				"task_index":1,
+				"task_title":"Task 1: emit",
+				"verdict":"pass",
+				"findings":[],
+				"suggested_header_block":"",
+				"suggested_header_reason":""
+			}
+		],
+		"next_action":"proceed",
+		"plan_quality":"actionable"
+	}`)
+	pr, err := ParsePlan(raw)
+	require.NoError(t, err)
+	require.Len(t, pr.Tasks, 1)
+	assert.Empty(t, pr.Tasks[0].ExitContracts)
+	assert.False(t, pr.Tasks[0].ExitContractsInferred)
+}
+
 func TestParsePlanResultPartial_AppliesPlanQualitySanity(t *testing.T) {
 	// Truncated reviewer output with a critical finding — partial parser
 	// must apply ApplyPlanQualitySanity for parity with strict ParsePlan,
