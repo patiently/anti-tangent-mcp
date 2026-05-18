@@ -2016,7 +2016,7 @@ func TestValidateTaskSpec_NormativeTestBodiesLimitsRejected(t *testing.T) {
 	// 20 entries pass, 21 fail.
 	twenty := make([]string, 20)
 	for i := range twenty {
-		twenty[i] = "@Test fun t" + strings.Repeat("x", 1) + "() {}"
+		twenty[i] = "@Test fun tx() {}"
 	}
 	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
 		TaskTitle:           "T",

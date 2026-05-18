@@ -28,117 +28,29 @@ func normalizePhase(phase string) (string, error) {
 	}
 }
 
-func normalizePinnedBy(entries []string) ([]string, error) {
+// normalizeBoundedStringList trims whitespace from each entry, drops empties,
+// caps per-entry length in runes, and caps total entry count. Errors name the
+// JSON snake_case field so callers can pass them straight through.
+func normalizeBoundedStringList(field string, entries []string, maxEntries, maxChars int) ([]string, error) {
 	out := make([]string, 0, len(entries))
 	for i, entry := range entries {
 		trimmed := strings.TrimSpace(entry)
 		if trimmed == "" {
 			continue
 		}
-		if len([]rune(trimmed)) > maxPinnedByChars {
-			return nil, fmt.Errorf("pinned_by[%d] must be at most %d characters", i, maxPinnedByChars)
+		if len([]rune(trimmed)) > maxChars {
+			return nil, fmt.Errorf("%s[%d] must be at most %d characters", field, i, maxChars)
 		}
 		out = append(out, trimmed)
-		if len(out) > maxPinnedByEntries {
-			return nil, fmt.Errorf("pinned_by must contain at most %d entries", maxPinnedByEntries)
-		}
-	}
-	return out, nil
-}
-
-func normalizeControllerVerifiedReferences(entries []string) ([]string, error) {
-	out := make([]string, 0, len(entries))
-	for i, entry := range entries {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			continue
-		}
-		if len([]rune(trimmed)) > maxPinnedByChars {
-			return nil, fmt.Errorf("controller_verified_references[%d] must be at most %d characters", i, maxPinnedByChars)
-		}
-		out = append(out, trimmed)
-		if len(out) > maxPinnedByEntries {
-			return nil, fmt.Errorf("controller_verified_references must contain at most %d entries", maxPinnedByEntries)
-		}
-	}
-	return out, nil
-}
-
-func normalizeTestStrategyNotes(entries []string) ([]string, error) {
-	out := make([]string, 0, len(entries))
-	for i, entry := range entries {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			continue
-		}
-		if len([]rune(trimmed)) > maxPinnedByChars {
-			return nil, fmt.Errorf("test_strategy_notes[%d] must be at most %d characters", i, maxPinnedByChars)
-		}
-		out = append(out, trimmed)
-		if len(out) > maxPinnedByEntries {
-			return nil, fmt.Errorf("test_strategy_notes must contain at most %d entries", maxPinnedByEntries)
-		}
-	}
-	return out, nil
-}
-
-func normalizeCodebaseConventions(entries []string) ([]string, error) {
-	out := make([]string, 0, len(entries))
-	for i, entry := range entries {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			continue
-		}
-		if len([]rune(trimmed)) > maxPinnedByChars {
-			return nil, fmt.Errorf("codebase_conventions[%d] must be at most %d characters", i, maxPinnedByChars)
-		}
-		out = append(out, trimmed)
-		if len(out) > maxPinnedByEntries {
-			return nil, fmt.Errorf("codebase_conventions must contain at most %d entries", maxPinnedByEntries)
-		}
-	}
-	return out, nil
-}
-
-func normalizeTestabilityExtractions(entries []string) ([]string, error) {
-	out := make([]string, 0, len(entries))
-	for i, entry := range entries {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			continue
-		}
-		if len([]rune(trimmed)) > maxPinnedByChars {
-			return nil, fmt.Errorf("testability_extractions[%d] must be at most %d characters", i, maxPinnedByChars)
-		}
-		out = append(out, trimmed)
-		if len(out) > maxPinnedByEntries {
-			return nil, fmt.Errorf("testability_extractions must contain at most %d entries", maxPinnedByEntries)
-		}
-	}
-	return out, nil
-}
-
-func normalizeNormativeTestBodies(entries []string) ([]string, error) {
-	out := make([]string, 0, len(entries))
-	for i, entry := range entries {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			continue
-		}
-		if len([]rune(trimmed)) > maxNormativeTestBodyChars {
-			return nil, fmt.Errorf("normative_test_bodies[%d] must be at most %d characters", i, maxNormativeTestBodyChars)
-		}
-		out = append(out, trimmed)
-		if len(out) > maxNormativeTestBodyEntries {
-			return nil, fmt.Errorf("normative_test_bodies must contain at most %d entries", maxNormativeTestBodyEntries)
+		if len(out) > maxEntries {
+			return nil, fmt.Errorf("%s must contain at most %d entries", field, maxEntries)
 		}
 	}
 	return out, nil
 }
 
 // taskSpecInputs holds the post-validation normalized form of the optional
-// task-spec inputs. The combined helper consolidates the two error paths so
-// the calling handler stays under cyclomatic-complexity thresholds.
+// task-spec inputs.
 type taskSpecInputs struct {
 	Phase                        string
 	PinnedBy                     []string
@@ -154,27 +66,27 @@ func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) 
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
-	pinnedBy, err := normalizePinnedBy(args.PinnedBy)
+	pinnedBy, err := normalizeBoundedStringList("pinned_by", args.PinnedBy, maxPinnedByEntries, maxPinnedByChars)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
-	controllerVerifiedReferences, err := normalizeControllerVerifiedReferences(args.ControllerVerifiedReferences)
+	controllerVerifiedReferences, err := normalizeBoundedStringList("controller_verified_references", args.ControllerVerifiedReferences, maxPinnedByEntries, maxPinnedByChars)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
-	testStrategyNotes, err := normalizeTestStrategyNotes(args.TestStrategyNotes)
+	testStrategyNotes, err := normalizeBoundedStringList("test_strategy_notes", args.TestStrategyNotes, maxPinnedByEntries, maxPinnedByChars)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
-	codebaseConventions, err := normalizeCodebaseConventions(args.CodebaseConventions)
+	codebaseConventions, err := normalizeBoundedStringList("codebase_conventions", args.CodebaseConventions, maxPinnedByEntries, maxPinnedByChars)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
-	testabilityExtractions, err := normalizeTestabilityExtractions(args.TestabilityExtractions)
+	testabilityExtractions, err := normalizeBoundedStringList("testability_extractions", args.TestabilityExtractions, maxPinnedByEntries, maxPinnedByChars)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
-	normativeTestBodies, err := normalizeNormativeTestBodies(args.NormativeTestBodies)
+	normativeTestBodies, err := normalizeBoundedStringList("normative_test_bodies", args.NormativeTestBodies, maxNormativeTestBodyEntries, maxNormativeTestBodyChars)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
