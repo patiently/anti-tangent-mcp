@@ -821,19 +821,6 @@ func warnPlanResp(nextAction string) providers.Response {
 	}
 }
 
-func planEnvelopeReviewMS(t *testing.T, out *mcp.CallToolResult) int64 {
-	t.Helper()
-	require.NotNil(t, out)
-	require.Len(t, out.Content, 1)
-	text, ok := out.Content[0].(*mcp.TextContent)
-	require.True(t, ok)
-	var body struct {
-		ReviewMS int64 `json:"review_ms"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(text.Text), &body))
-	return body.ReviewMS
-}
-
 func planEnvelopeBody(t *testing.T, out *mcp.CallToolResult) struct {
 	verdict.PlanResult
 	ModelUsed string `json:"model_used"`

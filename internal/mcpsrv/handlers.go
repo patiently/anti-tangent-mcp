@@ -51,13 +51,16 @@ type ValidateTaskSpecArgs struct {
 }
 
 type handlers struct {
-	deps Deps
+	deps          Deps
+	planCacheOnce sync.Once
 }
 
 func (h *handlers) planCache() *planPassCache {
-	if h.deps.planCache == nil {
-		h.deps.planCache = newPlanPassCache()
-	}
+	h.planCacheOnce.Do(func() {
+		if h.deps.planCache == nil {
+			h.deps.planCache = newPlanPassCache()
+		}
+	})
 	return h.deps.planCache
 }
 
