@@ -47,6 +47,35 @@ func TestRenderPre(t *testing.T) {
 	golden(t, "pre_basic", out.System+"\n---USER---\n"+out.User)
 }
 
+func TestRenderPre_WithControllerVerifiedReferencesIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.ControllerVerifiedReferences = []string{"internal/foo.go:12", "Foo.Bar"}
+
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Controller-verified references:")
+	assert.Contains(t, out.User, "- internal/foo.go:12")
+	assert.Contains(t, out.User, "- Foo.Bar")
+	assert.Contains(t, out.User, "some entry in controller_verified_references is a substring of C")
+	assert.Contains(t, out.User, "Do not suppress logical contradictions, missing acceptance criteria, or ambiguity findings")
+}
+
+func TestRenderPre_IncludesTestOnlyGuidance(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "For explicitly test-only tasks")
+	assert.Contains(t, out.User, "missing invocation counts")
+	assert.Contains(t, out.User, "when call-count behavior matters")
+	assert.Contains(t, out.User, "when a no-change or no-call invariant is intended")
+	assert.Contains(t, out.User, "one consolidated finding")
+}
+
+func TestRenderPre_WithoutControllerVerifiedReferencesOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Controller-verified references:")
+}
+
 func TestRenderMid(t *testing.T) {
 	out, err := RenderMid(MidInput{
 		Spec: sampleSpec(),
@@ -80,6 +109,24 @@ func TestRenderPost(t *testing.T) {
 	})
 	require.NoError(t, err)
 	golden(t, "post_basic", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPost_WithMajorPreFindingsIncludesMitigationGuidance(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:    sampleSpec(),
+		Summary: "Clarified the load profile and added a benchmark-backed test.",
+		MajorPreFindings: []verdict.Finding{{
+			Severity:  verdict.SeverityMajor,
+			Category:  verdict.CategoryAmbiguousSpec,
+			Criterion: "Responds in under 50ms p95",
+			Evidence:  "Pre-task review found the load profile was undefined.",
+		}},
+		TestEvidence: "PASS: TestHealthP95UnderLoad",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Major pre-task findings to verify")
+	assert.Contains(t, out.User, "Pre-task review found the load profile was undefined.")
+	assert.Contains(t, out.User, "explicitly mitigates")
 }
 
 func TestRenderPlan(t *testing.T) {
@@ -175,6 +222,16 @@ func TestRenderPlan_IncludesReviewerGroundRules(t *testing.T) {
 	assert.Contains(t, out.User, anchorConcreteEvidenceRule)
 }
 
+func TestRenderPlan_IncludesLightweightGuidance(t *testing.T) {
+	out, err := RenderPlan(PlanInput{PlanText: "# Sample plan\n\n### Task 1: Docs\n\n**Goal:** Update docs\n"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "lightweight_eligible")
+	assert.Contains(t, out.User, "lightweight_reason")
+	assert.Contains(t, out.User, "the task touches at most two files or is docs/config/data-only")
+	assert.Contains(t, out.User, "mechanical with no production-design or test-design choices")
+	assert.Contains(t, out.User, "Reason required when true, empty when false")
+}
+
 func TestRenderPlanFindingsOnly_IncludesReviewerGroundRules(t *testing.T) {
 	out, err := RenderPlanFindingsOnly(PlanInput{PlanText: "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n"})
 	require.NoError(t, err)
@@ -194,6 +251,19 @@ func TestRenderPlanTasksChunk_IncludesReviewerGroundRules(t *testing.T) {
 	assert.Contains(t, out.User, anchorEpistemicBoundary)
 	assert.Contains(t, out.User, anchorUnstatedAssumptionRule)
 	assert.Contains(t, out.User, anchorConcreteEvidenceRule)
+}
+
+func TestRenderPlanTasksChunk_IncludesLightweightGuidance(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   "# Sample plan\n\n### Task 1: Docs\n\n**Goal:** Update docs\n",
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: Docs"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "lightweight_eligible")
+	assert.Contains(t, out.User, "lightweight_reason")
+	assert.Contains(t, out.User, "the task touches at most two files or is docs/config/data-only")
+	assert.Contains(t, out.User, "mechanical with no production-design or test-design choices")
+	assert.Contains(t, out.User, "Reason required when true, empty when false")
 }
 
 const (

@@ -32,6 +32,15 @@ For each task in the list above, evaluate:
    unambiguous; ACs are observable outcomes, not implementation steps.
 3. **Unstated assumptions**: knowledge a fresh implementer would lack.
 
+For every task, also emit `lightweight_eligible` and `lightweight_reason`.
+Set `lightweight_eligible` to true only when ALL of these are true:
+
+- the task touches at most two files or is docs/config/data-only;
+- the task is mechanical with no production-design or test-design choices;
+- the plan includes literal text, exact diff, exact command, or exact insertion shape.
+
+Reason required when true, empty when false.
+
 If a task is missing the structured header block entirely, synthesize one in
 `suggested_header_block` (Goal + ACs + optional Non-goals/Context) and explain
 your reasoning in `suggested_header_reason`. If the header is already adequate,

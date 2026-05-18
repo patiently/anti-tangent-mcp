@@ -38,19 +38,30 @@ type Envelope struct {
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
 type ValidateTaskSpecArgs struct {
-	TaskTitle          string   `json:"task_title"           jsonschema:"required"`
-	Goal               string   `json:"goal"                 jsonschema:"required"`
-	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
-	NonGoals           []string `json:"non_goals,omitempty"`
-	Context            string   `json:"context,omitempty"`
-	PinnedBy           []string `json:"pinned_by,omitempty"`
-	Phase              string   `json:"phase,omitempty"`
-	ModelOverride      string   `json:"model_override,omitempty"`
-	MaxTokensOverride  int      `json:"max_tokens_override,omitempty"`
+	TaskTitle                    string   `json:"task_title"           jsonschema:"required"`
+	Goal                         string   `json:"goal"                 jsonschema:"required"`
+	AcceptanceCriteria           []string `json:"acceptance_criteria,omitempty"`
+	NonGoals                     []string `json:"non_goals,omitempty"`
+	Context                      string   `json:"context,omitempty"`
+	PinnedBy                     []string `json:"pinned_by,omitempty"`
+	ControllerVerifiedReferences []string `json:"controller_verified_references,omitempty"`
+	Phase                        string   `json:"phase,omitempty"`
+	ModelOverride                string   `json:"model_override,omitempty"`
+	MaxTokensOverride            int      `json:"max_tokens_override,omitempty"`
 }
 
 type handlers struct {
-	deps Deps
+	deps          Deps
+	planCacheOnce sync.Once
+}
+
+func (h *handlers) planCache() *planPassCache {
+	h.planCacheOnce.Do(func() {
+		if h.deps.planCache == nil {
+			h.deps.planCache = newPlanPassCache()
+		}
+	})
+	return h.deps.planCache
 }
 
 func validateTaskSpecTool() *mcp.Tool {
@@ -74,13 +85,14 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}
 
 	spec := session.TaskSpec{
-		Title:              args.TaskTitle,
-		Goal:               args.Goal,
-		AcceptanceCriteria: args.AcceptanceCriteria,
-		NonGoals:           args.NonGoals,
-		Context:            args.Context,
-		PinnedBy:           inputs.PinnedBy,
-		Phase:              inputs.Phase,
+		Title:                        args.TaskTitle,
+		Goal:                         args.Goal,
+		AcceptanceCriteria:           args.AcceptanceCriteria,
+		NonGoals:                     args.NonGoals,
+		Context:                      args.Context,
+		PinnedBy:                     inputs.PinnedBy,
+		ControllerVerifiedReferences: inputs.ControllerVerifiedReferences,
+		Phase:                        inputs.Phase,
 	}
 
 	cc, err := h.resolvePreCallContext(
@@ -105,6 +117,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}); handled {
 		return r, env, retErr
 	}
+	result.Findings = normalizeTaskSpecUnverifiableFindings(result.Findings)
 
 	// Create the session only after the review succeeds so failed reviews
 	// don't leave orphan sessions in the store waiting for TTL eviction.
@@ -427,6 +440,8 @@ func prependClamp(env Envelope, clamp verdict.Finding) Envelope {
 
 // prependPlanClamp is the PlanResult counterpart of prependClamp: it inserts
 // the clamp finding at the head of pr.PlanFindings when clamp is non-zero.
+// Clamp findings use a non-unverifiable category, so order relative to the
+// later unverifiable-rollup finalization does not change rollup behavior.
 func prependPlanClamp(pr verdict.PlanResult, clamp verdict.Finding) verdict.PlanResult {
 	if clamp.Severity == "" {
 		return pr
@@ -808,6 +823,16 @@ func malformedEvidenceEnvelope(sessionID, reason, modelUsed string) Envelope {
 	}
 }
 
+func majorFindings(findings []verdict.Finding) []verdict.Finding {
+	var major []verdict.Finding
+	for _, finding := range findings {
+		if finding.Severity == verdict.SeverityMajor {
+			major = append(major, finding)
+		}
+	}
+	return major
+}
+
 // ValidateCompletion runs the post-implementation reviewer call. Eight-step
 // ordering (preserved here to keep the AC-mapping legible):
 //
@@ -868,6 +893,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	var sess *session.Session
 	var spec session.TaskSpec
 	var sessID string
+	var majorPreFindings []verdict.Finding
 	if lightweight {
 		// Synthesize a minimal spec for the reviewer. No session is created.
 		spec = session.TaskSpec{
@@ -882,6 +908,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		}
 		spec = sess.Spec
 		sessID = sess.ID
+		majorPreFindings = majorFindings(sess.PreFindings)
 	}
 
 	model, rendered, err := h.resolveModelAndRender(
@@ -894,6 +921,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				Files:                          toPromptFiles(args.FinalFiles),
 				FinalDiff:                      args.FinalDiff,
 				TestEvidence:                   args.TestEvidence,
+				MajorPreFindings:               majorPreFindings,
 				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
 			})
 		},
@@ -975,15 +1003,25 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}
+	rendered, err := renderPlanReview(args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk, args.Mode)
+	if err != nil {
+		return nil, verdict.PlanResult{}, err
+	}
+	cacheKey := planPassCacheKey(args.PlanText, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
+	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey); ok {
+		// The cache key uses the configured model ref. cachedModelUsed is the
+		// provider-reported model from the original review being reused.
+		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
+	}
 
 	var pr verdict.PlanResult
 	var modelUsed string
 	var ms int64
 	var partialRaw []byte
-	if len(tasks) <= h.deps.Cfg.PlanTasksPerChunk {
-		pr, modelUsed, ms, partialRaw, err = h.reviewPlanSingle(ctx, model, args.PlanText, maxTokens, args.Mode)
+	if rendered.Single != nil {
+		pr, modelUsed, ms, partialRaw, err = h.reviewPlanSingle(ctx, model, *rendered.Single, maxTokens)
 	} else {
-		pr, modelUsed, ms, partialRaw, err = h.reviewPlanChunked(ctx, model, args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk, maxTokens, args.Mode)
+		pr, modelUsed, ms, partialRaw, err = h.reviewPlanChunked(ctx, model, rendered, maxTokens)
 	}
 	// `pr` carries any partial state already collected before the truncation
 	// point — for the chunked path that means Pass-1 plan_findings plus any
@@ -1002,20 +1040,78 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return r, p, retErr
 	}
 	pr = prependPlanClamp(pr, clamp)
-	return planEnvelopeResult(pr, modelUsed, ms)
+	pr = finalizePlanResult(pr, modelUsed, ms)
+	h.planCache().store(cacheKey, pr, modelUsed)
+	return planEnvelopeResultFinalized(pr, modelUsed, ms)
+}
+
+type renderedPlanChunk struct {
+	Tasks  []planparser.RawTask
+	Prompt prompts.Output
+}
+
+type renderedPlanReview struct {
+	Single       *prompts.Output
+	FindingsOnly *prompts.Output
+	Chunks       []renderedPlanChunk
+}
+
+func (r renderedPlanReview) cachePrompts() []planCachePrompt {
+	if r.Single != nil {
+		return []planCachePrompt{{System: r.Single.System, User: r.Single.User}}
+	}
+	prompts := make([]planCachePrompt, 0, 1+len(r.Chunks))
+	if r.FindingsOnly != nil {
+		prompts = append(prompts, planCachePrompt{System: r.FindingsOnly.System, User: r.FindingsOnly.User})
+	}
+	for _, chunk := range r.Chunks {
+		prompts = append(prompts, planCachePrompt{System: chunk.Prompt.System, User: chunk.Prompt.User})
+	}
+	return prompts
+}
+
+func renderPlanReview(planText string, tasks []planparser.RawTask, chunkSize int, mode string) (renderedPlanReview, error) {
+	if len(tasks) <= chunkSize {
+		rendered, err := prompts.RenderPlan(prompts.PlanInput{PlanText: planText, Mode: mode})
+		if err != nil {
+			return renderedPlanReview{}, fmt.Errorf("render plan prompt: %w", err)
+		}
+		return renderedPlanReview{Single: &rendered}, nil
+	}
+	if chunkSize <= 0 {
+		return renderedPlanReview{}, fmt.Errorf("renderPlanReview: chunkSize must be positive, got %d", chunkSize)
+	}
+	findingsOnly, err := prompts.RenderPlanFindingsOnly(prompts.PlanInput{PlanText: planText, Mode: mode})
+	if err != nil {
+		return renderedPlanReview{}, fmt.Errorf("render plan_findings_only: %w", err)
+	}
+	rendered := renderedPlanReview{FindingsOnly: &findingsOnly}
+	for i := 0; i < len(tasks); i += chunkSize {
+		end := i + chunkSize
+		if end > len(tasks) {
+			end = len(tasks)
+		}
+		chunkTasks := tasks[i:end]
+		chunkPrompt, err := prompts.RenderPlanTasksChunk(prompts.PlanChunkInput{
+			PlanText:   planText,
+			ChunkTasks: chunkTasks,
+			Mode:       mode,
+		})
+		if err != nil {
+			return renderedPlanReview{}, fmt.Errorf("render plan_tasks_chunk: %w", err)
+		}
+		rendered.Chunks = append(rendered.Chunks, renderedPlanChunk{Tasks: chunkTasks, Prompt: chunkPrompt})
+	}
+	return rendered, nil
 }
 
 // reviewPlanSingle runs one reviewer call for the entire plan — the
 // behavior used today for plans whose task count is at or below
-// h.deps.Cfg.PlanTasksPerChunk. Renders the prompt internally.
+// h.deps.Cfg.PlanTasksPerChunk.
 // On ErrResponseTruncated, the returned []byte carries the partial response
 // bytes (possibly empty if the provider returned none) so the caller can
 // attempt partial-findings recovery via recoverPartialPlanFindings.
-func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, planText string, maxTokens int, mode string) (verdict.PlanResult, string, int64, []byte, error) {
-	rendered, err := prompts.RenderPlan(prompts.PlanInput{PlanText: planText, Mode: mode})
-	if err != nil {
-		return verdict.PlanResult{}, "", 0, nil, fmt.Errorf("render plan prompt: %w", err)
-	}
+func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, rendered prompts.Output, maxTokens int) (verdict.PlanResult, string, int64, []byte, error) {
 	rv, err := h.deps.Reviews.Get(model.Provider)
 	if err != nil {
 		return verdict.PlanResult{}, "", 0, nil, err
@@ -1098,6 +1194,10 @@ func tooLargePlanResult(size, limit int) verdict.PlanResult {
 //     synthetic PlanResults that bypass ParsePlan / ParsePlanResultPartial).
 //  2. SummaryBlock is populated with the rendered paste-ready text block.
 func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
+	return planEnvelopeResultFinalized(finalizePlanResult(pr, modelUsed, ms), modelUsed, ms)
+}
+
+func finalizePlanResult(pr verdict.PlanResult, modelUsed string, ms int64) verdict.PlanResult {
 	// Order is load-bearing: rollup first so calibration sees no remaining
 	// task-level unverifiable findings; calibrate before sanity because
 	// calibration owns the verdict→quality mapping for the unverifiable-only
@@ -1106,6 +1206,10 @@ func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp
 	calibratePlanVerdictForUnverifiableOnly(&pr)
 	verdict.ApplyPlanQualitySanity(&pr)
 	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
+	return pr
+}
+
+func planEnvelopeResultFinalized(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
 	body, err := json.MarshalIndent(struct {
 		verdict.PlanResult
 		ModelUsed string `json:"model_used"`
@@ -1134,17 +1238,11 @@ func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp
 func (h *handlers) reviewPlanChunked(
 	ctx context.Context,
 	model config.ModelRef,
-	planText string,
-	tasks []planparser.RawTask,
-	chunkSize int,
+	rendered renderedPlanReview,
 	maxTokens int,
-	mode string,
 ) (verdict.PlanResult, string, int64, []byte, error) {
-	if chunkSize <= 0 {
-		// Defense-in-depth: config.Load already rejects PlanTasksPerChunk <= 0
-		// at startup, but a zero/negative chunkSize would turn the loop below
-		// into an infinite spin. Fail loudly instead.
-		return verdict.PlanResult{}, "", 0, nil, fmt.Errorf("reviewPlanChunked: chunkSize must be positive, got %d", chunkSize)
+	if rendered.FindingsOnly == nil {
+		return verdict.PlanResult{}, "", 0, nil, errors.New("reviewPlanChunked: missing plan_findings_only prompt")
 	}
 	rv, err := h.deps.Reviews.Get(model.Provider)
 	if err != nil {
@@ -1155,14 +1253,10 @@ func (h *handlers) reviewPlanChunked(
 	var modelUsed string
 
 	// ----- Pass 1: plan-findings only -----
-	rendered, err := prompts.RenderPlanFindingsOnly(prompts.PlanInput{PlanText: planText, Mode: mode})
-	if err != nil {
-		return verdict.PlanResult{}, "", 0, nil, fmt.Errorf("render plan_findings_only: %w", err)
-	}
 	req := providers.Request{
 		Model:      model.Model,
-		System:     rendered.System,
-		User:       rendered.User,
+		System:     rendered.FindingsOnly.System,
+		User:       rendered.FindingsOnly.User,
 		MaxTokens:  maxTokens,
 		JSONSchema: verdict.PlanFindingsOnlySchema(),
 	}
@@ -1176,7 +1270,7 @@ func (h *handlers) reviewPlanChunked(
 	}
 	pf, err := verdict.ParsePlanFindingsOnly(resp.RawJSON)
 	if err != nil {
-		req.User = rendered.User + "\n\n" + verdict.RetryHint()
+		req.User = rendered.FindingsOnly.User + "\n\n" + verdict.RetryHint()
 		resp, err = rv.Review(ctx, req)
 		if err != nil {
 			if errors.Is(err, providers.ErrResponseTruncated) {
@@ -1200,19 +1294,12 @@ func (h *handlers) reviewPlanChunked(
 		PlanFindings: pf.PlanFindings,
 		NextAction:   pf.NextAction,
 		PlanQuality:  pf.PlanQuality,
-		Tasks:        make([]verdict.PlanTaskResult, 0, len(tasks)),
+		Tasks:        make([]verdict.PlanTaskResult, 0),
 	}
 
 	// ----- Passes 2..K+1: per-task chunks -----
-	n := len(tasks)
-	for i := 0; i < n; i += chunkSize {
-		end := i + chunkSize
-		if end > n {
-			end = n
-		}
-		chunkTasks := tasks[i:end]
-
-		chunkResult, ms, partialRaw, err := h.reviewOnePlanChunk(ctx, rv, model, planText, chunkTasks, maxTokens, mode)
+	for _, chunk := range rendered.Chunks {
+		chunkResult, ms, partialRaw, err := h.reviewOnePlanChunk(ctx, rv, model, chunk.Prompt, chunk.Tasks, maxTokens)
 		if err != nil {
 			if errors.Is(err, providers.ErrResponseTruncated) {
 				// Return the partially-built result (Pass-1 plan_findings plus
@@ -1229,10 +1316,14 @@ func (h *handlers) reviewPlanChunked(
 		result.Tasks = append(result.Tasks, chunkResult.Tasks...)
 	}
 
-	if len(result.Tasks) != len(tasks) {
+	expectedTasks := 0
+	for _, chunk := range rendered.Chunks {
+		expectedTasks += len(chunk.Tasks)
+	}
+	if len(result.Tasks) != expectedTasks {
 		return verdict.PlanResult{}, "", 0, nil,
 			fmt.Errorf("chunked plan review returned %d task results, expected %d",
-				len(result.Tasks), len(tasks))
+				len(result.Tasks), expectedTasks)
 	}
 
 	return result, modelUsed, totalMs, nil, nil
@@ -1250,20 +1341,10 @@ func (h *handlers) reviewOnePlanChunk(
 	ctx context.Context,
 	rv providers.Reviewer,
 	model config.ModelRef,
-	planText string,
+	rendered prompts.Output,
 	chunkTasks []planparser.RawTask,
 	maxTokens int,
-	mode string,
 ) (verdict.TasksOnly, int64, []byte, error) {
-	rendered, err := prompts.RenderPlanTasksChunk(prompts.PlanChunkInput{
-		PlanText:   planText,
-		ChunkTasks: chunkTasks,
-		Mode:       mode,
-	})
-	if err != nil {
-		return verdict.TasksOnly{}, 0, nil, fmt.Errorf("render plan_tasks_chunk: %w", err)
-	}
-
 	req := providers.Request{
 		Model:      model.Model,
 		System:     rendered.System,

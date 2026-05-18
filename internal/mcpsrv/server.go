@@ -12,9 +12,10 @@ import (
 
 // Deps holds the dependencies required by the MCP server.
 type Deps struct {
-	Cfg      config.Config
-	Sessions *session.Store
-	Reviews  providers.Registry
+	Cfg       config.Config
+	Sessions  *session.Store
+	Reviews   providers.Registry
+	planCache *planPassCache
 }
 
 // Version is the server version reported via the MCP Implementation block.
@@ -25,6 +26,9 @@ var Version = "dev"
 // registered: validate_task_spec, check_progress, validate_completion, and
 // validate_plan.
 func New(d Deps) *mcp.Server {
+	if d.planCache == nil {
+		d.planCache = newPlanPassCache()
+	}
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "anti-tangent-mcp",
 		Version: Version,

@@ -10,13 +10,14 @@ import (
 )
 
 type TaskSpec struct {
-	Title              string   `json:"title"`
-	Goal               string   `json:"goal"`
-	AcceptanceCriteria []string `json:"acceptance_criteria,omitempty"`
-	NonGoals           []string `json:"non_goals,omitempty"`
-	Context            string   `json:"context,omitempty"`
-	PinnedBy           []string `json:"pinned_by,omitempty"`
-	Phase              string   `json:"phase,omitempty"`
+	Title                        string   `json:"title"`
+	Goal                         string   `json:"goal"`
+	AcceptanceCriteria           []string `json:"acceptance_criteria,omitempty"`
+	NonGoals                     []string `json:"non_goals,omitempty"`
+	Context                      string   `json:"context,omitempty"`
+	PinnedBy                     []string `json:"pinned_by,omitempty"`
+	ControllerVerifiedReferences []string `json:"controller_verified_references,omitempty"`
+	Phase                        string   `json:"phase,omitempty"`
 }
 
 type ModelDefaults struct {

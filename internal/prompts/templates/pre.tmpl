@@ -14,6 +14,9 @@ Context:
 {{end}}{{if .Spec.PinnedBy}}
 Pinned by:
 {{range .Spec.PinnedBy}}- {{.}}
+{{end}}{{end}}{{if .Spec.ControllerVerifiedReferences}}
+Controller-verified references:
+{{range .Spec.ControllerVerifiedReferences}}- {{.}}
 {{end}}{{end}}
 ## What to evaluate
 
@@ -26,7 +29,11 @@ Check three things:
 2. Acceptance-criterion quality — is each AC testable, specific, and unambiguous? For any vague AC, propose a concrete rewrite in the suggestion.
 3. Implicit assumptions — list any assumptions a fresh implementer would have to make. Each becomes a finding so the spec author can either pin them down or explicitly mark them as implementer's discretion.
 
+For explicitly test-only tasks, treat `null`, `unchanged`, or similar assertions as acceptable when the spec names the initial state, fixture setup, or existing test harness assumption. Still flag missing invocation counts when call-count behavior matters, missing negative assertions when a no-change or no-call invariant is intended, unclear scenario setup, or unclear path through the system. When the same ambiguity repeats across multiple scenarios, prefer one consolidated finding instead of one finding per scenario.
+
 If a pinned_by section is present, treat those entries as caller-supplied anchors for existing behavior. They are not codebase facts you can independently verify. Do not emit `unverifiable_codebase_claim` merely because a pinned_by entry names a file, class, method, command, or document. For ACs like "existing behavior remains unchanged," prefer a minor `quality` suggestion to enumerate the behavior only when pinned_by is empty or unrelated.
+
+If a Controller-verified references section is present, treat those entries as caller-supplied attestations that the controller grep-verified specific codebase references before dispatch. Suppress an `unverifiable_codebase_claim` for claim C only when some entry in controller_verified_references is a substring of C, or C is a substring of some entry. Do not suppress logical contradictions, missing acceptance criteria, or ambiguity findings.
 
 Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
 

@@ -58,12 +58,19 @@ All four tools accept an optional `max_tokens_override` non-negative int — rep
 
 Task-level `unverifiable_codebase_claim` findings are rolled into one plan-level checklist. If that checklist is the only remaining finding category, `plan_verdict` is `pass` and `plan_quality` lands at `actionable` (or stays at `rigorous` when the reviewer already emitted that); callers should still pre-flight the references before dispatch.
 
-### `validate_task_spec` arguments (v0.3.3+)
+As of v0.4.0, `validate_plan` task results may include `lightweight_eligible` and `lightweight_reason`. These are advisory controller hints for trivial mechanical tasks that may use the lightweight protocol; they do not change the server-side lifecycle hooks.
+
+Identical passing `validate_plan` calls are cached in memory for 3 minutes. The cache identity includes the rendered prompt, model, mode, and token budget; cache hits return `review_ms: 0` and preserve the original `next_action` behind a `[cached <=3m]` prefix.
+
+### `validate_task_spec` arguments
 
 In addition to the existing `task_title` / `goal` / `acceptance_criteria` / `non_goals` / `context` fields:
 
-- `pinned_by` (optional): existing tests, docs, commands, or static checks that pin referenced behavior. The reviewer treats these as caller-supplied anchors, not independently verified codebase facts.
-- `phase` (optional): `pre` (default) or `post`. Use `post` only for post-hoc/session-recovery reviews; normal protocol still calls this at task start.
+- `pinned_by` (optional, v0.3.3+): existing tests, docs, commands, or static checks that pin referenced behavior. The reviewer treats these as caller-supplied anchors, not independently verified codebase facts.
+- `controller_verified_references` (optional, v0.4.0+): paths, symbols, line anchors, commands, or adjacent patterns that the controller already verified before dispatch. The reviewer treats these as caller-supplied attestations and suppresses matching `unverifiable_codebase_claim` findings only by deterministic substring match; contradictions, missing acceptance criteria, and ambiguity still surface.
+- `phase` (optional, v0.3.3+): `pre` (default) or `post`. Use `post` only for post-hoc/session-recovery reviews; normal protocol still calls this at task start.
+
+`validate_task_spec` rolls task-level `unverifiable_codebase_claim` findings into a single `codebase_reference_checklist` finding so implementers get one consistent checklist shape instead of raw text-only-reference findings.
 
 ### Lightweight protocol mode (v0.3.1+)
 
