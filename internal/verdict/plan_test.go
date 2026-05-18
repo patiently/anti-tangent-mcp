@@ -189,6 +189,29 @@ func TestParsePlan_InvalidFindingCategory(t *testing.T) {
 	assert.Contains(t, err.Error(), "category")
 }
 
+func TestParsePlan_ConventionDeviation_SeverityFloorToMinor(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict": "warn",
+		"plan_findings": [{
+			"severity":   "critical",
+			"category":   "convention_deviation",
+			"criterion":  "codebase_convention",
+			"evidence":   "Task 3 stores id as String at the in-memory layer",
+			"suggestion": "Use UUID in memory."
+		}],
+		"tasks": [],
+		"next_action": "Address the convention deviation.",
+		"plan_quality": "actionable"
+	}`)
+	r, err := ParsePlan(raw)
+	if err != nil {
+		t.Fatalf("ParsePlan: %v", err)
+	}
+	if got, want := r.PlanFindings[0].Severity, SeverityMinor; got != want {
+		t.Errorf("plan-side severity = %q, want %q (server should floor)", got, want)
+	}
+}
+
 func TestParsePlan_RejectsExtraJSON(t *testing.T) {
 	in := []byte(`{"plan_verdict":"pass","plan_findings":[],"tasks":[],"next_action":"a"}{"plan_verdict":"fail","plan_findings":[],"tasks":[],"next_action":"b"}`)
 	_, err := ParsePlan(in)

@@ -36,6 +36,36 @@ func TestParse_UnverifiableCodebaseClaim_SeverityFloorToMinor(t *testing.T) {
 	}
 }
 
+func TestParse_ConventionDeviation_SeverityFloorToMinor(t *testing.T) {
+	// Reviewer emits a `major` convention_deviation — server should floor to
+	// `minor`, matching the unverifiable_codebase_claim pattern.
+	raw := []byte(`{
+		"verdict": "warn",
+		"findings": [{
+			"severity":   "major",
+			"category":   "convention_deviation",
+			"criterion":  "codebase_convention",
+			"evidence":   "spec serializes the id as String at the in-memory layer",
+			"suggestion": "Use UUID in memory; serialize to String only at the persistence boundary."
+		}],
+		"next_action": "Address the convention before dispatch."
+	}`)
+
+	r, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if len(r.Findings) != 1 {
+		t.Fatalf("expected 1 finding, got %d", len(r.Findings))
+	}
+	if got, want := r.Findings[0].Severity, SeverityMinor; got != want {
+		t.Errorf("severity = %q, want %q (server should floor)", got, want)
+	}
+	if got, want := r.Findings[0].Category, CategoryConventionDeviation; got != want {
+		t.Errorf("category = %q, want %q", got, want)
+	}
+}
+
 func TestParse_MalformedEvidenceCategory_RejectedFromReviewerOutput(t *testing.T) {
 	// malformed_evidence is emitted ONLY by the server-side validate_completion
 	// guard, never by the reviewer. If a reviewer somehow emits it, the

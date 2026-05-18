@@ -37,6 +37,14 @@ const (
 	// findings to SeverityMinor — the reviewer can't know if the claim is
 	// wrong, only that it can't check.
 	CategoryUnverifiableCodebaseClaim Category = "unverifiable_codebase_claim"
+	// CategoryConventionDeviation is emitted by the reviewer when a caller-
+	// supplied codebase_conventions entry conflicts with the spec text — for
+	// example, when the spec implies a type or identifier choice that
+	// contradicts a stated module convention. Parser-side severity floor (see
+	// Parse / validateFinding) forces these findings to SeverityMinor — the
+	// reviewer can't know whether the implementation will actually deviate,
+	// only that the spec suggests it might.
+	CategoryConventionDeviation Category = "convention_deviation"
 	// CategoryMalformedEvidence is server-only. It is emitted exclusively
 	// by the validate_completion evidence-shape guard, which constructs
 	// the envelope directly without round-tripping through Parse(). It is

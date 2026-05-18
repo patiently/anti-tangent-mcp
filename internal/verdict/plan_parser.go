@@ -78,6 +78,9 @@ func validateFinding(f *Finding, where string) error {
 	if f.Category == CategoryUnverifiableCodebaseClaim && f.Severity != SeverityMinor {
 		f.Severity = SeverityMinor
 	}
+	if f.Category == CategoryConventionDeviation && f.Severity != SeverityMinor {
+		f.Severity = SeverityMinor
+	}
 	return nil
 }
 

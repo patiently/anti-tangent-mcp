@@ -39,10 +39,13 @@ func Parse(raw []byte) (Result, error) {
 		if !validCategory(f.Category) {
 			return Result{}, fmt.Errorf("finding[%d]: invalid category %q", i, f.Category)
 		}
-		// Severity floor: unverifiable_codebase_claim findings are always
-		// minor — the reviewer can't know if the claim is wrong, only that
-		// it can't check.
+		// Severity floor: unverifiable_codebase_claim and convention_deviation
+		// findings are always minor — the reviewer can't know if the claim/
+		// deviation is wrong, only that it can't fully verify.
 		if f.Category == CategoryUnverifiableCodebaseClaim && f.Severity != SeverityMinor {
+			r.Findings[i].Severity = SeverityMinor
+		}
+		if f.Category == CategoryConventionDeviation && f.Severity != SeverityMinor {
 			r.Findings[i].Severity = SeverityMinor
 		}
 	}
@@ -57,7 +60,8 @@ func validCategory(c Category) bool {
 	switch c {
 	case CategoryMissingAC, CategoryScopeDrift, CategoryAmbiguousSpec,
 		CategoryUnaddressed, CategoryQuality, CategorySessionMissing,
-		CategoryTooLarge, CategoryUnverifiableCodebaseClaim, CategoryOther:
+		CategoryTooLarge, CategoryUnverifiableCodebaseClaim,
+		CategoryConventionDeviation, CategoryOther:
 		return true
 	}
 	return false
