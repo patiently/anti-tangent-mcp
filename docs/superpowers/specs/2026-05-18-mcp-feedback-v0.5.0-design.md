@@ -17,13 +17,13 @@ A fresh anonymized field report exercised `anti-tangent-mcp` v0.4.0 across a mul
 - **Language-specific scoping prose.** Closure/scoping semantics (Kotlin `var` + lambda) routinely surface `ambiguous_spec` findings when the underlying code block is unambiguous.
 - **Dispatch-clause lightweight-mode visibility.** Some implementers ran the full protocol on tasks that qualified for lightweight mode; the eligibility criteria sit below the full-protocol steps and are easy to skip.
 
-This release improves signal density and adds three new optional `validate_task_spec` fields plus a cross-task `exit_contracts` flow without changing core architecture. Anti-tangent remains text-only, advisory, and in-memory; CodeScene remains a companion convention rather than a dependency.
+This release improves signal density and adds four new optional `validate_task_spec` fields plus a cross-task `exit_contracts` flow without changing core architecture. Anti-tangent remains text-only, advisory, and in-memory; CodeScene remains a companion convention rather than a dependency.
 
 ## Scope
 
 In scope:
 
-- Four new optional `validate_task_spec` inputs: `test_strategy_notes`, `codebase_conventions`, `testability_extractions`, `normative_test_bodies`.
+- Four new optional `validate_task_spec` inputs: `test_strategy_notes`, `codebase_conventions`, `testability_extractions`, and `normative_test_bodies`.
 - New finding category `convention_deviation` (minor-floored) for `codebase_conventions`. Added to the reviewer-output JSON schema category enums in `internal/verdict/schema.json`, `plan_schema.json`, `tasks_only_schema.json`, and `plan_findings_only_schema.json`.
 - `validate_plan` task results include two new optional fields per task: `exit_contracts` (hybrid: explicit if the task has an `**Exit contracts:**` section, reviewer-inferred otherwise) and `normative_test_bodies` (extracted from `**NORMATIVE TEST BODIES (verbatim):**` sections in the plan markdown). Plus a sibling `exit_contracts_inferred bool` provenance flag per task.
 - `validate_completion` accepts optional `exit_contracts []string` plus a sibling `exit_contracts_inferred bool` provenance flag; reviewer assesses each contract against `final_files` / `final_diff`, with severity-on-miss calibrated by provenance (explicit → reviewer may emit `major`; inferred-only → cap at `minor` unless evidence is structurally inconsistent).
@@ -57,10 +57,10 @@ type ValidateTaskSpecArgs struct {
 }
 ```
 
-**Normalization shape (all four):**
-- Trim whitespace, drop empty entries.
-- Cap at `maxPinnedByEntries = 50` non-empty entries.
-- Cap each entry at `maxPinnedByChars = 500` Unicode code points.
+**Normalization shape:**
+- All four fields: trim whitespace, drop empty entries.
+- `test_strategy_notes`, `codebase_conventions`, `testability_extractions`: cap at `maxPinnedByEntries = 50` non-empty entries and `maxPinnedByChars = 500` Unicode code points per entry (same shape as `pinned_by` and `controller_verified_references`).
+- `normative_test_bodies`: cap at `maxNormativeTestBodyEntries = 20` entries and `maxNormativeTestBodyChars = 4000` Unicode code points per entry. The larger per-entry cap reflects that test bodies are code (longer than the prose attestations in the other three fields) while keeping the per-field worst case under 80KB — well inside the 200KB payload limit. Paraphrased or excerpted bodies are acceptable when even 4000 characters would truncate a real test; in that case, prefix the entry with `// excerpt:` to signal partial coverage to the reviewer (see §1d below).
 
 **Behavior (varies):**
 - `test_strategy_notes` — reviewer guidance. The reviewer reads each note as authoritative caller context and adjusts judgment about test-coverage gaps accordingly. No deterministic suppression; suppression is reviewer-driven.
@@ -122,24 +122,27 @@ Reviewer guidance:
 
 #### 1d. `normative_test_bodies`
 
-Semantics: caller-supplied verbatim test code blocks (or paraphrased test specifications) that the plan treats as binding AC, not advisory illustration. Necessary because `validate_task_spec` does not receive the plan's per-step code blocks — only the structured Goal/AC/Non-goals/Context fields.
+Semantics: caller-supplied verbatim test code blocks that the plan treats as binding AC, not advisory illustration. Necessary because `validate_task_spec` does not receive the plan's per-step code blocks — only the structured Goal/AC/Non-goals/Context fields.
 
-Each entry is one normative block (a complete test body, one block per entry; multi-test blocks may be concatenated into one entry with internal newlines, as long as the 500-character cap is honored).
+Each entry is one normative block: a complete test body when it fits in the per-entry cap, an excerpt prefixed with `// excerpt:` (or language-appropriate comment) otherwise. Multi-test blocks may be concatenated into one entry with internal newlines.
 
 Examples:
-- `"@Test fun whenInputIsX_thenOutputIsY() { … }"` (Kotlin test body)
-- `"def test_decline_phrase_subset(): assert phrase in OUTPUT"` (Python test)
+- A complete Kotlin test body: `"@Test fun whenInputIsX_thenOutputIsY() { ... }"` (full source up to 4000 chars).
+- An excerpt of a longer body: `"// excerpt: see plan §3 test 2 for full body. Key assertions: assertThat(result.decision).isEqualTo(DECLINE); assertThat(result.handlerName).isEqualTo(WINDDOWN_NODE_NAME)"`.
+- A Python test: `"def test_decline_phrase_subset(): assert phrase in OUTPUT"`.
 
-Prompt rendering: `pre.tmpl` emits a `Normative test bodies (caller-supplied, treat as binding AC):` section when non-empty.
+Prompt rendering: `pre.tmpl` emits a `Normative test bodies (caller-supplied, treat as binding AC):` section when non-empty. Excerpt-marker entries are rendered as-is; the reviewer learns from the marker convention that the entry is partial coverage of a longer body.
 
 Reviewer guidance:
 - Treat each entry as binding test scope — equivalent in authority to a bullet under Acceptance criteria.
 - Do not emit `ambiguous_spec` for "test scope unclear" findings about coverage that one of these bodies already pins.
-- Continue to flag invocation-count gaps, missing negative assertions, or unrelated coverage holes.
+- An entry that begins with `// excerpt:` (or analogous comment marker) is partial — flag invocation-count or assertion-shape gaps only when the excerpt itself reveals them, not when the gap might exist in the omitted portion.
+- Continue to flag invocation-count gaps, missing negative assertions, or unrelated coverage holes when the entry is a complete body.
 
 Sourcing convention:
 - Plans use `**NORMATIVE TEST BODIES (verbatim):**` as a header above the relevant code block(s) in the task markdown.
-- The controller (or `validate_plan` — see §2c) extracts those blocks and passes them as `normative_test_bodies` to `validate_task_spec` at dispatch time.
+- `validate_plan` extracts those blocks deterministically (server-side markdown parsing — not reviewer-driven; see §2c) and populates `PlanTaskResult.NormativeTestBodies`. Controllers thread that field into `validate_task_spec` when dispatching.
+- Controllers without a prior `validate_plan` call may populate `normative_test_bodies` manually by reading the task markdown.
 
 #### 1e. Reviewer-output schema updates
 
@@ -176,12 +179,16 @@ Hybrid authoring for `exit_contracts`:
 - **Inferred:** if absent, the reviewer infers `exit_contracts` by reading the plan as a whole and emits `exit_contracts_inferred: true`. Inference rule: "for each task, list symbols, types, constants, or fields it introduces that later tasks in the plan explicitly reference. One contract per consumed surface."
 - The provenance flag carries forward to `validate_completion` (see §2b) so the reviewer can calibrate miss severity — model-inferred contracts should not become hard completion gates without controller acknowledgement.
 
-`NormativeTestBodies` extraction:
+`NormativeTestBodies` extraction (server-deterministic — *not* reviewer-driven):
 
-- For each task, scan the task markdown for `**NORMATIVE TEST BODIES (verbatim):**` sections.
-- Extract the immediately-following fenced code blocks (or paragraph if no fence) into one entry per block.
-- Apply the same 20-entry / 500-character caps as the other reviewer-emitted lists.
+- After the controller-supplied `plan_text` is split into per-task chunks (existing logic), the server scans each task's markdown for the literal `**NORMATIVE TEST BODIES (verbatim):**` header.
+- For each header found, the server extracts the immediately-following fenced code block(s). A fence is opened by ```` ``` ```` (optionally with a language tag) and closed by ```` ``` ```` on its own line; everything between is one entry.
+- Adjacent fenced blocks (separated only by whitespace) are extracted as separate entries, in source order, until the next non-whitespace non-fence content.
+- If the header is followed by a non-fenced paragraph, the paragraph is one entry up to a blank line.
+- Apply `maxNormativeTestBodyEntries = 20` and `maxNormativeTestBodyChars = 4000` per entry. If an entry exceeds the char cap, truncate to `(maxNormativeTestBodyChars - len("\n// truncated"))` and append the literal `\n// truncated` marker so the reviewer sees that the body was clipped server-side.
+- The extracted list is set on `PlanTaskResult.NormativeTestBodies` before the reviewer sees the prompt. The reviewer does not extract anything for this field; it only reads what the server populated.
 - Empty list when no such header exists; the field is `omitempty`.
+- Rationale: verbatim extraction must be exact. LLMs can paraphrase, re-indent, or skip blank lines. Server-side markdown parsing is deterministic and matches the v0.4.0 plan-text chunking precedent (also server-side).
 
 Defensive limits (reviewer-emitted; same shape as evidence caps elsewhere):
 - At most 20 contracts per task.
@@ -223,9 +230,18 @@ Reviewer guidance (rendered into the prompt):
 
 Threading model: the controller is responsible for threading per-task `exit_contracts` and `exit_contracts_inferred` from the `validate_plan` result into each dispatched implementer's prompt. The implementer then passes both into `validate_completion`. Anti-tangent's plan and per-task hooks remain decoupled (no shared store). A controller that wants stricter behavior may set `exit_contracts_inferred: false` even for reviewer-inferred contracts, treating them as author-approved — that is an explicit controller acknowledgement, not a defect.
 
-#### 2c. Optional: `normative_test_bodies` plan-side extraction
+#### 2c. Server-deterministic `normative_test_bodies` extraction
 
-Mirrors §2a's extraction step for normative test bodies: `validate_plan` populates `PlanTaskResult.NormativeTestBodies` per task. The controller threads them into `validate_task_spec` (via the new input from §1d). Controllers may also populate `normative_test_bodies` manually for tasks dispatched without a prior `validate_plan` call.
+Extraction of `normative_test_bodies` is server-deterministic and runs before the reviewer prompt is rendered. It is *not* a reviewer-emitted field. The detailed extraction rules live in §2a above (`NormativeTestBodies extraction`).
+
+Why server-deterministic rather than reviewer-driven:
+- The bodies become binding AC in `validate_task_spec`. Verbatim fidelity matters.
+- LLMs may paraphrase, re-indent, drop blank lines, or skip blocks. Markdown parsing is exact.
+- The v0.4.0 plan-text chunking is already server-side, so this fits the existing extraction precedent.
+
+Controller threading:
+- Controllers thread the server-populated `PlanTaskResult.NormativeTestBodies` into `validate_task_spec` (via the new input from §1d).
+- Controllers without a prior `validate_plan` call may populate `normative_test_bodies` manually by reading the task markdown themselves. Patrick's downstream dispatch clause in `~/.claude/anti-tangent.md` should document the manual extraction shape for that case.
 
 ### 3. Doc-only fixes (D1–D5)
 
@@ -249,7 +265,7 @@ All land in `INTEGRATION.md`. Patrick's `~/.claude/anti-tangent.md` is downstrea
 - `plan.tmpl` and `plan_tasks_chunk.tmpl`:
   - Ask the reviewer to populate `exit_contracts` per task and set `exit_contracts_inferred` honestly; respect explicit `**Exit contracts:**` sections when present.
   - Cap at 20 contracts and 240 code points per contract (pairs with §2a).
-  - Extract `normative_test_bodies` from `**NORMATIVE TEST BODIES (verbatim):**` headers per task (pairs with §2c).
+  - The reviewer does *not* extract `normative_test_bodies`. The server populates that field before the prompt is rendered (see §2c). The prompt may include the server-extracted bodies as context if it helps the reviewer reason about exit contracts, but should not ask the reviewer to re-emit them.
 
 All template changes regenerate golden files in `internal/prompts/testdata/`.
 
@@ -280,7 +296,8 @@ Add to `CHANGELOG.md`:
 - Schema test that the four reviewer-output schemas (`schema.json`, `plan_schema.json`, `plan_findings_only_schema.json`, `tasks_only_schema.json`) include `convention_deviation` in the `category` enum and continue to reject unknown values (`additionalProperties: false` preserved).
 - Schema test that `plan_schema.json` and `tasks_only_schema.json` accept old JSON without the new task-level fields (`exit_contracts`, `exit_contracts_inferred`, `normative_test_bodies`) and new JSON with the fields, preserving `additionalProperties: false`.
 - Unit-test parser round-trip for `PlanTaskResult.ExitContracts`, `PlanTaskResult.ExitContractsInferred`, `PlanTaskResult.NormativeTestBodies`, `ValidateCompletionArgs.ExitContractsInferred`, and `Result` envelope with `criterion: exit_contract` findings.
-- Unit-test the deterministic `testability_extractions` substring suppression in the post-reviewer normalization path (same shape as `controller_verified_references` suppression test).
+- Unit-test the deterministic `testability_extractions` substring suppression that runs after provider-response normalization inside `validate_task_spec` (same shape as the existing `controller_verified_references` suppression test — pre-hook normalization, not the completion path).
+- Unit-test the deterministic `normative_test_bodies` server-side markdown extraction in `validate_plan`: header detection, fenced-block boundaries, paragraph fallback, multi-block ordering, per-entry truncation with `\n// truncated` marker, and entry-count cap.
 - Golden test `pre.tmpl` rendering for each new field independently and in combination, including provenance-aware section headers.
 - Golden test `post.tmpl` rendering with `exit_contracts` non-empty, covering both `exit_contracts_inferred: false` (explicit-header path) and `exit_contracts_inferred: true` (inferred-header path).
 - Golden test `plan.tmpl` and `plan_tasks_chunk.tmpl` rendering with the new instruction blocks.
@@ -300,7 +317,7 @@ The release is wire-compatible — old callers continue to work without code cha
 
 - **Response shape:** old controllers can call `validate_plan` against new servers and receive responses that include the new `exit_contracts`, `exit_contracts_inferred`, and `normative_test_bodies` fields. The old parser ignores unknown fields (`omitempty` on emit, lenient on parse). No regression.
 - **Request shape:** old controllers calling `validate_task_spec` / `validate_completion` without the new inputs see identical behavior to v0.4.0. The new reviewer guidance in the prompts is gated on the respective fields being non-empty.
-- **Functional value (requires controller update):** the new cross-task contract check fires only when a controller threads `exit_contracts` from a `validate_plan` result into the corresponding `validate_completion` call. Old controllers that do not yet thread will not benefit from the check (no regression, but also no improvement) until they update. The same applies to `normative_test_bodies` and to the three new `validate_task_spec` fields.
+- **Functional value (requires controller update):** the new cross-task contract check fires only when a controller threads `exit_contracts` from a `validate_plan` result into the corresponding `validate_completion` call. Old controllers that do not yet thread will not benefit from the check (no regression, but also no improvement) until they update. The same applies to `normative_test_bodies` and to the other three new `validate_task_spec` fields.
 - **Plan-author update:** the explicit `**Exit contracts:**` and `**NORMATIVE TEST BODIES (verbatim):**` sections are optional plan-markdown affordances. Plans without them continue to be valid; the reviewer infers (with provenance flag set) where applicable.
 
 ## Open questions
