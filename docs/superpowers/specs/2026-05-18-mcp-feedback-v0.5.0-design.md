@@ -216,7 +216,7 @@ type ValidateCompletionArgs struct {
 }
 ```
 
-Same normalization as the `validate_task_spec` fields above (trim, drop empties, 50/500 caps).
+Normalization: trim, drop empties, cap at 50 entries and 500 Unicode code points per entry (the standard caller-input cap shape — same as `pinned_by` and `controller_verified_references`). This comfortably accommodates plan-emitted entries (which are bounded at 20/240 per §2a) and leaves headroom for manually-authored entries when a controller is dispatching without a prior `validate_plan` call.
 
 Prompt rendering: `post.tmpl` emits an `Exit contracts (must be satisfied):` section when `ExitContracts` is non-empty. The section header explicitly states the provenance:
 - When `ExitContractsInferred == false`: header reads `Exit contracts (explicit — author-authored, must be satisfied):`.
@@ -285,13 +285,13 @@ Add to `CHANGELOG.md`:
 ### Changed
 - `pre.tmpl` treats `normative_test_bodies` as binding AC, treats adjacent complementary tests as joint coverage, and respects the new caller-supplied fields above.
 - `post.tmpl` checks `exit_contracts` against final-file evidence when present and adjusts on-miss severity by `exit_contracts_inferred`.
-- `plan.tmpl` and `plan_tasks_chunk.tmpl` populate `exit_contracts`, `exit_contracts_inferred`, and `normative_test_bodies` per task.
+- `plan.tmpl` and `plan_tasks_chunk.tmpl` ask the reviewer to populate `exit_contracts` and `exit_contracts_inferred` per task. `normative_test_bodies` is populated server-side via deterministic markdown extraction in `validate_plan` (not reviewer-emitted; see §2c).
 - Integration docs add the normative-test-bodies convention, CVR-scope clarification, `.trimIndent()` raw-string caveat, language-scoping prose caveat, and a lightweight-mode callout repositioning at the top of the dispatch clause. (Doc-only items folded under `Changed` per repo CLAUDE.md guidance on Keep-a-Changelog subsections; a prior release used `### Documentation`, which is a divergence from the project convention — this release re-aligns.)
 ```
 
 ## Testing Strategy
 
-- Unit-test input normalization (trim, drop empties, 50/500 caps) for the four new `validate_task_spec` fields (`test_strategy_notes`, `codebase_conventions`, `testability_extractions`, `normative_test_bodies`) and for `validate_completion.exit_contracts`, mirroring existing `pinned_by` and `controller_verified_references` tests.
+- Unit-test input normalization (trim, drop empties) for the four new `validate_task_spec` fields and `validate_completion.exit_contracts`, mirroring existing `pinned_by` and `controller_verified_references` tests. Cap regimes split: 50 entries / 500 chars for `test_strategy_notes`, `codebase_conventions`, `testability_extractions`, and `validate_completion.exit_contracts`; 20 entries / 4000 chars for `normative_test_bodies`. Each cap regime gets its own boundary test (at-cap, over-cap-by-one, empty-after-trim).
 - Unit-test that `convention_deviation` is server-side floored to `minor` and parses through `internal/verdict/finding.go`.
 - Schema test that the four reviewer-output schemas (`schema.json`, `plan_schema.json`, `plan_findings_only_schema.json`, `tasks_only_schema.json`) include `convention_deviation` in the `category` enum and continue to reject unknown values (`additionalProperties: false` preserved).
 - Schema test that `plan_schema.json` and `tasks_only_schema.json` accept old JSON without the new task-level fields (`exit_contracts`, `exit_contracts_inferred`, `normative_test_bodies`) and new JSON with the fields, preserving `additionalProperties: false`.
