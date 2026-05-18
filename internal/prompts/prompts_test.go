@@ -522,6 +522,77 @@ func TestRenderPre_PostPhaseIncludesGuidance(t *testing.T) {
 	assert.Contains(t, out.User, "implementation-alignment")
 }
 
+func TestRenderPre_WithTestStrategyNotesIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.TestStrategyNotes = []string{"AC #2 jointly covered by tests A and B"}
+
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Test strategy notes (caller-supplied):")
+	assert.Contains(t, out.User, "- AC #2 jointly covered by tests A and B")
+	assert.Contains(t, out.User, "Do not emit `missing_acceptance_criterion` for joint-coverage gaps")
+}
+
+func TestRenderPre_WithoutTestStrategyNotesOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Test strategy notes (caller-supplied):")
+}
+
+func TestRenderPre_WithCodebaseConventionsIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.CodebaseConventions = []string{"id is canonically UUID in memory"}
+
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Codebase conventions (caller-supplied):")
+	assert.Contains(t, out.User, "- id is canonically UUID in memory")
+	assert.Contains(t, out.User, "category: convention_deviation")
+	assert.Contains(t, out.User, "criterion: codebase_convention")
+	assert.Contains(t, out.User, "positive evidence of deviation")
+}
+
+func TestRenderPre_WithoutCodebaseConventionsOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Codebase conventions (caller-supplied):")
+}
+
+func TestRenderPre_WithTestabilityExtractionsIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.TestabilityExtractions = []string{"buildDeclineWinddownHandlerOutput"}
+
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Testability extractions (caller-supplied):")
+	assert.Contains(t, out.User, "- buildDeclineWinddownHandlerOutput")
+	assert.Contains(t, out.User, "suppress that specific finding")
+}
+
+func TestRenderPre_WithoutTestabilityExtractionsOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Testability extractions (caller-supplied):")
+}
+
+func TestRenderPre_WithNormativeTestBodiesIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.NormativeTestBodies = []string{"@Test fun t() { ... }"}
+
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Normative test bodies (caller-supplied, treat as binding AC):")
+	assert.Contains(t, out.User, "@Test fun t() { ... }")
+	assert.Contains(t, out.User, "binding test scope")
+	assert.Contains(t, out.User, "// excerpt:")
+}
+
+func TestRenderPre_WithoutNormativeTestBodiesOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Normative test bodies (caller-supplied, treat as binding AC):")
+}
+
 func TestRenderPost_WithPinnedByIncludesAnchors(t *testing.T) {
 	spec := sampleSpec()
 	spec.PinnedBy = []string{"HealthHandlerTest.TestOK", "go test ./internal/http"}
