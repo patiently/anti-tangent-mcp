@@ -23,10 +23,10 @@ This release improves signal density and adds three new optional `validate_task_
 
 In scope:
 
-- Three new optional `validate_task_spec` inputs: `test_strategy_notes`, `codebase_conventions`, `testability_extractions`.
-- New finding category `convention_deviation` (minor-floored) for `codebase_conventions`.
-- `validate_plan` task results include a new optional field `exit_contracts` (hybrid: explicit if the task has an `**Exit contracts:**` section, reviewer-inferred otherwise).
-- `validate_completion` accepts an optional `exit_contracts` input; reviewer assesses each against `final_files` / `final_diff`, emitting `missing_acceptance_criterion` with `criterion: exit_contract` on miss.
+- Four new optional `validate_task_spec` inputs: `test_strategy_notes`, `codebase_conventions`, `testability_extractions`, `normative_test_bodies`.
+- New finding category `convention_deviation` (minor-floored) for `codebase_conventions`. Added to the reviewer-output JSON schema category enums in `internal/verdict/schema.json`, `plan_schema.json`, `tasks_only_schema.json`, and `plan_findings_only_schema.json`.
+- `validate_plan` task results include two new optional fields per task: `exit_contracts` (hybrid: explicit if the task has an `**Exit contracts:**` section, reviewer-inferred otherwise) and `normative_test_bodies` (extracted from `**NORMATIVE TEST BODIES (verbatim):**` sections in the plan markdown). Plus a sibling `exit_contracts_inferred bool` provenance flag per task.
+- `validate_completion` accepts optional `exit_contracts []string` plus a sibling `exit_contracts_inferred bool` provenance flag; reviewer assesses each contract against `final_files` / `final_diff`, with severity-on-miss calibrated by provenance (explicit → reviewer may emit `major`; inferred-only → cap at `minor` unless evidence is structurally inconsistent).
 - Prompt-template tunes paired with the new fields and with the doc-only items below.
 - `INTEGRATION.md` doc additions: normative-test-bodies convention, CVR scope clarification, `.trimIndent()` raw-string caveat, language-scoping prose caveat, lightweight-mode callout repositioning.
 - CHANGELOG entry for 0.5.0.
@@ -45,7 +45,7 @@ Out of scope:
 
 ### 1. New optional `validate_task_spec` inputs
 
-Mirrors the v0.4.0 `controller_verified_references` shape: optional `[]string`, defensive limits, prompt rendering when non-empty, deterministic substring suppression where applicable.
+Four optional `[]string` inputs. All share normalization shape; behavior varies per field.
 
 ```go
 type ValidateTaskSpecArgs struct {
@@ -53,13 +53,22 @@ type ValidateTaskSpecArgs struct {
     TestStrategyNotes      []string `json:"test_strategy_notes,omitempty"`
     CodebaseConventions    []string `json:"codebase_conventions,omitempty"`
     TestabilityExtractions []string `json:"testability_extractions,omitempty"`
+    NormativeTestBodies    []string `json:"normative_test_bodies,omitempty"`
 }
 ```
 
-Each field is normalized identically to `pinned_by` and `controller_verified_references`:
+**Normalization shape (all four):**
 - Trim whitespace, drop empty entries.
 - Cap at `maxPinnedByEntries = 50` non-empty entries.
 - Cap each entry at `maxPinnedByChars = 500` Unicode code points.
+
+**Behavior (varies):**
+- `test_strategy_notes` — reviewer guidance. The reviewer reads each note as authoritative caller context and adjusts judgment about test-coverage gaps accordingly. No deterministic suppression; suppression is reviewer-driven.
+- `codebase_conventions` — **inverts** the pattern: actively triggers `convention_deviation` findings when the spec implies the implementation will deviate. Not a suppression mechanism.
+- `testability_extractions` — deterministic substring suppression of `scope_drift` findings whose evidence names one of the listed helpers (same substring rule as `controller_verified_references`).
+- `normative_test_bodies` — reviewer guidance. Rendered as a "Normative test bodies (caller-supplied, treat as binding AC):" section. The reviewer reads the bodies as binding test scope, not advisory illustration. Necessary because `validate_task_spec` otherwise receives only structured fields (Goal/AC/Non-goals/Context) and never sees the plan's per-step code blocks.
+
+**Input validation:** these inputs are validated in Go (`internal/mcpsrv/validate_task_spec.go` and friends), not in JSON schema files. The `internal/verdict/*.json` schemas are reviewer-**output** schemas (structured-output validation), not MCP tool-input schemas — see §1d below for the reviewer-output schema updates.
 
 #### 1a. `test_strategy_notes`
 
@@ -111,28 +120,68 @@ Reviewer guidance:
 - When a `scope_drift` finding would name one of these helpers (deterministic substring match: entry is substring of evidence or evidence is substring of entry), suppress that specific finding.
 - Continue to emit `scope_drift` for unrelated additions.
 
-Schema and parser updates:
-- Add all three fields to `internal/verdict/*.json` task-input schemas (input-side; no envelope schema change).
-- `convention_deviation` added to the canonical category list in `internal/verdict/finding.go`.
-- Server-side severity flooring for `convention_deviation` matches the existing flooring of `unverifiable_codebase_claim`.
+#### 1d. `normative_test_bodies`
+
+Semantics: caller-supplied verbatim test code blocks (or paraphrased test specifications) that the plan treats as binding AC, not advisory illustration. Necessary because `validate_task_spec` does not receive the plan's per-step code blocks — only the structured Goal/AC/Non-goals/Context fields.
+
+Each entry is one normative block (a complete test body, one block per entry; multi-test blocks may be concatenated into one entry with internal newlines, as long as the 500-character cap is honored).
+
+Examples:
+- `"@Test fun whenInputIsX_thenOutputIsY() { … }"` (Kotlin test body)
+- `"def test_decline_phrase_subset(): assert phrase in OUTPUT"` (Python test)
+
+Prompt rendering: `pre.tmpl` emits a `Normative test bodies (caller-supplied, treat as binding AC):` section when non-empty.
+
+Reviewer guidance:
+- Treat each entry as binding test scope — equivalent in authority to a bullet under Acceptance criteria.
+- Do not emit `ambiguous_spec` for "test scope unclear" findings about coverage that one of these bodies already pins.
+- Continue to flag invocation-count gaps, missing negative assertions, or unrelated coverage holes.
+
+Sourcing convention:
+- Plans use `**NORMATIVE TEST BODIES (verbatim):**` as a header above the relevant code block(s) in the task markdown.
+- The controller (or `validate_plan` — see §2c) extracts those blocks and passes them as `normative_test_bodies` to `validate_task_spec` at dispatch time.
+
+#### 1e. Reviewer-output schema updates
+
+The new finding category `convention_deviation` must be added to the reviewer-output JSON schema category enums so providers using structured output do not reject the very category the prompt asks for:
+
+- `internal/verdict/schema.json` — per-task envelope; add to the `category` enum alongside `unverifiable_codebase_claim`, `missing_acceptance_criterion`, etc.
+- `internal/verdict/plan_schema.json` — same.
+- `internal/verdict/tasks_only_schema.json` — same.
+- `internal/verdict/plan_findings_only_schema.json` — same.
+
+Other schema/parser updates:
+- `internal/verdict/finding.go` — add `convention_deviation` to the canonical category list.
+- Server-side severity flooring for `convention_deviation` matches the existing flooring of `unverifiable_codebase_claim` (minor floor in the parser/normalizer path).
+- `malformed_evidence` and other server-only categories continue to be omitted from the reviewer-output schemas, per existing convention.
 
 ### 2. Exit contracts — `validate_plan` and `validate_completion`
 
 #### 2a. Plan side (`validate_plan`)
 
-Extend `PlanTaskResult` with one optional field:
+Extend `PlanTaskResult` with three new optional fields:
 
 ```go
 type PlanTaskResult struct {
     // existing fields including LightweightEligible / LightweightReason ...
-    ExitContracts []string `json:"exit_contracts,omitempty"`
+    ExitContracts         []string `json:"exit_contracts,omitempty"`
+    ExitContractsInferred bool     `json:"exit_contracts_inferred,omitempty"`
+    NormativeTestBodies   []string `json:"normative_test_bodies,omitempty"`
 }
 ```
 
-Hybrid authoring:
+Hybrid authoring for `exit_contracts`:
 
-- **Explicit:** if a task's markdown contains an `**Exit contracts:**` bullet section, the reviewer respects it verbatim. Format mirrors `Acceptance criteria:` — a bulleted list of plain-English contract strings.
-- **Inferred:** if absent, the reviewer infers `exit_contracts` by reading the plan as a whole. Inference rule: "for each task, list symbols, types, constants, or fields it introduces that later tasks in the plan explicitly reference. One contract per consumed surface."
+- **Explicit:** if a task's markdown contains an `**Exit contracts:**` bullet section, the reviewer respects it verbatim and emits `exit_contracts_inferred: false`. Format mirrors `Acceptance criteria:` — a bulleted list of plain-English contract strings.
+- **Inferred:** if absent, the reviewer infers `exit_contracts` by reading the plan as a whole and emits `exit_contracts_inferred: true`. Inference rule: "for each task, list symbols, types, constants, or fields it introduces that later tasks in the plan explicitly reference. One contract per consumed surface."
+- The provenance flag carries forward to `validate_completion` (see §2b) so the reviewer can calibrate miss severity — model-inferred contracts should not become hard completion gates without controller acknowledgement.
+
+`NormativeTestBodies` extraction:
+
+- For each task, scan the task markdown for `**NORMATIVE TEST BODIES (verbatim):**` sections.
+- Extract the immediately-following fenced code blocks (or paragraph if no fence) into one entry per block.
+- Apply the same 20-entry / 500-character caps as the other reviewer-emitted lists.
+- Empty list when no such header exists; the field is `omitempty`.
 
 Defensive limits (reviewer-emitted; same shape as evidence caps elsewhere):
 - At most 20 contracts per task.
@@ -142,36 +191,41 @@ Defensive limits (reviewer-emitted; same shape as evidence caps elsewhere):
 Prompt rendering: `plan_tasks_chunk.tmpl` and `plan.tmpl` extended to ask the reviewer to populate `exit_contracts`. Falsy/empty allowed.
 
 Schema updates:
-- Add `exit_contracts` to `internal/verdict/plan_schema.json` and `internal/verdict/tasks_only_schema.json` task item `properties` (not `required`).
+- Add `exit_contracts`, `exit_contracts_inferred`, and `normative_test_bodies` to `internal/verdict/plan_schema.json` and `internal/verdict/tasks_only_schema.json` task item `properties` (not `required`).
 - Keep `additionalProperties: false`.
+- The category-enum update for `convention_deviation` (see §1e) applies to these schemas too — `convention_deviation` is added to the `findings[].category` enum across all four reviewer-output schemas.
 
-Cache compatibility: the v0.4.0 identical-plan cache keys already incorporate the rendered prompt content, so adding `exit_contracts` to the prompt naturally invalidates pre-0.5.0 cached entries. No explicit version bump needed in the cache key.
+Cache compatibility: the v0.4.0 identical-plan cache keys already incorporate the rendered prompt content, so adding the new instruction blocks to the prompt naturally invalidates pre-0.5.0 cached entries. No explicit version bump needed in the cache key.
 
 #### 2b. Completion side (`validate_completion`)
 
-Add one optional input:
+Add two optional inputs:
 
 ```go
 type ValidateCompletionArgs struct {
     // existing fields...
-    ExitContracts []string `json:"exit_contracts,omitempty"`
+    ExitContracts         []string `json:"exit_contracts,omitempty"`
+    ExitContractsInferred bool     `json:"exit_contracts_inferred,omitempty"`
 }
 ```
 
 Same normalization as the `validate_task_spec` fields above (trim, drop empties, 50/500 caps).
 
-Prompt rendering: `post.tmpl` emits an `Exit contracts (must be satisfied):` section when non-empty, listing each contract.
+Prompt rendering: `post.tmpl` emits an `Exit contracts (must be satisfied):` section when `ExitContracts` is non-empty. The section header explicitly states the provenance:
+- When `ExitContractsInferred == false`: header reads `Exit contracts (explicit — author-authored, must be satisfied):`.
+- When `ExitContractsInferred == true`: header reads `Exit contracts (reviewer-inferred — verify but do not gate harshly):`.
 
-Reviewer guidance:
+Reviewer guidance (rendered into the prompt):
 - For each contract, assess whether `final_files` / `final_diff` evidence satisfies it.
-- On miss, emit a finding:
-  - `severity` matches the reviewer's judgement (`major` is appropriate for a hard mismatch; `minor` for "looks present but not verifiable from this evidence").
-  - `category: missing_acceptance_criterion` (reuse — no new category).
-  - `criterion: exit_contract`.
-  - `evidence`: quote the contract and the closest matching production-code surface.
-  - `suggestion`: name the specific edit that would satisfy the contract.
+- On miss for an **explicit** contract: reviewer may emit `severity: major` when there is a hard mismatch (e.g. a named symbol the contract references is absent from the diff). Reviewer should emit `severity: minor` when evidence suggests the contract is satisfied but cannot be verified from the supplied evidence.
+- On miss for an **inferred** contract: cap at `severity: minor` unless the evidence is structurally inconsistent (a `final_diff` that clearly contradicts the inferred contract — e.g. the inferred contract names a constant the diff explicitly leaves undefined). The cap is reviewer guidance, not server-side flooring — it preserves the reviewer's ability to escalate when warranted.
+- On miss (either provenance): emit a finding with `category: missing_acceptance_criterion`, `criterion: exit_contract`, evidence quoting the contract and the closest matching production-code surface, and a suggestion naming the specific edit that would satisfy the contract.
 
-Threading model: the controller is responsible for threading per-task `exit_contracts` from the `validate_plan` result into each dispatched implementer's prompt. The implementer then passes them into `validate_completion`. Anti-tangent's plan and per-task hooks remain decoupled (no shared store).
+Threading model: the controller is responsible for threading per-task `exit_contracts` and `exit_contracts_inferred` from the `validate_plan` result into each dispatched implementer's prompt. The implementer then passes both into `validate_completion`. Anti-tangent's plan and per-task hooks remain decoupled (no shared store). A controller that wants stricter behavior may set `exit_contracts_inferred: false` even for reviewer-inferred contracts, treating them as author-approved — that is an explicit controller acknowledgement, not a defect.
+
+#### 2c. Optional: `normative_test_bodies` plan-side extraction
+
+Mirrors §2a's extraction step for normative test bodies: `validate_plan` populates `PlanTaskResult.NormativeTestBodies` per task. The controller threads them into `validate_task_spec` (via the new input from §1d). Controllers may also populate `normative_test_bodies` manually for tasks dispatched without a prior `validate_plan` call.
 
 ### 3. Doc-only fixes (D1–D5)
 
@@ -183,18 +237,19 @@ All land in `INTEGRATION.md`. Patrick's `~/.claude/anti-tangent.md` is downstrea
 - **D4. Language-scoping prose caveat.** New section noting that the text-only reviewer may surface `ambiguous_spec` findings around closure/scoping semantics (Kotlin `var` + lambda, Python nested-scope, etc.). Implementer mitigation: trust the verbatim plan code block over the prose, paste-then-verify rather than re-interpret.
 - **D5. Lightweight-mode visibility.** Restructure the dispatch clause so the lightweight-eligibility criteria are a callout at the *top* of the clause, before the full-protocol steps. Implementers reading the clause encounter lightweight first; full protocol is the fallback. Field reports indicated implementers occasionally ran the full protocol on tasks that qualified for lightweight, costing 60s+ of LLM time per dispatch.
 
-### 4. Prompt-template tunes (no API change)
+### 4. Prompt-template tunes
 
 - `pre.tmpl`:
-  - Recognize the `NORMATIVE TEST BODIES (verbatim):` header as binding AC (pairs with D1).
-  - Joint-coverage heuristic: when two adjacent test stubs cover the same AC bullet, treat them as joint coverage unless the gap is structurally obvious (e.g. missing invocation count). `test_strategy_notes` still wins when present (pairs with F1).
-  - When `codebase_conventions` non-empty, emit `convention_deviation` findings on observed deviations (pairs with F2).
-  - When `testability_extractions` non-empty, suppress matching `scope_drift` findings via deterministic substring match (pairs with F3).
+  - Render the new `Normative test bodies (caller-supplied, treat as binding AC):` section when `normative_test_bodies` non-empty (pairs with §1d and D1).
+  - Joint-coverage heuristic: when two adjacent test stubs cover the same AC bullet, treat them as joint coverage unless the gap is structurally obvious (e.g. missing invocation count). `test_strategy_notes` still wins when present (pairs with §1a).
+  - When `codebase_conventions` non-empty, render a `Codebase conventions (caller-supplied):` section and instruct the reviewer to emit `convention_deviation` findings on observed deviations (pairs with §1b).
+  - When `testability_extractions` non-empty, render a `Testability extractions (caller-supplied):` section and instruct deterministic substring suppression of matching `scope_drift` findings (pairs with §1c).
 - `post.tmpl`:
-  - When `exit_contracts` non-empty, walk each and emit `missing_acceptance_criterion` with `criterion: exit_contract` on miss (pairs with 2b).
+  - When `exit_contracts` non-empty, render the provenance-aware section (explicit vs reviewer-inferred header) and walk each contract; emit `missing_acceptance_criterion` with `criterion: exit_contract` on miss, calibrating severity by `exit_contracts_inferred` (pairs with §2b).
 - `plan.tmpl` and `plan_tasks_chunk.tmpl`:
-  - Ask the reviewer to populate `exit_contracts` per task; respect explicit `**Exit contracts:**` sections when present.
-  - Cap at 20 contracts and 240 code points per contract (pairs with 2a).
+  - Ask the reviewer to populate `exit_contracts` per task and set `exit_contracts_inferred` honestly; respect explicit `**Exit contracts:**` sections when present.
+  - Cap at 20 contracts and 240 code points per contract (pairs with §2a).
+  - Extract `normative_test_bodies` from `**NORMATIVE TEST BODIES (verbatim):**` headers per task (pairs with §2c).
 
 All template changes regenerate golden files in `internal/prompts/testdata/`.
 
@@ -206,31 +261,30 @@ Add to `CHANGELOG.md`:
 ## [0.5.0] - 2026-05-XX
 
 ### Added
-- `validate_task_spec` accepts optional `test_strategy_notes`, `codebase_conventions`, and `testability_extractions` so controllers can surface joint-coverage intent, module conventions, and intentional testability extractions.
-- New finding category `convention_deviation` (minor-floored) emitted when a `codebase_conventions` entry conflicts with the spec.
-- `validate_plan` task results include optional `exit_contracts` (hybrid: explicit `**Exit contracts:**` section if present, reviewer-inferred otherwise) so controllers can thread cross-task surface contracts into per-task completion gates.
-- `validate_completion` accepts optional `exit_contracts`; reviewer flags misses as `missing_acceptance_criterion` with `criterion: exit_contract`.
+- `validate_task_spec` accepts optional `test_strategy_notes`, `codebase_conventions`, `testability_extractions`, and `normative_test_bodies` so controllers can surface joint-coverage intent, module conventions, intentional testability extractions, and binding test bodies that the structured-fields-only spec otherwise hides from the reviewer.
+- New finding category `convention_deviation` (minor-floored) emitted when a `codebase_conventions` entry conflicts with the spec. Added to the reviewer-output JSON schema category enums.
+- `validate_plan` task results include optional `exit_contracts` (hybrid: explicit `**Exit contracts:**` section if present, reviewer-inferred otherwise) with a sibling `exit_contracts_inferred` provenance flag, plus `normative_test_bodies` extracted from `**NORMATIVE TEST BODIES (verbatim):**` sections.
+- `validate_completion` accepts optional `exit_contracts` plus `exit_contracts_inferred`; reviewer flags misses as `missing_acceptance_criterion` with `criterion: exit_contract`, calibrating miss severity by provenance.
 
 ### Changed
-- `pre.tmpl` recognizes `**NORMATIVE TEST BODIES (verbatim):**` headers as binding AC, treats adjacent complementary tests as joint coverage, and respects the three new caller-supplied fields above.
-- `post.tmpl` checks `exit_contracts` against final-file evidence when present.
-- `plan.tmpl` and `plan_tasks_chunk.tmpl` populate `exit_contracts` per task.
-
-### Documentation
-- Integration docs add the normative-test-bodies convention, CVR-scope clarification, `.trimIndent()` raw-string caveat, language-scoping prose caveat, and a lightweight-mode callout repositioning at the top of the dispatch clause.
+- `pre.tmpl` treats `normative_test_bodies` as binding AC, treats adjacent complementary tests as joint coverage, and respects the new caller-supplied fields above.
+- `post.tmpl` checks `exit_contracts` against final-file evidence when present and adjusts on-miss severity by `exit_contracts_inferred`.
+- `plan.tmpl` and `plan_tasks_chunk.tmpl` populate `exit_contracts`, `exit_contracts_inferred`, and `normative_test_bodies` per task.
+- Integration docs add the normative-test-bodies convention, CVR-scope clarification, `.trimIndent()` raw-string caveat, language-scoping prose caveat, and a lightweight-mode callout repositioning at the top of the dispatch clause. (Doc-only items folded under `Changed` per repo CLAUDE.md guidance on Keep-a-Changelog subsections; a prior release used `### Documentation`, which is a divergence from the project convention — this release re-aligns.)
 ```
 
 ## Testing Strategy
 
-- Unit-test input normalization (trim, drop empties, 50/500 caps) for the three new `validate_task_spec` fields, mirroring existing `pinned_by` and `controller_verified_references` tests.
+- Unit-test input normalization (trim, drop empties, 50/500 caps) for the four new `validate_task_spec` fields (`test_strategy_notes`, `codebase_conventions`, `testability_extractions`, `normative_test_bodies`) and for `validate_completion.exit_contracts`, mirroring existing `pinned_by` and `controller_verified_references` tests.
 - Unit-test that `convention_deviation` is server-side floored to `minor` and parses through `internal/verdict/finding.go`.
-- Schema test that `internal/verdict/*.json` task-input schemas accept the new fields and reject unknown ones (`additionalProperties: false`).
-- Golden test `pre.tmpl` rendering for each new field independently and in combination, including the normative-test-bodies header.
-- Golden test `post.tmpl` rendering with `exit_contracts` non-empty.
-- Golden test `plan.tmpl` and `plan_tasks_chunk.tmpl` rendering with the `exit_contracts` instruction block.
-- Schema test that `plan_schema.json` and `tasks_only_schema.json` accept old JSON without `exit_contracts` and new JSON with the field.
-- Unit-test parser round-trip for `PlanTaskResult.ExitContracts` and `Result` envelope with `criterion: exit_contract` findings.
-- Reviewer-behavior tests stay golden + httptest-based per project convention; deterministic behaviors (suppression, flooring) get unit assertions, reviewer-shaped behaviors (when to emit `convention_deviation`) get golden prompts and one E2E coverage test behind `-tags=e2e`.
+- Schema test that the four reviewer-output schemas (`schema.json`, `plan_schema.json`, `plan_findings_only_schema.json`, `tasks_only_schema.json`) include `convention_deviation` in the `category` enum and continue to reject unknown values (`additionalProperties: false` preserved).
+- Schema test that `plan_schema.json` and `tasks_only_schema.json` accept old JSON without the new task-level fields (`exit_contracts`, `exit_contracts_inferred`, `normative_test_bodies`) and new JSON with the fields, preserving `additionalProperties: false`.
+- Unit-test parser round-trip for `PlanTaskResult.ExitContracts`, `PlanTaskResult.ExitContractsInferred`, `PlanTaskResult.NormativeTestBodies`, `ValidateCompletionArgs.ExitContractsInferred`, and `Result` envelope with `criterion: exit_contract` findings.
+- Unit-test the deterministic `testability_extractions` substring suppression in the post-reviewer normalization path (same shape as `controller_verified_references` suppression test).
+- Golden test `pre.tmpl` rendering for each new field independently and in combination, including provenance-aware section headers.
+- Golden test `post.tmpl` rendering with `exit_contracts` non-empty, covering both `exit_contracts_inferred: false` (explicit-header path) and `exit_contracts_inferred: true` (inferred-header path).
+- Golden test `plan.tmpl` and `plan_tasks_chunk.tmpl` rendering with the new instruction blocks.
+- Reviewer-behavior tests stay golden + httptest-based per project convention; deterministic behaviors (suppression, flooring, header selection) get unit assertions, reviewer-shaped behaviors (when to emit `convention_deviation`, when to infer `exit_contracts`) get golden prompts and one E2E coverage test per behavior behind `-tags=e2e`.
 - Run `go test -race ./...`.
 
 ## Rollout
@@ -239,7 +293,15 @@ Add to `CHANGELOG.md`:
 - `CHANGELOG.md` updated as work progresses; merge commit carries `[minor]`.
 - `INTEGRATION.md` updated in the same release.
 - Patrick mirrors `INTEGRATION.md` changes into `~/.claude/anti-tangent.md` after merge (downstream of this repo per existing memory policy).
-- No upstream coordination required — all changes are additive and backward-compatible. Old controllers omit the new fields; old plans omit the explicit `**Exit contracts:**` section and the reviewer infers.
+
+### Backward compatibility
+
+The release is wire-compatible — old callers continue to work without code changes — but the functional value of the cross-task and normative-body flows requires controller-side updates:
+
+- **Response shape:** old controllers can call `validate_plan` against new servers and receive responses that include the new `exit_contracts`, `exit_contracts_inferred`, and `normative_test_bodies` fields. The old parser ignores unknown fields (`omitempty` on emit, lenient on parse). No regression.
+- **Request shape:** old controllers calling `validate_task_spec` / `validate_completion` without the new inputs see identical behavior to v0.4.0. The new reviewer guidance in the prompts is gated on the respective fields being non-empty.
+- **Functional value (requires controller update):** the new cross-task contract check fires only when a controller threads `exit_contracts` from a `validate_plan` result into the corresponding `validate_completion` call. Old controllers that do not yet thread will not benefit from the check (no regression, but also no improvement) until they update. The same applies to `normative_test_bodies` and to the three new `validate_task_spec` fields.
+- **Plan-author update:** the explicit `**Exit contracts:**` and `**NORMATIVE TEST BODIES (verbatim):**` sections are optional plan-markdown affordances. Plans without them continue to be valid; the reviewer infers (with provenance flag set) where applicable.
 
 ## Open questions
 
