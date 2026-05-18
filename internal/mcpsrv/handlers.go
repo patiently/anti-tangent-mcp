@@ -45,6 +45,10 @@ type ValidateTaskSpecArgs struct {
 	Context                      string   `json:"context,omitempty"`
 	PinnedBy                     []string `json:"pinned_by,omitempty"`
 	ControllerVerifiedReferences []string `json:"controller_verified_references,omitempty"`
+	TestStrategyNotes            []string `json:"test_strategy_notes,omitempty"`
+	CodebaseConventions          []string `json:"codebase_conventions,omitempty"`
+	TestabilityExtractions       []string `json:"testability_extractions,omitempty"`
+	NormativeTestBodies          []string `json:"normative_test_bodies,omitempty"`
 	Phase                        string   `json:"phase,omitempty"`
 	ModelOverride                string   `json:"model_override,omitempty"`
 	MaxTokensOverride            int      `json:"max_tokens_override,omitempty"`
@@ -92,6 +96,10 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		Context:                      args.Context,
 		PinnedBy:                     inputs.PinnedBy,
 		ControllerVerifiedReferences: inputs.ControllerVerifiedReferences,
+		TestStrategyNotes:            inputs.TestStrategyNotes,
+		CodebaseConventions:          inputs.CodebaseConventions,
+		TestabilityExtractions:       inputs.TestabilityExtractions,
+		NormativeTestBodies:          inputs.NormativeTestBodies,
 		Phase:                        inputs.Phase,
 	}
 

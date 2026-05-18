@@ -1777,3 +1777,285 @@ func TestValidateCompletion_LightweightMode_NoEvidenceErrors(t *testing.T) {
 		t.Errorf("error should mention 'at least one of'; got: %v", err)
 	}
 }
+
+func TestValidateTaskSpec_TestStrategyNotesTrimmedAndStored(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:         "T",
+		Goal:              "G",
+		TestStrategyNotes: []string{"  AC #2 covered jointly by tests A and B  ", "", "   ", "AC #3 negative case split across X/Y"},
+	})
+	require.NoError(t, err)
+
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	assert.Equal(t, []string{"AC #2 covered jointly by tests A and B", "AC #3 negative case split across X/Y"}, sess.Spec.TestStrategyNotes)
+}
+
+func TestValidateTaskSpec_TestStrategyNotesLimitsRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	// 50 entries pass, 51 fail.
+	fifty := make([]string, 50)
+	for i := range fifty {
+		fifty[i] = "joint"
+	}
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:         "T",
+		Goal:              "G",
+		TestStrategyNotes: fifty,
+	})
+	require.NoError(t, err)
+
+	tooMany := make([]string, 51)
+	for i := range tooMany {
+		tooMany[i] = "joint"
+	}
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:         "T",
+		Goal:              "G",
+		TestStrategyNotes: tooMany,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "test_strategy_notes must contain at most 50 entries")
+
+	// 500 ASCII runes pass, 501 fail.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:         "T",
+		Goal:              "G",
+		TestStrategyNotes: []string{strings.Repeat("x", 500)},
+	})
+	require.NoError(t, err)
+
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:         "T",
+		Goal:              "G",
+		TestStrategyNotes: []string{strings.Repeat("x", 501)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "test_strategy_notes[0] must be at most 500 characters")
+
+	// 500 multibyte runes (1000 bytes) must pass — the cap is on runes.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:         "T",
+		Goal:              "G",
+		TestStrategyNotes: []string{strings.Repeat("é", 500)},
+	})
+	require.NoError(t, err)
+}
+
+func TestValidateTaskSpec_CodebaseConventionsTrimmedAndStored(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		CodebaseConventions: []string{"  id is canonically UUID in memory  ", "", "Instant fields use @Serializable"},
+	})
+	require.NoError(t, err)
+
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	assert.Equal(t, []string{"id is canonically UUID in memory", "Instant fields use @Serializable"}, sess.Spec.CodebaseConventions)
+}
+
+func TestValidateTaskSpec_CodebaseConventionsLimitsRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	// 50 entries pass, 51 fail.
+	fifty := make([]string, 50)
+	for i := range fifty {
+		fifty[i] = "convention"
+	}
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		CodebaseConventions: fifty,
+	})
+	require.NoError(t, err)
+
+	tooMany := make([]string, 51)
+	for i := range tooMany {
+		tooMany[i] = "convention"
+	}
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		CodebaseConventions: tooMany,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "codebase_conventions must contain at most 50 entries")
+
+	// 500 ASCII runes pass, 501 fail.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		CodebaseConventions: []string{strings.Repeat("x", 500)},
+	})
+	require.NoError(t, err)
+
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		CodebaseConventions: []string{strings.Repeat("x", 501)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "codebase_conventions[0] must be at most 500 characters")
+
+	// 500 multibyte runes (1000 bytes) must pass — cap is rune-based, not byte-based.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		CodebaseConventions: []string{strings.Repeat("é", 500)},
+	})
+	require.NoError(t, err)
+}
+
+func TestValidateTaskSpec_TestabilityExtractionsTrimmedAndStored(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:              "T",
+		Goal:                   "G",
+		TestabilityExtractions: []string{"  buildDeclineWinddownHandlerOutput  ", "", "runHiringAreaRecheck"},
+	})
+	require.NoError(t, err)
+
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	assert.Equal(t, []string{"buildDeclineWinddownHandlerOutput", "runHiringAreaRecheck"}, sess.Spec.TestabilityExtractions)
+}
+
+func TestValidateTaskSpec_TestabilityExtractionsLimitsRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	// 50 entries pass, 51 fail.
+	fifty := make([]string, 50)
+	for i := range fifty {
+		fifty[i] = "helper"
+	}
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:              "T",
+		Goal:                   "G",
+		TestabilityExtractions: fifty,
+	})
+	require.NoError(t, err)
+
+	tooMany := make([]string, 51)
+	for i := range tooMany {
+		tooMany[i] = "helper"
+	}
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:              "T",
+		Goal:                   "G",
+		TestabilityExtractions: tooMany,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "testability_extractions must contain at most 50 entries")
+
+	// 500 ASCII runes pass, 501 fail.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:              "T",
+		Goal:                   "G",
+		TestabilityExtractions: []string{strings.Repeat("x", 500)},
+	})
+	require.NoError(t, err)
+
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:              "T",
+		Goal:                   "G",
+		TestabilityExtractions: []string{strings.Repeat("x", 501)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "testability_extractions[0] must be at most 500 characters")
+
+	// 500 multibyte runes (1000 bytes) must pass — cap is rune-based, not byte-based.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:              "T",
+		Goal:                   "G",
+		TestabilityExtractions: []string{strings.Repeat("é", 500)},
+	})
+	require.NoError(t, err)
+}
+
+func TestValidateTaskSpec_NormativeTestBodiesTrimmedAndStored(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		NormativeTestBodies: []string{"  @Test fun whenX_thenY() { ... }  ", "", "// excerpt: see plan §3 test 2"},
+	})
+	require.NoError(t, err)
+
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	assert.Equal(t, []string{"@Test fun whenX_thenY() { ... }", "// excerpt: see plan §3 test 2"}, sess.Spec.NormativeTestBodies)
+}
+
+func TestValidateTaskSpec_NormativeTestBodiesLimitsRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	// 20 entries pass, 21 fail.
+	twenty := make([]string, 20)
+	for i := range twenty {
+		twenty[i] = "@Test fun t" + strings.Repeat("x", 1) + "() {}"
+	}
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		NormativeTestBodies: twenty,
+	})
+	require.NoError(t, err)
+
+	twentyOne := append([]string(nil), twenty...)
+	twentyOne = append(twentyOne, "@Test fun extra() {}")
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		NormativeTestBodies: twentyOne,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "normative_test_bodies must contain at most 20 entries")
+
+	// 4000 runes pass, 4001 fail.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		NormativeTestBodies: []string{strings.Repeat("x", 4000)},
+	})
+	require.NoError(t, err)
+
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		NormativeTestBodies: []string{strings.Repeat("x", 4001)},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "normative_test_bodies[0] must be at most 4000 characters")
+
+	// 4000 multibyte runes must pass — cap is rune-based, not byte-based.
+	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "T",
+		Goal:                "G",
+		NormativeTestBodies: []string{strings.Repeat("é", 4000)},
+	})
+	require.NoError(t, err)
+}
