@@ -430,6 +430,8 @@ func prependClamp(env Envelope, clamp verdict.Finding) Envelope {
 
 // prependPlanClamp is the PlanResult counterpart of prependClamp: it inserts
 // the clamp finding at the head of pr.PlanFindings when clamp is non-zero.
+// Clamp findings use a non-unverifiable category, so order relative to the
+// later unverifiable-rollup finalization does not change rollup behavior.
 func prependPlanClamp(pr verdict.PlanResult, clamp verdict.Finding) verdict.PlanResult {
 	if clamp.Severity == "" {
 		return pr
@@ -997,6 +999,8 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}
 	cacheKey := planPassCacheKey(args.PlanText, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
 	if cached, cachedModelUsed, ok := lookupPlanPassCache(cacheKey); ok {
+		// The cache key uses the configured model ref. cachedModelUsed is the
+		// provider-reported model from the original review being reused.
 		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
 	}
 

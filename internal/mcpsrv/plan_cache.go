@@ -64,7 +64,7 @@ func lookupPlanPassCache(key [32]byte) (verdict.PlanResult, string, bool) {
 		delete(planPassCache.entries, key)
 		return verdict.PlanResult{}, "", false
 	}
-	pr := entry.result
+	pr := clonePlanResult(entry.result)
 	pr.NextAction = "[cached <=3m] " + pr.NextAction
 	pr.SummaryBlock = formatPlanSummary(pr, entry.modelUsed, 0)
 	return pr, entry.modelUsed, true
@@ -84,10 +84,19 @@ func storePlanPassCache(key [32]byte, pr verdict.PlanResult, modelUsed string) {
 		}
 	}
 	planPassCache.entries[key] = planPassCacheEntry{
-		result:    pr,
+		result:    clonePlanResult(pr),
 		modelUsed: modelUsed,
 		expiresAt: now.Add(planPassCacheTTL),
 	}
+}
+
+func clonePlanResult(pr verdict.PlanResult) verdict.PlanResult {
+	pr.PlanFindings = append([]verdict.Finding(nil), pr.PlanFindings...)
+	pr.Tasks = append([]verdict.PlanTaskResult(nil), pr.Tasks...)
+	for i := range pr.Tasks {
+		pr.Tasks[i].Findings = append([]verdict.Finding(nil), pr.Tasks[i].Findings...)
+	}
+	return pr
 }
 
 func resetPlanPassCacheForTest() {

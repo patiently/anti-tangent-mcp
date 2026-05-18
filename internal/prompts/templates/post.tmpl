@@ -15,7 +15,7 @@ Context:
 Pinned by:
 {{range .Spec.PinnedBy}}- {{.}}
 {{end}}{{end}}{{if .MajorPreFindings}}
-## Major pre-task findings to verify:
+## Major pre-task findings to verify
 
 Check whether the implementer's summary, final evidence, or test evidence explicitly mitigates each major pre-task finding below. If a major pre-task finding remains unresolved and is relevant to acceptance-criterion completion, emit a completion finding mapped to the relevant AC or `spec`.
 {{range .MajorPreFindings}}

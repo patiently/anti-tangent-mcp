@@ -909,6 +909,44 @@ func TestValidatePlan_CacheKeyIncludesClampState(t *testing.T) {
 	}
 }
 
+func TestPlanPassCache_LookupReturnsIndependentSlices(t *testing.T) {
+	resetPlanPassCacheForTest()
+	t.Cleanup(resetPlanPassCacheForTest)
+
+	key := [32]byte{1}
+	storePlanPassCache(key, verdict.PlanResult{
+		PlanVerdict: verdict.VerdictPass,
+		PlanFindings: []verdict.Finding{{
+			Severity:  verdict.SeverityMinor,
+			Category:  verdict.CategoryQuality,
+			Criterion: "plan",
+			Evidence:  "cached plan evidence",
+		}},
+		Tasks: []verdict.PlanTaskResult{{
+			TaskIndex: 1,
+			TaskTitle: "Task 1: t1",
+			Verdict:   verdict.VerdictPass,
+			Findings: []verdict.Finding{{
+				Severity:  verdict.SeverityMinor,
+				Category:  verdict.CategoryQuality,
+				Criterion: "task",
+				Evidence:  "cached task evidence",
+			}},
+		}},
+		NextAction: "Proceed.",
+	}, "claude-sonnet-4-6")
+
+	first, _, ok := lookupPlanPassCache(key)
+	require.True(t, ok)
+	first.PlanFindings[0].Evidence = "mutated plan evidence"
+	first.Tasks[0].Findings[0].Evidence = "mutated task evidence"
+
+	second, _, ok := lookupPlanPassCache(key)
+	require.True(t, ok)
+	assert.Equal(t, "cached plan evidence", second.PlanFindings[0].Evidence)
+	assert.Equal(t, "cached task evidence", second.Tasks[0].Findings[0].Evidence)
+}
+
 func TestValidatePlan_DoesNotCacheWarnResult(t *testing.T) {
 	resetPlanPassCacheForTest()
 	t.Cleanup(resetPlanPassCacheForTest)

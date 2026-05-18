@@ -124,7 +124,7 @@ func TestRenderPost_WithMajorPreFindingsIncludesMitigationGuidance(t *testing.T)
 		TestEvidence: "PASS: TestHealthP95UnderLoad",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, out.User, "Major pre-task findings to verify:")
+	assert.Contains(t, out.User, "Major pre-task findings to verify")
 	assert.Contains(t, out.User, "Pre-task review found the load profile was undefined.")
 	assert.Contains(t, out.User, "explicitly mitigates")
 }

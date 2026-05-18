@@ -1689,7 +1689,7 @@ func TestValidateCompletion_LightweightMode_OmitsMajorPreFindings(t *testing.T) 
 		FinalFiles: []FileArg{{Path: "doc.md", Content: "updated\n"}},
 	})
 	require.NoError(t, err)
-	assert.NotContains(t, cap.LastRequest.User, "Major pre-task findings to verify:")
+	assert.NotContains(t, cap.LastRequest.User, "Major pre-task findings to verify")
 }
 
 func TestReferencedPathsMissingEvidence(t *testing.T) {
@@ -1757,7 +1757,7 @@ func TestValidateCompletion_RendersMajorPreFindings(t *testing.T) {
 		TestEvidence: "PASS: TestACUnderLoad",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, cap.LastRequest.User, "Major pre-task findings to verify:")
+	assert.Contains(t, cap.LastRequest.User, "Major pre-task findings to verify")
 	assert.Contains(t, cap.LastRequest.User, "Pre-task review found AC did not specify load.")
 	assert.NotContains(t, cap.LastRequest.User, "Minor pre-finding should not render.")
 }

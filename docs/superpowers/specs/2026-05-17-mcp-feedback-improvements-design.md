@@ -194,7 +194,7 @@ Do not add a new tool. Add integration guidance:
 
 Post-hook requirement:
 
-- Thread prior `major` pre-findings from the session into `post.tmpl` in a compact `Major pre-task findings to verify:` section.
+- Thread prior `major` pre-findings from the session into `post.tmpl` in a compact `Major pre-task findings to verify` section.
 - Instruct the reviewer to check whether the summary, final evidence, or test evidence explicitly mitigates each major pre-finding.
 - If a major pre-finding appears unresolved and could affect AC completion, the reviewer should emit a completion finding mapped to the relevant AC or to `spec`.
 
