@@ -54,6 +54,13 @@ type handlers struct {
 	deps Deps
 }
 
+func (h *handlers) planCache() *planPassCache {
+	if h.deps.planCache == nil {
+		h.deps.planCache = newPlanPassCache()
+	}
+	return h.deps.planCache
+}
+
 func validateTaskSpecTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name: "validate_task_spec",
@@ -998,7 +1005,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return nil, verdict.PlanResult{}, err
 	}
 	cacheKey := planPassCacheKey(args.PlanText, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
-	if cached, cachedModelUsed, ok := lookupPlanPassCache(cacheKey); ok {
+	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey); ok {
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
 		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
@@ -1031,7 +1038,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}
 	pr = prependPlanClamp(pr, clamp)
 	pr = finalizePlanResult(pr, modelUsed, ms)
-	storePlanPassCache(cacheKey, pr, modelUsed)
+	h.planCache().store(cacheKey, pr, modelUsed)
 	return planEnvelopeResultFinalized(pr, modelUsed, ms)
 }
 

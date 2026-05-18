@@ -854,9 +854,6 @@ func planEnvelopeBody(t *testing.T, out *mcp.CallToolResult) struct {
 }
 
 func TestValidatePlan_CachePassingResult(t *testing.T) {
-	resetPlanPassCacheForTest()
-	t.Cleanup(resetPlanPassCacheForTest)
-
 	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
 	d := newDeps(t, rv)
 	h := &handlers{deps: d}
@@ -879,10 +876,128 @@ func TestValidatePlan_CachePassingResult(t *testing.T) {
 	assert.Equal(t, second.SummaryBlock, body.SummaryBlock)
 }
 
-func TestValidatePlan_CacheKeyIncludesClampState(t *testing.T) {
-	resetPlanPassCacheForTest()
-	t.Cleanup(resetPlanPassCacheForTest)
+func TestValidatePlan_CacheIsScopedToDeps(t *testing.T) {
+	rv1 := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+	d1 := newDeps(t, rv1)
+	h1 := &handlers{deps: d1}
+	args := ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)}
 
+	_, _, err := h1.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	_, _, err = h1.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, 1, rv1.Calls, "same handler should use its own cache")
+
+	rv2 := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+	d2 := newDeps(t, rv2)
+	h2 := &handlers{deps: d2}
+	_, _, err = h2.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, 1, rv2.Calls, "separate deps must not share cached plan results")
+}
+
+func TestValidatePlan_CacheHitChunkedPath(t *testing.T) {
+	plan := buildPlanWithNTasks(9)
+	sr := &scriptedReviewer{
+		responses: []providers.Response{
+			passOneResp(),
+			chunkResp(t, titlesRange(1, 8)),
+			chunkResp(t, titlesRange(9, 9)),
+		},
+	}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.Len(t, first.Tasks, 9)
+	assert.Equal(t, 3, sr.calls)
+
+	out, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.Len(t, second.Tasks, 9)
+	assert.Equal(t, 3, sr.calls, "chunked cache hit must avoid pass1 and chunk reviewer calls")
+	assert.Equal(t, int64(0), planEnvelopeBody(t, out).ReviewMS)
+}
+
+func TestValidatePlan_CacheMissAxes(t *testing.T) {
+	tests := []struct {
+		name   string
+		first  ValidatePlanArgs
+		second ValidatePlanArgs
+	}{
+		{
+			name:   "plan text",
+			first:  ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)},
+			second: ValidatePlanArgs{PlanText: buildPlanWithNTasks(2)},
+		},
+		{
+			name:   "mode",
+			first:  ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), Mode: "quick"},
+			second: ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), Mode: "thorough"},
+		},
+		{
+			name:   "model",
+			first:  ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)},
+			second: ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), ModelOverride: "anthropic:claude-opus-4-7"},
+		},
+		{
+			name:   "max token budget",
+			first:  ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), MaxTokensOverride: 4096},
+			second: ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), MaxTokensOverride: 8192},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+			d := newDeps(t, rv)
+			h := &handlers{deps: d}
+
+			_, _, err := h.ValidatePlan(context.Background(), nil, tt.first)
+			require.NoError(t, err)
+			_, second, err := h.ValidatePlan(context.Background(), nil, tt.second)
+			require.NoError(t, err)
+			assert.Equal(t, verdict.VerdictPass, second.PlanVerdict)
+			assert.Equal(t, 2, rv.Calls, "changed %s should miss cache", tt.name)
+		})
+	}
+}
+
+func TestValidatePlan_TruncatedResultNotCached(t *testing.T) {
+	partial := []byte(`{"plan_verdict":"warn","plan_quality":"rough","plan_findings":[{"severity":"major","category":"ambiguous_spec","criterion":"plan","evidence":"e","suggestion":"s"}],"tasks":[],"next_action":"retry"`)
+	sr := &scriptedReviewer{
+		responses: []providers.Response{
+			{RawJSON: partial, Model: "claude-sonnet-4-6"},
+			passPlanResp("Proceed with implementation."),
+		},
+		errors: []error{providers.ErrResponseTruncated, nil},
+	}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+	args := ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)}
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.True(t, first.Partial)
+	_, second, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, second.PlanVerdict)
+	assert.Equal(t, 2, sr.calls, "partial/truncated result must not populate pass cache")
+}
+
+func TestPlanPassCache_EvictsOldestExpiryWhenFull(t *testing.T) {
+	cache := newPlanPassCache()
+	for i := 0; i < planPassCacheMaxEntries+1; i++ {
+		key := [32]byte{byte(i + 1)}
+		cache.store(key, verdict.PlanResult{PlanVerdict: verdict.VerdictPass, NextAction: strconv.Itoa(i)}, "claude-sonnet-4-6")
+	}
+	assert.Equal(t, planPassCacheMaxEntries, cache.entryCountForTest())
+	_, _, ok := cache.lookup([32]byte{1})
+	assert.False(t, ok, "oldest entry should be evicted when cache reaches max size")
+}
+
+func TestValidatePlan_CacheKeyIncludesClampState(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
 	d := newDeps(t, rv)
 	d.Cfg.MaxTokensCeiling = 16384
@@ -910,11 +1025,9 @@ func TestValidatePlan_CacheKeyIncludesClampState(t *testing.T) {
 }
 
 func TestPlanPassCache_LookupReturnsIndependentSlices(t *testing.T) {
-	resetPlanPassCacheForTest()
-	t.Cleanup(resetPlanPassCacheForTest)
-
+	cache := newPlanPassCache()
 	key := [32]byte{1}
-	storePlanPassCache(key, verdict.PlanResult{
+	cache.store(key, verdict.PlanResult{
 		PlanVerdict: verdict.VerdictPass,
 		PlanFindings: []verdict.Finding{{
 			Severity:  verdict.SeverityMinor,
@@ -936,21 +1049,18 @@ func TestPlanPassCache_LookupReturnsIndependentSlices(t *testing.T) {
 		NextAction: "Proceed.",
 	}, "claude-sonnet-4-6")
 
-	first, _, ok := lookupPlanPassCache(key)
+	first, _, ok := cache.lookup(key)
 	require.True(t, ok)
 	first.PlanFindings[0].Evidence = "mutated plan evidence"
 	first.Tasks[0].Findings[0].Evidence = "mutated task evidence"
 
-	second, _, ok := lookupPlanPassCache(key)
+	second, _, ok := cache.lookup(key)
 	require.True(t, ok)
 	assert.Equal(t, "cached plan evidence", second.PlanFindings[0].Evidence)
 	assert.Equal(t, "cached task evidence", second.Tasks[0].Findings[0].Evidence)
 }
 
 func TestValidatePlan_DoesNotCacheWarnResult(t *testing.T) {
-	resetPlanPassCacheForTest()
-	t.Cleanup(resetPlanPassCacheForTest)
-
 	rv := &fakeReviewer{name: "anthropic", resp: warnPlanResp("Clarify AC.")}
 	d := newDeps(t, rv)
 	h := &handlers{deps: d}
@@ -966,9 +1076,6 @@ func TestValidatePlan_DoesNotCacheWarnResult(t *testing.T) {
 }
 
 func TestPlanPassCache_ExpiredEntryMisses(t *testing.T) {
-	resetPlanPassCacheForTest()
-	t.Cleanup(resetPlanPassCacheForTest)
-
 	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
 	d := newDeps(t, rv)
 	h := &handlers{deps: d}
@@ -976,7 +1083,7 @@ func TestPlanPassCache_ExpiredEntryMisses(t *testing.T) {
 
 	_, _, err := h.ValidatePlan(context.Background(), nil, args)
 	require.NoError(t, err)
-	expirePlanPassCacheForTest()
+	d.planCache.expireForTest()
 
 	_, second, err := h.ValidatePlan(context.Background(), nil, args)
 	require.NoError(t, err)

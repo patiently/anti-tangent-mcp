@@ -1358,7 +1358,7 @@ The repository also keeps anonymized upstream-feedback drafts under `docs/feedba
 
 - [ ] **Step 6: Public hygiene grep**
 
-Run: `rg '[A-Z]{2,}-[0-9]{3,}|consumer project|private product|internal commit|person name placeholder' docs/feedback/codescene`
+Run the public-hygiene grep for ticket-like IDs and private-identifier placeholder phrases against `docs/feedback/codescene`.
 
 Expected: no matches.
 
@@ -1409,7 +1409,7 @@ Expected: exit 0 with no output.
 
 - [ ] **Step 3: Run public hygiene grep**
 
-Run: `rg '[A-Z]{2,}-[0-9]{3,}|consumer project|private product|internal commit|person name placeholder' README.md INTEGRATION.md CHANGELOG.md docs/feedback docs/superpowers/plans docs/superpowers/specs`
+Run the public-hygiene grep for ticket-like IDs and private-identifier placeholder phrases against `README.md`, `INTEGRATION.md`, `CHANGELOG.md`, `docs/feedback`, `docs/superpowers/plans`, and `docs/superpowers/specs`.
 
 Expected: no matches except historical spec/plan files that predate this 0.4.0 work. If matches appear in new 0.4.0 files, remove or anonymize them.
 

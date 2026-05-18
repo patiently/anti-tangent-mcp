@@ -40,7 +40,6 @@ func passResp(model string) providers.Response {
 }
 
 func newDeps(t *testing.T, rv *fakeReviewer) Deps {
-	resetPlanPassCacheForTest()
 	cfg, err := config.Load(func(k string) string {
 		switch k {
 		case "ANTHROPIC_API_KEY":
@@ -50,9 +49,10 @@ func newDeps(t *testing.T, rv *fakeReviewer) Deps {
 	})
 	require.NoError(t, err)
 	return Deps{
-		Cfg:      cfg,
-		Sessions: session.NewStore(1 * time.Hour),
-		Reviews:  providers.Registry{"anthropic": rv},
+		Cfg:       cfg,
+		Sessions:  session.NewStore(1 * time.Hour),
+		Reviews:   providers.Registry{"anthropic": rv},
+		planCache: newPlanPassCache(),
 	}
 }
 
