@@ -17,7 +17,10 @@ Eight distinct improvements surfaced. They cluster into three architectural move
 
 The v0.5.0 normative-body work landed correctly at `validate_task_spec`, but the field report shows AC-vs-fixture mismatches still fire at `validate_completion`. The root cause is plumbing: the post-hook prompt never received the normative bodies the pre-hook stored. v0.5.2 closes that loop and pairs it with a reviewer-side demotion rule so resolved-by-normative-body ambiguities present as `minor` advisories rather than `major` blockers.
 
-This release adds one new optional `validate_task_spec` input (`harness_shape_attestation`) and changes the verdict-severity ladder. Both are additive and backward-compatible: callers that don't pass the new field see no behavioral change; callers that parse the `verdict` field continue to get one of `{pass, warn, fail}`.
+This release adds one new optional `validate_task_spec` input (`harness_shape_attestation`) and changes the verdict-severity ladder. Backward-compatibility splits along two axes:
+
+- **New input + new output category**: callers that do not pass `harness_shape_attestation` will not receive `attestation_contradiction` findings, and their dispatch templates and finding parsers need no change.
+- **Verdict ladder**: ALL callers may see redistributed verdicts under the new ladder — borderline cases shift (single-`minor` moves from `fail` to `pass`; three-`minor` moves from `pass` to `warn`). The `verdict` field still resolves to one of `{pass, warn, fail}`, so callers branching on equality continue to work; callers that conditionally degrade on `verdict != "pass"` will see fewer false alarms on single-minor and slightly more triggers on three-minor.
 
 ## Scope
 
@@ -109,31 +112,48 @@ For `validate_plan`, derivation runs per-task AND at the plan level after any pl
 // helper checks for an existing noise_cluster before appending).
 func FinalizeVerdict(r Result) Result
 
-func FinalizePlanVerdict(p *PlanResult)  // per-task + plan-level
+// FinalizePlanVerdict derives per-task and plan-level verdicts from
+// the current findings AND re-applies ApplyPlanQualitySanity so
+// PlanQuality stays consistent with the freshly-derived PlanVerdict
+// (e.g. a reviewer-emitted `plan_quality: rigorous` becomes `rough`
+// if finalization concludes `plan_verdict: fail`). Pure derivation
+// without the sanity rerun would leave PlanQuality stale — ApplyPlanQualitySanity
+// runs at parse time, before any handler-level finding mutation
+// (suppression, rollup) and before the ladder runs, so the parse-time
+// PlanQuality value reflects the reviewer's verdict, not the
+// server-finalized one. FinalizePlanVerdict therefore:
+//   1. derives per-task verdicts via the same severity-ladder helper,
+//   2. derives plan-level verdict from PlanFindings,
+//   3. appends noise_cluster advisories per the ladder (at task level
+//      and plan level when applicable),
+//   4. re-runs ApplyPlanQualitySanity(pr) so PlanQuality is consistent.
+// Idempotent like FinalizeVerdict.
+func FinalizePlanVerdict(p *PlanResult)
 ```
 
 The reviewer's own `verdict` field is parsed by `Parse` for schema validation (must be one of `{pass, warn, fail}`) but is overwritten by `FinalizeVerdict`. This is documented in `verdict.go` and in INTEGRATION.md so callers know the reviewer's claimed verdict is advisory.
 
 ### Server-synthesized envelopes
 
-Several envelopes are constructed by handler code without a reviewer call:
+Several envelopes are constructed by handler code without going through the reviewer-response parser. These split into two categories with different finalization treatment:
 
-- **`malformed_evidence`** (input shape-guard rejection)
-- **`payload_too_large`** (input cap rejection)
-- **`session_not_found`** (stateful handlers when the `session_id` cannot be resolved)
-- **`max_tokens_override` clamp** (input validation finding appended to the otherwise-normal envelope)
-- **Partial recovery** envelopes from `ParseResultPartial` / `ParsePlanResultPartial`
-- **Cache hits** on `validate_plan` (returns a previously-finalized envelope)
+**Category A — hard rejections (built directly as `mcpsrv.Envelope`, no `verdict.Result` intermediate).**
 
-These ALL go through `FinalizeVerdict` (or `FinalizePlanVerdict`) immediately before being returned. To preserve current fail-grade semantics on hard rejections, this release MUST bump the severity of the synthetic findings emitted for hard rejection cases — the new ladder otherwise produces `warn` for these (≥1 major → warn), which would silently weaken existing rejection contracts. Mandatory adjustments:
+These envelopes (`notFoundEnvelope`, `tooLargeEnvelope`, the `malformed_evidence` rejection envelope, etc.) set `Verdict: VerdictFail` explicitly and carry one synthetic finding describing why. They do NOT go through `FinalizeVerdict` (the helper's signature is `Result → Result`; these envelopes are `mcpsrv.Envelope` and never become a `Result`). Adding a parallel `finalizeEnvelopeVerdict(env Envelope) Envelope` helper is YAGNI — the rejection envelopes already set the correct verdict.
 
-- `malformed_evidence` → severity `critical` (was `major` — `critical` produces `fail` under the new ladder; `major` would produce `warn`).
-- `payload_too_large` → severity `critical` (same reasoning).
-- `session_not_found` → severity `critical` (same reasoning).
-- `max_tokens_override` clamp → severity stays `minor` (it's an advisory, not a rejection).
-- Partial recovery's truncation marker → severity stays as documented (`minor` when partial recovery succeeded, `major` when it didn't); the verdict ladder reads these normally.
+The MANDATORY adjustment for this category: bump the severity of each rejection's synthetic finding to `critical` so that IF a caller (or a future code path) ever derived a verdict from the envelope's findings list, the ladder would produce `fail` (≥1 critical → fail). Without this, the finding+verdict pair becomes self-inconsistent under the new ladder (verdict=fail but findings=[1 major] would derive to warn). Required severity bumps:
 
-Cache hits return the cached envelope unchanged — the cache already stored a finalized envelope (the cache key includes the prompt, model, mode, and token budget; a cached envelope was finalized on its original computation).
+- `malformed_evidence` rejection finding → `critical` (was `major`)
+- `payload_too_large` rejection finding → `critical` (was `major`)
+- `session_not_found` rejection finding → `critical` (was `major`)
+
+The rejection envelope's `Verdict` field stays `fail` — already correct under the new ladder; no helper invocation needed.
+
+**Category B — envelopes that DO carry a `verdict.Result` (or `PlanResult`) under the hood.**
+
+- **`max_tokens_override` clamp** — appended to an otherwise-normal envelope. The envelope's Result goes through `FinalizeVerdict` normally; the clamp finding is `minor` (advisory) and contributes to the ladder count like any other finding.
+- **Partial recovery** envelopes from `ParseResultPartial` / `ParsePlanResultPartial` — the parser produced a Result; the handler passes that Result through `FinalizeVerdict` / `FinalizePlanVerdict` like a normal parse. The synthetic truncation marker's severity stays as documented (`minor` when partial recovery succeeded, `major` when it didn't); the ladder reads these normally.
+- **Cache hits** on `validate_plan` — return the cached envelope unchanged. The cache stores a previously-finalized envelope (the cache key includes the prompt, model, mode, and token budget; the cached envelope was finalized on its original computation), so re-running finalization on a cache hit would be a no-op anyway.
 
 ### Caller contract
 
@@ -369,7 +389,8 @@ When (a) or (b) holds, emit a finding with:
 - `internal/prompts/prompts_test.go`: assertions for the new section's header + each rendered attestation's fields.
 - `internal/mcpsrv/handlers_test.go`: input validation tests (caps, dedup, empty handling) + session round-trip + reviewer-prompt context test + tool-registration test confirming the MCP input schema exposes `harness_shape_attestation`.
 - `internal/verdict/schema.json`, `internal/verdict/plan_schema.json`, `internal/verdict/tasks_only_schema.json`, `internal/verdict/plan_findings_only_schema.json`: add `"attestation_contradiction"` to the `category` enum (4 files, identical one-line addition each). v0.5.1's `schema_invariants_test.go` re-runs and continues to pass.
-- `internal/verdict/verdict.go`: add `CategoryAttestationContradiction Category = "attestation_contradiction"` constant alongside the existing category constants. Update `applySeverityFloor` documentation to clarify that `attestation_contradiction` is intentionally NOT floored.
+- `internal/verdict/verdict.go`: add `CategoryAttestationContradiction Category = "attestation_contradiction"` constant alongside the existing category constants.
+- `internal/verdict/parser_partial.go`: where `applySeverityFloor` is defined (around line 9–22), update its doc comment to clarify that `attestation_contradiction` is intentionally NOT floored — distinct from `convention_deviation` / `unverifiable_codebase_claim` which ARE floored. No code change to `applySeverityFloor` itself; the function only ever floors categories it explicitly tests for, and `attestation_contradiction` is not on that list.
 - `internal/verdict/parser.go`: include `CategoryAttestationContradiction` in the `validCategory` switch (around line 59 alongside `CategoryConventionDeviation` / `CategoryOther`). Without this, the parser rejects the reviewer's category as unknown.
 - `INTEGRATION.md` §3 and §4.2: document the new input alongside `pinned_by` / `controller_verified_references` / `normative_test_bodies`. Document the new `attestation_contradiction` finding category in §6 FAQ or wherever the finding categories are listed.
 - `README.md`: extend the v0.5.0-era list of `validate_task_spec` optional inputs from four to five.
