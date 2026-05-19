@@ -126,9 +126,6 @@ func normalizeHarnessShapeAttestation(entries []session.HarnessShapeAttestation)
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	if len(entries) > maxHarnessShapeAttestationEntries {
-		return nil, fmt.Errorf("harness_shape_attestation must contain at most %d entries", maxHarnessShapeAttestationEntries)
-	}
 	out := make([]session.HarnessShapeAttestation, 0, len(entries))
 	seen := make(map[[32]byte]struct{}, len(entries))
 	for i, e := range entries {
@@ -175,6 +172,9 @@ func normalizeHarnessShapeAttestation(entries []session.HarnessShapeAttestation)
 		}
 		seen[key] = struct{}{}
 		out = append(out, norm)
+		if len(out) > maxHarnessShapeAttestationEntries {
+			return nil, fmt.Errorf("harness_shape_attestation must contain at most %d entries", maxHarnessShapeAttestationEntries)
+		}
 	}
 	return out, nil
 }

@@ -105,3 +105,17 @@ func TestNormalizeHarnessShapeAttestation_EmptyInputOk(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, out)
 }
+
+func TestNormalizeHarnessShapeAttestation_DupsDoNotCountTowardEntryCap(t *testing.T) {
+	// 26 inputs but 2 are duplicates — after dedup, 25 unique entries.
+	// Must succeed under dedup-before-count semantics.
+	in := make([]session.HarnessShapeAttestation, 26)
+	for i := 0; i < 25; i++ {
+		in[i] = session.HarnessShapeAttestation{Harness: "h" + string(rune('a'+i)), Path: "p", Assertions: []string{"a"}}
+	}
+	// Index 25 duplicates index 0 (post-trim).
+	in[25] = session.HarnessShapeAttestation{Harness: "h" + string(rune('a'+0)), Path: "p", Assertions: []string{"a"}}
+	out, err := normalizeHarnessShapeAttestation(in)
+	require.NoError(t, err, "dup collapses → 25 unique entries → within cap")
+	require.Len(t, out, 25)
+}
