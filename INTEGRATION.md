@@ -312,17 +312,7 @@ The implementing subagent still calls `validate_task_spec` at task start in its 
 
 ### 5.2 Dispatch addendum (paste the §4.2 clause into every implementer prompt)
 
-For each task you actually dispatch to an implementing subagent, paste the §4.2 clause into that subagent's prompt verbatim. Subagents do not inherit your CLAUDE.md or any harness-level system prompt — they only see what you put in their dispatch.
-
-> **Append the §4.2 clause to your implementer-subagent prompt template, right before the "Report Format" section.**
-
-Per-skill-system pointers:
-
-- **superpowers:** open `subagent-driven-development/implementer-prompt.md` and paste before the "Report Format" heading.
-- **hone-ai:** the equivalent dispatch template file.
-- **Vanilla harness:** wherever your dispatch prompt lives (a CLAUDE.md, a system-prompt template, etc.).
-
-Apply this only to subagents that will implement a task with the Goal/AC/Non-goals structure. Skip it for read-only research subagents (Explore, summarizers, code reviewers, security reviews) per §1.
+For each task you dispatch to an implementing subagent, paste the §4.2 clause verbatim into that subagent's prompt — subagents do not inherit your CLAUDE.md or any harness-level system prompt. Append it right before the "Report Format" section of your existing dispatch template. Apply only to subagents that will implement a Goal/AC/Non-goals task; skip for read-only research subagents per §1.
 
 ### 5.3 DONE-gate (recommended)
 
@@ -345,19 +335,17 @@ The two tools' analyses overlap intentionally: the plan gate catches plan-wide a
 
 The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`. While `plan_verdict` answers "is this dispatchable?" (pass / warn / fail), `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When you see consecutive `warn` verdicts that aren't changing, watch `plan_quality` for convergence: `actionable → rigorous` is a meaningful improvement even if the verdict stays `warn`. Use `plan_quality` to decide when to stop iterating: most callers can ship at `actionable` for ASAP work, and at `rigorous` for quarterly-rewrite scope.
 
-### 5.6 Per-call tool args (v0.3.0+)
+### 5.6 Per-call tool args and partial-response handling (v0.3.0+)
 
-**`max_tokens_override`** (all four tools): optional non-negative int. Replaces the configured `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` clamp finding is appended to the envelope. Negative values are rejected with `max_tokens_override must be ≥ 0`. Use when you know a particular call needs a larger reviewer budget without modifying global config — handy when paired with partial-findings recovery on truncated responses.
+**`max_tokens_override`** (all four tools): optional non-negative int. Replaces the configured `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` clamp finding is appended. Negative values are rejected with `max_tokens_override must be ≥ 0`. Use when one specific call needs a larger reviewer budget without changing global config.
 
-**`mode`** (`validate_plan` only): optional `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings — at most 3 per scope (plan-level + each task) — and omit stylistic nits. Useful for small ASAP plans where rounds 5+ surface only polish. Invalid values are rejected with `mode must be "quick" or "thorough"`.
+**`mode`** (`validate_plan` only): optional `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings — at most 3 per scope — and omit stylistic nits. Useful for small ASAP plans where late rounds surface only polish. Invalid values rejected with `mode must be "quick" or "thorough"`.
 
-Passing `validate_plan` results are cached in memory for 3 minutes when the rendered prompt, model, mode, and token budget are identical. Cache hits do not call the reviewer, return `review_ms: 0`, and prefix the preserved original `next_action` with `[cached <=3m]`.
+**`partial: true`** envelope field: when the reviewer's output was truncated at its `max_tokens` cap but at least one complete finding could be recovered, the response carries `"partial": true` and the synthetic truncation finding is `severity: minor` rather than `major`. The field is `omitempty` — absent in the common case. If partial recovery fails (no complete finding before the cap), the envelope falls back to the legacy single `severity: major` truncation finding with no `partial` field set.
 
-### 5.7 `partial: true` envelope field (v0.3.0+)
+Passing `validate_plan` calls are cached in memory for 3 minutes when the rendered prompt, model, mode, and token budget are identical. Cache hits return `review_ms: 0` and prefix the original `next_action` with `[cached <=3m]`.
 
-When the reviewer's output was truncated at its `max_tokens` cap but at least one complete finding could be recovered, the response envelope (`Result` for per-task tools, `PlanResult` for `validate_plan`) carries `"partial": true` and the synthetic truncation finding is `severity: minor` rather than `major`. The field is `omitempty` — absent in the common (non-truncated) case, so pre-0.3.0 callers continue to work. If partial recovery fails (no complete finding before the cap hit), the envelope falls back to the legacy single `severity: major` truncation finding with no `partial` field set.
-
-### 5.8 Using review-context features
+### 5.7 Using review-context features
 
 Use `pinned_by` when a terse acceptance criterion is backed by existing tests, docs, commands, or static checks:
 
@@ -392,10 +380,6 @@ Use `controller_verified_references` when the controller has already grep-verifi
 ```
 
 These entries are attestations from the caller. They suppress matching `unverifiable_codebase_claim` findings by substring match only; they do not suppress real contradictions or ambiguity.
-
-For `validate_plan`, normally omit `max_tokens_override`. v0.3.3 scales the default budget by task count. If a no-analysis truncation response asks for a retry, pass a higher `max_tokens_override` or raise `ANTI_TANGENT_PLAN_MAX_TOKENS` / `ANTI_TANGENT_MAX_TOKENS_CEILING`. Treat `codebase_reference_checklist` as a pre-flight checklist, not as a blocking plan-quality defect by itself.
-
-For `validate_completion`, submit doc/generated deliverables through `final_files`, complete code changes through `final_diff`, and command outputs through `test_evidence`. If the summary names a `.md`, `.txt`, `.json`, `.yaml`, or `.yml` path that is missing from evidence, the reviewer prompt will call that out.
 
 ---
 
