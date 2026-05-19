@@ -135,6 +135,10 @@ When a task's plan pastes verbatim test code that the implementer must land as w
 
 When a plan snippet is wrapped in `.trimIndent()` (or any equivalent raw-string trim), multi-line source phrases render newlines exactly where they sit in the markdown — anti-tangent reads the source, not the rendered output. Keep example strings the implementation will compare against on a single source line, and phrase ACs against the rendered string (e.g. "output contains `please decline politely`"), not against source layout.
 
+### 3.8 Harness shape attestations (v0.5.2+)
+
+`harness_shape_attestation` is a structured optional input on `validate_task_spec`. Each entry is `{harness: string, path: string, assertions: []string}`. Use it when a task's acceptance criteria depend on a test harness's stated capabilities (or stated non-capabilities). The reviewer treats each attestation as authoritative caller-attested context (no independent verification) and flags ACs that EXPLICITLY contradict an entry — e.g. an AC asks for behavior a `does not …` assertion forbids, or an AC asserts a state that directly contradicts a positive assertion — as `attestation_contradiction` findings. Absence of a capability is NOT a contradiction; do not list things to forbid them.
+
 ---
 
 ## 4. For implementers — the lifecycle protocol
@@ -144,7 +148,7 @@ When a plan snippet is wrapped in `.trimIndent()` (or any equivalent raw-string 
 | Phase | Tool | Required? | When to call |
 |---|---|---|---|
 | Start | `validate_task_spec` | **Yes** | Once, before writing any code |
-| During | `check_progress` | Optional (advisory) | When you suspect drift mid-task |
+| During | `check_progress` | Optional (advisory; low-signal in field data — call only when you suspect drift, OR when a test that 'should' fail doesn't, OR you've spent >5 min debugging behavior the spec leaves under-specified) | When you suspect drift mid-task |
 | End | `validate_completion` | **Yes** | Before reporting DONE |
 
 One task = one session = one subagent. The session_id returned by `validate_task_spec` lives in the implementer's context for the lifetime of the task; it is not handed off to anyone else.
@@ -166,9 +170,11 @@ returned `session_id` — you'll thread it through subsequent calls.
   guessing.
 
 **2. During work (OPTIONAL).** Call `check_progress` ONLY if you suspect
-you're drifting mid-task. Per the 0.3.1 protocol revision this call is
-advisory — most tasks will skip it. When you do call, pass: the
-session_id, a one-sentence `working_on` summary, and the changed files.
+you're drifting mid-task, OR a test that 'should' fail doesn't, OR
+you've spent >5 min debugging behavior the spec leaves under-specified.
+Per the 0.3.1 protocol revision this call is advisory — most tasks will
+skip it. When you do call, pass: the session_id, a one-sentence
+`working_on` summary, and the changed files.
 
 **2b. CodeScene mid-task check (RECOMMENDED — when codescene-mcp is
 configured in your host).** Call `pre_commit_code_health_safeguard` after
@@ -201,6 +207,7 @@ If codescene-mcp is not configured, skip this step silently.
 - context:              <from "Context:" if present>
 - pinned_by:            <optional anchors for existing behavior>
 - controller_verified_references: <optional references the controller already verified>
+- harness_shape_attestation: <optional structured input; see §3.8>
 - phase:                <optional; "pre" (default) or "post" for post-hoc/session-recovery>
 ```
 
@@ -360,6 +367,8 @@ Use `controller_verified_references` when the controller has already grep-verifi
 
 These entries are attestations from the caller. They suppress matching `unverifiable_codebase_claim` findings by substring match only; they do not suppress real contradictions or ambiguity.
 
+Suppression now runs server-side (deterministic) as well as in the reviewer prompt: a CVR-entry substring match against the finding's `evidence` or `criterion` (either direction; 4-code-point floor on CVR entries) suppresses the entire `unverifiable_codebase_claim`. The behavior is independent of reviewer compliance.
+
 ---
 
 ## 6. FAQ / failure modes
@@ -378,6 +387,9 @@ The server's evidence-shape guard rejected your submission before sending it to 
 
 **A hook returned a finding with `category: other` and `criterion: reviewer_response`.**
 The reviewer's response was cut off at the output token budget. As of v0.3.0, the server runs truncated responses through a tolerant parser and surfaces any complete findings produced before the cap — look for `"partial": true` on the envelope and a `severity: minor` truncation marker. To get the full response on the next call, either raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` / `ANTI_TANGENT_PLAN_MAX_TOKENS` globally, or pass `max_tokens_override` (clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING`, default 16384) for that single call. Pre-0.3.0 servers would emit a single `severity: major` truncation finding and discard any partial output.
+
+**A finding has `category: attestation_contradiction` — what is that?**
+Emitted when an AC explicitly contradicts a `harness_shape_attestation` entry (see §3.8). NOT severity-floored (unlike `convention_deviation` / `unverifiable_codebase_claim`); the reviewer's chosen severity is preserved.
 
 **`validate_task_spec` is asking for ACs my plan doesn't have.**
 That's the spec quality gate working as designed. Either (a) add the missing ACs to the plan and re-validate, or (b) acknowledge the gap in the next `working_on` description so the reviewer knows to expect implementer-discretion choices.
