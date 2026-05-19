@@ -11,8 +11,8 @@ A second anonymized field report exercised `anti-tangent-mcp` v0.5.0 across a 7-
 
 Eight distinct improvements surfaced. They cluster into three architectural moves:
 
-- **Server-side response-shape changes** (verdict ladder, `malformed_evidence` patterns, `controller_verified_references` suppression scope): touch `internal/verdict` and `internal/mcpsrv/handlers.go`. No new public input fields. The verdict change is a stable contract — `pass`/`warn`/`fail` keep meaning; thresholds shift.
-- **Session propagation + one new public input** (normative-body carry-over from `validate_task_spec` → `validate_completion`; `harness_shape_attestation` input): `internal/session/session.go` gains a `NormativeTestBodies` field on `Session`; `internal/mcpsrv/task_spec_input.go` gains a normalizer for `harness_shape_attestation`. Reviewer-output JSON schemas (`schema.json`, `plan_schema.json`, `tasks_only_schema.json`, `plan_findings_only_schema.json`) are unchanged — these are input-only.
+- **Server-side response-shape changes** (verdict ladder, `malformed_evidence` patterns, `controller_verified_references` suppression scope): touch `internal/verdict` and `internal/mcpsrv/handlers.go`. No new public input fields. The verdict change is a stable contract — `pass`/`warn`/`fail` keep meaning; thresholds shift. Verdict derivation moves to handler-level (after all finding-list mutations) so the envelope's verdict always matches the envelope's findings.
+- **Session propagation + one new public input + one new finding category** (normative-body rendering at `validate_completion`; `harness_shape_attestation` input on `validate_task_spec`; `attestation_contradiction` finding category): `internal/session/session.go` is unchanged — `Session.Spec.NormativeTestBodies` already exists from v0.5.0. `internal/mcpsrv/task_spec_input.go` gains a normalizer for `harness_shape_attestation`. All four reviewer-output JSON schemas (`schema.json`, `plan_schema.json`, `tasks_only_schema.json`, `plan_findings_only_schema.json`) add `attestation_contradiction` to their `category` enums (this is the only output-side schema change in v0.5.2; the v0.5.1 `schema_invariants_test.go` continues to enforce `properties == required`).
 - **Prompt-template tunes** (major→minor demotion when normative bodies disambiguate; `harness_shape_attestation` rendering; `.trimIndent()` pre-task heuristic): edits in `internal/prompts/templates/pre.tmpl` and `post.tmpl`; golden-file regeneration in `internal/prompts/testdata/`.
 
 The v0.5.0 normative-body work landed correctly at `validate_task_spec`, but the field report shows AC-vs-fixture mismatches still fire at `validate_completion`. The root cause is plumbing: the post-hook prompt never received the normative bodies the pre-hook stored. v0.5.2 closes that loop and pairs it with a reviewer-side demotion rule so resolved-by-normative-body ambiguities present as `minor` advisories rather than `major` blockers.
@@ -24,11 +24,11 @@ This release adds one new optional `validate_task_spec` input (`harness_shape_at
 In scope:
 
 - **#1 Verdict-severity ladder.** Server-side after-parser derivation of `verdict` from finding-severity counts. Applies to all four tools (`validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`). The reviewer's `verdict` claim becomes advisory; the server-computed value wins. New `noise_cluster` advisory finding when the ≥3-minor → warn rule fires.
-- **#2 Session-propagated normative bodies.** `Session` struct gains `NormativeTestBodies []string`. `validate_task_spec` writes it during session creation. `validate_completion` reads it and `post.tmpl` renders a binding "Normative test bodies" section before the diff/files block. Lightweight mode (empty `session_id`) is unaffected.
+- **#2 Session-propagated normative bodies.** `Session.Spec.NormativeTestBodies` is already populated by `validate_task_spec` (added in v0.5.0). v0.5.2 adds a `post.tmpl` section that renders the bodies as binding context. No struct change; the post-hook handler already passes `Spec` into the prompt context via `prompts.PostInput`. Lightweight mode (empty `session_id`) is unaffected — the section renders empty when no bodies are present.
 - **#3 Reviewer-emitted major→minor demotion.** Prompt instruction in `pre.tmpl` and `post.tmpl`: if the reviewer would emit `major ambiguous_spec` but a `normative_test_bodies` entry resolves the ambiguity, emit `minor` and append `(resolved-by-normative-body: <short citation>)` to the suggestion field.
-- **#4 `malformed_evidence` shape-guard patterns.** Extend the existing regex/match list to reject `final_diff` containing `/* ... */`, `/* ...rest unchanged */`, `// snip`, `// elided`, `// ... rest unchanged`, and `/...` (lone forward-slash-ellipsis). Same finding category, same 5-minute hash cache.
+- **#4 `malformed_evidence` shape-guard patterns.** Extend `internal/mcpsrv/handlers.go`'s `evidenceTruncationPatterns` slice. The existing `checkEvidenceShape` walker applies every entry in that slice to BOTH `final_diff` AND every `final_files[].content`, so adding patterns to the slice automatically extends both. New patterns: `/* ... */`, `/* ...rest unchanged */`, `// snip`, `// elided`, `// ... rest unchanged`, and `/...` (lone forward-slash-ellipsis). Same finding category, same 5-minute hash cache.
 - **#5 CVR claim-level suppression.** Change `controller_verified_references` suppression semantics from per-substring to per-claim: any substring match between any CVR entry and any part of the claim suppresses the entire claim's `unverifiable_codebase_claim`. No fuzzy variant matching.
-- **#6 `harness_shape_attestation` input on `validate_task_spec`.** New optional structured input: each entry is `{harness: string, path: string, assertions: []string}`. Normalizer mirrors `controller_verified_references`. Reviewer-prompt section instructs the reviewer to flag contradicting ACs as `convention_deviation` (severity `major`).
+- **#6 `harness_shape_attestation` input on `validate_task_spec` + `attestation_contradiction` finding category.** New optional structured input: each entry is `{harness: string, path: string, assertions: []string}`. Normalizer mirrors `controller_verified_references`. Reviewer-prompt section instructs the reviewer to flag ACs that EXPLICITLY contradict an attestation (e.g. the AC asks for behavior a `does not` assertion forbids, OR the AC asserts a fixture state that contradicts a stated positive assertion) using the new `attestation_contradiction` category at the reviewer's chosen severity (typically `major`). The category is intentionally distinct from `convention_deviation` (which is severity-floored to `minor` at parser-level for "reviewer can't verify the implementation"); attestations are caller-attested shape facts, so a reviewer-detected contradiction with the AC's prose is a hard finding, not a "can't verify."
 - **#7 `.trimIndent()` pre-task heuristic.** New instruction in `pre.tmpl`: when the plan text contains `.trimIndent()` / `.trimMargin()` / `textwrap.dedent` / tagged-template `dedent` alongside multi-line literal comparison, emit a `minor ambiguous_spec` finding pointing at INTEGRATION.md §3.7.
 - **#9 `check_progress` docs nudge.** Single-sentence addition to INTEGRATION.md §4's lifecycle table and the implementer paste-clause: "call this if a test that 'should' fail doesn't, or if you've spent more than ~5 min debugging behavior the spec leaves under-specified."
 - CHANGELOG entry for 0.5.2 with `### Added` (harness_shape_attestation), `### Changed` (verdict ladder, normative-body propagation, demotion rule, CVR scope, trimIndent heuristic, docs nudge), and `### Fixed` (malformed_evidence pattern gap).
@@ -38,8 +38,8 @@ Out of scope:
 - **#8 `validate_completion` latency outlier investigation.** Deferred. Profiling work that may produce a soft `final_files` payload threshold + advisory finding lands in a later release. No code change in v0.5.2.
 - **CodeScene-side improvements** (fixture-aware downweighting, baseline-aware `pre_commit_code_health_safeguard`, `failed_pre_existing` quality-gates verdict). Filed at `codescene-oss/codescene-mcp-server` separately.
 - **Persistent storage.** All new state stays in-memory; `NormativeTestBodies` lives on the existing `Session` and expires with the session's 4h sliding TTL.
-- **New finding categories.** The `noise_cluster` advisory uses `category: other` with `criterion: noise_cluster`. The demotion advisory rides on existing `ambiguous_spec`.
-- **Reviewer-output schema changes.** Inputs change; outputs do not. `internal/verdict/*_schema.json` files are untouched.
+- **Other new finding categories.** The `noise_cluster` advisory uses `category: other` with `criterion: noise_cluster`. The demotion advisory rides on existing `ambiguous_spec`. The only new category added in v0.5.2 is `attestation_contradiction`, which #6 introduces and threads through all four reviewer-output schemas + the parser's `validCategory` allowlist.
+- **Other reviewer-output schema changes.** The only output-side schema delta in v0.5.2 is adding `attestation_contradiction` to the `category` enums in the four schema files. No other field additions, no `required`/`properties` changes. The v0.5.1 `schema_invariants_test.go` continues to enforce that every property is in `required`, catching any accidental drift.
 
 ## Verdict-severity ladder (#1)
 
@@ -80,20 +80,75 @@ When the `minor >= 3 → warn` branch fires (i.e., no `critical` and no `major`,
 
 The `noise_cluster` advisory is the LAST finding appended (after the reviewer's own findings) and uses `category: other` to avoid claiming structural meaning. It is itself `minor`, so it does not double-count toward the next verdict computation (the verdict is computed once, before the synthetic is appended).
 
-### Affected tools
+### Where derivation runs: handler-level, post-mutation
 
-All four. The change lives in a shared helper called from each handler's response path. The `Result` envelope (`internal/verdict/verdict.go`) and `PlanResult` envelope (`internal/verdict/plan.go`) gain the same derivation. For `validate_plan` the verdict at issue is `plan_verdict` (plan-level findings only — per-task verdicts are derived per-task from each task's findings list with the same rule).
+Derivation runs AFTER every finding-list mutation. The parser's job is to load and validate the reviewer response (including the existing per-category severity floors in `applySeverityFloor` for `unverifiable_codebase_claim` and `convention_deviation`); derivation does not happen inside the parser. The handler is responsible for invoking the derivation helper after all other handler-side post-processing has run, immediately before returning the envelope.
+
+For `validate_task_spec` (`internal/mcpsrv/handlers.go`), the per-task post-mutation pipeline becomes:
+
+```go
+result, err := verdict.Parse(raw)          // schema validation + severity floors
+result.Findings = suppressTestabilityExtractionScopeDrift(result.Findings, inputs.TestabilityExtractions)
+result.Findings = suppressUnverifiableCodebaseClaim(result.Findings, inputs.ControllerVerifiedReferences)  // new from #5
+result.Findings = normalizeTaskSpecUnverifiableFindings(result.Findings)
+result = verdict.FinalizeVerdict(result)   // new: derive verdict + append noise_cluster if applicable
+```
+
+`check_progress` and `validate_completion` get the same `FinalizeVerdict` call at the end of their respective pipelines (after any per-tool mutations).
+
+For `validate_plan`, derivation runs per-task AND at the plan level after any plan-side rollups. The helper signature is symmetric:
+
+```go
+// FinalizeVerdict mutates r in place:
+//   - Sets r.Verdict per the severity-ladder rule.
+//   - Appends a `noise_cluster` advisory finding (severity: minor,
+//     category: other, criterion: noise_cluster) when the ≥3-minor → warn
+//     branch fires AND no critical/major exists.
+// Idempotent: calling twice produces the same envelope (the
+// noise_cluster advisory is itself counted at minor severity, so the
+// helper checks for an existing noise_cluster before appending).
+func FinalizeVerdict(r Result) Result
+
+func FinalizePlanVerdict(p *PlanResult)  // per-task + plan-level
+```
+
+The reviewer's own `verdict` field is parsed by `Parse` for schema validation (must be one of `{pass, warn, fail}`) but is overwritten by `FinalizeVerdict`. This is documented in `verdict.go` and in INTEGRATION.md so callers know the reviewer's claimed verdict is advisory.
+
+### Server-synthesized envelopes
+
+Several envelopes are constructed by handler code without a reviewer call:
+
+- **`malformed_evidence`** (input shape-guard rejection)
+- **`payload_too_large`** (input cap rejection)
+- **`session_not_found`** (stateful handlers when the `session_id` cannot be resolved)
+- **`max_tokens_override` clamp** (input validation finding appended to the otherwise-normal envelope)
+- **Partial recovery** envelopes from `ParseResultPartial` / `ParsePlanResultPartial`
+- **Cache hits** on `validate_plan` (returns a previously-finalized envelope)
+
+These ALL go through `FinalizeVerdict` (or `FinalizePlanVerdict`) immediately before being returned. To preserve current fail-grade semantics on hard rejections, this release MAY also bump the severity of the synthetic findings emitted for hard rejection cases so the new derivation produces the expected verdict:
+
+- `malformed_evidence` → severity `critical` (was `major` — `critical` produces `fail` under the new ladder; `major` would produce `warn`).
+- `payload_too_large` → severity `critical` (same reasoning).
+- `session_not_found` → severity `critical` (same reasoning).
+- `max_tokens_override` clamp → severity stays `minor` (it's an advisory, not a rejection).
+- Partial recovery's truncation marker → severity stays as documented (`minor` when partial recovery succeeded, `major` when it didn't); the verdict ladder reads these normally.
+
+Cache hits return the cached envelope unchanged — the cache already stored a finalized envelope (the cache key includes the prompt, model, mode, and token budget; a cached envelope was finalized on its original computation).
 
 ### Caller contract
 
-The contract `verdict ∈ {pass, warn, fail}` is unchanged. Callers parsing `verdict` continue to get one of those three values. The only externally-visible change is which value they get in borderline cases (single-minor was previously sometimes `fail`; now it's `pass`).
+The contract `verdict ∈ {pass, warn, fail}` is unchanged. Callers parsing `verdict` continue to get one of those three values. Externally-visible changes:
+
+- Borderline cases redistribute (single-minor was sometimes `fail`; now `pass`; three-minor was sometimes `pass`; now `warn`).
+- Hard rejections (`malformed_evidence`, `payload_too_large`, `session_not_found`) continue to produce `fail` via the bumped-to-`critical` synthetic findings.
 
 ### Files touched
 
-- `internal/verdict/verdict.go`: add `DeriveVerdict(findings []Finding) string` helper.
-- `internal/verdict/plan.go`: invoke `DeriveVerdict` for both plan-level and per-task results in `PlanResult`.
-- `internal/verdict/parser.go` (and `plan_parser.go`): after parsing the reviewer response, call `DeriveVerdict` and overwrite `result.Verdict`. Append the `noise_cluster` synthetic finding when applicable.
-- `internal/verdict/verdict_test.go`, `plan_test.go`, `parser_test.go`: tests for each branch (pass / warn / fail / noise_cluster appended).
+- `internal/verdict/verdict.go`: add `FinalizeVerdict(r Result) Result` helper. Implements the ladder + idempotent `noise_cluster` advisory append.
+- `internal/verdict/plan.go`: add `FinalizePlanVerdict(p *PlanResult)`. Walks each task's findings (calls `FinalizeVerdict`-equivalent on each task), then computes plan-level verdict from `PlanFindings`.
+- `internal/mcpsrv/handlers.go`: invoke `FinalizeVerdict` at the end of each per-task handler's pipeline; invoke `FinalizePlanVerdict` at the end of `ValidatePlan`. Bump the severity of `malformed_evidence` / `payload_too_large` / `session_not_found` synthetic findings to `critical`.
+- `internal/mcpsrv/handlers_test.go`: tests confirming verdict derivation runs AFTER suppression (a reviewer response with 5 scope_drift findings, all of which match a `testability_extractions` entry, finalizes to `pass`, not `fail` — both suppression AND derivation must have happened before the envelope returns).
+- `internal/verdict/verdict_test.go`: parametric table-driven test of the ladder. Includes idempotence test (`FinalizeVerdict(FinalizeVerdict(r))` is equal to `FinalizeVerdict(r)`).
 
 ## Session-propagated normative bodies (#2)
 
@@ -105,33 +160,32 @@ The contract `verdict ∈ {pass, warn, fail}` is unchanged. Callers parsing `ver
 
 The post-hook renders the bodies before the diff/files block. The reviewer is instructed to treat them as authoritative for fixture state, exact strings, and assertions.
 
-The `Session` struct already carries `TaskSpec` which has a `NormativeTestBodies []string` field (added in v0.5.0). No struct change is needed. Only the prompt template and the handler's prompt-render call site change.
+The data is already plumbed: `prompts.PostInput.Spec` is `session.TaskSpec` (see `internal/prompts/prompts.go:40-50`), `TaskSpec` already carries `NormativeTestBodies []string` (added in v0.5.0; see `internal/session/session.go:23`), and `ValidateCompletion` already passes the looked-up session's `Spec` into the prompt-render. The minimal change is a `post.tmpl`-only edit that adds a conditional section referencing `.Spec.NormativeTestBodies`. NO handler change. NO struct change. NO new field on `prompts.PostInput`.
 
-`post.tmpl` gains a new section, rendered only when `len(.NormativeTestBodies) > 0`:
+`post.tmpl` gains a new section, rendered only when `len(.Spec.NormativeTestBodies) > 0`. It belongs immediately after the existing exit-contracts block (or, if exit-contracts is also empty, immediately after the `## Task spec` header block):
 
 ```
-## Normative test bodies (binding)
+{{if .Spec.NormativeTestBodies}}## Normative test bodies (binding)
 
 The following test bodies were declared as binding when the implementer started this task. They are authoritative for fixture state, exact strings, and assertions. The AC list above is authoritative for behavior — but when an AC and a normative body appear to disagree on a fixture value, the body wins.
 
 Do NOT flag AC-vs-fixture mismatches when a normative body explicitly pins the value.
 
-<for each body in .NormativeTestBodies:>
+{{range .Spec.NormativeTestBodies}}---
+{{.}}
 ---
-{{body}}
----
-</for>
+{{end}}
+{{end}}
 ```
 
-The handler's `renderPostPrompt` is updated to pass `session.TaskSpec.NormativeTestBodies` into the template context. Lightweight mode (empty `session_id`, no session lookup) gets an empty list → the new section renders as nothing → no behavior change.
+Lightweight mode (empty `session_id`, no session lookup) constructs a `PostInput` with an empty `Spec`, so `.Spec.NormativeTestBodies` is nil → the section renders as nothing → no behavior change.
 
 ### Files touched
 
-- `internal/mcpsrv/handlers.go`: in `handleValidateCompletion`, pass the normative bodies from the looked-up session into the prompt-render context.
-- `internal/prompts/templates/post.tmpl`: add the conditional `## Normative test bodies (binding)` section.
+- `internal/prompts/templates/post.tmpl`: add the conditional `## Normative test bodies (binding)` section. No handler change.
 - `internal/prompts/testdata/post_*.golden`: regenerate (intentional template change).
-- `internal/prompts/prompts_test.go`: add `Contains` assertions that, when bodies are non-empty, the rendered prompt contains the section header and each body verbatim.
-- `internal/mcpsrv/handlers_test.go`: add a session-round-trip test (pre-hook stores bodies → post-hook prompt contains them).
+- `internal/prompts/prompts_test.go`: add `Contains` assertions that, when `PostInput.Spec.NormativeTestBodies` is non-empty, the rendered prompt contains the section header and each body verbatim. Add a converse test: when empty, the section header does NOT appear (no orphan `## Normative test bodies (binding)` heading).
+- `internal/mcpsrv/handlers_test.go`: add a session-round-trip test (`ValidateTaskSpec` stores bodies → `ValidateCompletion` reviewer prompt contains them).
 
 ## Reviewer-emitted major→minor demotion (#3)
 
@@ -160,37 +214,27 @@ This is reviewer-emitted: the reviewer judges the resolution and writes the demo
 
 ### Current behavior
 
-The shape-guard in `internal/mcpsrv/handlers.go` rejects `validate_completion` inputs before sending them to the reviewer when they contain known placeholder/truncation markers: `(truncated)`, `[truncated)`, `// ... unchanged`, lone `...` lines, empty `Path` entries.
+`checkEvidenceShape` (`internal/mcpsrv/handlers.go` around line 711) rejects `validate_completion` inputs containing known placeholder/truncation markers. The walker checks BOTH `final_diff` AND every `final_files[].content` against the same `evidenceTruncationPatterns` slice, plus a separate `evidenceEllipsisLine` regex for lone-`...` lines, plus an empty-`final_files[].path` check. Rejected inputs short-circuit before the reviewer is invoked; rejections cache by canonical content hash for 5 minutes.
 
 ### New behavior
 
-Extend the pattern list with six additional patterns observed in the field:
+Extend the `evidenceTruncationPatterns` slice with six additional patterns observed in the field:
 
 1. `/* ... */` (C-style block comment with ellipsis only)
 2. `/* ...rest unchanged */` and variants with `rest unchanged` inside a block comment
 3. `// snip`
 4. `// elided`
-5. `// ... rest unchanged` (line comment variant — distinct from the existing `// ... unchanged` pattern in the leading-space sense)
-6. `/...` as a standalone token on a line (forward-slash-ellipsis without a comment prefix)
+5. `// ... rest unchanged` (line comment variant — distinct from the existing `// ... unchanged` in the inner spacing)
+6. `/...` (forward-slash-ellipsis as a standalone substring; targets the field-observed "/..." abbreviation pattern)
 
-Each new pattern is a literal substring or a small regex. The existing 5-minute canonical-hash cache for rejection idempotency is unchanged.
+Each is a lowercased literal substring (the walker `strings.ToLower`'s the input and compares against lowercase patterns). The walker is unchanged; only the pattern slice grows. Because the same walker iterates both `final_diff` and each `final_files[].content`, the new patterns auto-cover BOTH inputs — no separate code path needed.
 
-The finding shape is identical:
-
-```json
-{
-  "severity": "major",
-  "category": "malformed_evidence",
-  "criterion": "<short pattern label>",
-  "evidence": "final_diff contains placeholder/truncation marker: <quoted snippet>",
-  "suggestion": "Pass full file content via final_files (or, for legitimate inclusion of these literal strings, pass a complete unified diff via final_diff with all lines intact)."
-}
-```
+The finding shape stays identical to existing rejections (the `Evidence` string already names which input the pattern matched and at which offset, e.g. `"final_files[2].content (path \"foo.go\") contains truncation marker \"/...\" at offset 47"`). Severity stays `critical` per the #1 verdict-ladder bump (was `major` — bumped so the synthetic finding produces `fail` under the new ladder; documented in the verdict-ladder section above).
 
 ### Files touched
 
-- `internal/mcpsrv/handlers.go`: extend the shape-guard pattern list.
-- `internal/mcpsrv/handlers_test.go`: parametric test exercising each new pattern (one finding emitted, finding shape matches the contract above).
+- `internal/mcpsrv/handlers.go`: extend the `evidenceTruncationPatterns` slice; bump synthetic finding severity to `critical`.
+- `internal/mcpsrv/handlers_test.go`: parametric per-pattern test asserting rejection fires AND that each new pattern is checked on BOTH `final_diff` AND `final_files[].content`. Bump expected severity to `critical` in any pre-existing tests that asserted `major`.
 
 ## CVR claim-level suppression (#5)
 
@@ -292,13 +336,21 @@ A new helper in `internal/mcpsrv/task_spec_input.go` mirrors the `controller_ver
 ```
 ## Harness shape attestations (caller-attested)
 
-The controller has declared the following non-trivial shape facts about test harnesses or fixtures referenced in this task. Treat each attestation as authoritative context — the controller has verified the assertions before dispatch. The reviewer does NOT independently verify these against the codebase.
+The controller has declared the following shape facts about test harnesses or fixtures referenced in this task. Treat each attestation as authoritative context — the controller has verified the assertions before dispatch. The reviewer does NOT independently verify these against the codebase.
 
-Use the attestations to flag any AC that contradicts an assertion. When an AC asks the implementer to do something a `does not` assertion forbids, OR an AC depends on a capability not listed in the harness's positive assertions, emit a finding with:
-  - `category: convention_deviation`
-  - `severity: major`
-  - `criterion: <which attestation is contradicted>`
-  - `evidence: <which AC contradicts it>`
+These attestations are NOT exhaustive. An assertion list states what the controller confirmed; the absence of a capability from the list means "not asserted," NOT "forbidden." Do NOT flag ACs merely because they depend on a capability that isn't in the list.
+
+Flag ONLY EXPLICIT contradictions:
+
+  (a) An AC asks the implementer to do something a `does not …` (or analogous negative) assertion explicitly forbids.
+
+  (b) An AC asserts a fixture state, value, or invariant that DIRECTLY contradicts a stated positive assertion (e.g. attestation says "records emitted spans"; AC says "no spans should be recorded").
+
+When (a) or (b) holds, emit a finding with:
+  - `category: attestation_contradiction`
+  - `severity: major` (or `critical` for a structural contradiction that prevents the task from being implementable)
+  - `criterion: <which attestation is contradicted, quoted>`
+  - `evidence: <which AC contradicts it, quoted>`
   - `suggestion: <revised AC or explicit harness change request>`
 
 <for each attestation in .HarnessShapeAttestations:>
@@ -311,15 +363,20 @@ Use the attestations to flag any AC that contradicts an assertion. When an AC as
 
 ### Files touched
 
-- `internal/mcpsrv/task_spec_input.go`: add `normalizeHarnessShapeAttestation`.
-- `internal/mcpsrv/handlers.go`: thread the field through `validate_task_spec` input parsing into the prompt context; persist on `Session.TaskSpec` so future post-hook rendering can opt into it.
-- `internal/session/session.go`: add `HarnessShapeAttestations []HarnessShapeAttestation` to `TaskSpec`, with the supporting struct type defined here.
+- `internal/mcpsrv/task_spec_input.go`: add `normalizeHarnessShapeAttestation` and the `HarnessShapeAttestation` Go type. Mirrors the existing `normalizeBoundedStringList` and CVR pattern.
+- `internal/mcpsrv/handlers.go`: thread the field from `ValidateTaskSpecArgs` through `normalizeTaskSpecInputs` into the session and into the pre-hook prompt context.
+- `internal/mcpsrv/server.go`: update `validateTaskSpecTool()` so the MCP tool-registration schema exposes `harness_shape_attestation` as an optional input. Without this, MCP clients can't see the new field even though the handler accepts it.
+- `internal/session/session.go`: add `HarnessShapeAttestations []HarnessShapeAttestation` to `TaskSpec`. (The `HarnessShapeAttestation` Go type is defined in `task_spec_input.go` and re-exported here; place where the v0.5.0 `NormativeTestBodies` field sits.)
+- `internal/prompts/prompts.go`: `PreInput.Spec` already passes through `session.TaskSpec`, so the new field is automatically visible to the template — no struct change to `prompts.PreInput`.
 - `internal/prompts/templates/pre.tmpl`: add the new `## Harness shape attestations` section.
 - `internal/prompts/testdata/pre_*.golden`: regenerate.
 - `internal/prompts/prompts_test.go`: assertions for the new section's header + each rendered attestation's fields.
-- `internal/mcpsrv/handlers_test.go`: input validation tests (caps, dedup, empty handling) + session round-trip + reviewer-prompt context test.
-- `INTEGRATION.md` §3 and §4.2: document the new input alongside `pinned_by` / `controller_verified_references` / `normative_test_bodies`.
-- `README.md`: add to the `### validate_task_spec arguments` block if such a block exists (today the v0.5.0 summary in README mentions the four existing optional inputs; extend to five).
+- `internal/mcpsrv/handlers_test.go`: input validation tests (caps, dedup, empty handling) + session round-trip + reviewer-prompt context test + tool-registration test confirming the MCP input schema exposes `harness_shape_attestation`.
+- `internal/verdict/schema.json`, `internal/verdict/plan_schema.json`, `internal/verdict/tasks_only_schema.json`, `internal/verdict/plan_findings_only_schema.json`: add `"attestation_contradiction"` to the `category` enum (4 files, identical one-line addition each). v0.5.1's `schema_invariants_test.go` re-runs and continues to pass.
+- `internal/verdict/verdict.go`: add `CategoryAttestationContradiction Category = "attestation_contradiction"` constant alongside the existing category constants. Update `applySeverityFloor` documentation to clarify that `attestation_contradiction` is intentionally NOT floored.
+- `internal/verdict/parser.go`: include `CategoryAttestationContradiction` in the `validCategory` switch (around line 59 alongside `CategoryConventionDeviation` / `CategoryOther`). Without this, the parser rejects the reviewer's category as unknown.
+- `INTEGRATION.md` §3 and §4.2: document the new input alongside `pinned_by` / `controller_verified_references` / `normative_test_bodies`. Document the new `attestation_contradiction` finding category in §6 FAQ or wherever the finding categories are listed.
+- `README.md`: extend the v0.5.0-era list of `validate_task_spec` optional inputs from four to five.
 
 ## `.trimIndent()` pre-task heuristic (#7)
 
@@ -366,9 +423,11 @@ The paste-clause's "During work (OPTIONAL)" step gets the same wording appended.
 
 `## [0.5.2] - 2026-05-19` opens with the first commit. Per project convention, bullets under:
 
-- `### Added`: `harness_shape_attestation` input on `validate_task_spec` (one bullet describing shape + caps).
+- `### Added`:
+  - `harness_shape_attestation` input on `validate_task_spec` (one bullet describing shape + caps).
+  - `attestation_contradiction` finding category (NOT severity-floored — distinct from `convention_deviation`). Added to all four reviewer-output schemas and to the parser's `validCategory` allowlist.
 - `### Changed`:
-  - Verdict-severity ladder (server-computed; pass/warn/fail thresholds documented).
+  - Verdict-severity ladder (server-computed; pass/warn/fail thresholds documented). Synthetic-finding severities adjusted to preserve fail-grade semantics for hard rejections (`malformed_evidence`, `payload_too_large`, `session_not_found` bumped to `critical`).
   - `validate_completion` now sees `normative_test_bodies` via session propagation; reviewer instructed to treat them as authoritative for fixture state.
   - Reviewer demotes `major ambiguous_spec` → `minor` with `(resolved-by-normative-body: …)` advisory when applicable.
   - `controller_verified_references` suppression widens from per-substring to per-claim (with 4-code-point floor).
@@ -395,9 +454,9 @@ Per-item, in addition to the unit tests already named above:
 - **Demotion advisory:** prompt golden + a reviewer-output parsing test that confirms a reviewer-emitted `minor` finding with `(resolved-by-normative-body: …)` suffix in `suggestion` is parsed as-is. Server doesn't re-derive severity.
 - **Malformed-evidence patterns:** parametric per-pattern test asserting rejection and finding shape match.
 - **CVR claim-level:** three-case table: (a) one substring matches a CVR entry → claim suppressed; (b) no substring matches → claim retained; (c) substring < 4 code points → not used for matching.
-- **`harness_shape_attestation`:** input normalization (caps, dedup, error messages) + prompt-rendering golden + session round-trip.
+- **`harness_shape_attestation`:** input normalization (caps, dedup, error messages) + prompt-rendering golden + session round-trip + MCP tool-registration test (the `validateTaskSpecTool()` factory in `internal/mcpsrv/server.go` exposes the new optional field in the MCP tool's input schema so MCP clients see and can pass it).
 - **`.trimIndent()` heuristic:** prompt golden assertion (no reviewer-output test — the heuristic is a prompt instruction; the reviewer's compliance is tested via E2E only and remains off the per-PR path).
-- **Docs nudge:** INTEGRATION.md `grep -c "test that 'should' fail"` returns 1 (lifecycle row) or 2 (lifecycle row + paste-clause "During work" step) per the design.
+- **Docs nudge:** TWO targeted assertions, not a permissive count. (a) The lifecycle table row at INTEGRATION.md §4 contains the literal substring `test that 'should' fail`. (b) The implementer paste-clause's "During work" step also contains the literal substring `test that 'should' fail`. Exact count `grep -c` MUST equal 2 (failing if 1 or 3+ — catches accidental partial edits or duplicated paste).
 
 Mainline run: `go test -race ./...` as always. E2E (`-tags=e2e`) remains opt-in.
 
