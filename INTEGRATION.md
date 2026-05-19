@@ -165,7 +165,7 @@ Two rules for plan authors:
 | Phase | Tool | Required? | When to call |
 |---|---|---|---|
 | Start | `validate_task_spec` | **Yes** | Once, before writing any code |
-| During | `check_progress` | Optional (advisory; low-signal in field data — call only when you suspect drift) | Mid-task, when you suspect drift |
+| During | `check_progress` | Optional (advisory) | When you suspect drift mid-task |
 | End | `validate_completion` | **Yes** | Before reporting DONE |
 
 One task = one session = one subagent. The session_id returned by `validate_task_spec` lives in the implementer's context for the lifetime of the task; it is not handed off to anyone else.
@@ -222,6 +222,7 @@ If codescene-mcp is not configured, skip this step silently.
 - context:              <from "Context:" if present>
 - pinned_by:            <optional anchors for existing behavior>
 - controller_verified_references: <optional references the controller already verified>
+- phase:                <optional; "pre" (default) or "post" for post-hoc/session-recovery>
 ```
 
 If any `severity: major` pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE so `validate_completion` and the controller can see how the risk was handled.
