@@ -10,7 +10,7 @@
       "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["task_index", "task_title", "verdict", "findings", "suggested_header_block", "suggested_header_reason"],
+        "required": ["task_index", "task_title", "verdict", "findings", "suggested_header_block", "suggested_header_reason", "lightweight_eligible", "lightweight_reason", "exit_contracts", "exit_contracts_inferred"],
         "additionalProperties": false,
         "properties": {
           "task_index":              { "type": "integer", "minimum": 0 },
