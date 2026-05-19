@@ -126,6 +126,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return r, env, retErr
 	}
 	result.Findings = suppressTestabilityExtractionScopeDrift(result.Findings, inputs.TestabilityExtractions)
+	result.Findings = suppressUnverifiableCodebaseClaim(result.Findings, inputs.ControllerVerifiedReferences)
 	result.Findings = normalizeTaskSpecUnverifiableFindings(result.Findings)
 	if cc.Clamp.Severity != "" {
 		result.Findings = append([]verdict.Finding{cc.Clamp}, result.Findings...)

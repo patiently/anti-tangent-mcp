@@ -2403,3 +2403,49 @@ func TestCheckEvidenceShape_NewPatternsRejected(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateTaskSpec_CVRSuppressesUnverifiableClaim_ClaimLevel(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[{
+				"severity":"minor",
+				"category":"unverifiable_codebase_claim",
+				"criterion":"spec",
+				"evidence":"XService.findFoo at path/to/file.kt:L42",
+				"suggestion":"verify"
+			}],"next_action":"n"}`),
+			Model: "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"},
+		ControllerVerifiedReferences: []string{"path/to/file.kt"},
+	})
+	require.NoError(t, err)
+	require.Empty(t, env.Findings, "claim suppressed by CVR substring match")
+	require.Equal(t, "pass", env.Verdict, "no findings → pass")
+}
+
+func TestValidateTaskSpec_CVRSuppression_RunsBeforeRollup(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[
+				{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"path/to/file.kt:L1","suggestion":"v"},
+				{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"path/to/file.kt:L2","suggestion":"v"}
+			],"next_action":"n"}`),
+			Model: "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"},
+		ControllerVerifiedReferences: []string{"path/to/file.kt"},
+	})
+	require.NoError(t, err)
+	require.Empty(t, env.Findings, "both unverifiables suppressed before rollup; rollup sees zero")
+}
