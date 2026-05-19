@@ -399,7 +399,7 @@ This collapses the 4 paragraphs + bullet list into one paragraph; the per-skill 
 
 - [ ] **Step 2: Merge §5.6 and §5.7 into one subsection**
 
-Locate `### 5.6 Per-call tool args (v0.3.0+)` and `### 5.7 \`partial: true\` envelope field (v0.3.0+)`. Replace BOTH headers + bodies with a single `### 5.6 Per-call tool args and partial-response handling (v0.3.0+)` subsection. Keep all three knobs (`max_tokens_override`, `mode`, `partial`) — only collapse the H3 split; preserve the technical content. §5.8 then becomes §5.7 — renumber it.
+Locate ``### 5.6 Per-call tool args (v0.3.0+)`` and ``### 5.7 `partial: true` envelope field (v0.3.0+)``. Replace BOTH headers + bodies with a single ``### 5.6 Per-call tool args and partial-response handling (v0.3.0+)`` subsection. Keep all three knobs (`max_tokens_override`, `mode`, `partial`) — only collapse the H3 split; preserve the technical content. §5.8 then becomes §5.7 — renumber it.
 
 Body shape (this is the entire merged subsection):
 
@@ -554,7 +554,13 @@ Expected: ≤ 34,000 chars (measured arithmetic lands at ~33,430). Capture the e
 
 If above 34,000: apply the fallback trims below, re-run `wc -c`, and only proceed to Step 6 once the result is ≤ 34,000. Apply Fallback A first (lower-risk and higher-yield); only add Fallback B if Fallback A is insufficient on its own.
 
-- **Fallback A — Compress the "Choosing `pinned_by`, `context`, `controller_verified_references`" preamble subsection (lines 43–49, ~1,267 chars; partial overlap with §5.7).** Replace the entire subsection with: `### Choosing review-context inputs\n\nUse `context` for background a fresh implementer needs (constraints, prior decisions, why a non-obvious approach is required). Use `pinned_by` for existing tests, docs, commands, or static checks that pin a "behavior unchanged" AC. Use `controller_verified_references` for codebase references the controller already grep-verified (paths, symbols, line anchors, commands, adjacent patterns); CVR suppresses matching `unverifiable_codebase_claim` findings by substring only — contradictions, missing ACs, ambiguity, and `convention_deviation` are NOT suppressed. CVR is single-category; use `testability_extractions` for intentional `scope_drift` suppression and `codebase_conventions` to actively trigger `convention_deviation`.` Target replacement ≤ 400 chars; saves ~870.
+- **Fallback A — Compress the "Choosing `pinned_by`, `context`, `controller_verified_references`" preamble subsection (lines 43–49, ~1,267 chars; partial overlap with §5.7).** Replace the entire subsection with the fenced block below; target replacement ≤ 400 chars; saves ~870.
+
+  ```markdown
+  ### Choosing review-context inputs
+
+  Use `context` for background a fresh implementer needs (constraints, prior decisions, why a non-obvious approach is required). Use `pinned_by` for existing tests, docs, commands, or static checks that pin a "behavior unchanged" AC. Use `controller_verified_references` for codebase references the controller already grep-verified (paths, symbols, line anchors, commands, adjacent patterns); CVR suppresses matching `unverifiable_codebase_claim` findings by substring only — contradictions, missing ACs, ambiguity, and `convention_deviation` are NOT suppressed. CVR is single-category; use `testability_extractions` for intentional `scope_drift` suppression and `codebase_conventions` to actively trigger `convention_deviation`.
+  ```
 - **Fallback B — Compress §5.7 "Using review-context features" by dropping the `controller_verified_references` JSON example** (keep the `pinned_by` JSON example, since CVR is already explained in Fallback A's replacement when applied). Saves ~400–500 chars.
 
 If above 35,000: a step failed. Re-run each task's char-count checkpoint to find which task underperformed and inspect the corresponding diff.
