@@ -635,6 +635,35 @@ func TestRenderPost_WithPinnedByIncludesAnchors(t *testing.T) {
 	assert.Contains(t, out.User, "caller-supplied anchors")
 }
 
+func TestRenderPre_WithHarnessShapeAttestations_IncludesSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{
+		Title: "t", Goal: "g",
+		AcceptanceCriteria: []string{"ac1"},
+		HarnessShapeAttestations: []session.HarnessShapeAttestation{
+			{Harness: "TestHarnessX", Path: "test/foo.kt:L1", Assertions: []string{
+				"records emitted spans via getEmittedSpans()",
+				"does not stub the validator method",
+			}},
+		},
+	}})
+	require.NoError(t, err)
+	require.Contains(t, out.User, "## Harness shape attestations (caller-attested)")
+	require.Contains(t, out.User, "TestHarnessX")
+	require.Contains(t, out.User, "test/foo.kt:L1")
+	require.Contains(t, out.User, "records emitted spans via getEmittedSpans()")
+	require.Contains(t, out.User, "does not stub the validator method")
+	require.Contains(t, out.User, "category: attestation_contradiction")
+	require.Contains(t, out.User, "NOT exhaustive")
+	require.Contains(t, out.User, "the absence of a capability from the list means \"not asserted,\" NOT \"forbidden.\"")
+}
+
+func TestRenderPre_WithoutHarnessShapeAttestations_OmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
+	require.NoError(t, err)
+	require.NotContains(t, out.User, "## Harness shape attestations")
+	require.NotContains(t, out.User, "attestation_contradiction") // category isn't mentioned when no attestations
+}
+
 func TestRenderPost_WithMissingReferencedPathsIncludesEvidenceNote(t *testing.T) {
 	out, err := RenderPost(PostInput{
 		Spec:                           sampleSpec(),

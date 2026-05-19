@@ -29,7 +29,30 @@ Testability extractions (caller-supplied):
 {{end}}{{end}}{{if .Spec.NormativeTestBodies}}
 Normative test bodies (caller-supplied, treat as binding AC):
 {{range .Spec.NormativeTestBodies}}- {{.}}
+{{end}}{{end}}{{if .Spec.HarnessShapeAttestations}}
+## Harness shape attestations (caller-attested)
+
+The controller has declared the following shape facts about test harnesses or fixtures referenced in this task. Treat each attestation as authoritative context — the controller has verified the assertions before dispatch. The reviewer does NOT independently verify these against the codebase.
+
+These attestations are NOT exhaustive. An assertion list states what the controller confirmed; the absence of a capability from the list means "not asserted," NOT "forbidden." Do NOT flag ACs merely because they depend on a capability that isn't in the list.
+
+Flag ONLY EXPLICIT contradictions:
+
+  (a) An AC asks the implementer to do something a `does not ...` (or analogous negative) assertion explicitly forbids.
+
+  (b) An AC asserts a fixture state, value, or invariant that DIRECTLY contradicts a stated positive assertion (e.g. attestation says "records emitted spans"; AC says "no spans should be recorded").
+
+When (a) or (b) holds, emit a finding with:
+  - `category: attestation_contradiction`
+  - `severity: major` (or `critical` for a structural contradiction that prevents the task from being implementable)
+  - `criterion: <which attestation is contradicted, quoted>`
+  - `evidence: <which AC contradicts it, quoted>`
+  - `suggestion: <revised AC or explicit harness change request>`
+
+{{range .Spec.HarnessShapeAttestations}}- **{{.Harness}}** (at `{{.Path}}`):
+{{range .Assertions}}    - {{.}}
 {{end}}{{end}}
+{{end}}
 ## What to evaluate
 
 {{if eq .Spec.Phase "post"}}Phase: post-hoc. The caller may already have implemented the task and needs a session/review baseline. Bias toward implementation-alignment risk rather than AC wording polish: prioritize contradictions that could make completion validation unreliable. Do not fail solely because an AC is terse when pinned_by provides concrete existing tests or docs.
