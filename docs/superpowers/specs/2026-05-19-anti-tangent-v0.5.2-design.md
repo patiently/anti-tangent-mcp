@@ -19,7 +19,7 @@ The v0.5.0 normative-body work landed correctly at `validate_task_spec`, but the
 
 This release adds one new optional `validate_task_spec` input (`harness_shape_attestation`) and changes the verdict-severity ladder. Backward-compatibility splits along two axes:
 
-- **New input + new output category**: callers that do not pass `harness_shape_attestation` will not receive `attestation_contradiction` findings, and their dispatch templates and finding parsers need no change.
+- **New input + new output category**: the prompts only instruct reviewers to emit `attestation_contradiction` when attestations are present in the task spec, so callers that do not pass `harness_shape_attestation` should not normally see this category. The category sits in all four reviewer-output schemas (required for the OpenAI strict-mode invariant), which means a non-compliant reviewer COULD technically emit it outside the documented trigger; callers that exhaustively switch on `category` SHOULD therefore handle it generically (parse-and-surface) rather than asserting it never appears, but no dispatch-template change is required.
 - **Verdict ladder**: ALL callers may see redistributed verdicts under the new ladder — borderline cases shift (single-`minor` moves from `fail` to `pass`; three-`minor` moves from `pass` to `warn`). The `verdict` field still resolves to one of `{pass, warn, fail}`, so callers branching on equality continue to work; callers that conditionally degrade on `verdict != "pass"` will see fewer false alarms on single-minor and slightly more triggers on three-minor.
 
 ## Scope
@@ -94,10 +94,23 @@ result, err := verdict.Parse(raw)          // schema validation + severity floor
 result.Findings = suppressTestabilityExtractionScopeDrift(result.Findings, inputs.TestabilityExtractions)
 result.Findings = suppressUnverifiableCodebaseClaim(result.Findings, inputs.ControllerVerifiedReferences)  // new from #5
 result.Findings = normalizeTaskSpecUnverifiableFindings(result.Findings)
+if cc.Clamp != (verdict.Finding{}) {
+    // CRITICAL: prepend the clamp BEFORE finalization so it
+    // participates in the severity ladder. Today's prependClamp at
+    // envelope-construction time runs AFTER any verdict derivation,
+    // so a result with 2 minors + 1 minor clamp would stay `pass`
+    // under the new ladder unless the clamp is in result.Findings
+    // when FinalizeVerdict runs.
+    result.Findings = append([]verdict.Finding{cc.Clamp}, result.Findings...)
+}
 result = verdict.FinalizeVerdict(result)   // new: derive verdict + append noise_cluster if applicable
+// envelope is built from `result` directly; no separate prependClamp
+// call afterwards — the clamp is already at result.Findings[0].
 ```
 
-`check_progress` and `validate_completion` get the same `FinalizeVerdict` call at the end of their respective pipelines (after any per-tool mutations).
+`check_progress` and `validate_completion` get the same pipeline shape: insert any clamp finding into `result.Findings[0]` BEFORE `FinalizeVerdict`, then build the envelope from `result` without a trailing `prependClamp` step.
+
+Rationale: today's `prependClamp(env, cc.Clamp)` runs at handlers.go line 148 AFTER the envelope is built from `result.Findings`. If `FinalizeVerdict` runs on `result` (before envelope construction), the clamp wouldn't yet be in `result.Findings` and wouldn't contribute to the severity ladder. v0.5.2 moves clamp insertion ahead of finalization so a clamp's `minor` severity is counted alongside any other minors (matters for the new `≥3 minor → warn` rule).
 
 For `validate_plan`, derivation runs per-task AND at the plan level after any plan-side rollups. The helper signature is symmetric:
 
@@ -151,7 +164,7 @@ The rejection envelope's `Verdict` field stays `fail` — already correct under 
 
 **Category B — envelopes that DO carry a `verdict.Result` (or `PlanResult`) under the hood.**
 
-- **`max_tokens_override` clamp** — appended to an otherwise-normal envelope. The envelope's Result goes through `FinalizeVerdict` normally; the clamp finding is `minor` (advisory) and contributes to the ladder count like any other finding.
+- **`max_tokens_override` clamp** — today appended to an envelope AFTER it is built (via `prependClamp` at handlers.go:148, :345, :908, etc.). v0.5.2 changes the ordering: the clamp is prepended into `result.Findings` BEFORE `FinalizeVerdict` runs, so its `minor` severity participates in the ladder (matters for the `≥3 minor → warn` rule). The trailing `prependClamp(env, ...)` calls are removed in the per-task handlers and the validate_plan handler; clamp insertion lives in the new path. (`prependClamp` may stay as a helper used only on hard-rejection envelopes, where the clamp is appended for display but the envelope's `Verdict: fail` is already correct and finalization is not invoked.)
 - **Partial recovery** envelopes from `ParseResultPartial` / `ParsePlanResultPartial` — the parser produced a Result; the handler passes that Result through `FinalizeVerdict` / `FinalizePlanVerdict` like a normal parse. The synthetic truncation marker's severity stays as documented (`minor` when partial recovery succeeded, `major` when it didn't); the ladder reads these normally.
 - **Cache hits** on `validate_plan` — return the cached envelope unchanged. The cache stores a previously-finalized envelope (the cache key includes the prompt, model, mode, and token budget; the cached envelope was finalized on its original computation), so re-running finalization on a cache hit would be a no-op anyway.
 
@@ -166,7 +179,7 @@ The contract `verdict ∈ {pass, warn, fail}` is unchanged. Callers parsing `ver
 
 - `internal/verdict/verdict.go`: add `FinalizeVerdict(r Result) Result` helper. Implements the ladder + idempotent `noise_cluster` advisory append.
 - `internal/verdict/plan.go`: add `FinalizePlanVerdict(p *PlanResult)`. Walks each task's findings (calls `FinalizeVerdict`-equivalent on each task), then computes plan-level verdict from `PlanFindings`.
-- `internal/mcpsrv/handlers.go`: invoke `FinalizeVerdict` at the end of each per-task handler's pipeline; invoke `FinalizePlanVerdict` at the end of `ValidatePlan`. Bump the severity of `malformed_evidence` / `payload_too_large` / `session_not_found` synthetic findings to `critical`.
+- `internal/mcpsrv/handlers.go`: in each per-task handler (`ValidateTaskSpec`, `CheckProgress`, `ValidateCompletion`), reorder the clamp-insertion: prepend `cc.Clamp` (and the `validate_plan` `prependPlanClamp` equivalent) into `result.Findings` / `pr.PlanFindings` BEFORE invoking `FinalizeVerdict` / `FinalizePlanVerdict`, then build the envelope from the finalized result without a trailing `prependClamp(env, ...)` call. Bump the severity of `malformed_evidence` / `payload_too_large` / `session_not_found` synthetic findings to `critical`. The existing `prependClamp` / `prependPlanClamp` helpers may remain in use for hard-rejection envelopes only (where the envelope's `Verdict: fail` is already correct and finalization is not invoked) — confirm by grepping every call site after the refactor.
 - `internal/mcpsrv/handlers_test.go`: tests confirming verdict derivation runs AFTER suppression (a reviewer response with 5 scope_drift findings, all of which match a `testability_extractions` entry, finalizes to `pass`, not `fail` — both suppression AND derivation must have happened before the envelope returns).
 - `internal/verdict/verdict_test.go`: parametric table-driven test of the ladder. Includes idempotence test (`FinalizeVerdict(FinalizeVerdict(r))` is equal to `FinalizeVerdict(r)`).
 
@@ -380,9 +393,23 @@ When (a) or (b) holds, emit a finding with:
 
 ### Files touched
 
-- `internal/session/session.go`: define the `HarnessShapeAttestation` struct type here AND add `HarnessShapeAttestations []HarnessShapeAttestation` to `TaskSpec` (alongside the v0.5.0 `NormativeTestBodies` field). The struct must live in `session` (or a lower-level package) — `mcpsrv` already imports `session`, so defining the type in `mcpsrv` would create an import cycle when `session.TaskSpec` references it.
+- `internal/session/session.go`: define the `HarnessShapeAttestation` struct type here AND add `HarnessShapeAttestations []HarnessShapeAttestation` to `TaskSpec` (alongside the v0.5.0 `NormativeTestBodies` field). The struct must live in `session` (or a lower-level package) — `mcpsrv` already imports `session`, so defining the type in `mcpsrv` would create an import cycle when `session.TaskSpec` references it. Struct definition with explicit JSON tags (since this type is exposed to MCP clients through reflection on `ValidateTaskSpecArgs`, the tags pin the caller-visible field names; without tags, reflection may surface capitalized Go names like `Harness` / `Path` / `Assertions` in the generated MCP input schema instead of the documented lowercase ones):
+
+  ```go
+  // HarnessShapeAttestation declares a caller-attested shape fact about a
+  // test harness or fixture referenced in a task spec. See INTEGRATION.md
+  // §3 for the use case and §6 (or wherever finding categories are listed)
+  // for the matching attestation_contradiction output category.
+  type HarnessShapeAttestation struct {
+      Harness    string   `json:"harness"`
+      Path       string   `json:"path"`
+      Assertions []string `json:"assertions"`
+  }
+  ```
+
+  The `TaskSpec` field uses the existing pattern: `HarnessShapeAttestations []HarnessShapeAttestation \`json:"harness_shape_attestations,omitempty"\``.
 - `internal/mcpsrv/task_spec_input.go`: add `normalizeHarnessShapeAttestation([]session.HarnessShapeAttestation) ([]session.HarnessShapeAttestation, error)` — the normalizer consumes/produces the `session`-defined type. Mirrors the existing `normalizeBoundedStringList` pattern (trim, dedup, cap counts and rune lengths).
-- `internal/mcpsrv/handlers.go`: add `HarnessShapeAttestation []session.HarnessShapeAttestation` (or equivalent shape — Go reflection-tag-friendly) to `ValidateTaskSpecArgs` with `json:"harness_shape_attestation,omitempty"`. The `mcp.AddTool` registration in `server.go` reflects on this args struct to generate the MCP tool's input schema — no edit to `server.go` or to `validateTaskSpecTool()` (which only sets Name + Description) is needed; the schema is auto-derived from the struct tags. Thread the normalized value through `normalizeTaskSpecInputs` into `session.TaskSpec.HarnessShapeAttestations` and into the pre-hook prompt context.
+- `internal/mcpsrv/handlers.go`: add `HarnessShapeAttestation []session.HarnessShapeAttestation \`json:"harness_shape_attestation,omitempty"\`` to `ValidateTaskSpecArgs`. The `mcp.AddTool` registration in `server.go` reflects on this args struct to generate the MCP tool's input schema — no edit to `server.go` or to `validateTaskSpecTool()` (which only sets Name + Description) is needed; the schema is auto-derived from the struct tags. Both the outer `json:"harness_shape_attestation,omitempty"` tag on the args field AND the per-field tags on the `session.HarnessShapeAttestation` struct (`json:"harness"`, `json:"path"`, `json:"assertions"`) are required to keep the public MCP input shape exactly `{"harness_shape_attestation": [{"harness": ..., "path": ..., "assertions": [...]}]}`. Thread the normalized value through `normalizeTaskSpecInputs` into `session.TaskSpec.HarnessShapeAttestations` and into the pre-hook prompt context.
 - `internal/prompts/prompts.go`: `PreInput.Spec` already passes through `session.TaskSpec`, so the new field is automatically visible to the template — no struct change to `prompts.PreInput`.
 - `internal/prompts/templates/pre.tmpl`: add the new `## Harness shape attestations` section.
 - `internal/prompts/testdata/pre_*.golden`: regenerate.
@@ -458,7 +485,7 @@ The paste-clause's "During work (OPTIONAL)" step gets the same wording appended.
 - **Inputs.** All new fields are optional with safe defaults. Callers on v0.5.1 continue to work unchanged.
 - **Outputs.** The `verdict` field stays in `{pass, warn, fail}`. The only externally-visible change is the borderline-case distribution. Callers that conditionally branch on `verdict == "fail"` get fewer false fails on single-minor.
 - **`noise_cluster` advisory.** Callers that iterate findings see one extra `minor` advisory when the ≥3-minor-warn branch fires. Existing finding parsers handle it as any other minor; the `criterion: noise_cluster` lets callers identify and downweight it.
-- **New `attestation_contradiction` output category.** Callers that exhaustively switch on the `category` enum (e.g. for routing findings to different UI lanes) MUST be updated to handle `attestation_contradiction`. The category is only emitted when a task uses `harness_shape_attestation` — callers that do not pass that input will never see this category, so this caller-side update is only required if you opt into the new field. Callers that treat unknown categories generically (parse and surface as-is) need no change. The category enum landing in all four reviewer-output schemas is the trigger that makes this a publicly-observed change rather than purely internal.
+- **New `attestation_contradiction` output category.** Callers that exhaustively switch on the `category` enum (e.g. for routing findings to different UI lanes) SHOULD be updated to handle `attestation_contradiction` generically. The prompts instruct reviewers to emit this category only when a task supplies `harness_shape_attestation`, so callers that do not pass that input should not normally see it — but since the category sits in all four reviewer-output schemas (required for the OpenAI strict-mode invariant), the server cannot prevent a non-compliant reviewer from emitting it outside the documented trigger. Treat-unknown-categories-as-parseable is the safe default. The category enum landing in all four reviewer-output schemas is the trigger that makes this a publicly-observed change rather than purely internal.
 - **`harness_shape_attestation`.** Net-new input field. Existing dispatch templates ignore it. Callers wanting the value update their dispatch clause to pass it from the task spec. Opting in is when the new `attestation_contradiction` output category becomes reachable (see above).
 - **Session propagation.** A v0.5.1 caller that calls `validate_task_spec` then `validate_completion` continues to work; if they didn't pass `normative_test_bodies` they continue to get a post-hook prompt without that section. A v0.5.2 caller that did pass bodies at pre-hook automatically gets them rendered at post-hook.
 - **Schema files.** All four `internal/verdict/*_schema.json` files add `"attestation_contradiction"` to their `category` enums (#6). No other output-schema changes. The OpenAI strict-mode invariant (#22 history: required-must-cover-properties) remains satisfied — verified by the v0.5.1 `schema_invariants_test.go` regression test, which runs on every PR.
