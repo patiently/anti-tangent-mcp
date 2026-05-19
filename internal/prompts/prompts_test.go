@@ -753,3 +753,19 @@ func TestRenderPost_WithoutNormativeTestBodies_OmitsSection(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, out.User, "## Normative test bodies (binding)")
 }
+
+const anchorDemotionRule = "(resolved-by-normative-body:"
+
+func TestRenderPre_IncludesDemotionRule(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
+	require.NoError(t, err)
+	require.Contains(t, out.User, anchorDemotionRule)
+	require.Contains(t, out.User, "downgrade the severity to `minor`")
+}
+
+func TestRenderPost_IncludesDemotionRule(t *testing.T) {
+	out, err := RenderPost(PostInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}, Summary: "s", FinalDiff: "d"})
+	require.NoError(t, err)
+	require.Contains(t, out.User, anchorDemotionRule)
+	require.Contains(t, out.User, "downgrade the severity to `minor`")
+}

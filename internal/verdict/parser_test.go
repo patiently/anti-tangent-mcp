@@ -110,3 +110,23 @@ func TestParse_MalformedEvidenceCategory_RejectedFromReviewerOutput(t *testing.T
 		t.Errorf("error should mention invalid category; got %v", err)
 	}
 }
+
+func TestParse_DemotedAmbiguousSpec_PassesThroughUnchanged(t *testing.T) {
+	raw := []byte(`{
+		"verdict":"warn",
+		"findings":[{
+			"severity":"minor",
+			"category":"ambiguous_spec",
+			"criterion":"AC1: emits spans",
+			"evidence":"AC reads ambiguous about span count",
+			"suggestion":"Pin count in the AC. (resolved-by-normative-body: Test fun emits_spans pins exactly 2 calls)"
+		}],
+		"next_action":"address as minor"
+	}`)
+	r, err := Parse(raw)
+	require.NoError(t, err)
+	require.Len(t, r.Findings, 1)
+	require.Equal(t, SeverityMinor, r.Findings[0].Severity, "demoted finding stays minor; parser does not re-derive")
+	require.Equal(t, CategoryAmbiguousSpec, r.Findings[0].Category)
+	require.Contains(t, r.Findings[0].Suggestion, "(resolved-by-normative-body:")
+}
