@@ -803,6 +803,7 @@ func TestValidatePlan_PayloadTooLarge(t *testing.T) {
 	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
+	assert.Equal(t, verdict.SeverityCritical, pr.PlanFindings[0].Severity)
 	assert.Equal(t, 0, rv.Calls)
 }
 
@@ -2281,4 +2282,35 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarnWithMajorFinding(t *testi
 	require.Len(t, env.Findings, 1)
 	require.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity, "truncated finding bumped to major")
 	require.Equal(t, "reviewer_response", env.Findings[0].Criterion)
+}
+
+func TestTooLargeEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
+	env := tooLargeEnvelope("sess-1", config.ModelRef{Provider: "anthropic", Model: "x"}, 1000, 500, "trim")
+	require.Equal(t, "fail", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
+	require.Equal(t, verdict.CategoryTooLarge, env.Findings[0].Category)
+}
+
+func TestMalformedEvidenceEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
+	env := malformedEvidenceEnvelope("sess-1", "reason", "model")
+	require.Equal(t, "fail", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
+	require.Equal(t, verdict.CategoryMalformedEvidence, env.Findings[0].Category)
+}
+
+func TestNotFoundEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
+	env := notFoundEnvelope("sess-1", config.ModelRef{Provider: "anthropic", Model: "x"})
+	require.Equal(t, "fail", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
+}
+
+func TestTooLargePlanResult_SyntheticFindingSeverityIsCritical(t *testing.T) {
+	pr := tooLargePlanResult(1000, 500)
+	require.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
+	require.Len(t, pr.PlanFindings, 1)
+	require.Equal(t, verdict.SeverityCritical, pr.PlanFindings[0].Severity)
+	require.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
 }

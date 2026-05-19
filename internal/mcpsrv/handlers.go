@@ -621,12 +621,14 @@ func recoverPartialPlanFindings(rawJSON []byte, prior verdict.PlanResult) (verdi
 	return pr, true
 }
 
+// tooLargeEnvelope builds the rejection envelope for a payload-too-large hit.
+// Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
 func tooLargeEnvelope(id string, model config.ModelRef, size, limit int, suggestion string) Envelope {
 	return Envelope{
 		SessionID: id,
 		Verdict:   string(verdict.VerdictFail),
 		Findings: []verdict.Finding{{
-			Severity:   verdict.SeverityMajor,
+			Severity:   verdict.SeverityCritical,
 			Category:   verdict.CategoryTooLarge,
 			Criterion:  "payload",
 			Evidence:   fmt.Sprintf("payload %d bytes exceeds cap %d", size, limit),
@@ -817,15 +819,13 @@ func storeRejection(key [32]byte, env Envelope) {
 }
 
 // malformedEvidenceEnvelope builds the rejection envelope for a guard hit.
-// Severity is major (not critical) because the caller can almost always fix
-// the submission by re-sending complete evidence; the work isn't necessarily
-// wrong, just unverifiable.
+// Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
 func malformedEvidenceEnvelope(sessionID, reason, modelUsed string) Envelope {
 	return Envelope{
 		SessionID: sessionID,
 		Verdict:   string(verdict.VerdictFail),
 		Findings: []verdict.Finding{{
-			Severity:   verdict.SeverityMajor,
+			Severity:   verdict.SeverityCritical,
 			Category:   verdict.CategoryMalformedEvidence,
 			Criterion:  "evidence_shape",
 			Evidence:   reason,
@@ -1222,11 +1222,13 @@ func noHeadingsPlanResult() verdict.PlanResult {
 	}
 }
 
+// tooLargePlanResult builds the rejection PlanResult for a plan-text-too-large hit.
+// Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
 func tooLargePlanResult(size, limit int) verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictFail,
 		PlanFindings: []verdict.Finding{{
-			Severity:   verdict.SeverityMajor,
+			Severity:   verdict.SeverityCritical,
 			Category:   verdict.CategoryTooLarge,
 			Criterion:  "payload",
 			Evidence:   fmt.Sprintf("plan_text %d bytes exceeds cap %d", size, limit),
