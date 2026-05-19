@@ -2370,3 +2370,36 @@ func TestValidatePlan_TruncatedResponse_PreservesFinalizePlanResultSideEffects(t
 	require.NotEmpty(t, pr.SummaryBlock, "formatPlanSummary must run on the truncation path")
 	require.Equal(t, verdict.PlanQualityRough, pr.PlanQuality, "ApplyPlanQualitySanity (via FinalizePlanVerdict) must have run; truncatedPlanResult explicitly sets rough")
 }
+
+func TestCheckEvidenceShape_NewPatternsRejected(t *testing.T) {
+	patterns := []string{
+		"/* ... */",
+		"/* ...rest unchanged */",
+		"// snip",
+		"// elided",
+		"// ... rest unchanged",
+		"/...",
+	}
+	for _, p := range patterns {
+		t.Run("final_diff:"+p, func(t *testing.T) {
+			args := ValidateCompletionArgs{
+				SessionID: "s",
+				Summary:   "s",
+				FinalDiff: "valid header\n" + p + "\nmore",
+			}
+			reason := checkEvidenceShape(args)
+			require.NotEmpty(t, reason, "must reject %q in final_diff", p)
+			require.Contains(t, reason, "final_diff")
+		})
+		t.Run("final_files:"+p, func(t *testing.T) {
+			args := ValidateCompletionArgs{
+				SessionID:  "s",
+				Summary:    "s",
+				FinalFiles: []FileArg{{Path: "foo.go", Content: "valid header\n" + p + "\nmore"}},
+			}
+			reason := checkEvidenceShape(args)
+			require.NotEmpty(t, reason, "must reject %q in final_files[].content", p)
+			require.Contains(t, reason, "final_files")
+		})
+	}
+}

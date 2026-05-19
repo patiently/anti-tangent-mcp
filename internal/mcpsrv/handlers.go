@@ -684,9 +684,10 @@ func totalCompletionBytes(files []FileArg, finalDiff string) int {
 
 // evidenceTruncationPatterns are case-insensitive substrings that strongly
 // indicate the caller pasted truncated/elided evidence rather than a complete
-// diff or full file contents. The reviewer cannot verify acceptance criteria
-// against placeholder text, so the guard rejects these submissions before the
-// reviewer call to fail-fast with a clear error.
+// diff or full file contents. The checkEvidenceShape walker applies every
+// entry to BOTH final_diff AND every final_files[].content, so adding a
+// pattern here automatically extends both inputs. Patterns must be
+// lowercased; the walker calls strings.ToLower on the input first.
 //
 // The list is intentionally narrow: only patterns that have negligible chance
 // of appearing in legitimate code or diffs. "diff --git with zero @@" is NOT
@@ -696,6 +697,13 @@ var evidenceTruncationPatterns = []string{
 	"[truncated]",
 	"// ... unchanged",
 	"<!-- truncated -->",
+	// Added in v0.5.2 from field reports:
+	"/* ... */",
+	"/* ...rest unchanged */",
+	"// snip",
+	"// elided",
+	"// ... rest unchanged",
+	"/...",
 }
 
 // evidenceEllipsisLine matches a line that contains only `...` (with optional
