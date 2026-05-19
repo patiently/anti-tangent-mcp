@@ -30,7 +30,6 @@ func TestReviewerSchemas_RequireAllProperties_ForOpenAIStrictMode(t *testing.T) 
 	}
 
 	for _, s := range schemas {
-		s := s // capture
 		t.Run(s.name, func(t *testing.T) {
 			var root map[string]any
 			require.NoError(t, json.Unmarshal(s.raw, &root), "schema must be valid JSON")
