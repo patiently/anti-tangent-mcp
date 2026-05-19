@@ -48,6 +48,10 @@ Set `lightweight_eligible` to true only when ALL of these are true:
 
 Reason required when true, empty when false.
 
+For every task, also emit `exit_contracts` and `exit_contracts_inferred`.
+
+`exit_contracts` is a list of plain-English contract strings — symbols, types, constants, or fields the task introduces that later tasks in the plan explicitly reference. One contract per consumed surface. Emit at most 20 contracts per task, with each contract at most 240 Unicode code points; if more would apply, summarize. If the task's markdown contains an explicit `**Exit contracts:**` bullet section, respect it verbatim and set `exit_contracts_inferred` to false. Otherwise, infer the contracts by reading the plan as a whole and set `exit_contracts_inferred` to true. When no later task references anything the task introduces, emit an empty list and still set `exit_contracts_inferred` honestly.
+
 If a task is missing the structured header block entirely, synthesize one in
 `suggested_header_block` (Goal + ACs + optional Non-goals/Context) and explain
 your reasoning in `suggested_header_reason`. If the header is already adequate,

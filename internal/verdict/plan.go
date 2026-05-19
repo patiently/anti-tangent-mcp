@@ -70,6 +70,9 @@ type PlanTaskResult struct {
 	SuggestedHeaderReason string    `json:"suggested_header_reason"`
 	LightweightEligible   bool      `json:"lightweight_eligible,omitempty"`
 	LightweightReason     string    `json:"lightweight_reason,omitempty"`
+	ExitContracts         []string  `json:"exit_contracts,omitempty"`
+	ExitContractsInferred bool      `json:"exit_contracts_inferred,omitempty"`
+	NormativeTestBodies   []string  `json:"normative_test_bodies,omitempty"`
 }
 
 //go:embed tasks_only_schema.json

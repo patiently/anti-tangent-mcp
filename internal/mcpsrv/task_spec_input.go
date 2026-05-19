@@ -11,6 +11,9 @@ import (
 const (
 	maxPinnedByEntries = 50
 	maxPinnedByChars   = 500
+
+	maxNormativeTestBodyEntries = 20
+	maxNormativeTestBodyChars   = 4000
 )
 
 func normalizePhase(phase string) (string, error) {
@@ -25,49 +28,43 @@ func normalizePhase(phase string) (string, error) {
 	}
 }
 
-func normalizePinnedBy(entries []string) ([]string, error) {
+// normalizeBoundedStringList trims whitespace from each entry, drops empties,
+// caps per-entry length in runes, and caps total entry count. Errors name the
+// JSON snake_case field so callers can pass them straight through.
+func normalizeBoundedStringList(field string, entries []string, maxEntries, maxChars int) ([]string, error) {
 	out := make([]string, 0, len(entries))
 	for i, entry := range entries {
 		trimmed := strings.TrimSpace(entry)
 		if trimmed == "" {
 			continue
 		}
-		if len([]rune(trimmed)) > maxPinnedByChars {
-			return nil, fmt.Errorf("pinned_by[%d] must be at most %d characters", i, maxPinnedByChars)
+		if len([]rune(trimmed)) > maxChars {
+			return nil, fmt.Errorf("%s[%d] must be at most %d characters", field, i, maxChars)
 		}
 		out = append(out, trimmed)
-		if len(out) > maxPinnedByEntries {
-			return nil, fmt.Errorf("pinned_by must contain at most %d entries", maxPinnedByEntries)
+		if len(out) > maxEntries {
+			return nil, fmt.Errorf("%s must contain at most %d entries", field, maxEntries)
 		}
 	}
 	return out, nil
 }
 
-func normalizeControllerVerifiedReferences(entries []string) ([]string, error) {
-	out := make([]string, 0, len(entries))
-	for i, entry := range entries {
-		trimmed := strings.TrimSpace(entry)
-		if trimmed == "" {
-			continue
-		}
-		if len([]rune(trimmed)) > maxPinnedByChars {
-			return nil, fmt.Errorf("controller_verified_references[%d] must be at most %d characters", i, maxPinnedByChars)
-		}
-		out = append(out, trimmed)
-		if len(out) > maxPinnedByEntries {
-			return nil, fmt.Errorf("controller_verified_references must contain at most %d entries", maxPinnedByEntries)
-		}
-	}
-	return out, nil
+// normalizeCompletionExitContracts trims and bounds the optional
+// exit_contracts list submitted to validate_completion.
+func normalizeCompletionExitContracts(entries []string) ([]string, error) {
+	return normalizeBoundedStringList("exit_contracts", entries, maxPinnedByEntries, maxPinnedByChars)
 }
 
 // taskSpecInputs holds the post-validation normalized form of the optional
-// task-spec inputs. The combined helper consolidates the two error paths so
-// the calling handler stays under cyclomatic-complexity thresholds.
+// task-spec inputs.
 type taskSpecInputs struct {
 	Phase                        string
 	PinnedBy                     []string
 	ControllerVerifiedReferences []string
+	TestStrategyNotes            []string
+	CodebaseConventions          []string
+	TestabilityExtractions       []string
+	NormativeTestBodies          []string
 }
 
 func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) {
@@ -75,11 +72,27 @@ func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) 
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
-	pinnedBy, err := normalizePinnedBy(args.PinnedBy)
+	pinnedBy, err := normalizeBoundedStringList("pinned_by", args.PinnedBy, maxPinnedByEntries, maxPinnedByChars)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
-	controllerVerifiedReferences, err := normalizeControllerVerifiedReferences(args.ControllerVerifiedReferences)
+	controllerVerifiedReferences, err := normalizeBoundedStringList("controller_verified_references", args.ControllerVerifiedReferences, maxPinnedByEntries, maxPinnedByChars)
+	if err != nil {
+		return taskSpecInputs{}, err
+	}
+	testStrategyNotes, err := normalizeBoundedStringList("test_strategy_notes", args.TestStrategyNotes, maxPinnedByEntries, maxPinnedByChars)
+	if err != nil {
+		return taskSpecInputs{}, err
+	}
+	codebaseConventions, err := normalizeBoundedStringList("codebase_conventions", args.CodebaseConventions, maxPinnedByEntries, maxPinnedByChars)
+	if err != nil {
+		return taskSpecInputs{}, err
+	}
+	testabilityExtractions, err := normalizeBoundedStringList("testability_extractions", args.TestabilityExtractions, maxPinnedByEntries, maxPinnedByChars)
+	if err != nil {
+		return taskSpecInputs{}, err
+	}
+	normativeTestBodies, err := normalizeBoundedStringList("normative_test_bodies", args.NormativeTestBodies, maxNormativeTestBodyEntries, maxNormativeTestBodyChars)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
@@ -87,5 +100,9 @@ func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) 
 		Phase:                        phase,
 		PinnedBy:                     pinnedBy,
 		ControllerVerifiedReferences: controllerVerifiedReferences,
+		TestStrategyNotes:            testStrategyNotes,
+		CodebaseConventions:          codebaseConventions,
+		TestabilityExtractions:       testabilityExtractions,
+		NormativeTestBodies:          normativeTestBodies,
 	}, nil
 }

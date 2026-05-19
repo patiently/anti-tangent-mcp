@@ -522,6 +522,109 @@ func TestRenderPre_PostPhaseIncludesGuidance(t *testing.T) {
 	assert.Contains(t, out.User, "implementation-alignment")
 }
 
+func TestRenderPre_WithTestStrategyNotesIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.TestStrategyNotes = []string{"AC #2 jointly covered by tests A and B"}
+
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Test strategy notes (caller-supplied):")
+	assert.Contains(t, out.User, "- AC #2 jointly covered by tests A and B")
+	assert.Contains(t, out.User, "Do not emit `missing_acceptance_criterion` for joint-coverage gaps")
+}
+
+func TestRenderPre_WithoutTestStrategyNotesOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Test strategy notes (caller-supplied):")
+}
+
+func TestRenderPre_WithCodebaseConventionsIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.CodebaseConventions = []string{"id is canonically UUID in memory"}
+
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Codebase conventions (caller-supplied):")
+	assert.Contains(t, out.User, "- id is canonically UUID in memory")
+	assert.Contains(t, out.User, "category: convention_deviation")
+	assert.Contains(t, out.User, "criterion: codebase_convention")
+	assert.Contains(t, out.User, "positive evidence of deviation")
+}
+
+func TestRenderPre_WithoutCodebaseConventionsOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Codebase conventions (caller-supplied):")
+}
+
+func TestRenderPre_WithTestabilityExtractionsIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.TestabilityExtractions = []string{"buildDeclineWinddownHandlerOutput"}
+
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Testability extractions (caller-supplied):")
+	assert.Contains(t, out.User, "- buildDeclineWinddownHandlerOutput")
+	assert.Contains(t, out.User, "suppress that specific finding")
+}
+
+func TestRenderPre_WithoutTestabilityExtractionsOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Testability extractions (caller-supplied):")
+}
+
+func TestRenderPre_WithNormativeTestBodiesIncludesGuidance(t *testing.T) {
+	spec := sampleSpec()
+	spec.NormativeTestBodies = []string{"@Test fun t() { ... }"}
+
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Normative test bodies (caller-supplied, treat as binding AC):")
+	assert.Contains(t, out.User, "@Test fun t() { ... }")
+	assert.Contains(t, out.User, "binding test scope")
+	assert.Contains(t, out.User, "// excerpt:")
+}
+
+func TestRenderPre_WithoutNormativeTestBodiesOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Normative test bodies (caller-supplied, treat as binding AC):")
+}
+
+const (
+	anchorExitContractsInstruction          = "exit_contracts"
+	anchorExitContractsInferredFlag         = "exit_contracts_inferred"
+	anchorExitContractsExplicitHeader       = "**Exit contracts:**"
+	anchorExitContractsMaxGuidance          = "at most 20 contracts"
+	anchorNormativeServerSideInstruction    = "populated server-side"
+	anchorNormativeDoNotEmitInstruction     = "Do NOT emit `normative_test_bodies`"
+)
+
+func TestRenderPlan_ExitContractsInstructionPresent(t *testing.T) {
+	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n\n### Task 1: A\n\n**Goal:** Test\n"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorExitContractsInstruction, "plan.tmpl should ask reviewer to populate exit_contracts")
+	assert.Contains(t, out.User, anchorExitContractsInferredFlag, "plan.tmpl should ask reviewer to set exit_contracts_inferred")
+	assert.Contains(t, out.User, anchorExitContractsExplicitHeader, "plan.tmpl should mention the explicit **Exit contracts:** plan-side syntax")
+	assert.Contains(t, out.User, anchorExitContractsMaxGuidance, "plan.tmpl should bound contracts per task")
+	assert.Contains(t, out.User, anchorNormativeServerSideInstruction, "plan.tmpl should tell reviewer NOT to emit normative_test_bodies (server-populated)")
+	assert.Contains(t, out.User, anchorNormativeDoNotEmitInstruction, "plan.tmpl should explicitly forbid emitting normative_test_bodies")
+}
+
+func TestRenderPlanTasksChunk_ExitContractsInstructionPresent(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   "# Plan\n\n### Task 1: A\n\n**Goal:** Test\n",
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: A"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, anchorExitContractsInstruction, "plan_tasks_chunk.tmpl should ask reviewer to populate exit_contracts")
+	assert.Contains(t, out.User, anchorExitContractsInferredFlag, "plan_tasks_chunk.tmpl should ask reviewer to set exit_contracts_inferred")
+	assert.Contains(t, out.User, anchorExitContractsExplicitHeader, "plan_tasks_chunk.tmpl should mention the explicit **Exit contracts:** plan-side syntax")
+	assert.Contains(t, out.User, anchorExitContractsMaxGuidance, "plan_tasks_chunk.tmpl should bound contracts per task")
+}
+
 func TestRenderPost_WithPinnedByIncludesAnchors(t *testing.T) {
 	spec := sampleSpec()
 	spec.PinnedBy = []string{"HealthHandlerTest.TestOK", "go test ./internal/http"}
@@ -548,4 +651,39 @@ func TestRenderPost_WithoutMissingReferencedPathsOmitsEvidenceNote(t *testing.T)
 	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "No referenced deliverable."})
 	require.NoError(t, err)
 	assert.NotContains(t, out.User, "summary references these paths")
+}
+
+func TestRenderPost_WithExplicitExitContractsIncludesSection(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:                  sampleSpec(),
+		Summary:               "implemented X",
+		FinalDiff:             "diff --git",
+		ExitContracts:         []string{"Defines handlerName"},
+		ExitContractsInferred: false,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Exit contracts (explicit — author-authored, must be satisfied):")
+	assert.Contains(t, out.User, "- Defines handlerName")
+	assert.Contains(t, out.User, "criterion: exit_contract")
+	assert.Contains(t, out.User, "explicit")
+}
+
+func TestRenderPost_WithInferredExitContractsIncludesSection(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:                  sampleSpec(),
+		Summary:               "implemented X",
+		FinalDiff:             "diff --git",
+		ExitContracts:         []string{"Exports DECLINE_NODE"},
+		ExitContractsInferred: true,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Exit contracts (reviewer-inferred — verify but do not gate harshly):")
+	assert.Contains(t, out.User, "- Exports DECLINE_NODE")
+	assert.Contains(t, out.User, "cap at `severity: minor`")
+}
+
+func TestRenderPost_WithoutExitContractsOmitsSection(t *testing.T) {
+	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "x", FinalDiff: "diff"})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Exit contracts (")
 }
