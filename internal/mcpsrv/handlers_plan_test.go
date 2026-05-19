@@ -662,7 +662,7 @@ func TestValidatePlan_UnverifiableOnly_PreservesRigorousQuality(t *testing.T) {
 		"rigorous plan_quality from reviewer must survive unverifiable-only calibration")
 }
 
-func TestValidatePlan_MixedFindingsDoNotCalibrateToPass(t *testing.T) {
+func TestValidatePlan_MixedFindings_PlanLevelDerivesPassTaskLevelDerivesWarn(t *testing.T) {
 	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"major","category":"ambiguous_spec","criterion":"AC","evidence":"AC is vague","suggestion":"rewrite"},{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Rewrite AC."}`)
 	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
@@ -767,7 +767,7 @@ func TestValidatePlan_MultipleUnverifiableUnderSameTaskJoinedWithSemicolon(t *te
 	assert.Contains(t, pr.PlanFindings[0].Evidence, "Foo.kt:10; Bar.kt:20")
 }
 
-// TestValidatePlan_EmptyFindingsDoNotCalibrateToPass locks in the
+// TestValidatePlan_EmptyFindings_LadderDerivesPass locks in the
 // allPlanFindingsAreMinorUnverifiable sentinel: a plan with zero
 // findings is NOT force-passed by the calibration helper itself. After
 // v0.5.2 the post-calibration FinalizePlanVerdict ladder derives `pass`
@@ -776,7 +776,7 @@ func TestValidatePlan_MultipleUnverifiableUnderSameTaskJoinedWithSemicolon(t *te
 // alone leaves the reviewer's verdict untouched. The NextAction check
 // guards against the unverifiable-only force-pass message leaking onto
 // this non-unverifiable input.
-func TestValidatePlan_EmptyFindingsDoNotCalibrateToPass(t *testing.T) {
+func TestValidatePlan_EmptyFindings_LadderDerivesPass(t *testing.T) {
 	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Reviewer warned but emitted no findings."}`)
 	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)

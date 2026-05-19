@@ -1245,8 +1245,9 @@ func tooLargePlanResult(size, limit int) verdict.PlanResult {
 // partial-recovery, legacy-truncation, too-large, no-headings — gets them
 // for free:
 //
-//  1. verdict.ApplyPlanQualitySanity normalizes plan_quality (handles
-//     synthetic PlanResults that bypass ParsePlan / ParsePlanResultPartial).
+//  1. finalizePlanResult runs unverifiable-claim rollup,
+//     unverifiable-only calibration, and FinalizePlanVerdict (per-task +
+//     plan-level severity ladder + noise_cluster + plan-quality sanity).
 //  2. SummaryBlock is populated with the rendered paste-ready text block.
 func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
 	return planEnvelopeResultFinalized(finalizePlanResult(pr, modelUsed, ms), modelUsed, ms)
