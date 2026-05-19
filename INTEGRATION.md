@@ -129,32 +129,11 @@ Acceptance criteria describe *what done looks like*, not *how to get there*. Imp
 
 ### 3.6 Normative test bodies (binding test code in plans)
 
-When a task's plan markdown pastes verbatim test code that the implementer should land as written — not as advisory illustration — wrap each test body in a fenced code block immediately following the literal header:
-
-````markdown
-**NORMATIVE TEST BODIES (verbatim):**
-
-```kotlin
-@Test fun whenInputIsX_thenOutputIsY() {
-    val result = subject.process(X)
-    assertThat(result.decision).isEqualTo(DECLINE)
-    assertThat(result.handlerName).isEqualTo(WINDDOWN_NODE_NAME)
-}
-```
-````
-
-`validate_plan` extracts each fenced block server-side (deterministic markdown parsing, not reviewer-driven) and populates `PlanTaskResult.NormativeTestBodies`. Controllers thread that list into `validate_task_spec`'s `normative_test_bodies` input on dispatch. The reviewer is then instructed to treat each entry as binding test scope — equivalent in authority to a bullet under Acceptance criteria — so the `validate_task_spec`-only view of the task (Goal / AC / Non-goals / Context) does not blindly flag "test scope unclear" when the plan's per-step code block already pins it.
-
-Adjacent fenced blocks (separated only by whitespace) extract as separate entries. When a body exceeds 4000 Unicode code points, the server truncates it and appends a `// truncated` marker so the reviewer sees the body was clipped. If you need to pin a body that legitimately exceeds 4000 code points, paraphrase or excerpt with the leading comment marker `// excerpt:` (or analogous language-appropriate comment) — the reviewer treats `// excerpt:` entries as partial coverage rather than full bodies.
+When a task's plan pastes verbatim test code that the implementer must land as written, wrap each test body in a fenced block immediately under a literal `**NORMATIVE TEST BODIES (verbatim):**` header. `validate_plan` extracts each fence server-side (deterministic markdown parsing) and threads the list into the per-task `validate_task_spec` `normative_test_bodies` input; the reviewer then treats each entry as binding scope. Adjacent fences extract as separate entries. Bodies exceeding 4000 Unicode code points are server-truncated with a `// truncated` marker; for legitimately longer bodies, paraphrase or excerpt and start the body with `// excerpt:` so the reviewer treats it as partial coverage.
 
 ### 3.7 `.trimIndent()` raw-string caveat
 
-When a plan snippet is wrapped in `.trimIndent()` (or any equivalent raw-string trimming construct), multi-line phrases render newlines exactly where they sit in source. A phrase that wraps mid-sentence in the plan markdown for readability will land as a newline at runtime — anti-tangent cannot catch this; the reviewer reads only the source text, not the rendered string.
-
-Two rules for plan authors:
-
-- Keep example phrases on a single source line, even if it makes the markdown wider. Wrapping for prose readability is fine for surrounding commentary, but example strings that the implementation will compare against must be one line in source.
-- Where ACs assert on the rendered output, phrase the AC against the *rendered* string, not the source layout. For example, "the output contains the phrase `please decline politely`" beats "the output contains the phrase `please decline\npolitely`" — the second hides a regression behind plan-layout choices.
+When a plan snippet is wrapped in `.trimIndent()` (or any equivalent raw-string trim), multi-line source phrases render newlines exactly where they sit in the markdown — anti-tangent reads the source, not the rendered output. Keep example strings the implementation will compare against on a single source line, and phrase ACs against the rendered string (e.g. "output contains `please decline politely`"), not against source layout.
 
 ---
 
@@ -385,12 +364,6 @@ These entries are attestations from the caller. They suppress matching `unverifi
 
 ## 6. FAQ / failure modes
 
-**What happens if a task fails the plan-handoff gate?**
-The controller surfaces the verdict + findings to the user and proposes revisions to the plan. Plan changes land first; only after every task passes (or every `warn` is explicitly justified) does dispatch begin. This catches a vague AC at handoff time — one cheap call — rather than after a subagent has already started writing code against a misread spec.
-
-**What if the reviewer is wrong?**
-Findings are advisory. If a finding misreads the code, document the disagreement in the next call's `working_on` field so the next reviewer call sees your reasoning, then re-validate. Don't silently ignore.
-
 **My implementer is also Claude Sonnet — does this still help?**
 Less than if they were different models. Same model + same training data ≈ same blind spots. If you can't run a different provider, at least pick a different family (Sonnet implementer, Opus reviewer; or Sonnet implementer, Haiku for cheap mid-checks plus Opus for post). Different provider is best.
 
@@ -417,9 +390,6 @@ No — the reviewer LLM reasons over text, not execution. Use mid-checks for dri
 
 **Cost / latency overhead.**
 Roughly 1–2 s and $0.001–$0.02 per call, depending on payload size and model choice. One mandatory `validate_plan` call per plan-handoff, and two mandatory implementer calls per task minimum (pre + post). Use a cheap-fast model for mid-checks and a stronger model for handoff/post.
-
-**Should I use this for ad-hoc code changes outside a plan?**
-No. The protocol only fires for tasks with the structured Goal/AC/Non-goals header — see §1 ("When the protocol applies"). Ad-hoc edits, debugging help, code review, and brainstorming all skip the protocol.
 
 **Where do I file bugs?**
 [`https://github.com/patiently/anti-tangent-mcp/issues`](https://github.com/patiently/anti-tangent-mcp/issues).
