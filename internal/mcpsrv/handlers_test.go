@@ -19,15 +19,17 @@ import (
 )
 
 type fakeReviewer struct {
-	name  string
-	resp  providers.Response
-	err   error
-	Calls int
+	name        string
+	resp        providers.Response
+	err         error
+	Calls       int
+	LastRequest providers.Request // captured on every Review call; tests inspect rv.LastRequest.User to assert prompt content
 }
 
 func (f *fakeReviewer) Name() string { return f.name }
-func (f *fakeReviewer) Review(ctx context.Context, _ providers.Request) (providers.Response, error) {
+func (f *fakeReviewer) Review(ctx context.Context, req providers.Request) (providers.Response, error) {
 	f.Calls++
+	f.LastRequest = req
 	return f.resp, f.err
 }
 
@@ -529,7 +531,7 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 
 	// No session should be created on truncation.
@@ -559,7 +561,7 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 }
@@ -586,7 +588,7 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 }
@@ -648,11 +650,11 @@ func TestRecoverPartialFindings_PreservesReviewerNextActionWithOverrideHint(t *t
 		`{"severity":"major","category":"other","criterion":"ac1","evidence":"e1","suggestion":"s1"}` +
 		`],"next_action":"Tighten AC1 wording."}`)
 
-	env, ok := recoverPartialFindings("", config.ModelRef{Provider: "anthropic", Model: "claude-sonnet-4-6"}, raw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	r, ok := recoverPartialFindings(raw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	require.True(t, ok)
-	assert.True(t, env.Partial)
-	assert.Contains(t, env.NextAction, "Tighten AC1 wording.")
-	assert.Contains(t, env.NextAction, "max_tokens_override")
+	assert.True(t, r.Partial)
+	assert.Contains(t, r.NextAction, "Tighten AC1 wording.")
+	assert.Contains(t, r.NextAction, "max_tokens_override")
 }
 
 func TestCheckProgress_PartialFindingsRecoveredOnTruncation(t *testing.T) {
@@ -2208,4 +2210,75 @@ func TestValidateCompletion_ExitContractsLimitsRejected(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exit_contracts[0] must be at most 500 characters")
+}
+
+func TestValidateTaskSpec_FinalizeVerdict_ClampParticipatesInLadder(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"pass","findings":[
+				{"severity":"minor","category":"quality","criterion":"a","evidence":"b","suggestion":"c"},
+				{"severity":"minor","category":"quality","criterion":"d","evidence":"e","suggestion":"f"}
+			],"next_action":"n"}`),
+			Model: "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	d.Cfg.MaxTokensCeiling = 1000
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g",
+		AcceptanceCriteria: []string{"ac1"},
+		MaxTokensOverride:  10000,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "warn", env.Verdict, "two minors + clamp minor → warn")
+	hasNoise := false
+	for _, f := range env.Findings {
+		if f.Category == verdict.CategoryOther && f.Criterion == "noise_cluster" {
+			hasNoise = true
+		}
+	}
+	require.True(t, hasNoise, "noise_cluster appended on ≥3 minor → warn")
+	require.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+}
+
+func TestValidateTaskSpec_SuppressionRunsBeforeFinalize(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"fail","findings":[
+				{"severity":"major","category":"scope_drift","criterion":"a","evidence":"helperFn","suggestion":"x"},
+				{"severity":"major","category":"scope_drift","criterion":"b","evidence":"helperFn","suggestion":"x"},
+				{"severity":"major","category":"scope_drift","criterion":"c","evidence":"helperFn","suggestion":"x"},
+				{"severity":"major","category":"scope_drift","criterion":"d","evidence":"helperFn","suggestion":"x"},
+				{"severity":"major","category":"scope_drift","criterion":"e","evidence":"helperFn","suggestion":"x"}
+			],"next_action":"n"}`),
+			Model: "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g",
+		AcceptanceCriteria:     []string{"ac1"},
+		TestabilityExtractions: []string{"helperFn"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "pass", env.Verdict, "all five suppressed → pass")
+	require.Empty(t, env.Findings, "all findings suppressed before finalize")
+}
+
+func TestValidateTaskSpec_TruncatedResponseSurfacesWarnWithMajorFinding(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "warn", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	require.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity, "truncated finding bumped to major")
+	require.Equal(t, "reviewer_response", env.Findings[0].Criterion)
 }

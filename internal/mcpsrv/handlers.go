@@ -127,6 +127,10 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}
 	result.Findings = suppressTestabilityExtractionScopeDrift(result.Findings, inputs.TestabilityExtractions)
 	result.Findings = normalizeTaskSpecUnverifiableFindings(result.Findings)
+	if cc.Clamp.Severity != "" {
+		result.Findings = append([]verdict.Finding{cc.Clamp}, result.Findings...)
+	}
+	result = verdict.FinalizeVerdict(result)
 
 	// Create the session only after the review succeeds so failed reviews
 	// don't leave orphan sessions in the store waiting for TTL eviction.
@@ -145,7 +149,6 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
-	env = prependClamp(env, cc.Clamp)
 	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
@@ -322,6 +325,11 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		return r, env, retErr
 	}
 
+	if clamp.Severity != "" {
+		result.Findings = append([]verdict.Finding{clamp}, result.Findings...)
+	}
+	result = verdict.FinalizeVerdict(result)
+
 	h.deps.Sessions.AppendCheckpoint(sess.ID, session.Checkpoint{
 		At:        time.Now(),
 		WorkingOn: args.WorkingOn,
@@ -342,7 +350,6 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
-	env = prependClamp(env, clamp)
 	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
@@ -387,19 +394,22 @@ func notFoundEnvelope(id string, model config.ModelRef) Envelope {
 	}
 }
 
-func truncatedEnvelope(id string, model config.ModelRef) Envelope {
-	return Envelope{
-		SessionID: id,
-		Verdict:   string(verdict.VerdictWarn),
+// truncatedResult is the no-recovery fallback for per-task truncation. It
+// returns a Result (not an Envelope) so the caller can fold any clamp into
+// Findings, run FinalizeVerdict, and assemble the envelope. The synthetic
+// finding is SeverityMajor (was minor pre-0.5.2) so the ladder derives warn
+// consistently with the previously-explicit Verdict assignment.
+func truncatedResult() verdict.Result {
+	return verdict.Result{
+		Verdict: verdict.VerdictWarn,
 		Findings: []verdict.Finding{{
-			Severity:   verdict.SeverityMinor,
+			Severity:   verdict.SeverityMajor,
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
 			Suggestion: "Raise ANTI_TANGENT_PER_TASK_MAX_TOKENS or pass max_tokens_override and retry.",
 		}},
 		NextAction: "Retry with a higher max_tokens_override (or raise the configured max-tokens cap).",
-		ModelUsed:  model.String(),
 	}
 }
 
@@ -460,22 +470,22 @@ func prependPlanClamp(pr verdict.PlanResult, clamp verdict.Finding) verdict.Plan
 }
 
 // recoverPartialFindings attempts to extract complete findings from a
-// truncated reviewer response. Returns (envelope, true) when at least one
+// truncated reviewer response. Returns (result, true) when at least one
 // finding was recovered; (zero, false) when the caller should fall back to
-// truncatedEnvelope.
+// truncatedResult.
 //
-// The returned envelope has Verdict="warn", Findings = recovered list plus a
+// The returned Result has Verdict="warn", Findings = recovered list plus a
 // single minor "truncation marker" finding noting the count and referencing
 // both envVar and max_tokens_override mitigations, Partial=true, and
 // NextAction = the parsed result's next_action when non-empty, otherwise a
 // generic fallback that points the caller at max_tokens_override.
-func recoverPartialFindings(id string, model config.ModelRef, rawJSON []byte, envVar string) (Envelope, bool) {
+func recoverPartialFindings(rawJSON []byte, envVar string) (verdict.Result, bool) {
 	if len(rawJSON) == 0 {
-		return Envelope{}, false
+		return verdict.Result{}, false
 	}
 	r, ok := verdict.ParseResultPartial(rawJSON)
 	if !ok || len(r.Findings) == 0 {
-		return Envelope{}, false
+		return verdict.Result{}, false
 	}
 	marker := verdict.Finding{
 		Severity:   verdict.SeverityMinor,
@@ -484,26 +494,18 @@ func recoverPartialFindings(id string, model config.ModelRef, rawJSON []byte, en
 		Evidence:   fmt.Sprintf("reviewer output truncated at the max_tokens cap; %d complete findings recovered", len(r.Findings)),
 		Suggestion: "Raise " + envVar + " or pass max_tokens_override on the next call to capture more.",
 	}
-	findings := append([]verdict.Finding{}, r.Findings...)
-	findings = append(findings, marker)
+	r.Findings = append(r.Findings, marker)
 	// AC: next_action MUST mention re-running with max_tokens_override. If the
 	// reviewer returned a NextAction that already mentions it, preserve it;
 	// otherwise append the mitigation hint (or supply a fallback if empty).
-	next := r.NextAction
 	switch {
-	case next == "":
-		next = "Address recovered findings; reviewer output was truncated. Re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
-	case !strings.Contains(next, "max_tokens_override"):
-		next = next + " Reviewer output was truncated; re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
+	case r.NextAction == "":
+		r.NextAction = "Address recovered findings; reviewer output was truncated. Re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
+	case !strings.Contains(r.NextAction, "max_tokens_override"):
+		r.NextAction = r.NextAction + " Reviewer output was truncated; re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
 	}
-	return Envelope{
-		SessionID:  id,
-		Verdict:    string(verdict.VerdictWarn),
-		Findings:   findings,
-		NextAction: next,
-		ModelUsed:  model.String(),
-		Partial:    true,
-	}, true
+	r.Partial = true
+	return r, true
 }
 
 // truncatedPlanResult builds the synthetic PlanResult returned when a
@@ -967,6 +969,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return r, env, retErr
 	}
 
+	if clamp.Severity != "" {
+		result.Findings = append([]verdict.Finding{clamp}, result.Findings...)
+	}
+	result = verdict.FinalizeVerdict(result)
+
 	if !lightweight {
 		h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
 		// Re-fetch after SetPostFindings so LastAccessed reflects the final mutation.
@@ -984,7 +991,6 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
-	env = prependClamp(env, clamp)
 	if !lightweight {
 		env = h.withSessionTTL(env, sess)
 	}
