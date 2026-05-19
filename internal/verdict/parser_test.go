@@ -3,6 +3,8 @@ package verdict
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParse_UnverifiableCodebaseClaim_SeverityFloorToMinor(t *testing.T) {
@@ -64,6 +66,25 @@ func TestParse_ConventionDeviation_SeverityFloorToMinor(t *testing.T) {
 	if got, want := r.Findings[0].Category, CategoryConventionDeviation; got != want {
 		t.Errorf("category = %q, want %q", got, want)
 	}
+}
+
+func TestParse_AttestationContradiction_AcceptedAndNotFloored(t *testing.T) {
+	raw := []byte(`{
+		"verdict":"warn",
+		"findings":[{
+			"severity":"major",
+			"category":"attestation_contradiction",
+			"criterion":"records emitted spans",
+			"evidence":"AC asserts no spans recorded",
+			"suggestion":"Revise AC or harness"
+		}],
+		"next_action":"address contradiction"
+	}`)
+	r, err := Parse(raw)
+	require.NoError(t, err, "attestation_contradiction must be a valid category")
+	require.Len(t, r.Findings, 1)
+	require.Equal(t, SeverityMajor, r.Findings[0].Severity, "attestation_contradiction must NOT be floored to minor")
+	require.Equal(t, CategoryAttestationContradiction, r.Findings[0].Category)
 }
 
 func TestParse_MalformedEvidenceCategory_RejectedFromReviewerOutput(t *testing.T) {

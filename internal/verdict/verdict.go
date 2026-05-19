@@ -45,6 +45,14 @@ const (
 	// reviewer can't know whether the implementation will actually deviate,
 	// only that the spec suggests it might.
 	CategoryConventionDeviation Category = "convention_deviation"
+	// CategoryAttestationContradiction is emitted by the reviewer when an
+	// acceptance criterion explicitly contradicts a caller-attested harness
+	// shape (see HarnessShapeAttestation on TaskSpec). Distinct from
+	// convention_deviation: attestations are caller-attested shape facts, so
+	// a reviewer-detected contradiction is a hard finding, not "can't
+	// verify." Intentionally NOT in applySeverityFloor's list — the
+	// reviewer's chosen severity (typically major) is preserved.
+	CategoryAttestationContradiction Category = "attestation_contradiction"
 	// CategoryMalformedEvidence is server-only. It is emitted exclusively
 	// by the validate_completion evidence-shape guard, which constructs
 	// the envelope directly without round-tripping through Parse(). It is

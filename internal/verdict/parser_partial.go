@@ -11,6 +11,11 @@ import (
 // consistent with strict output. Floored categories:
 //   - unverifiable_codebase_claim → minor (reviewer can't verify the claim)
 //   - convention_deviation → minor (reviewer can't know if implementation will deviate)
+//
+// attestation_contradiction is intentionally NOT floored: attestations are
+// caller-attested shape facts, so a reviewer-detected contradiction with the
+// AC's prose is a hard finding (the reviewer's chosen severity — typically
+// major — is preserved).
 func applySeverityFloor(f Finding) Finding {
 	if f.Category == CategoryUnverifiableCodebaseClaim && f.Severity != SeverityMinor {
 		f.Severity = SeverityMinor
