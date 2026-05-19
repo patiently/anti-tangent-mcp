@@ -91,23 +91,35 @@ reports — redact to `***` whenever a step would otherwise print one.
    `anti-tangent-mcp` to `~/.local/bin/anti-tangent-mcp` (`mkdir -p
    ~/.local/bin` first, `chmod +x` after), and verify
    `~/.local/bin/anti-tangent-mcp --version` prints VERSION.
-4. opencode requires an ABSOLUTE path in MCP `command` and does NOT inherit
-   shell env into MCP servers — so the reviewer key must be declared in the
-   opencode config. Ask me which of ANTHROPIC_API_KEY / OPENAI_API_KEY /
-   GOOGLE_API_KEY to use, and what value (I'll paste it once). Hold the value
-   in memory only; do not echo it back in any subsequent report.
+4. opencode requires an ABSOLUTE path in MCP `command` and does NOT
+   auto-inherit shell env into MCP servers. It does, however, support
+   `{env:NAME}` substitution at config-load time (and `{file:path}` for keys
+   stored in a separate file). Ask me:
+   (a) which of ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY to use,
+   AND
+   (b) how to wire the value, defaulting to env substitution:
+       - `{env:NAME}` (default, recommended): the key stays in my shell
+         profile and the JSON only references it by name. Remind me to
+         export the variable.
+       - `{file:/abs/path}`: the key lives in a separate file. Ask for the
+         path and confirm it's outside the opencode config dir if I want it
+         git-ignored.
+       - Literal value: only if I explicitly opt in. Hold the value in
+         memory; never echo it back.
 5. `mkdir -p ~/.config/opencode`, then open `~/.config/opencode/opencode.json`.
    If it doesn't exist, create it as
    `{ "$schema": "https://opencode.ai/config.json" }`. Then add or merge an
    `mcp.anti-tangent` entry, preserving any other MCP servers already
-   configured. Use the absolute resolved binary path (no `~`):
+   configured. Use the absolute resolved binary path (no `~`) and the chosen
+   substitution form for the API key (env substitution shown — replace the
+   value with `{file:/abs/path}` or a literal if I picked one of those):
        {
          "mcp": {
            "anti-tangent": {
              "type": "local",
              "command": ["/abs/path/to/anti-tangent-mcp"],
              "environment": {
-               "<PROVIDER>_API_KEY": "<value>"
+               "<PROVIDER>_API_KEY": "{env:<PROVIDER>_API_KEY}"
              }
            }
          }
