@@ -54,7 +54,7 @@ Use `controller_verified_references` for codebase references the controller has 
 
 ## 1. When the protocol applies
 
-**Strict trigger:** the work item is a task from an implementation plan that has the structured **Goal / Acceptance criteria / (Non-goals) / (Context)** header (see §2 for the exact shape). If those fields are present, the protocol applies — whether you do the work directly or dispatch it to a subagent.
+**Strict trigger:** the work item is a task from an implementation plan that has the structured **Goal / Acceptance criteria / (Non-goals) / (Context)** header (see §3 for the exact shape). If those fields are present, the protocol applies — whether you do the work directly or dispatch it to a subagent.
 
 **Skip the protocol entirely** for any of:
 
@@ -70,11 +70,11 @@ If you're unsure whether work is in scope, look for the structured task block. N
 
 ---
 
-## 2. For plan authors — the anti-tangent-friendly task format
+## 3. For plan authors — the anti-tangent-friendly task format
 
 When you write a plan, give each task a small structured header block. The implementing subagent will pass these fields verbatim into `validate_task_spec`, and the reviewer LLM uses them to decide whether the spec is implementable as written.
 
-### 2.1 The required shape
+### 3.1 The required shape
 
 ```markdown
 ### Task N: <one-line title>
@@ -96,7 +96,7 @@ When you write a plan, give each task a small structured header block. The imple
 
 The existing "Files:" / "Steps:" structure that superpowers, hone-ai, and most CLAUDE.md plans already use lives below the header block. The header is additive.
 
-### 2.2 Worked example
+### 3.2 Worked example
 
 ```markdown
 ### Task 4: Add /healthz endpoint
@@ -119,23 +119,23 @@ Kubernetes liveness check defined in `deploy/k8s/api.yaml`.
 
 A common style mistake is a vague AC like `should be fast`. `validate_task_spec` will flag it as `category: ambiguous_spec` with a suggestion to pin the load profile (e.g. the `p95 < 50ms at 100 RPS` rewrite above). Catch this at plan time, not at implementation time.
 
-### 2.3 What `validate_task_spec` actually checks
+### 3.3 What `validate_task_spec` actually checks
 
 - **Structural completeness.** Is the goal stated? Are there acceptance criteria? Are non-goals declared where they help bound scope?
 - **Acceptance-criterion quality.** Is each AC testable, specific, and unambiguous? For any vague AC, the reviewer suggests a concrete rewrite.
 - **Implicit assumptions.** Each assumption a fresh implementer would have to make becomes a finding, so the spec author can either pin it down or explicitly mark it as implementer's discretion.
 
-### 2.4 Mapping to existing plan-writers
+### 3.4 Mapping to existing plan-writers
 
 - **superpowers `writing-plans`:** add the Goal/AC/Non-goals/Context block to the top of each `### Task N:` section. The skill's existing "Files:" / "Steps:" structure stays untouched below.
 - **hone-ai:** same pattern — header block above the task body.
 - **Vanilla CLAUDE.md plans:** same pattern.
 
-### 2.5 Anti-pattern: keep implementation steps OUT of the AC list
+### 3.5 Anti-pattern: keep implementation steps OUT of the AC list
 
 Acceptance criteria describe *what done looks like*, not *how to get there*. Implementation steps belong in the "Steps:" / "Files:" portion of the task, where they always lived. Mixing them produces brittle ACs that the reviewer flags as either redundant or hyper-specific.
 
-### 2.6 Normative test bodies (binding test code in plans)
+### 3.6 Normative test bodies (binding test code in plans)
 
 When a task's plan markdown pastes verbatim test code that the implementer should land as written — not as advisory illustration — wrap each test body in a fenced code block immediately following the literal header:
 
@@ -155,7 +155,7 @@ When a task's plan markdown pastes verbatim test code that the implementer shoul
 
 Adjacent fenced blocks (separated only by whitespace) extract as separate entries. When a body exceeds 4000 Unicode code points, the server truncates it and appends a `// truncated` marker so the reviewer sees the body was clipped. If you need to pin a body that legitimately exceeds 4000 code points, paraphrase or excerpt with the leading comment marker `// excerpt:` (or analogous language-appropriate comment) — the reviewer treats `// excerpt:` entries as partial coverage rather than full bodies.
 
-### 2.7 `.trimIndent()` raw-string caveat
+### 3.7 `.trimIndent()` raw-string caveat
 
 When a plan snippet is wrapped in `.trimIndent()` (or any equivalent raw-string trimming construct), multi-line phrases render newlines exactly where they sit in source. A phrase that wraps mid-sentence in the plan markdown for readability will land as a newline at runtime — anti-tangent cannot catch this; the reviewer reads only the source text, not the rendered string.
 
@@ -166,13 +166,13 @@ Two rules for plan authors:
 
 ---
 
-## 3. For implementers — the lifecycle protocol
+## 4. For implementers — the lifecycle protocol
 
 > **Before reaching for the full protocol, check lightweight eligibility.** Many tasks qualify for lightweight mode (skip `validate_task_spec`, skip `check_progress`, keep `validate_completion` as the sanity gate). The full clause below adds ~50 lines of dispatch boilerplate; lightweight is ~15 lines. Lightweight applies when ALL of: (a) the task touches at most two files OR is docs/config/data-only; (b) the task is mechanical with no production-design or test-design choices; (c) the spec includes the literal text, exact diff, exact command, or exact insertion shape. `validate_plan` may pre-annotate tasks with `lightweight_eligible: true` and a `lightweight_reason` — treat those as advisory controller hints rather than permission to skip judgment. See [Lightweight protocol mode](#lightweight-protocol-mode-v031) below for the reference clause.
 
 If you're an implementing subagent (or you're writing a system prompt for one), this section is what to follow.
 
-### 3.1 Protocol summary
+### 4.1 Protocol summary
 
 | Phase | Tool | Required? | When to call |
 |---|---|---|---|
@@ -182,7 +182,7 @@ If you're an implementing subagent (or you're writing a system prompt for one), 
 
 One task = one session = one subagent. The session_id returned by `validate_task_spec` lives in the implementer's context for the lifetime of the task; it is not handed off to anyone else.
 
-(Note: the controller may have separately called `validate_task_spec` against the same task at the plan-handoff gate — see §4.1. That created a different session that's already gone. The implementer always creates its own fresh session at task start.)
+(Note: the controller may have separately called `validate_task_spec` against the same task at the plan-handoff gate — see §5.1. That created a different session that's already gone. The implementer always creates its own fresh session at task start.)
 
 #### `check_progress` per-tool note
 
@@ -190,7 +190,7 @@ One task = one session = one subagent. The session_id returned by `validate_task
 
 Field data from execution-phase usage shows `check_progress` consistently produces low-signal findings — mid-implementation context is inherently ambiguous (tests not yet written, function not yet finished, assertion not yet reached). The fast-model default magnifies the issue. Call it when *you* sense drift mid-task; do not treat it as a mandatory gate. The strong-model `validate_completion` post-impl call is far higher signal for a typical task.
 
-### 3.2 The implementer-prompt clause (paste this into every dispatch)
+### 4.2 The implementer-prompt clause (paste this into every dispatch)
 
 ```markdown
 ## Drift-protection protocol (anti-tangent-mcp)
@@ -246,7 +246,7 @@ If codescene-mcp is not configured, skip this step silently.
 
 If any `severity: major` pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE so `validate_completion` and the controller can see how the risk was handled.
 
-### 3.2a Short dispatch target shape
+### 4.2a Short dispatch target shape
 
 For agents that already have the full protocol in their system prompt or local instructions, controllers can dispatch a shorter task-specific clause:
 
@@ -260,7 +260,7 @@ Use anti-tangent per the standard dispatch protocol. For this task:
 - If any major pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
 ```
 
-### 3.2b Language-scoping prose caveat
+### 4.2b Language-scoping prose caveat
 
 The text-only reviewer can surface `ambiguous_spec` findings around closure/scoping semantics — Kotlin `var` captured by a lambda, Python nested-scope `nonlocal`, JavaScript `let` vs `const` in arrow bodies, etc. — when the prose AC reads ambiguously even though the verbatim code block in the plan is unambiguous.
 
@@ -329,9 +329,9 @@ Consumer setup checklist:
 }
 ```
 
-Keep anti-tangent and CodeScene as separate MCP servers. See the [CodeScene MCP installation guide](https://github.com/codescene-oss/codescene-mcp-server#installation) for the upstream host-specific config shapes. Once the server is wired in, the dispatch clause in §3.2 already covers the recommended cadence (Step 2b / Step 3b); `code_health_review` is available as a drill-down when a safeguard returns `degraded`.
+Keep anti-tangent and CodeScene as separate MCP servers. See the [CodeScene MCP installation guide](https://github.com/codescene-oss/codescene-mcp-server#installation) for the upstream host-specific config shapes. Once the server is wired in, the dispatch clause in §4.2 already covers the recommended cadence (Step 2b / Step 3b); `code_health_review` is available as a drill-down when a safeguard returns `degraded`.
 
-### 3.3 How to address findings
+### 4.3 How to address findings
 
 **Address vs. push back.** Reviewer LLMs can be wrong. If a finding misreads the code, document the disagreement in the next call's `working_on` field — for example, `working_on: "addressed all findings except F#3 which is incorrect because the helper does in fact perform the length check, see handlers.go line 42"` — and re-validate. Don't silently ignore: the next reviewer call won't see your reasoning unless you write it.
 
@@ -339,7 +339,7 @@ Keep anti-tangent and CodeScene as separate MCP servers. See the [CodeScene MCP 
 
 **Session not found.** If `check_progress` or `validate_completion` returns a finding with `category: session_not_found`, the session expired (default TTL 4h) or was never created. Call `validate_task_spec` again to start a fresh session and continue with the new ID.
 
-### 3.4 Concrete examples
+### 4.4 Concrete examples
 
 **Example A — pre-hook surfaces a vague AC.**
 
@@ -431,11 +431,11 @@ The implementer adds the benchmark, re-runs `validate_completion` with the new t
 
 ---
 
-## 4. For controllers — plan-handoff gate + dispatch addendum
+## 5. For controllers — plan-handoff gate + dispatch addendum
 
 If you orchestrate implementer subagents — superpowers' `subagent-driven-development`, hone-ai's equivalent, or a hand-rolled dispatch loop — you have **two** responsibilities that the implementer can't cover on its own.
 
-### 4.1 Plan-handoff gate (REQUIRED before any dispatch)
+### 5.1 Plan-handoff gate (REQUIRED before any dispatch)
 
 When you are about to execute a multi-task plan — whether you do the work yourself or dispatch each task to a subagent — **first call `validate_plan` once with the full plan markdown**, before any implementation work begins.
 
@@ -447,17 +447,17 @@ When you are about to execute a multi-task plan — whether you do the work your
 4. If anything material changed (headers added, ACs rewritten), call `validate_plan` again to confirm. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified).
 5. **Only proceed to dispatch when the plan-level gate passes.**
 
-The implementing subagent still calls `validate_task_spec` at task start in its own session — see §3. The plan-level gate (`validate_plan`) and the per-task implementer gate (`validate_task_spec`) are two different responsibilities at two different lifecycle moments.
+The implementing subagent still calls `validate_task_spec` at task start in its own session — see §4. The plan-level gate (`validate_plan`) and the per-task implementer gate (`validate_task_spec`) are two different responsibilities at two different lifecycle moments.
 
 **Why this matters:** catching a vague AC at handoff time costs one `validate_plan` call (~$0.01–$0.02 for a typical plan); catching it after a subagent has spent 10 minutes implementing against a misread of the spec costs a wasted dispatch. The plan-handoff gate is the cheap insurance.
 
 **Skip this gate** when the plan only has one task (just go straight to per-task validation), or when the work item didn't come from a plan at all (see §1).
 
-### 4.2 Dispatch addendum (paste the §3.2 clause into every implementer prompt)
+### 5.2 Dispatch addendum (paste the §4.2 clause into every implementer prompt)
 
-For each task you actually dispatch to an implementing subagent, paste the §3.2 clause into that subagent's prompt verbatim. Subagents do not inherit your CLAUDE.md or any harness-level system prompt — they only see what you put in their dispatch.
+For each task you actually dispatch to an implementing subagent, paste the §4.2 clause into that subagent's prompt verbatim. Subagents do not inherit your CLAUDE.md or any harness-level system prompt — they only see what you put in their dispatch.
 
-> **Append the §3.2 clause to your implementer-subagent prompt template, right before the "Report Format" section.**
+> **Append the §4.2 clause to your implementer-subagent prompt template, right before the "Report Format" section.**
 
 Per-skill-system pointers:
 
@@ -467,17 +467,17 @@ Per-skill-system pointers:
 
 Apply this only to subagents that will implement a task with the Goal/AC/Non-goals structure. Skip it for read-only research subagents (Explore, summarizers, code reviewers, security reviews) per §1.
 
-### 4.3 DONE-gate (recommended)
+### 5.3 DONE-gate (recommended)
 
 After the subagent reports DONE, you may want to require evidence that `validate_completion` was called and returned `pass` (or `warn` with all findings addressed). The simplest way: ask for the verdict + findings JSON in the subagent's DONE report. The MCP server does not enforce this; the prompt does.
 
-### 4.4 Anti-pattern: don't re-validate completion from the controller
+### 5.4 Anti-pattern: don't re-validate completion from the controller
 
 Do NOT have the controller call `validate_completion` itself after the subagent reports DONE. The implementer's session was created in its own context — the controller doesn't have the `session_id`, so a fresh `validate_completion` call from the controller would either fail with a `session_not_found` finding (no session to thread) or, if the controller passed an arbitrary id, return spurious findings. Either way it duplicates the post-hook gate the subagent already cleared and adds noise. The subagent's post-hook IS the gate.
 
-(This is different from §4.1, which is `validate_task_spec` against fresh sessions before any subagent has started — that's pre-implementation and lives in the controller's own context.)
+(This is different from §5.1, which is `validate_task_spec` against fresh sessions before any subagent has started — that's pre-implementation and lives in the controller's own context.)
 
-### 4.5 `validate_plan` vs `validate_task_spec` — when to use which
+### 5.5 `validate_plan` vs `validate_task_spec` — when to use which
 
 | Tool | Caller | Lifecycle moment | Returns |
 |---|---|---|---|
@@ -488,7 +488,7 @@ The two tools' analyses overlap intentionally: the plan gate catches plan-wide a
 
 The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`. While `plan_verdict` answers "is this dispatchable?" (pass / warn / fail), `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When you see consecutive `warn` verdicts that aren't changing, watch `plan_quality` for convergence: `actionable → rigorous` is a meaningful improvement even if the verdict stays `warn`. Use `plan_quality` to decide when to stop iterating: most callers can ship at `actionable` for ASAP work, and at `rigorous` for quarterly-rewrite scope.
 
-### 4.6 Per-call tool args (v0.3.0+)
+### 5.6 Per-call tool args (v0.3.0+)
 
 **`max_tokens_override`** (all four tools): optional non-negative int. Replaces the configured `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` clamp finding is appended to the envelope. Negative values are rejected with `max_tokens_override must be ≥ 0`. Use when you know a particular call needs a larger reviewer budget without modifying global config — handy when paired with partial-findings recovery on truncated responses.
 
@@ -496,11 +496,11 @@ The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`. While
 
 Passing `validate_plan` results are cached in memory for 3 minutes when the rendered prompt, model, mode, and token budget are identical. Cache hits do not call the reviewer, return `review_ms: 0`, and prefix the preserved original `next_action` with `[cached <=3m]`.
 
-### 4.7 `partial: true` envelope field (v0.3.0+)
+### 5.7 `partial: true` envelope field (v0.3.0+)
 
 When the reviewer's output was truncated at its `max_tokens` cap but at least one complete finding could be recovered, the response envelope (`Result` for per-task tools, `PlanResult` for `validate_plan`) carries `"partial": true` and the synthetic truncation finding is `severity: minor` rather than `major`. The field is `omitempty` — absent in the common (non-truncated) case, so pre-0.3.0 callers continue to work. If partial recovery fails (no complete finding before the cap hit), the envelope falls back to the legacy single `severity: major` truncation finding with no `partial` field set.
 
-### 4.8 Using review-context features
+### 5.8 Using review-context features
 
 Use `pinned_by` when a terse acceptance criterion is backed by existing tests, docs, commands, or static checks:
 
@@ -542,7 +542,7 @@ For `validate_completion`, submit doc/generated deliverables through `final_file
 
 ---
 
-## 5. FAQ / failure modes
+## 6. FAQ / failure modes
 
 **What happens if a task fails the plan-handoff gate?**
 The controller surfaces the verdict + findings to the user and proposes revisions to the plan. Plan changes land first; only after every task passes (or every `warn` is explicitly justified) does dispatch begin. This catches a vague AC at handoff time — one cheap call — rather than after a subagent has already started writing code against a misread spec.
@@ -569,7 +569,7 @@ The reviewer's response was cut off at the output token budget. As of v0.3.0, th
 That's the spec quality gate working as designed. Either (a) add the missing ACs to the plan and re-validate, or (b) acknowledge the gap in the next `working_on` description so the reviewer knows to expect implementer-discretion choices.
 
 **What if the implementer skips the post-hook?**
-Two defenses: the implementer-prompt clause (§3.2) marks post REQUIRED, and the controller can require the post-hook envelope in the subagent's DONE report (see §4.3).
+Two defenses: the implementer-prompt clause (§4.2) marks post REQUIRED, and the controller can require the post-hook envelope in the subagent's DONE report (see §5.3).
 
 **Does `check_progress` catch failing tests?**
 No — the reviewer LLM reasons over text, not execution. Use mid-checks for drift detection (scope creep, untouched ACs, unaddressed prior findings), not for debugging. Run tests separately.
