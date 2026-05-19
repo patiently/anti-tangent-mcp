@@ -26,6 +26,11 @@ func normalizeTaskSpecUnverifiableFindings(findings []verdict.Finding) []verdict
 // direction (entry is substring of evidence OR evidence is substring of
 // entry). Non-scope_drift findings pass through unchanged. Empty extractions
 // short-circuits to the input slice (no allocation).
+//
+// Empty/whitespace-only evidence on a scope_drift finding is treated as
+// non-match: `strings.Contains(non_empty, "")` returns true, which would
+// otherwise let a non-compliant reviewer that emits empty Evidence suppress
+// every scope_drift finding whenever extractions is non-empty.
 func suppressTestabilityExtractionScopeDrift(findings []verdict.Finding, extractions []string) []verdict.Finding {
 	if len(extractions) == 0 || len(findings) == 0 {
 		return findings
@@ -36,8 +41,15 @@ func suppressTestabilityExtractionScopeDrift(findings []verdict.Finding, extract
 			out = append(out, f)
 			continue
 		}
+		if strings.TrimSpace(f.Evidence) == "" {
+			out = append(out, f)
+			continue
+		}
 		matched := false
 		for _, e := range extractions {
+			if e == "" {
+				continue
+			}
 			if strings.Contains(f.Evidence, e) || strings.Contains(e, f.Evidence) {
 				matched = true
 				break

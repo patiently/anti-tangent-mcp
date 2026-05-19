@@ -64,13 +64,17 @@ func ExtractNormativeTestBodies(body string) []string {
 		if !ok {
 			break
 		}
-		out = append(out, capNormativeEntry(entry))
 		rest = remainder
+		// Skip whitespace-only entries: an empty fenced block or a
+		// header-followed-by-blank paragraph would otherwise emit "".
+		if strings.TrimSpace(entry) != "" {
+			out = append(out, capNormativeEntry(entry))
+		}
 		if isFenced {
 			sawFenced = true
 			continue
 		}
-		// Paragraph fallback yields exactly one entry then stops.
+		// Paragraph fallback yields at most one entry then stops.
 		break
 	}
 	if len(out) == 0 {

@@ -186,13 +186,26 @@ func TestExtractNormativeTestBodies_FenceClosingMustBeOnOwnLine(t *testing.T) {
 	body := "**NORMATIVE TEST BODIES (verbatim):**\n\n```\nfirst line\n```bash\nstill inside fence\n```\n"
 	got := ExtractNormativeTestBodies(body)
 	// We accept either one entry whose content runs until the real closer
-	// (i.e. multi-line including "```bash\nstill inside fence") OR nil
-	// (unterminated fence treated as bail-out). The forbidden behavior is
-	// emitting an entry that ends at the "```bash" line.
+	// (i.e. multi-line including "still inside fence") OR nil (unterminated
+	// fence treated as bail-out). The forbidden behaviors are: (a) emitting
+	// an entry that ends at the "```bash" line, or (b) emitting more than
+	// one entry (a single fenced block must produce at most one entry).
+	if len(got) > 1 {
+		t.Fatalf("a single fenced block must yield at most one entry, got %d (%v)", len(got), got)
+	}
 	if len(got) == 1 {
-		if strings.Contains(got[0], "still inside fence") == false &&
-			strings.HasSuffix(strings.TrimSpace(got[0]), "first line") {
+		if !strings.Contains(got[0], "still inside fence") {
 			t.Errorf("closing fence incorrectly matched a ```bash opener; entry = %q", got[0])
 		}
+	}
+}
+
+func TestExtractNormativeTestBodies_EmptyFencedBody(t *testing.T) {
+	// An empty fenced block (open ``` immediately followed by close ```)
+	// must not emit an empty-string entry — the result should be nil.
+	body := "**NORMATIVE TEST BODIES (verbatim):**\n\n```\n```\n"
+	got := ExtractNormativeTestBodies(body)
+	if got != nil {
+		t.Errorf("want nil for empty fenced body, got %v", got)
 	}
 }

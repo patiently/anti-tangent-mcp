@@ -136,6 +136,8 @@ func clonePlanResult(pr verdict.PlanResult) verdict.PlanResult {
 	pr.Tasks = append([]verdict.PlanTaskResult(nil), pr.Tasks...)
 	for i := range pr.Tasks {
 		pr.Tasks[i].Findings = append([]verdict.Finding(nil), pr.Tasks[i].Findings...)
+		pr.Tasks[i].ExitContracts = append([]string(nil), pr.Tasks[i].ExitContracts...)
+		pr.Tasks[i].NormativeTestBodies = append([]string(nil), pr.Tasks[i].NormativeTestBodies...)
 	}
 	return pr
 }
