@@ -769,3 +769,13 @@ func TestRenderPost_IncludesDemotionRule(t *testing.T) {
 	require.Contains(t, out.User, anchorDemotionRule)
 	require.Contains(t, out.User, "downgrade the severity to `minor`")
 }
+
+func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
+	require.NoError(t, err)
+	require.Contains(t, out.User, "RAW-STRING TRIMMING CAVEAT")
+	require.Contains(t, out.User, ".trimIndent()")
+	require.Contains(t, out.User, ".trimMargin()")
+	require.Contains(t, out.User, "textwrap.dedent")
+	require.Contains(t, out.User, "INTEGRATION.md §3.7")
+}

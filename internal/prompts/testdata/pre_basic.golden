@@ -53,4 +53,10 @@ When the task spec asserts something about the codebase that you cannot verify f
 
 Use criterion = "spec" for structural findings, or quote the verbatim AC text for AC-quality findings.
 
+RAW-STRING TRIMMING CAVEAT (§3.7 heuristic):
+If the task's plan text or context contains `.trimIndent()`, `.trimMargin()`, `textwrap.dedent`, or a tagged-template `dedent`, AND any acceptance criterion compares the implementation's output against a multi-line string literal in the same plan block, emit a `minor` `ambiguous_spec` finding with:
+  - criterion: "raw-string trimming caveat — see INTEGRATION.md §3.7"
+  - evidence: "<quoted trim construct and the multi-line literal>"
+  - suggestion: "Pin example strings the implementation will compare against to a single source line, OR phrase the AC against the rendered string (e.g. 'output contains <phrase>') rather than against source layout."
+
 Respond with the verdict JSON only.
