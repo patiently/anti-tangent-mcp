@@ -1,11 +1,35 @@
 package verdict
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSchemas_AcceptConventionDeviationCategory(t *testing.T) {
+	// All four reviewer-output schemas must include "convention_deviation"
+	// in their findings[].category enum. The test is a substring assertion;
+	// JSON-Schema validation of round-trip parsing is covered by the parser
+	// tests above. We assert here that the enum text is present so a future
+	// schema edit cannot silently drop the value.
+	schemas := map[string][]byte{
+		"schema.json":                    Schema(),
+		"plan_schema.json":               PlanSchema(),
+		"tasks_only_schema.json":         TasksOnlySchema(),
+		"plan_findings_only_schema.json": PlanFindingsOnlySchema(),
+	}
+	for name, body := range schemas {
+		if !strings.Contains(string(body), `"convention_deviation"`) {
+			t.Errorf("%s: missing \"convention_deviation\" in category enum", name)
+		}
+		// Sanity: additionalProperties:false is still enforced (no regression).
+		if !strings.Contains(string(body), `"additionalProperties": false`) {
+			t.Errorf("%s: lost additionalProperties:false", name)
+		}
+	}
+}
 
 func TestEdge_FindingEvidenceContainsEscapedBraces(t *testing.T) {
 	// Evidence contains `\"} \"` and `{}` characters inside the string.

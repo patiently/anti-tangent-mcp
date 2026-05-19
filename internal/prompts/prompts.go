@@ -45,6 +45,8 @@ type PostInput struct {
 	TestEvidence                   string
 	MajorPreFindings               []verdict.Finding
 	ReferencedPathsMissingEvidence []string
+	ExitContracts                  []string
+	ExitContractsInferred          bool
 }
 
 type PlanInput struct {

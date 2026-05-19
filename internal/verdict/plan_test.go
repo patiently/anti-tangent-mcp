@@ -189,6 +189,35 @@ func TestParsePlan_InvalidFindingCategory(t *testing.T) {
 	assert.Contains(t, err.Error(), "category")
 }
 
+func TestParsePlan_ConventionDeviation_SeverityFloorToMinor(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict": "warn",
+		"plan_findings": [{
+			"severity":   "critical",
+			"category":   "convention_deviation",
+			"criterion":  "codebase_convention",
+			"evidence":   "Task 3 stores id as String at the in-memory layer",
+			"suggestion": "Use UUID in memory."
+		}],
+		"tasks": [],
+		"next_action": "Address the convention deviation.",
+		"plan_quality": "actionable"
+	}`)
+	r, err := ParsePlan(raw)
+	if err != nil {
+		t.Fatalf("ParsePlan: %v", err)
+	}
+	if len(r.PlanFindings) != 1 {
+		t.Fatalf("expected 1 plan finding, got %d", len(r.PlanFindings))
+	}
+	if got, want := r.PlanFindings[0].Severity, SeverityMinor; got != want {
+		t.Errorf("plan-side severity = %q, want %q (server should floor)", got, want)
+	}
+	if got, want := r.PlanFindings[0].Category, CategoryConventionDeviation; got != want {
+		t.Errorf("plan-side category = %q, want %q", got, want)
+	}
+}
+
 func TestParsePlan_RejectsExtraJSON(t *testing.T) {
 	in := []byte(`{"plan_verdict":"pass","plan_findings":[],"tasks":[],"next_action":"a"}{"plan_verdict":"fail","plan_findings":[],"tasks":[],"next_action":"b"}`)
 	_, err := ParsePlan(in)
@@ -458,6 +487,56 @@ func TestParseTasksOnly_RejectsInvalid(t *testing.T) {
 		_, err := ParseTasksOnly(in)
 		require.Error(t, err)
 	})
+}
+
+func TestParsePlan_ExitContractsRoundTrip(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict":"pass",
+		"plan_findings":[],
+		"tasks":[
+			{
+				"task_index":1,
+				"task_title":"Task 1: emit",
+				"verdict":"pass",
+				"findings":[],
+				"suggested_header_block":"",
+				"suggested_header_reason":"",
+				"exit_contracts":["Defines handlerName constant","Exports DECLINE_NODE_NAME"],
+				"exit_contracts_inferred":true
+			}
+		],
+		"next_action":"proceed",
+		"plan_quality":"actionable"
+	}`)
+	pr, err := ParsePlan(raw)
+	require.NoError(t, err)
+	require.Len(t, pr.Tasks, 1)
+	assert.Equal(t, []string{"Defines handlerName constant", "Exports DECLINE_NODE_NAME"}, pr.Tasks[0].ExitContracts)
+	assert.True(t, pr.Tasks[0].ExitContractsInferred)
+}
+
+func TestParsePlan_ExitContractsAbsent_BackCompat(t *testing.T) {
+	raw := []byte(`{
+		"plan_verdict":"pass",
+		"plan_findings":[],
+		"tasks":[
+			{
+				"task_index":1,
+				"task_title":"Task 1: emit",
+				"verdict":"pass",
+				"findings":[],
+				"suggested_header_block":"",
+				"suggested_header_reason":""
+			}
+		],
+		"next_action":"proceed",
+		"plan_quality":"actionable"
+	}`)
+	pr, err := ParsePlan(raw)
+	require.NoError(t, err)
+	require.Len(t, pr.Tasks, 1)
+	assert.Empty(t, pr.Tasks[0].ExitContracts)
+	assert.False(t, pr.Tasks[0].ExitContractsInferred)
 }
 
 func TestParsePlanResultPartial_AppliesPlanQualitySanity(t *testing.T) {

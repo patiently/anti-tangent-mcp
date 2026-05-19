@@ -45,6 +45,10 @@ type ValidateTaskSpecArgs struct {
 	Context                      string   `json:"context,omitempty"`
 	PinnedBy                     []string `json:"pinned_by,omitempty"`
 	ControllerVerifiedReferences []string `json:"controller_verified_references,omitempty"`
+	TestStrategyNotes            []string `json:"test_strategy_notes,omitempty"`
+	CodebaseConventions          []string `json:"codebase_conventions,omitempty"`
+	TestabilityExtractions       []string `json:"testability_extractions,omitempty"`
+	NormativeTestBodies          []string `json:"normative_test_bodies,omitempty"`
 	Phase                        string   `json:"phase,omitempty"`
 	ModelOverride                string   `json:"model_override,omitempty"`
 	MaxTokensOverride            int      `json:"max_tokens_override,omitempty"`
@@ -92,6 +96,10 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		Context:                      args.Context,
 		PinnedBy:                     inputs.PinnedBy,
 		ControllerVerifiedReferences: inputs.ControllerVerifiedReferences,
+		TestStrategyNotes:            inputs.TestStrategyNotes,
+		CodebaseConventions:          inputs.CodebaseConventions,
+		TestabilityExtractions:       inputs.TestabilityExtractions,
+		NormativeTestBodies:          inputs.NormativeTestBodies,
 		Phase:                        inputs.Phase,
 	}
 
@@ -117,6 +125,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}); handled {
 		return r, env, retErr
 	}
+	result.Findings = suppressTestabilityExtractionScopeDrift(result.Findings, inputs.TestabilityExtractions)
 	result.Findings = normalizeTaskSpecUnverifiableFindings(result.Findings)
 
 	// Create the session only after the review succeeds so failed reviews
@@ -636,13 +645,15 @@ func validateCompletionTool() *mcp.Tool {
 }
 
 type ValidateCompletionArgs struct {
-	SessionID         string    `json:"session_id"  jsonschema:"required"`
-	Summary           string    `json:"summary"     jsonschema:"required"`
-	FinalFiles        []FileArg `json:"final_files,omitempty"`
-	FinalDiff         string    `json:"final_diff,omitempty"`
-	TestEvidence      string    `json:"test_evidence,omitempty"`
-	ModelOverride     string    `json:"model_override,omitempty"`
-	MaxTokensOverride int       `json:"max_tokens_override,omitempty"`
+	SessionID             string    `json:"session_id"  jsonschema:"required"`
+	Summary               string    `json:"summary"     jsonschema:"required"`
+	FinalFiles            []FileArg `json:"final_files,omitempty"`
+	FinalDiff             string    `json:"final_diff,omitempty"`
+	TestEvidence          string    `json:"test_evidence,omitempty"`
+	ExitContracts         []string  `json:"exit_contracts,omitempty"`
+	ExitContractsInferred bool      `json:"exit_contracts_inferred,omitempty"`
+	ModelOverride         string    `json:"model_override,omitempty"`
+	MaxTokensOverride     int       `json:"max_tokens_override,omitempty"`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
@@ -876,6 +887,14 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp))
 	}
 
+	// 5b. exit_contracts normalization. Runs after the payload-cap check
+	// (input size already bounded) and before the evidence-shape guard so a
+	// malformed exit_contracts list rejects fast regardless of session state.
+	exitContracts, err := normalizeCompletionExitContracts(args.ExitContracts)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+
 	// 6. evidence-shape guard. Runs BEFORE session lookup so a broken payload
 	// rejects fast regardless of session state. Cache hit → return the same
 	// envelope without re-running the guard or hitting the reviewer.
@@ -923,6 +942,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				TestEvidence:                   args.TestEvidence,
 				MajorPreFindings:               majorPreFindings,
 				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
+				ExitContracts:                  exitContracts,
+				ExitContractsInferred:          args.ExitContractsInferred,
 			})
 		},
 		"render post prompt",
@@ -1039,6 +1060,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}); handled {
 		return r, p, retErr
 	}
+	populateNormativeTestBodies(&pr, tasks)
 	pr = prependPlanClamp(pr, clamp)
 	pr = finalizePlanResult(pr, modelUsed, ms)
 	h.planCache().store(cacheKey, pr, modelUsed)
@@ -1152,6 +1174,31 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 		modelUsed = model.String()
 	}
 	return r, modelUsed, time.Since(start).Milliseconds(), nil, nil
+}
+
+// populateNormativeTestBodies fills in pr.Tasks[i].NormativeTestBodies from
+// the matching planparser.RawTask body. The reviewer is prompted to emit
+// 1-based TaskIndex, but plan_schema.json accepts minimum:0 and some
+// reviewers (and the parser_partial fixtures) emit 0-based; detect the base
+// from the lowest non-negative index and apply uniformly. Tasks whose index
+// is out of range after de-basing are left alone (defensive — chunked-path
+// reviewer responses occasionally drift on task_index, and we'd rather emit
+// no extraction for that task than panic or misattribute).
+func populateNormativeTestBodies(pr *verdict.PlanResult, tasks []planparser.RawTask) {
+	base := 1
+	for _, t := range pr.Tasks {
+		if t.TaskIndex == 0 {
+			base = 0
+			break
+		}
+	}
+	for i := range pr.Tasks {
+		idx := pr.Tasks[i].TaskIndex - base
+		if idx < 0 || idx >= len(tasks) {
+			continue
+		}
+		pr.Tasks[i].NormativeTestBodies = planparser.ExtractNormativeTestBodies(tasks[idx].Body)
+	}
 }
 
 func noHeadingsPlanResult() verdict.PlanResult {

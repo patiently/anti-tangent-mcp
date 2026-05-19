@@ -17,6 +17,18 @@ Pinned by:
 {{end}}{{end}}{{if .Spec.ControllerVerifiedReferences}}
 Controller-verified references:
 {{range .Spec.ControllerVerifiedReferences}}- {{.}}
+{{end}}{{end}}{{if .Spec.TestStrategyNotes}}
+Test strategy notes (caller-supplied):
+{{range .Spec.TestStrategyNotes}}- {{.}}
+{{end}}{{end}}{{if .Spec.CodebaseConventions}}
+Codebase conventions (caller-supplied):
+{{range .Spec.CodebaseConventions}}- {{.}}
+{{end}}{{end}}{{if .Spec.TestabilityExtractions}}
+Testability extractions (caller-supplied):
+{{range .Spec.TestabilityExtractions}}- {{.}}
+{{end}}{{end}}{{if .Spec.NormativeTestBodies}}
+Normative test bodies (caller-supplied, treat as binding AC):
+{{range .Spec.NormativeTestBodies}}- {{.}}
 {{end}}{{end}}
 ## What to evaluate
 
@@ -34,6 +46,14 @@ For explicitly test-only tasks, treat `null`, `unchanged`, or similar assertions
 If a pinned_by section is present, treat those entries as caller-supplied anchors for existing behavior. They are not codebase facts you can independently verify. Do not emit `unverifiable_codebase_claim` merely because a pinned_by entry names a file, class, method, command, or document. For ACs like "existing behavior remains unchanged," prefer a minor `quality` suggestion to enumerate the behavior only when pinned_by is empty or unrelated.
 
 If a Controller-verified references section is present, treat those entries as caller-supplied attestations that the controller grep-verified specific codebase references before dispatch. Suppress an `unverifiable_codebase_claim` for claim C only when some entry in controller_verified_references is a substring of C, or C is a substring of some entry. Do not suppress logical contradictions, missing acceptance criteria, or ambiguity findings.
+
+If a Test strategy notes section is present, treat each entry as authoritative caller context about why test coverage is split. Do not emit `missing_acceptance_criterion` for joint-coverage gaps when an entry explains the split that covers the gap. Continue to emit `missing_acceptance_criterion` when the gap is unrelated (e.g. an AC bullet with zero tests at all, or an invocation-count assertion that is genuinely missing).
+
+If a Codebase conventions section is present, treat each entry as a convention the implementation must follow. When the task spec or surrounding context shows positive evidence of deviation, emit a finding with `category: convention_deviation`, `criterion: codebase_convention`, severity `minor`, evidence quoting the spec text that suggests deviation, and a suggestion that re-states the convention and asks the implementer to confirm or document an exception. Do not emit `convention_deviation` when the spec is silent on the convention — only when there is positive evidence of deviation.
+
+If a Testability extractions section is present, treat each entry as a helper that exists in production code purely so tests can call it directly. When a `scope_drift` finding would name one of these helpers, suppress that specific finding. Continue to emit `scope_drift` for unrelated additions.
+
+If a Normative test bodies section is present, treat each entry as binding test scope — equivalent in authority to a bullet under Acceptance criteria. Do not emit `ambiguous_spec` for "test scope unclear" findings about coverage that one of these bodies already pins. An entry that begins with `// excerpt:` (or an analogous comment marker) is partial — flag invocation-count or assertion-shape gaps only when the excerpt itself reveals them, not when the gap might exist in the omitted portion. Continue to flag invocation-count gaps, missing negative assertions, or unrelated coverage holes when the entry is a complete body.
 
 Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
 
