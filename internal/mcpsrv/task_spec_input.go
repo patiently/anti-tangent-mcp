@@ -75,6 +75,7 @@ type taskSpecInputs struct {
 	CodebaseConventions          []string
 	TestabilityExtractions       []string
 	NormativeTestBodies          []string
+	HarnessShapeAttestations     []session.HarnessShapeAttestation
 }
 
 func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) {
@@ -106,6 +107,10 @@ func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) 
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
+	harnessShapeAttestations, err := normalizeHarnessShapeAttestation(args.HarnessShapeAttestation)
+	if err != nil {
+		return taskSpecInputs{}, err
+	}
 	return taskSpecInputs{
 		Phase:                        phase,
 		PinnedBy:                     pinnedBy,
@@ -114,6 +119,7 @@ func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) 
 		CodebaseConventions:          codebaseConventions,
 		TestabilityExtractions:       testabilityExtractions,
 		NormativeTestBodies:          normativeTestBodies,
+		HarnessShapeAttestations:     harnessShapeAttestations,
 	}, nil
 }
 

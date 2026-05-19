@@ -38,20 +38,21 @@ type Envelope struct {
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
 type ValidateTaskSpecArgs struct {
-	TaskTitle                    string   `json:"task_title"           jsonschema:"required"`
-	Goal                         string   `json:"goal"                 jsonschema:"required"`
-	AcceptanceCriteria           []string `json:"acceptance_criteria,omitempty"`
-	NonGoals                     []string `json:"non_goals,omitempty"`
-	Context                      string   `json:"context,omitempty"`
-	PinnedBy                     []string `json:"pinned_by,omitempty"`
-	ControllerVerifiedReferences []string `json:"controller_verified_references,omitempty"`
-	TestStrategyNotes            []string `json:"test_strategy_notes,omitempty"`
-	CodebaseConventions          []string `json:"codebase_conventions,omitempty"`
-	TestabilityExtractions       []string `json:"testability_extractions,omitempty"`
-	NormativeTestBodies          []string `json:"normative_test_bodies,omitempty"`
-	Phase                        string   `json:"phase,omitempty"`
-	ModelOverride                string   `json:"model_override,omitempty"`
-	MaxTokensOverride            int      `json:"max_tokens_override,omitempty"`
+	TaskTitle                    string                            `json:"task_title"           jsonschema:"required"`
+	Goal                         string                            `json:"goal"                 jsonschema:"required"`
+	AcceptanceCriteria           []string                          `json:"acceptance_criteria,omitempty"`
+	NonGoals                     []string                          `json:"non_goals,omitempty"`
+	Context                      string                            `json:"context,omitempty"`
+	PinnedBy                     []string                          `json:"pinned_by,omitempty"`
+	ControllerVerifiedReferences []string                          `json:"controller_verified_references,omitempty"`
+	TestStrategyNotes            []string                          `json:"test_strategy_notes,omitempty"`
+	CodebaseConventions          []string                          `json:"codebase_conventions,omitempty"`
+	TestabilityExtractions       []string                          `json:"testability_extractions,omitempty"`
+	NormativeTestBodies          []string                          `json:"normative_test_bodies,omitempty"`
+	HarnessShapeAttestation      []session.HarnessShapeAttestation `json:"harness_shape_attestation,omitempty"`
+	Phase                        string                            `json:"phase,omitempty"`
+	ModelOverride                string                            `json:"model_override,omitempty"`
+	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty"`
 }
 
 type handlers struct {
@@ -100,6 +101,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		CodebaseConventions:          inputs.CodebaseConventions,
 		TestabilityExtractions:       inputs.TestabilityExtractions,
 		NormativeTestBodies:          inputs.NormativeTestBodies,
+		HarnessShapeAttestations:     inputs.HarnessShapeAttestations,
 		Phase:                        inputs.Phase,
 	}
 

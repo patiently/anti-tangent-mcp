@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2448,4 +2449,99 @@ func TestValidateTaskSpec_CVRSuppression_RunsBeforeRollup(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Empty(t, env.Findings, "both unverifiables suppressed before rollup; rollup sees zero")
+}
+
+func TestValidateTaskSpec_HarnessShapeAttestationStoredOnSession(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"n"}`), Model: "claude-sonnet-4-6"},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	att := []session.HarnessShapeAttestation{
+		{Harness: "TestHarnessX", Path: "test/foo.kt:L1", Assertions: []string{"records emitted spans", "does not stub validator"}},
+	}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g",
+		AcceptanceCriteria:      []string{"ac1"},
+		HarnessShapeAttestation: att,
+	})
+	require.NoError(t, err)
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	require.Equal(t, att, sess.Spec.HarnessShapeAttestations)
+}
+
+func TestValidateTaskSpec_HarnessShapeAttestationLimitsRejected(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"n"}`), Model: "claude-sonnet-4-6"},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	att := []session.HarnessShapeAttestation{{Harness: "", Path: "p", Assertions: []string{"a"}}}
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g",
+		AcceptanceCriteria:      []string{"ac1"},
+		HarnessShapeAttestation: att,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "harness")
+}
+
+func TestValidateTaskSpecArgs_HarnessShapeAttestation_JSONTag(t *testing.T) {
+	rt := reflect.TypeOf(ValidateTaskSpecArgs{})
+	f, ok := rt.FieldByName("HarnessShapeAttestation")
+	require.True(t, ok, "field must exist on args struct")
+	require.Equal(t, `harness_shape_attestation,omitempty`, f.Tag.Get("json"))
+	require.Equal(t, "[]session.HarnessShapeAttestation", f.Type.String())
+
+	nested := reflect.TypeOf(session.HarnessShapeAttestation{})
+	type want struct{ name, tag, typ string }
+	for _, w := range []want{
+		{"Harness", "harness", "string"},
+		{"Path", "path", "string"},
+		{"Assertions", "assertions", "[]string"},
+	} {
+		fld, ok := nested.FieldByName(w.name)
+		require.True(t, ok, "nested field %s must exist", w.name)
+		require.Equal(t, w.tag, fld.Tag.Get("json"), "nested field %s json tag", w.name)
+		require.Equal(t, w.typ, fld.Type.String(), "nested field %s type", w.name)
+	}
+}
+
+func TestValidateTaskSpec_NewServerBootsAndHandlerAcceptsNewField(t *testing.T) {
+	// Two-part smoke test:
+	//   (a) New(d) — proves mcp.AddTool's schema generation does not panic
+	//       on the new ValidateTaskSpecArgs.HarnessShapeAttestation field.
+	//   (b) Direct h.ValidateTaskSpec(...) call — proves the args-struct →
+	//       normalize → session.TaskSpec round-trip works for the new field.
+	// This is NOT an MCP-protocol-level test (no JSON-RPC encode/decode).
+	// Per design §504, protocol-level decoding reflects on the same JSON
+	// tags the sibling reflection test pins.
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"n"}`),
+			Model:   "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	srv := New(d)
+	require.NotNil(t, srv, "(a) New(d) constructs without panic — mcp.AddTool accepted the new args shape")
+
+	h := &handlers{deps: d}
+	att := []session.HarnessShapeAttestation{
+		{Harness: "TestHarnessX", Path: "test/foo.kt:L1", Assertions: []string{"records emitted spans"}},
+	}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:               "t",
+		Goal:                    "g",
+		AcceptanceCriteria:      []string{"ac1"},
+		HarnessShapeAttestation: att,
+	})
+	require.NoError(t, err, "(b) handler accepts the new field and round-trips it to the session")
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	require.Equal(t, att, sess.Spec.HarnessShapeAttestations)
 }
