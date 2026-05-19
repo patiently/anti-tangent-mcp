@@ -1104,3 +1104,34 @@ func TestValidatePlan_PopulatesNormativeTestBodies(t *testing.T) {
 	require.Len(t, pr.Tasks, 1)
 	assert.Equal(t, []string{"@Test fun t() { /* body */ }"}, pr.Tasks[0].NormativeTestBodies)
 }
+
+func TestValidatePlan_PopulatesNormativeTestBodies_ZeroBasedTaskIndex(t *testing.T) {
+	// plan_schema.json accepts task_index minimum:0, and some reviewers emit
+	// 0-based indices. Confirm populateNormativeTestBodies detects the base
+	// and still maps the first task to tasks[0].
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{
+				"plan_verdict":"pass",
+				"plan_findings":[],
+				"tasks":[
+					{"task_index":0,"task_title":"Task 1: with bodies","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},
+					{"task_index":1,"task_title":"Task 2: also bodies","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}
+				],
+				"next_action":"proceed",
+				"plan_quality":"actionable"
+			}`),
+			Model: "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	plan := "# Plan\n\n### Task 1: with bodies\n\n**Goal:** g\n\n**NORMATIVE TEST BODIES (verbatim):**\n\n```kotlin\n@Test fun first() {}\n```\n\n### Task 2: also bodies\n\n**Goal:** g\n\n**NORMATIVE TEST BODIES (verbatim):**\n\n```kotlin\n@Test fun second() {}\n```\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.Len(t, pr.Tasks, 2)
+	assert.Equal(t, []string{"@Test fun first() {}"}, pr.Tasks[0].NormativeTestBodies)
+	assert.Equal(t, []string{"@Test fun second() {}"}, pr.Tasks[1].NormativeTestBodies)
+}

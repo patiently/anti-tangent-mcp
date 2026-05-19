@@ -1177,13 +1177,23 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 }
 
 // populateNormativeTestBodies fills in pr.Tasks[i].NormativeTestBodies from
-// the matching planparser.RawTask body. Match is by 1-based TaskIndex; tasks
-// whose index is out of range are left alone (defensive — chunked-path
+// the matching planparser.RawTask body. The reviewer is prompted to emit
+// 1-based TaskIndex, but plan_schema.json accepts minimum:0 and some
+// reviewers (and the parser_partial fixtures) emit 0-based; detect the base
+// from the lowest non-negative index and apply uniformly. Tasks whose index
+// is out of range after de-basing are left alone (defensive — chunked-path
 // reviewer responses occasionally drift on task_index, and we'd rather emit
 // no extraction for that task than panic or misattribute).
 func populateNormativeTestBodies(pr *verdict.PlanResult, tasks []planparser.RawTask) {
+	base := 1
+	for _, t := range pr.Tasks {
+		if t.TaskIndex == 0 {
+			base = 0
+			break
+		}
+	}
 	for i := range pr.Tasks {
-		idx := pr.Tasks[i].TaskIndex - 1 // 1-based -> 0-based
+		idx := pr.Tasks[i].TaskIndex - base
 		if idx < 0 || idx >= len(tasks) {
 			continue
 		}
