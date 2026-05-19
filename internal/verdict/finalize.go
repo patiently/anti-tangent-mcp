@@ -48,3 +48,27 @@ func FinalizeVerdict(r Result) Result {
 	}
 	return r
 }
+
+// FinalizePlanVerdict derives per-task and plan-level verdicts from current
+// findings via the severity ladder (see FinalizeVerdict), appends
+// noise_cluster advisories where applicable, and re-runs
+// ApplyPlanQualitySanity so PlanQuality stays consistent with the
+// server-derived PlanVerdict (e.g. reviewer-emitted `rigorous` becomes
+// `rough` when finalization concludes `fail`). Mutates *p in place.
+// Idempotent. Nil-safe.
+func FinalizePlanVerdict(p *PlanResult) {
+	if p == nil {
+		return
+	}
+	for i := range p.Tasks {
+		tmp := Result{Verdict: p.Tasks[i].Verdict, Findings: p.Tasks[i].Findings}
+		tmp = FinalizeVerdict(tmp)
+		p.Tasks[i].Verdict = tmp.Verdict
+		p.Tasks[i].Findings = tmp.Findings
+	}
+	tmp := Result{Verdict: p.PlanVerdict, Findings: p.PlanFindings}
+	tmp = FinalizeVerdict(tmp)
+	p.PlanVerdict = tmp.Verdict
+	p.PlanFindings = tmp.Findings
+	ApplyPlanQualitySanity(p)
+}

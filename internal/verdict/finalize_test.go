@@ -71,3 +71,72 @@ func TestFinalizeVerdict_OverridesReviewerVerdict(t *testing.T) {
 	out := FinalizeVerdict(r)
 	require.Equal(t, VerdictPass, out.Verdict)
 }
+
+func TestFinalizePlanVerdict_PerTaskAndPlanLadder(t *testing.T) {
+	mk := func(s Severity) Finding {
+		return Finding{Severity: s, Category: CategoryQuality, Criterion: "x", Evidence: "y", Suggestion: "z"}
+	}
+	pr := PlanResult{
+		PlanVerdict:  VerdictPass, // reviewer-emitted; should be overridden
+		PlanFindings: []Finding{mk(SeverityMajor)},
+		Tasks: []PlanTaskResult{
+			{TaskIndex: 0, TaskTitle: "t0", Verdict: VerdictPass, Findings: []Finding{mk(SeverityMinor), mk(SeverityMinor), mk(SeverityMinor)}},
+			{TaskIndex: 1, TaskTitle: "t1", Verdict: VerdictFail, Findings: []Finding{mk(SeverityMinor)}},
+		},
+		NextAction:  "n",
+		PlanQuality: PlanQualityRigorous, // reviewer-emitted; sanity rerun should keep it (warn → actionable default doesn't apply because reviewer's value is valid)
+	}
+	FinalizePlanVerdict(&pr)
+	require.Equal(t, VerdictWarn, pr.PlanVerdict, "≥1 major → warn")
+	require.Equal(t, VerdictWarn, pr.Tasks[0].Verdict, "task 0: three minor → warn")
+	require.Equal(t, VerdictPass, pr.Tasks[1].Verdict, "task 1: single minor → pass (reviewer fail overridden)")
+	// Task 0's noise_cluster advisory appended.
+	taskHasNoise := false
+	for _, f := range pr.Tasks[0].Findings {
+		if f.Category == CategoryOther && f.Criterion == "noise_cluster" {
+			taskHasNoise = true
+		}
+	}
+	require.True(t, taskHasNoise, "task 0 should carry noise_cluster")
+}
+
+func TestFinalizePlanVerdict_RerunsApplyPlanQualitySanity(t *testing.T) {
+	mk := func(s Severity) Finding {
+		return Finding{Severity: s, Category: CategoryQuality, Criterion: "x", Evidence: "y", Suggestion: "z"}
+	}
+	// Reviewer emitted PlanQuality=rigorous but findings force fail.
+	pr := PlanResult{
+		PlanVerdict:  VerdictPass, // reviewer-emitted; ladder will derive fail
+		PlanFindings: []Finding{mk(SeverityCritical)},
+		Tasks:        []PlanTaskResult{},
+		NextAction:   "n",
+		PlanQuality:  PlanQualityRigorous,
+	}
+	FinalizePlanVerdict(&pr)
+	require.Equal(t, VerdictFail, pr.PlanVerdict, "ladder derives fail")
+	require.Equal(t, PlanQualityRough, pr.PlanQuality, "ApplyPlanQualitySanity forces rough on fail")
+}
+
+func TestFinalizePlanVerdict_Idempotent(t *testing.T) {
+	mk := func(s Severity) Finding {
+		return Finding{Severity: s, Category: CategoryQuality, Criterion: "x", Evidence: "y", Suggestion: "z"}
+	}
+	pr := PlanResult{
+		PlanVerdict:  VerdictPass,
+		PlanFindings: []Finding{mk(SeverityMinor), mk(SeverityMinor), mk(SeverityMinor)},
+		Tasks: []PlanTaskResult{
+			{TaskIndex: 0, TaskTitle: "t0", Verdict: VerdictPass, Findings: []Finding{mk(SeverityMinor), mk(SeverityMinor), mk(SeverityMinor)}},
+		},
+		NextAction: "n",
+	}
+	FinalizePlanVerdict(&pr)
+	beforeLen := len(pr.PlanFindings)
+	beforeTaskLen := len(pr.Tasks[0].Findings)
+	FinalizePlanVerdict(&pr)
+	require.Equal(t, beforeLen, len(pr.PlanFindings), "plan noise_cluster not re-appended")
+	require.Equal(t, beforeTaskLen, len(pr.Tasks[0].Findings), "task noise_cluster not re-appended")
+}
+
+func TestFinalizePlanVerdict_NilSafe(t *testing.T) {
+	FinalizePlanVerdict(nil) // must not panic
+}
