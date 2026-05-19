@@ -3,9 +3,13 @@
 package mcpsrv
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/patiently/anti-tangent-mcp/internal/session"
 )
 
 const (
@@ -14,6 +18,12 @@ const (
 
 	maxNormativeTestBodyEntries = 20
 	maxNormativeTestBodyChars   = 4000
+
+	maxHarnessShapeAttestationEntries        = 25
+	maxHarnessShapeAttestationHarnessChars   = 240
+	maxHarnessShapeAttestationPathChars      = 240
+	maxHarnessShapeAttestationAssertions     = 10
+	maxHarnessShapeAttestationAssertionChars = 480
 )
 
 func normalizePhase(phase string) (string, error) {
@@ -105,4 +115,66 @@ func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) 
 		TestabilityExtractions:       testabilityExtractions,
 		NormativeTestBodies:          normativeTestBodies,
 	}, nil
+}
+
+// normalizeHarnessShapeAttestation trims whitespace, caps lengths and counts,
+// dedupes by canonical-JSON SHA-256, and rejects entries with empty harness
+// or empty assertions array. Returns a fresh slice; the input is not
+// mutated. Mirrors normalizeBoundedStringList's error-message style so the
+// errors are friendly to MCP callers.
+func normalizeHarnessShapeAttestation(entries []session.HarnessShapeAttestation) ([]session.HarnessShapeAttestation, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	if len(entries) > maxHarnessShapeAttestationEntries {
+		return nil, fmt.Errorf("harness_shape_attestation must contain at most %d entries", maxHarnessShapeAttestationEntries)
+	}
+	out := make([]session.HarnessShapeAttestation, 0, len(entries))
+	seen := make(map[[32]byte]struct{}, len(entries))
+	for i, e := range entries {
+		harness := strings.TrimSpace(e.Harness)
+		if harness == "" {
+			return nil, fmt.Errorf("harness_shape_attestation[%d].harness must be non-empty", i)
+		}
+		if len([]rune(harness)) > maxHarnessShapeAttestationHarnessChars {
+			return nil, fmt.Errorf("harness_shape_attestation[%d].harness must be at most %d characters", i, maxHarnessShapeAttestationHarnessChars)
+		}
+		path := strings.TrimSpace(e.Path)
+		if len([]rune(path)) > maxHarnessShapeAttestationPathChars {
+			return nil, fmt.Errorf("harness_shape_attestation[%d].path must be at most %d characters", i, maxHarnessShapeAttestationPathChars)
+		}
+		if len(e.Assertions) == 0 {
+			return nil, fmt.Errorf("harness_shape_attestation[%d].assertions must be non-empty", i)
+		}
+		if len(e.Assertions) > maxHarnessShapeAttestationAssertions {
+			return nil, fmt.Errorf("harness_shape_attestation[%d].assertions must contain at most %d entries", i, maxHarnessShapeAttestationAssertions)
+		}
+		normAssertions := make([]string, 0, len(e.Assertions))
+		for j, a := range e.Assertions {
+			trimmed := strings.TrimSpace(a)
+			if trimmed == "" {
+				return nil, fmt.Errorf("harness_shape_attestation[%d].assertions[%d] must be non-empty", i, j)
+			}
+			if len([]rune(trimmed)) > maxHarnessShapeAttestationAssertionChars {
+				return nil, fmt.Errorf("harness_shape_attestation[%d].assertions[%d] must be at most %d characters", i, j, maxHarnessShapeAttestationAssertionChars)
+			}
+			normAssertions = append(normAssertions, trimmed)
+		}
+		norm := session.HarnessShapeAttestation{
+			Harness:    harness,
+			Path:       path,
+			Assertions: normAssertions,
+		}
+		raw, mErr := json.Marshal(norm)
+		if mErr != nil {
+			return nil, fmt.Errorf("harness_shape_attestation[%d]: canonical encode: %w", i, mErr)
+		}
+		key := sha256.Sum256(raw)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, norm)
+	}
+	return out, nil
 }
