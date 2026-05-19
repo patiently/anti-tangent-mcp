@@ -666,10 +666,16 @@ func TestValidatePlan_MixedFindingsDoNotCalibrateToPass(t *testing.T) {
 	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"major","category":"ambiguous_spec","criterion":"AC","evidence":"AC is vague","suggestion":"rewrite"},{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"Task 1 cites Foo.kt","suggestion":"verify"}],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Rewrite AC."}`)
 	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
-	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
+	// Task-level ladder (via FinalizePlanVerdict, v0.5.2): the major
+	// ambiguous_spec finding survives rollup → task verdict derives to warn.
 	require.Len(t, pr.Tasks, 1)
 	require.Len(t, pr.Tasks[0].Findings, 1)
 	assert.Equal(t, verdict.CategoryAmbiguousSpec, pr.Tasks[0].Findings[0].Category)
+	assert.Equal(t, verdict.VerdictWarn, pr.Tasks[0].Verdict, "task ladder derives warn from one major finding")
+	// Plan-level: the rolled-up codebase_reference_checklist (1 minor) drives
+	// the ladder to pass. Plan-level verdict is derived from PlanFindings only;
+	// task-level severity does NOT propagate up to the plan verdict.
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict, "plan ladder derives pass from one minor plan-level finding")
 }
 
 func TestValidatePlan_PreservesPlanLevelUnverifiableBesideTaskRollup(t *testing.T) {
@@ -763,14 +769,21 @@ func TestValidatePlan_MultipleUnverifiableUnderSameTaskJoinedWithSemicolon(t *te
 
 // TestValidatePlan_EmptyFindingsDoNotCalibrateToPass locks in the
 // allPlanFindingsAreMinorUnverifiable sentinel: a plan with zero
-// findings must NOT be force-passed by the calibration helper. The
-// reviewer's verdict survives untouched.
+// findings is NOT force-passed by the calibration helper itself. After
+// v0.5.2 the post-calibration FinalizePlanVerdict ladder derives `pass`
+// from zero findings (the reviewer's bare `warn` claim with no findings
+// is correctly recognized as inconsistent), but the calibration helper
+// alone leaves the reviewer's verdict untouched. The NextAction check
+// guards against the unverifiable-only force-pass message leaking onto
+// this non-unverifiable input.
 func TestValidatePlan_EmptyFindingsDoNotCalibrateToPass(t *testing.T) {
 	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"Reviewer warned but emitted no findings."}`)
 	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
-	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
-	assert.NotContains(t, pr.NextAction, "No blocking plan-quality findings")
+	// FinalizePlanVerdict ladder: zero findings → pass.
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+	assert.NotContains(t, pr.NextAction, "No blocking plan-quality findings",
+		"the calibration helper's unverifiable-only message must not leak onto an empty-findings input")
 }
 
 // TestValidatePlan_RollupFallsBackToMergedPositionForBadTaskIndex defends

@@ -1253,13 +1253,19 @@ func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp
 }
 
 func finalizePlanResult(pr verdict.PlanResult, modelUsed string, ms int64) verdict.PlanResult {
-	// Order is load-bearing: rollup first so calibration sees no remaining
-	// task-level unverifiable findings; calibrate before sanity because
-	// calibration owns the verdict→quality mapping for the unverifiable-only
-	// case (sanity is then a passthrough on the already-valid values).
+	// Order is load-bearing:
+	//   1. rollup unverifiable-codebase-claim findings (else calibration sees
+	//      noise);
+	//   2. calibrate verdict for the unverifiable-only case (preserves the
+	//      v0.4.0 verdict→quality mapping for plans whose only findings are
+	//      unverifiable claims);
+	//   3. FinalizePlanVerdict (per-task + plan-level severity ladder +
+	//      noise_cluster + ApplyPlanQualitySanity rerun).
+	// FinalizePlanVerdict's ApplyPlanQualitySanity rerun replaces the
+	// stand-alone call this function previously made.
 	normalizePlanUnverifiableFindings(&pr)
 	calibratePlanVerdictForUnverifiableOnly(&pr)
-	verdict.ApplyPlanQualitySanity(&pr)
+	verdict.FinalizePlanVerdict(&pr)
 	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
 	return pr
 }

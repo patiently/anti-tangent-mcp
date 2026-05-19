@@ -2314,3 +2314,59 @@ func TestTooLargePlanResult_SyntheticFindingSeverityIsCritical(t *testing.T) {
 	require.Equal(t, verdict.SeverityCritical, pr.PlanFindings[0].Severity)
 	require.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
 }
+
+func TestValidatePlan_FinalizePlanVerdict_ClampParticipatesInLadder(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "openai",
+		resp: providers.Response{
+			RawJSON: []byte(`{"plan_verdict":"pass","plan_findings":[
+				{"severity":"minor","category":"quality","criterion":"a","evidence":"b","suggestion":"c"},
+				{"severity":"minor","category":"quality","criterion":"d","evidence":"e","suggestion":"f"}
+			],"tasks":[{"task_index":1,"task_title":"t","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":"","lightweight_eligible":false,"lightweight_reason":"","exit_contracts":[],"exit_contracts_inferred":false}],"next_action":"n","plan_quality":"actionable"}`),
+			Model: "gpt-5",
+		},
+	}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	d.Cfg.MaxTokensCeiling = 1000
+	h := &handlers{deps: d}
+	planText := "### Task 1: t\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac1\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:          planText,
+		MaxTokensOverride: 10000,
+	})
+	require.NoError(t, err)
+	require.Equal(t, verdict.VerdictWarn, pr.PlanVerdict, "two minors + clamp minor → warn")
+	hasNoise := false
+	for _, f := range pr.PlanFindings {
+		if f.Category == verdict.CategoryOther && f.Criterion == "noise_cluster" {
+			hasNoise = true
+		}
+	}
+	require.True(t, hasNoise, "plan-level noise_cluster appended")
+	require.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion, "clamp at PlanFindings[0]")
+}
+
+func TestTruncatedPlanResult_SeverityIsMajor(t *testing.T) {
+	pr := truncatedPlanResult()
+	require.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
+	require.Len(t, pr.PlanFindings, 1)
+	require.Equal(t, verdict.SeverityMajor, pr.PlanFindings[0].Severity)
+	require.Equal(t, verdict.PlanQualityRough, pr.PlanQuality)
+}
+
+func TestValidatePlan_TruncatedResponse_PreservesFinalizePlanResultSideEffects(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", err: providers.ErrResponseTruncated}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	planText := "### Task 1: t\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac1\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planText})
+	require.NoError(t, err)
+	require.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
+	require.NotEmpty(t, pr.SummaryBlock, "formatPlanSummary must run on the truncation path")
+	require.Equal(t, verdict.PlanQualityRough, pr.PlanQuality, "ApplyPlanQualitySanity (via FinalizePlanVerdict) must have run; truncatedPlanResult explicitly sets rough")
+}
