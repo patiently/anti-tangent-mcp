@@ -653,6 +653,17 @@ func TestRenderPost_WithoutMissingReferencedPathsOmitsEvidenceNote(t *testing.T)
 	assert.NotContains(t, out.User, "summary references these paths")
 }
 
+func TestRenderPre_CVRInstructionIncludesMultiSymbolExample(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{
+		Title: "t", Goal: "g",
+		AcceptanceCriteria:           []string{"ac1"},
+		ControllerVerifiedReferences: []string{"path/to/file.kt"},
+	}})
+	require.NoError(t, err)
+	require.Contains(t, out.User, "XService.findFoo at path/to/file.kt:L42")
+	require.Contains(t, out.User, "the path matches one of the claim's substrings")
+}
+
 func TestRenderPost_WithExplicitExitContractsIncludesSection(t *testing.T) {
 	out, err := RenderPost(PostInput{
 		Spec:                  sampleSpec(),
