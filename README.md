@@ -16,6 +16,121 @@ Or grab a pre-built binary from the [releases page](https://github.com/patiently
 docker pull ghcr.io/patiently/anti-tangent-mcp:latest
 ```
 
+### One-shot install via paste-in prompt
+
+If your host is Claude Code or opencode, you can paste the matching prompt below into a fresh session and the agent will fetch the latest release binary, register the MCP, download `INTEGRATION.md`, and wire it into your user-level instructions so every future session sees the protocol. The prompts resolve "latest" from the GitHub API, so they don't need to be edited each release.
+
+These prompts target Linux and macOS. Windows users should follow the manual install above and adapt the steps to their host's MCP config format.
+
+Pick the host you use:
+
+#### Claude Code
+
+````text
+Install the latest anti-tangent-mcp release on this Linux/macOS machine and
+wire it into Claude Code. Do all of the following, reporting progress after
+each step and stopping on any error. NEVER echo the value of any API key in
+your reports — redact to `***` whenever a step would otherwise print one.
+
+1. Detect this machine's OS and arch (`uname -s`, `uname -m`). Map to one of
+   Linux_x86_64, Linux_arm64, Darwin_x86_64, Darwin_arm64. If the host is
+   Windows, stop and tell me to use the manual install instead.
+2. Look up the latest release tag from
+   https://api.github.com/repos/patiently/anti-tangent-mcp/releases/latest
+   (`tag_name` is shaped like `v0.5.0`; strip the leading `v` to get VERSION).
+3. Download `anti-tangent-mcp_${VERSION}_${OS}_${ARCH}.tar.gz` from the release
+   assets and extract the `anti-tangent-mcp` binary to
+   `~/.local/bin/anti-tangent-mcp`. `mkdir -p ~/.local/bin` first; `chmod +x`
+   after extraction. Run `~/.local/bin/anti-tangent-mcp --version` and confirm
+   it prints VERSION.
+4. If `~/.local/bin` is not on my PATH, tell me the one-line export to add to
+   my shell profile (do not edit my dotfiles yourself). Continue with the
+   absolute path regardless.
+5. Register the MCP server at user scope so it applies across all projects:
+       claude mcp add anti-tangent ~/.local/bin/anti-tangent-mcp -s user
+   Verify with `claude mcp list`.
+6. The server needs at least one reviewer key. Ask me which of
+   ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY to use. If I want
+   Claude Code to inherit it from my shell env, leave the registration as-is
+   and remind me to export the variable from my shell profile. Otherwise
+   re-register with `-e KEY=VALUE` so the key lives in Claude Code's MCP
+   config instead of my shell env. Do not print the value back in any
+   subsequent report.
+7. Download `INTEGRATION.md` for the installed version to
+   `~/.claude/anti-tangent.md` (overwrite if present — it is a mirror, not a
+   user file):
+       https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}/INTEGRATION.md
+8. Wire that file into `~/.claude/CLAUDE.md` so every Claude Code session
+   sees the protocol. Claude Code's `@`-import does NOT expand `~` — use the
+   literal absolute path (e.g. `@/Users/me/.claude/anti-tangent.md` on macOS,
+   `@/home/me/.claude/anti-tangent.md` on Linux):
+   - If `~/.claude/CLAUDE.md` exists, append the import line under an
+     `## Active integrations` heading (create the heading if absent). Skip if
+     the same import is already present.
+   - If it doesn't exist, create it with that heading and one import line.
+
+Report: installed version, binary path, `claude mcp list` output (with any
+key values redacted), and the final contents of `~/.claude/CLAUDE.md`.
+````
+
+#### opencode
+
+````text
+Install the latest anti-tangent-mcp release on this Linux/macOS machine and
+wire it into opencode. Do all of the following, reporting progress after each
+step and stopping on any error. NEVER echo the value of any API key in your
+reports — redact to `***` whenever a step would otherwise print one.
+
+1. Detect OS+arch (`uname -s`, `uname -m`). Map to one of Linux_x86_64,
+   Linux_arm64, Darwin_x86_64, Darwin_arm64. If the host is Windows, stop
+   and tell me to use the manual install instead.
+2. Look up the latest release tag from
+   https://api.github.com/repos/patiently/anti-tangent-mcp/releases/latest;
+   strip the leading `v` from `tag_name` to get VERSION.
+3. Download `anti-tangent-mcp_${VERSION}_${OS}_${ARCH}.tar.gz`, extract
+   `anti-tangent-mcp` to `~/.local/bin/anti-tangent-mcp` (`mkdir -p
+   ~/.local/bin` first, `chmod +x` after), and verify
+   `~/.local/bin/anti-tangent-mcp --version` prints VERSION.
+4. opencode requires an ABSOLUTE path in MCP `command` and does NOT inherit
+   shell env into MCP servers — so the reviewer key must be declared in the
+   opencode config. Ask me which of ANTHROPIC_API_KEY / OPENAI_API_KEY /
+   GOOGLE_API_KEY to use, and what value (I'll paste it once). Hold the value
+   in memory only; do not echo it back in any subsequent report.
+5. `mkdir -p ~/.config/opencode`, then open `~/.config/opencode/opencode.json`.
+   If it doesn't exist, create it as
+   `{ "$schema": "https://opencode.ai/config.json" }`. Then add or merge an
+   `mcp.anti-tangent` entry, preserving any other MCP servers already
+   configured. Use the absolute resolved binary path (no `~`):
+       {
+         "mcp": {
+           "anti-tangent": {
+             "type": "local",
+             "command": ["/abs/path/to/anti-tangent-mcp"],
+             "environment": {
+               "<PROVIDER>_API_KEY": "<value>"
+             }
+           }
+         }
+       }
+6. Download `INTEGRATION.md` for the installed version to
+   `~/.config/opencode/anti-tangent.md` (overwrite if present):
+       https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}/INTEGRATION.md
+7. Wire that file into opencode's top-level `instructions` array in the same
+   `~/.config/opencode/opencode.json` you edited in step 5 — opencode loads
+   files listed there automatically; it does NOT process `@`-imports inside
+   `AGENTS.md`. Use the literal absolute path (no `~`):
+       {
+         "instructions": ["/abs/path/to/.config/opencode/anti-tangent.md"]
+       }
+   If an `instructions` array is already present, append the path only if
+   not already listed. Do not duplicate entries.
+8. Tell me to restart opencode so the new MCP entry and `instructions` are
+   loaded.
+
+Report: installed version, binary path, and the final `opencode.json` with
+every `*_API_KEY` value redacted to `***` before printing.
+````
+
 ## Configure
 
 Set at least one provider key. The defaults route every hook through Anthropic; override per hook with env vars.
