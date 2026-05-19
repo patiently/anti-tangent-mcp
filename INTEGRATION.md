@@ -160,27 +160,15 @@ Two rules for plan authors:
 
 ## 4. For implementers — the lifecycle protocol
 
-> **Before reaching for the full protocol, check lightweight eligibility.** Many tasks qualify for lightweight mode (skip `validate_task_spec`, skip `check_progress`, keep `validate_completion` as the sanity gate). The full clause below adds ~50 lines of dispatch boilerplate; lightweight is ~15 lines. Lightweight applies when ALL of: (a) the task touches at most two files OR is docs/config/data-only; (b) the task is mechanical with no production-design or test-design choices; (c) the spec includes the literal text, exact diff, exact command, or exact insertion shape. `validate_plan` may pre-annotate tasks with `lightweight_eligible: true` and a `lightweight_reason` — treat those as advisory controller hints rather than permission to skip judgment. See [Lightweight protocol mode](#lightweight-protocol-mode-v031) below for the reference clause.
-
-If you're an implementing subagent (or you're writing a system prompt for one), this section is what to follow.
-
-### 4.1 Protocol summary
+> **Lightweight eligibility first.** Many tasks qualify for lightweight mode (skip `validate_task_spec`, skip `check_progress`, keep `validate_completion` as the sanity gate). Lightweight applies when ALL of: (a) the task touches ≤ 2 files OR is docs/config/data-only; (b) it is mechanical (no production-design or test-design choices); (c) the spec includes the literal text, exact diff, exact command, or exact insertion shape. `validate_plan` may pre-annotate tasks with `lightweight_eligible: true` and `lightweight_reason` — advisory only. See [Lightweight protocol mode](#lightweight-protocol-mode-v031) below for the reference clause.
 
 | Phase | Tool | Required? | When to call |
 |---|---|---|---|
 | Start | `validate_task_spec` | **Yes** | Once, before writing any code |
-| During | `check_progress` | Optional | When you suspect drift mid-task; otherwise skip |
+| During | `check_progress` | Optional (advisory; low-signal in field data — call only when you suspect drift) | Mid-task, when you suspect drift |
 | End | `validate_completion` | **Yes** | Before reporting DONE |
 
 One task = one session = one subagent. The session_id returned by `validate_task_spec` lives in the implementer's context for the lifetime of the task; it is not handed off to anyone else.
-
-(Note: the controller may have separately called `validate_task_spec` against the same task at the plan-handoff gate — see §5.1. That created a different session that's already gone. The implementer always creates its own fresh session at task start.)
-
-#### `check_progress` per-tool note
-
-**Status:** OPTIONAL / advisory (was RECOMMENDED prior to v0.3.1).
-
-Field data from execution-phase usage shows `check_progress` consistently produces low-signal findings — mid-implementation context is inherently ambiguous (tests not yet written, function not yet finished, assertion not yet reached). The fast-model default magnifies the issue. Call it when *you* sense drift mid-task; do not treat it as a mandatory gate. The strong-model `validate_completion` post-impl call is far higher signal for a typical task.
 
 ### 4.2 The implementer-prompt clause (paste this into every dispatch)
 
@@ -238,25 +226,19 @@ If codescene-mcp is not configured, skip this step silently.
 
 If any `severity: major` pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE so `validate_completion` and the controller can see how the risk was handled.
 
-### 4.2a Short dispatch target shape
+**Short variant for agents with the protocol already in their system prompt.** If the implementer already has the full clause above in its system prompt or local instructions, controllers may dispatch the shorter clause:
 
-For agents that already have the full protocol in their system prompt or local instructions, controllers can dispatch a shorter task-specific clause:
-
-```markdown
+````markdown
 ## Drift protection
 
 Use anti-tangent per the standard dispatch protocol. For this task:
-- Call `validate_task_spec` before edits unless `lightweight_eligible: true` is explicitly set by the controller.
+- Call `validate_task_spec` before edits unless `lightweight_eligible: true` is set by the controller.
 - Call `validate_completion` before DONE and paste its `summary_block`.
 - If CodeScene MCP is configured, run `pre_commit_code_health_safeguard` after meaningful code changes.
 - If any major pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
-```
+````
 
-### 4.2b Language-scoping prose caveat
-
-The text-only reviewer can surface `ambiguous_spec` findings around closure/scoping semantics — Kotlin `var` captured by a lambda, Python nested-scope `nonlocal`, JavaScript `let` vs `const` in arrow bodies, etc. — when the prose AC reads ambiguously even though the verbatim code block in the plan is unambiguous.
-
-Implementer mitigation: trust the verbatim plan code block. Paste it as-is, run the tests, and only deviate from the code if the *tests* disagree with the prose. Do not re-interpret the prose against your own model of the language's scoping rules — the plan author's code block already encodes the intent. If you genuinely cannot reconcile the code and the prose, stop and ask the controller; do not silently rewrite either.
+**Language-scoping prose caveat.** Reviewers can surface `ambiguous_spec` findings around closure/scoping semantics — Kotlin `var` captured by a lambda, Python `nonlocal`, JS `let`/`const` in arrow bodies — when the prose AC reads ambiguously even though the verbatim code block in the plan is unambiguous. Trust the verbatim plan code block; only deviate if the *tests* disagree with the prose. If you genuinely cannot reconcile code and prose, stop and ask the controller.
 
 ### Lightweight protocol mode (v0.3.1+)
 
@@ -291,37 +273,9 @@ The two tools are complementary, not redundant:
 - Before reporting DONE (alongside `validate_completion`): call CodeScene's `analyze_change_set` for the full branch-vs-base view. If the Code Health delta is negative or a regression is reported, surface it in the DONE summary and consider iterating — anti-tangent itself remains advisory-only, but the implementer-side judgment call benefits from the codebase-grounded second opinion.
 - For drill-down on a flagged issue: `code_health_review`.
 
-On already-degraded files, read each CodeScene finding's `value` versus `value_before` before reacting to a top-level failed gate. A file can remain over threshold because it was already degraded before the current task; the task-relevant signal is whether the current change worsened the metric or crossed a threshold.
-
-The repository also keeps anonymized upstream-feedback drafts under `docs/feedback/codescene/`. These are public-safe issue bodies for CodeScene maintainers; they document companion-tool friction but do not change anti-tangent runtime behavior. Examples include [`already-degraded-file-deltas.md`](docs/feedback/codescene/already-degraded-file-deltas.md), [`per-task-attribution-ledger.md`](docs/feedback/codescene/per-task-attribution-ledger.md), [`pasteable-companion-envelope.md`](docs/feedback/codescene/pasteable-companion-envelope.md), and [`test-file-classification.md`](docs/feedback/codescene/test-file-classification.md).
-
 **Advisory posture.** Anti-tangent never enforces CodeScene findings server-side. The integration lives at the dispatch-clause / convention layer: a controller that has CodeScene MCP installed updates the dispatch clause to include the companion calls; the implementer cites the findings in its DONE summary. If CodeScene MCP isn't configured in the host, the companion calls are simply skipped — anti-tangent's own protocol is unchanged.
 
 **Lightweight mode.** Tasks dispatched under the lightweight protocol (doc-only edits, mechanical relocations) skip `validate_task_spec`, `check_progress`, and the CodeScene companion calls, while still requiring `validate_completion` as the sanity gate.
-
-**Enabling CodeScene companion tools.** Anti-tangent does not call CodeScene automatically. To make the companion steps available, configure CodeScene MCP in the same MCP host that runs anti-tangent.
-
-Consumer setup checklist:
-
-- Install or run the CodeScene MCP package: `npx -y @codescene/codehealth-mcp`.
-- Set `CS_ACCESS_TOKEN` in the environment available to the MCP host.
-- Add a CodeScene MCP server entry to your host configuration. The exact file differs by host, but the server entry should be equivalent to:
-
-```json
-{
-  "mcpServers": {
-    "codescene": {
-      "command": "npx",
-      "args": ["-y", "@codescene/codehealth-mcp"],
-      "env": {
-        "CS_ACCESS_TOKEN": "${CS_ACCESS_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-Keep anti-tangent and CodeScene as separate MCP servers. See the [CodeScene MCP installation guide](https://github.com/codescene-oss/codescene-mcp-server#installation) for the upstream host-specific config shapes. Once the server is wired in, the dispatch clause in §4.2 already covers the recommended cadence (Step 2b / Step 3b); `code_health_review` is available as a drill-down when a safeguard returns `degraded`.
 
 ### 4.3 How to address findings
 
@@ -330,96 +284,6 @@ Keep anti-tangent and CodeScene as separate MCP servers. See the [CodeScene MCP 
 **The retry loop.** Parse failures on the reviewer's response are handled inside the server (one retry with a JSON-only reminder). The implementer does not need to handle that.
 
 **Session not found.** If `check_progress` or `validate_completion` returns a finding with `category: session_not_found`, the session expired (default TTL 4h) or was never created. Call `validate_task_spec` again to start a fresh session and continue with the new ID.
-
-### 4.4 Concrete examples
-
-**Example A — pre-hook surfaces a vague AC.**
-
-Initial call:
-
-```json
-{
-  "task_title": "Add /healthz endpoint",
-  "goal": "Liveness probe for the HTTP server",
-  "acceptance_criteria": [
-    "Returns 200 OK with body \"ok\"",
-    "Should be fast"
-  ]
-}
-```
-
-Response (abridged):
-
-```json
-{
-  "verdict": "warn",
-  "findings": [{
-    "severity": "major",
-    "category": "ambiguous_spec",
-    "criterion": "Should be fast",
-    "evidence": "AC #2 lacks a measurable target",
-    "suggestion": "Replace with: 'p95 latency < 50 ms at 100 RPS'"
-  }],
-  "next_action": "Tighten AC #2 and re-validate."
-}
-```
-
-The implementer surfaces this to the controller, the AC is rewritten, and a fresh `validate_task_spec` call returns `verdict: "pass"`.
-
-**Example B — mid-hook catches scope drift.**
-
-After writing 200 lines, the implementer calls `check_progress` with `working_on: "added Prometheus metrics endpoint"` and the changed files. Response:
-
-```json
-{
-  "verdict": "warn",
-  "findings": [{
-    "severity": "major",
-    "category": "scope_drift",
-    "criterion": "non-goal: 'Authentication on the endpoint'",
-    "evidence": "metrics_handler.go line 17 wires the auth middleware",
-    "suggestion": "Remove the auth middleware from the new route; metrics handler is out of scope for this task entirely."
-  }],
-  "next_action": "Revert the auth wiring AND remove the metrics endpoint (out of scope)."
-}
-```
-
-The implementer rolls back the metrics work and the next mid-check passes.
-
-**Example C — post-hook catches an untouched AC.**
-
-Final call with `summary: "Implemented /healthz returning ok"`, a unified diff in `final_diff`, and test output in `test_evidence` (v0.2.0+: at least one of `final_files`, `final_diff`, or `test_evidence` must be non-empty). Request:
-
-```json
-{
-  "session_id": "...",
-  "summary": "Implemented /healthz returning ok; see diff and test run.",
-  "final_diff": "diff --git a/handlers/health.go b/handlers/health.go\n...",
-  "test_evidence": "go test ./handlers/... -run TestHealthz\nok handlers 0.012s"
-}
-```
-
-Response:
-
-```json
-{
-  "verdict": "fail",
-  "findings": [{
-    "severity": "critical",
-    "category": "missing_acceptance_criterion",
-    "criterion": "p95 latency < 50 ms at 100 RPS",
-    "evidence": "no benchmark or load test was added",
-    "suggestion": "Add a Go benchmark in handlers/health_test.go that runs 100 RPS for 10s and asserts p95 < 50ms; include the result in test_evidence."
-  }],
-  "next_action": "Add the benchmark and re-validate; do not report DONE.",
-  "session_expires_at": "2026-05-12T18:30:00Z",
-  "session_ttl_remaining_seconds": 12600
-}
-```
-
-`session_expires_at` and `session_ttl_remaining_seconds` are included in all stateful-hook responses (v0.2.0+). If the session TTL expires mid-task (default 4h), `check_progress` or `validate_completion` returns a `category: session_not_found` finding — re-call `validate_task_spec` to start a fresh session.
-
-The implementer adds the benchmark, re-runs `validate_completion` with the new test evidence, gets `verdict: "pass"`, and reports DONE.
 
 ---
 
