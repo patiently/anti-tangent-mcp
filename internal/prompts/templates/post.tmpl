@@ -22,7 +22,17 @@ Pinned by:
 For each contract above, assess whether `final_files` / `final_diff` evidence satisfies it. On miss, emit a finding with `category: missing_acceptance_criterion`, `criterion: exit_contract`, `evidence` quoting the contract and the closest matching production-code surface, and `suggestion` naming the specific edit that would satisfy the contract.
 
 {{if .ExitContractsInferred}}These contracts were inferred from cross-task references rather than authored explicitly. On miss, cap at `severity: minor` unless the evidence is structurally inconsistent — e.g. the contract names a constant the diff explicitly leaves undefined — in which case `severity: major` is appropriate.{{else}}These contracts were authored explicitly by the plan. On miss, you may emit `severity: major` for hard mismatches (a named symbol the contract references is absent from the diff) and `severity: minor` for soft mismatches (evidence suggests the contract is satisfied but cannot be verified from the supplied evidence).{{end}}
-{{end}}{{if .MajorPreFindings}}
+{{end}}{{if .Spec.NormativeTestBodies}}
+## Normative test bodies (binding)
+
+The following test bodies were declared as binding when the implementer started this task. They are authoritative for fixture state, exact strings, and assertions. The AC list above is authoritative for behavior — but when an AC and a normative body appear to disagree on a fixture value, the body wins.
+
+Do NOT flag AC-vs-fixture mismatches when a normative body explicitly pins the value.
+
+{{range .Spec.NormativeTestBodies}}---
+{{.}}
+---
+{{end}}{{end}}{{if .MajorPreFindings}}
 ## Major pre-task findings to verify
 
 Check whether the implementer's summary, final evidence, or test evidence explicitly mitigates each major pre-task finding below. If a major pre-task finding remains unresolved and is relevant to acceptance-criterion completion, emit a completion finding mapped to the relevant AC or `spec`.

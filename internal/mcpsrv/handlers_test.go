@@ -2545,3 +2545,46 @@ func TestValidateTaskSpec_NewServerBootsAndHandlerAcceptsNewField(t *testing.T) 
 	require.True(t, ok)
 	require.Equal(t, att, sess.Spec.HarnessShapeAttestations)
 }
+
+func TestValidateCompletion_NormativeBodiesPropagatedFromSession(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"n"}`), Model: "claude-sonnet-4-6"},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, preEnv, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "t",
+		Goal:                "g",
+		AcceptanceCriteria:  []string{"ac1"},
+		NormativeTestBodies: []string{"@Test fun emits_spans() { /* binding */ }"},
+	})
+	require.NoError(t, err)
+
+	_, _, err = h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: preEnv.SessionID,
+		Summary:   "did it",
+		FinalDiff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n",
+	})
+	require.NoError(t, err)
+	require.Contains(t, rv.LastRequest.User, "## Normative test bodies (binding)",
+		"post-hook prompt must surface the session-stored normative bodies")
+	require.Contains(t, rv.LastRequest.User, "@Test fun emits_spans() { /* binding */ }")
+}
+
+func TestValidateCompletion_LightweightMode_OmitsNormativeBodiesSection(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"n"}`), Model: "claude-sonnet-4-6"},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: "",
+		Summary:   "did it",
+		FinalDiff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n",
+	})
+	require.NoError(t, err, "lightweight ValidateCompletion must not error")
+	require.NotContains(t, rv.LastRequest.User, "## Normative test bodies (binding)",
+		"lightweight mode (empty session_id) must not render the normative-bodies section")
+}

@@ -727,3 +727,29 @@ func TestRenderPost_WithoutExitContractsOmitsSection(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, out.User, "Exit contracts (")
 }
+
+func TestRenderPost_WithNormativeTestBodies_IncludesSection(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec: session.TaskSpec{
+			Title: "t", Goal: "g",
+			AcceptanceCriteria:  []string{"ac1"},
+			NormativeTestBodies: []string{"@Test fun emits_spans() { /* binding */ }"},
+		},
+		Summary:   "did it",
+		FinalDiff: "diff --git ...",
+	})
+	require.NoError(t, err)
+	require.Contains(t, out.User, "## Normative test bodies (binding)")
+	require.Contains(t, out.User, "@Test fun emits_spans() { /* binding */ }")
+	require.Contains(t, out.User, "Do NOT flag AC-vs-fixture mismatches when a normative body explicitly pins the value.")
+}
+
+func TestRenderPost_WithoutNormativeTestBodies_OmitsSection(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:      session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}},
+		Summary:   "did it",
+		FinalDiff: "diff --git ...",
+	})
+	require.NoError(t, err)
+	require.NotContains(t, out.User, "## Normative test bodies (binding)")
+}
