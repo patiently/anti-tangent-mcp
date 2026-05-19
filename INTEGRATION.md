@@ -117,19 +117,11 @@ The service is a Gin app on port 8080. The probe is consumed by the
 Kubernetes liveness check defined in `deploy/k8s/api.yaml`.
 ```
 
-A common style mistake is a vague AC like `should be fast`. `validate_task_spec` will flag it as `category: ambiguous_spec` with a suggestion to pin the load profile (e.g. the `p95 < 50ms at 100 RPS` rewrite above). Catch this at plan time, not at implementation time.
-
 ### 3.3 What `validate_task_spec` actually checks
 
 - **Structural completeness.** Is the goal stated? Are there acceptance criteria? Are non-goals declared where they help bound scope?
 - **Acceptance-criterion quality.** Is each AC testable, specific, and unambiguous? For any vague AC, the reviewer suggests a concrete rewrite.
 - **Implicit assumptions.** Each assumption a fresh implementer would have to make becomes a finding, so the spec author can either pin it down or explicitly mark it as implementer's discretion.
-
-### 3.4 Mapping to existing plan-writers
-
-- **superpowers `writing-plans`:** add the Goal/AC/Non-goals/Context block to the top of each `### Task N:` section. The skill's existing "Files:" / "Steps:" structure stays untouched below.
-- **hone-ai:** same pattern — header block above the task body.
-- **Vanilla CLAUDE.md plans:** same pattern.
 
 ### 3.5 Anti-pattern: keep implementation steps OUT of the AC list
 
