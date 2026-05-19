@@ -81,7 +81,10 @@ func TestParsePlan_LightweightFieldsOptionalForOlderReviewerJSON(t *testing.T) {
 	assert.Empty(t, r.Tasks[0].LightweightReason)
 }
 
-func TestPlanSchemas_AllowOptionalLightweightTaskFields(t *testing.T) {
+func TestPlanSchemas_LightweightTaskFieldsInPropertiesAndRequired(t *testing.T) {
+	// OpenAI structured-outputs strict:true requires every property to appear
+	// in required. Previously lightweight_eligible and lightweight_reason were
+	// in properties but not required, causing HTTP 400 on OpenAI.
 	for _, tc := range []struct {
 		name string
 		raw  []byte
@@ -93,8 +96,8 @@ func TestPlanSchemas_AllowOptionalLightweightTaskFields(t *testing.T) {
 			props, required := taskSchemaPropertiesAndRequired(t, tc.raw)
 			assert.Contains(t, props, "lightweight_eligible")
 			assert.Contains(t, props, "lightweight_reason")
-			assert.NotContains(t, required, "lightweight_eligible")
-			assert.NotContains(t, required, "lightweight_reason")
+			assert.Contains(t, required, "lightweight_eligible")
+			assert.Contains(t, required, "lightweight_reason")
 		})
 	}
 }
