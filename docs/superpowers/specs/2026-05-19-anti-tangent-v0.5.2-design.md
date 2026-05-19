@@ -12,7 +12,7 @@ A second anonymized field report exercised `anti-tangent-mcp` v0.5.0 across a 7-
 Eight distinct improvements surfaced. They cluster into three architectural moves:
 
 - **Server-side response-shape changes** (verdict ladder, `malformed_evidence` patterns, `controller_verified_references` suppression scope): touch `internal/verdict` and `internal/mcpsrv/handlers.go`. No new public input fields. The verdict change is a stable contract — `pass`/`warn`/`fail` keep meaning; thresholds shift. Verdict derivation moves to handler-level (after all finding-list mutations) so the envelope's verdict always matches the envelope's findings.
-- **Session propagation + one new public input + one new finding category** (normative-body rendering at `validate_completion`; `harness_shape_attestation` input on `validate_task_spec`; `attestation_contradiction` finding category): `internal/session/session.go` is unchanged — `Session.Spec.NormativeTestBodies` already exists from v0.5.0. `internal/mcpsrv/task_spec_input.go` gains a normalizer for `harness_shape_attestation`. All four reviewer-output JSON schemas (`schema.json`, `plan_schema.json`, `tasks_only_schema.json`, `plan_findings_only_schema.json`) add `attestation_contradiction` to their `category` enums (this is the only output-side schema change in v0.5.2; the v0.5.1 `schema_invariants_test.go` continues to enforce `properties == required`).
+- **Session propagation + one new public input + one new finding category** (normative-body rendering at `validate_completion`; `harness_shape_attestation` input on `validate_task_spec`; `attestation_contradiction` finding category): `Session.Spec.NormativeTestBodies` already exists from v0.5.0 — no change needed for #2's session-propagation work. `internal/session/session.go` DOES change for #6: define a new `HarnessShapeAttestation` struct AND add `HarnessShapeAttestations []HarnessShapeAttestation` to `TaskSpec` (the struct must live in `session` because `mcpsrv` already imports `session` — defining the type in `mcpsrv` would create an import cycle once `session.TaskSpec` references it). `internal/mcpsrv/task_spec_input.go` gains a normalizer for `harness_shape_attestation`. All four reviewer-output JSON schemas (`schema.json`, `plan_schema.json`, `tasks_only_schema.json`, `plan_findings_only_schema.json`) add `attestation_contradiction` to their `category` enums (the only output-side schema change in v0.5.2; the v0.5.1 `schema_invariants_test.go` continues to enforce `properties == required`).
 - **Prompt-template tunes** (major→minor demotion when normative bodies disambiguate; `harness_shape_attestation` rendering; `.trimIndent()` pre-task heuristic): edits in `internal/prompts/templates/pre.tmpl` and `post.tmpl`; golden-file regeneration in `internal/prompts/testdata/`.
 
 The v0.5.0 normative-body work landed correctly at `validate_task_spec`, but the field report shows AC-vs-fixture mismatches still fire at `validate_completion`. The root cause is plumbing: the post-hook prompt never received the normative bodies the pre-hook stored. v0.5.2 closes that loop and pairs it with a reviewer-side demotion rule so resolved-by-normative-body ambiguities present as `minor` advisories rather than `major` blockers.
@@ -125,7 +125,7 @@ Several envelopes are constructed by handler code without a reviewer call:
 - **Partial recovery** envelopes from `ParseResultPartial` / `ParsePlanResultPartial`
 - **Cache hits** on `validate_plan` (returns a previously-finalized envelope)
 
-These ALL go through `FinalizeVerdict` (or `FinalizePlanVerdict`) immediately before being returned. To preserve current fail-grade semantics on hard rejections, this release MAY also bump the severity of the synthetic findings emitted for hard rejection cases so the new derivation produces the expected verdict:
+These ALL go through `FinalizeVerdict` (or `FinalizePlanVerdict`) immediately before being returned. To preserve current fail-grade semantics on hard rejections, this release MUST bump the severity of the synthetic findings emitted for hard rejection cases — the new ladder otherwise produces `warn` for these (≥1 major → warn), which would silently weaken existing rejection contracts. Mandatory adjustments:
 
 - `malformed_evidence` → severity `critical` (was `major` — `critical` produces `fail` under the new ladder; `major` would produce `warn`).
 - `payload_too_large` → severity `critical` (same reasoning).
@@ -331,7 +331,7 @@ A new helper in `internal/mcpsrv/task_spec_input.go` mirrors the `controller_ver
 
 ### Reviewer-prompt rendering
 
-`pre.tmpl` gains a new section, rendered only when `len(.HarnessShapeAttestations) > 0`:
+`pre.tmpl` gains a new section, rendered only when `len(.Spec.HarnessShapeAttestations) > 0`. (The template context is `prompts.PreInput`, which carries spec data at `.Spec.*` — see how existing fields like `.Spec.AcceptanceCriteria`, `.Spec.NonGoals`, `.Spec.PinnedBy` are referenced in `pre.tmpl`.)
 
 ```
 ## Harness shape attestations (caller-attested)
@@ -353,20 +353,16 @@ When (a) or (b) holds, emit a finding with:
   - `evidence: <which AC contradicts it, quoted>`
   - `suggestion: <revised AC or explicit harness change request>`
 
-<for each attestation in .HarnessShapeAttestations:>
-- **{{harness}}** (at `{{path}}`):
-<for each assertion in attestation.assertions:>
-    - {{assertion}}
-</for>
-</for>
+{{range .Spec.HarnessShapeAttestations}}- **{{.Harness}}** (at `{{.Path}}`):
+{{range .Assertions}}    - {{.}}
+{{end}}{{end}}
 ```
 
 ### Files touched
 
-- `internal/mcpsrv/task_spec_input.go`: add `normalizeHarnessShapeAttestation` and the `HarnessShapeAttestation` Go type. Mirrors the existing `normalizeBoundedStringList` and CVR pattern.
-- `internal/mcpsrv/handlers.go`: thread the field from `ValidateTaskSpecArgs` through `normalizeTaskSpecInputs` into the session and into the pre-hook prompt context.
-- `internal/mcpsrv/server.go`: update `validateTaskSpecTool()` so the MCP tool-registration schema exposes `harness_shape_attestation` as an optional input. Without this, MCP clients can't see the new field even though the handler accepts it.
-- `internal/session/session.go`: add `HarnessShapeAttestations []HarnessShapeAttestation` to `TaskSpec`. (The `HarnessShapeAttestation` Go type is defined in `task_spec_input.go` and re-exported here; place where the v0.5.0 `NormativeTestBodies` field sits.)
+- `internal/session/session.go`: define the `HarnessShapeAttestation` struct type here AND add `HarnessShapeAttestations []HarnessShapeAttestation` to `TaskSpec` (alongside the v0.5.0 `NormativeTestBodies` field). The struct must live in `session` (or a lower-level package) — `mcpsrv` already imports `session`, so defining the type in `mcpsrv` would create an import cycle when `session.TaskSpec` references it.
+- `internal/mcpsrv/task_spec_input.go`: add `normalizeHarnessShapeAttestation([]session.HarnessShapeAttestation) ([]session.HarnessShapeAttestation, error)` — the normalizer consumes/produces the `session`-defined type. Mirrors the existing `normalizeBoundedStringList` pattern (trim, dedup, cap counts and rune lengths).
+- `internal/mcpsrv/handlers.go`: add `HarnessShapeAttestation []session.HarnessShapeAttestation` (or equivalent shape — Go reflection-tag-friendly) to `ValidateTaskSpecArgs` with `json:"harness_shape_attestation,omitempty"`. The `mcp.AddTool` registration in `server.go` reflects on this args struct to generate the MCP tool's input schema — no edit to `server.go` or to `validateTaskSpecTool()` (which only sets Name + Description) is needed; the schema is auto-derived from the struct tags. Thread the normalized value through `normalizeTaskSpecInputs` into `session.TaskSpec.HarnessShapeAttestations` and into the pre-hook prompt context.
 - `internal/prompts/prompts.go`: `PreInput.Spec` already passes through `session.TaskSpec`, so the new field is automatically visible to the template — no struct change to `prompts.PreInput`.
 - `internal/prompts/templates/pre.tmpl`: add the new `## Harness shape attestations` section.
 - `internal/prompts/testdata/pre_*.golden`: regenerate.
@@ -441,9 +437,10 @@ The paste-clause's "During work (OPTIONAL)" step gets the same wording appended.
 - **Inputs.** All new fields are optional with safe defaults. Callers on v0.5.1 continue to work unchanged.
 - **Outputs.** The `verdict` field stays in `{pass, warn, fail}`. The only externally-visible change is the borderline-case distribution. Callers that conditionally branch on `verdict == "fail"` get fewer false fails on single-minor.
 - **`noise_cluster` advisory.** Callers that iterate findings see one extra `minor` advisory when the ≥3-minor-warn branch fires. Existing finding parsers handle it as any other minor; the `criterion: noise_cluster` lets callers identify and downweight it.
-- **`harness_shape_attestation`.** Net-new field. Existing dispatch templates ignore it. Callers wanting the value update their dispatch clause to pass it from the task spec.
+- **New `attestation_contradiction` output category.** Callers that exhaustively switch on the `category` enum (e.g. for routing findings to different UI lanes) MUST be updated to handle `attestation_contradiction`. The category is only emitted when a task uses `harness_shape_attestation` — callers that do not pass that input will never see this category, so this caller-side update is only required if you opt into the new field. Callers that treat unknown categories generically (parse and surface as-is) need no change. The category enum landing in all four reviewer-output schemas is the trigger that makes this a publicly-observed change rather than purely internal.
+- **`harness_shape_attestation`.** Net-new input field. Existing dispatch templates ignore it. Callers wanting the value update their dispatch clause to pass it from the task spec. Opting in is when the new `attestation_contradiction` output category becomes reachable (see above).
 - **Session propagation.** A v0.5.1 caller that calls `validate_task_spec` then `validate_completion` continues to work; if they didn't pass `normative_test_bodies` they continue to get a post-hook prompt without that section. A v0.5.2 caller that did pass bodies at pre-hook automatically gets them rendered at post-hook.
-- **Schema files.** No `internal/verdict/*_schema.json` changes. The OpenAI strict-mode invariant (#22 history: required-must-cover-properties) remains satisfied — verified by the v0.5.1 `schema_invariants_test.go` regression test, which runs on every PR.
+- **Schema files.** All four `internal/verdict/*_schema.json` files add `"attestation_contradiction"` to their `category` enums (#6). No other output-schema changes. The OpenAI strict-mode invariant (#22 history: required-must-cover-properties) remains satisfied — verified by the v0.5.1 `schema_invariants_test.go` regression test, which runs on every PR.
 
 ## Testing strategy
 
@@ -454,7 +451,7 @@ Per-item, in addition to the unit tests already named above:
 - **Demotion advisory:** prompt golden + a reviewer-output parsing test that confirms a reviewer-emitted `minor` finding with `(resolved-by-normative-body: …)` suffix in `suggestion` is parsed as-is. Server doesn't re-derive severity.
 - **Malformed-evidence patterns:** parametric per-pattern test asserting rejection and finding shape match.
 - **CVR claim-level:** three-case table: (a) one substring matches a CVR entry → claim suppressed; (b) no substring matches → claim retained; (c) substring < 4 code points → not used for matching.
-- **`harness_shape_attestation`:** input normalization (caps, dedup, error messages) + prompt-rendering golden + session round-trip + MCP tool-registration test (the `validateTaskSpecTool()` factory in `internal/mcpsrv/server.go` exposes the new optional field in the MCP tool's input schema so MCP clients see and can pass it).
+- **`harness_shape_attestation`:** input normalization (caps, dedup, error messages) + prompt-rendering golden + session round-trip + MCP tool-registration test confirming the field shows up in the registered tool's input schema. Mechanism note: the input schema is reflected from `ValidateTaskSpecArgs` struct tags by the `mcp.AddTool` registration in `internal/mcpsrv/server.go`; adding the field to the args struct with the correct `json:"harness_shape_attestation,omitempty"` tag is sufficient for MCP clients to see it. The test exercises the registration call site (no edits to `validateTaskSpecTool()` in `handlers.go`, which only carries Name + Description).
 - **`.trimIndent()` heuristic:** prompt golden assertion (no reviewer-output test — the heuristic is a prompt instruction; the reviewer's compliance is tested via E2E only and remains off the per-PR path).
 - **Docs nudge:** TWO targeted assertions, not a permissive count. (a) The lifecycle table row at INTEGRATION.md §4 contains the literal substring `test that 'should' fail`. (b) The implementer paste-clause's "During work" step also contains the literal substring `test that 'should' fail`. Exact count `grep -c` MUST equal 2 (failing if 1 or 3+ — catches accidental partial edits or duplicated paste).
 
