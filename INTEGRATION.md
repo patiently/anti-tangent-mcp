@@ -301,7 +301,7 @@ After the subagent reports DONE, you may want to require evidence that `validate
 
 Do NOT have the controller call `validate_completion` itself after the subagent reports DONE. The implementer's session was created in its own context — the controller doesn't have the `session_id`, so a fresh `validate_completion` call from the controller would either fail with a `session_not_found` finding (no session to thread) or, if the controller passed an arbitrary id, return spurious findings. Either way it duplicates the post-hook gate the subagent already cleared and adds noise. The subagent's post-hook IS the gate.
 
-(This is different from §5.1, which is `validate_task_spec` against fresh sessions before any subagent has started — that's pre-implementation and lives in the controller's own context.)
+(This is different from §5.1, which is `validate_plan` at plan-handoff time before any subagent has started — that's pre-implementation and lives in the controller's own context.)
 
 ### 5.5 `validate_plan` vs `validate_task_spec` — when to use which
 
