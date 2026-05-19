@@ -171,6 +171,22 @@ ANTI_TANGENT_PLAN_TASKS_PER_CHUNK=8      # plans above this task count are revie
 ANTI_TANGENT_MAX_TOKENS_CEILING=16384    # cap on per-call max_tokens_override; over-ceiling values are clamped and emit a minor clamp finding (v0.3.0+)
 ```
 
+### Picking a reviewer model
+
+The reviewer LLM should not be the same model as the implementer. Same model + same training data ≈ same blind spots, which defeats the point.
+
+| If your implementer is… | Set `ANTI_TANGENT_*_MODEL` to… |
+|---|---|
+| Anthropic Claude (Sonnet/Opus) | `openai:gpt-5` and/or `google:gemini-3.1-pro-preview` |
+| OpenAI GPT-5 family | `anthropic:claude-sonnet-4-6` and/or `google:gemini-3.1-pro-preview` |
+| Google Gemini | `anthropic:claude-sonnet-4-6` and/or `openai:gpt-5` |
+
+The mid-hook (`check_progress`) is called more often — a fast/cheap tier there is fine. The plan-level hook (`validate_plan`) reasons over the whole plan in one shot — give it a strong tier. `ANTI_TANGENT_PLAN_MODEL` falls back to `ANTI_TANGENT_PRE_MODEL` if unset.
+
+### Smoke test
+
+Launch your MCP host with debug logging on and confirm all four tools — `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion` — appear in the discovered tool catalog. Server-side configuration errors print to stderr at startup.
+
 ### Large plans (chunking)
 
 `validate_plan` automatically chunks plans with more than `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` tasks (default 8). Internally the server makes one Pass-1 reviewer call for cross-cutting `plan_findings` plus `ceil(n/N)` per-task chunks, each carrying the full plan as context. The merged `PlanResult` is identical in shape to the single-call path — callers see no difference. Operators with very dense per-task content (long `**Goal:**` / `**Acceptance criteria:**` blocks) can lower `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` to reduce per-chunk output size, or raise `ANTI_TANGENT_PLAN_MAX_TOKENS` if their reviewer model supports it. Worst-case wall-clock for a 25-task plan is ~5 sequential calls.
