@@ -72,6 +72,31 @@ func formatPlanSummary(pr verdict.PlanResult, modelUsed string, reviewMS int64) 
 	return b.String()
 }
 
+// formatPrimeSummary renders a deterministic, paste-ready text block for a
+// PrimeResult (prime_project_knowledge). Mirrors formatEnvelopeSummary's
+// conventions but emits a `picks:` list and an optional `bm_commands:` count
+// in place of session/TTL data, since prime is stateless.
+func formatPrimeSummary(r verdict.PrimeResult, modelUsed string, reviewMS int64) string {
+	var b strings.Builder
+	b.WriteString("anti-tangent envelope (prime_project_knowledge)\n")
+	fmt.Fprintf(&b, "  verdict:       %s\n", r.Verdict)
+	if r.Partial {
+		b.WriteString("  partial:       true\n")
+	}
+	fmt.Fprintf(&b, "  model_used:    %s\n", modelUsed)
+	fmt.Fprintf(&b, "  review_ms:     %d\n", reviewMS)
+	writeFindingsSummary(&b, r.Findings, "  ")
+	fmt.Fprintf(&b, "  picks: %d\n", len(r.Picks))
+	for _, p := range r.Picks {
+		fmt.Fprintf(&b, "    - [%s] %s — %s\n", p.Priority, p.Permalink, truncate(p.Reason, summaryEvidenceMax))
+	}
+	if len(r.BMCommands) > 0 {
+		fmt.Fprintf(&b, "  bm_commands: %d\n", len(r.BMCommands))
+	}
+	fmt.Fprintf(&b, "  next_action:   %s\n", r.NextAction)
+	return b.String()
+}
+
 // writeFindingsSummary writes the `findings: N total (C critical, M major, m minor)`
 // summary line and one bullet per finding to b, prefixed with the supplied
 // indent. Shared by formatEnvelopeSummary so the layout stays identical.

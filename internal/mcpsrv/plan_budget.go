@@ -30,3 +30,19 @@ func adaptivePlanMaxTokens(cfg config.Config, taskCount int) int {
 	}
 	return floor
 }
+
+// adaptivePrimeMaxTokens implements design §5.3 sizing for prime_project_knowledge.
+// Formula: max(cfg.PrimeMaxTokens, min(cfg.MaxTokensCeiling, 1500 + 50*kbIndexLen)).
+// Applied only when no caller-supplied max_tokens_override is set; explicit
+// overrides route through effectiveMaxTokens (with clamp) at the handler
+// boundary like every other tool. Adaptive bumps do not emit a clamp finding.
+func adaptivePrimeMaxTokens(cfg config.Config, kbIndexLen int) int {
+	scaled := 1500 + 50*kbIndexLen
+	if scaled > cfg.MaxTokensCeiling {
+		scaled = cfg.MaxTokensCeiling
+	}
+	if scaled < cfg.PrimeMaxTokens {
+		return cfg.PrimeMaxTokens
+	}
+	return scaled
+}
