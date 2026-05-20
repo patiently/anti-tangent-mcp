@@ -35,6 +35,7 @@
             "payload_too_large",
             "unverifiable_codebase_claim",
             "convention_deviation",
+            "attestation_contradiction",
             "other"
           ]
         },

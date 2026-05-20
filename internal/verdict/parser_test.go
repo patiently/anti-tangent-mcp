@@ -3,6 +3,8 @@ package verdict
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParse_UnverifiableCodebaseClaim_SeverityFloorToMinor(t *testing.T) {
@@ -66,6 +68,25 @@ func TestParse_ConventionDeviation_SeverityFloorToMinor(t *testing.T) {
 	}
 }
 
+func TestParse_AttestationContradiction_AcceptedAndNotFloored(t *testing.T) {
+	raw := []byte(`{
+		"verdict":"warn",
+		"findings":[{
+			"severity":"major",
+			"category":"attestation_contradiction",
+			"criterion":"records emitted spans",
+			"evidence":"AC asserts no spans recorded",
+			"suggestion":"Revise AC or harness"
+		}],
+		"next_action":"address contradiction"
+	}`)
+	r, err := Parse(raw)
+	require.NoError(t, err, "attestation_contradiction must be a valid category")
+	require.Len(t, r.Findings, 1)
+	require.Equal(t, SeverityMajor, r.Findings[0].Severity, "attestation_contradiction must NOT be floored to minor")
+	require.Equal(t, CategoryAttestationContradiction, r.Findings[0].Category)
+}
+
 func TestParse_MalformedEvidenceCategory_RejectedFromReviewerOutput(t *testing.T) {
 	// malformed_evidence is emitted ONLY by the server-side validate_completion
 	// guard, never by the reviewer. If a reviewer somehow emits it, the
@@ -88,4 +109,24 @@ func TestParse_MalformedEvidenceCategory_RejectedFromReviewerOutput(t *testing.T
 	if !strings.Contains(err.Error(), "category") {
 		t.Errorf("error should mention invalid category; got %v", err)
 	}
+}
+
+func TestParse_DemotedAmbiguousSpec_PassesThroughUnchanged(t *testing.T) {
+	raw := []byte(`{
+		"verdict":"warn",
+		"findings":[{
+			"severity":"minor",
+			"category":"ambiguous_spec",
+			"criterion":"AC1: emits spans",
+			"evidence":"AC reads ambiguous about span count",
+			"suggestion":"Pin count in the AC. (resolved-by-normative-body: Test fun emits_spans pins exactly 2 calls)"
+		}],
+		"next_action":"address as minor"
+	}`)
+	r, err := Parse(raw)
+	require.NoError(t, err)
+	require.Len(t, r.Findings, 1)
+	require.Equal(t, SeverityMinor, r.Findings[0].Severity, "demoted finding stays minor; parser does not re-derive")
+	require.Equal(t, CategoryAmbiguousSpec, r.Findings[0].Category)
+	require.Contains(t, r.Findings[0].Suggestion, "(resolved-by-normative-body:")
 }

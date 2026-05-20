@@ -38,20 +38,21 @@ type Envelope struct {
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
 type ValidateTaskSpecArgs struct {
-	TaskTitle                    string   `json:"task_title"           jsonschema:"required"`
-	Goal                         string   `json:"goal"                 jsonschema:"required"`
-	AcceptanceCriteria           []string `json:"acceptance_criteria,omitempty"`
-	NonGoals                     []string `json:"non_goals,omitempty"`
-	Context                      string   `json:"context,omitempty"`
-	PinnedBy                     []string `json:"pinned_by,omitempty"`
-	ControllerVerifiedReferences []string `json:"controller_verified_references,omitempty"`
-	TestStrategyNotes            []string `json:"test_strategy_notes,omitempty"`
-	CodebaseConventions          []string `json:"codebase_conventions,omitempty"`
-	TestabilityExtractions       []string `json:"testability_extractions,omitempty"`
-	NormativeTestBodies          []string `json:"normative_test_bodies,omitempty"`
-	Phase                        string   `json:"phase,omitempty"`
-	ModelOverride                string   `json:"model_override,omitempty"`
-	MaxTokensOverride            int      `json:"max_tokens_override,omitempty"`
+	TaskTitle                    string                            `json:"task_title"           jsonschema:"required"`
+	Goal                         string                            `json:"goal"                 jsonschema:"required"`
+	AcceptanceCriteria           []string                          `json:"acceptance_criteria,omitempty"`
+	NonGoals                     []string                          `json:"non_goals,omitempty"`
+	Context                      string                            `json:"context,omitempty"`
+	PinnedBy                     []string                          `json:"pinned_by,omitempty"`
+	ControllerVerifiedReferences []string                          `json:"controller_verified_references,omitempty"`
+	TestStrategyNotes            []string                          `json:"test_strategy_notes,omitempty"`
+	CodebaseConventions          []string                          `json:"codebase_conventions,omitempty"`
+	TestabilityExtractions       []string                          `json:"testability_extractions,omitempty"`
+	NormativeTestBodies          []string                          `json:"normative_test_bodies,omitempty"`
+	HarnessShapeAttestation      []session.HarnessShapeAttestation `json:"harness_shape_attestation,omitempty"`
+	Phase                        string                            `json:"phase,omitempty"`
+	ModelOverride                string                            `json:"model_override,omitempty"`
+	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty"`
 }
 
 type handlers struct {
@@ -100,6 +101,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		CodebaseConventions:          inputs.CodebaseConventions,
 		TestabilityExtractions:       inputs.TestabilityExtractions,
 		NormativeTestBodies:          inputs.NormativeTestBodies,
+		HarnessShapeAttestations:     inputs.HarnessShapeAttestations,
 		Phase:                        inputs.Phase,
 	}
 
@@ -126,7 +128,12 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return r, env, retErr
 	}
 	result.Findings = suppressTestabilityExtractionScopeDrift(result.Findings, inputs.TestabilityExtractions)
+	result.Findings = suppressUnverifiableCodebaseClaim(result.Findings, inputs.ControllerVerifiedReferences)
 	result.Findings = normalizeTaskSpecUnverifiableFindings(result.Findings)
+	if cc.Clamp.Severity != "" {
+		result.Findings = append([]verdict.Finding{cc.Clamp}, result.Findings...)
+	}
+	result = verdict.FinalizeVerdict(result)
 
 	// Create the session only after the review succeeds so failed reviews
 	// don't leave orphan sessions in the store waiting for TTL eviction.
@@ -145,7 +152,6 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
-	env = prependClamp(env, cc.Clamp)
 	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
@@ -322,6 +328,11 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		return r, env, retErr
 	}
 
+	if clamp.Severity != "" {
+		result.Findings = append([]verdict.Finding{clamp}, result.Findings...)
+	}
+	result = verdict.FinalizeVerdict(result)
+
 	h.deps.Sessions.AppendCheckpoint(sess.ID, session.Checkpoint{
 		At:        time.Now(),
 		WorkingOn: args.WorkingOn,
@@ -342,7 +353,6 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
-	env = prependClamp(env, clamp)
 	env = h.withSessionTTL(env, sess)
 	return envelopeResult(env)
 }
@@ -387,19 +397,22 @@ func notFoundEnvelope(id string, model config.ModelRef) Envelope {
 	}
 }
 
-func truncatedEnvelope(id string, model config.ModelRef) Envelope {
-	return Envelope{
-		SessionID: id,
-		Verdict:   string(verdict.VerdictWarn),
+// truncatedResult is the no-recovery fallback for per-task truncation. It
+// returns a Result (not an Envelope) so the caller can fold any clamp into
+// Findings, run FinalizeVerdict, and assemble the envelope. The synthetic
+// finding is SeverityMajor (was minor pre-0.5.2) so the ladder derives warn
+// consistently with the previously-explicit Verdict assignment.
+func truncatedResult() verdict.Result {
+	return verdict.Result{
+		Verdict: verdict.VerdictWarn,
 		Findings: []verdict.Finding{{
-			Severity:   verdict.SeverityMinor,
+			Severity:   verdict.SeverityMajor,
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
 			Suggestion: "Raise ANTI_TANGENT_PER_TASK_MAX_TOKENS or pass max_tokens_override and retry.",
 		}},
 		NextAction: "Retry with a higher max_tokens_override (or raise the configured max-tokens cap).",
-		ModelUsed:  model.String(),
 	}
 }
 
@@ -460,22 +473,22 @@ func prependPlanClamp(pr verdict.PlanResult, clamp verdict.Finding) verdict.Plan
 }
 
 // recoverPartialFindings attempts to extract complete findings from a
-// truncated reviewer response. Returns (envelope, true) when at least one
+// truncated reviewer response. Returns (result, true) when at least one
 // finding was recovered; (zero, false) when the caller should fall back to
-// truncatedEnvelope.
+// truncatedResult.
 //
-// The returned envelope has Verdict="warn", Findings = recovered list plus a
+// The returned Result has Verdict="warn", Findings = recovered list plus a
 // single minor "truncation marker" finding noting the count and referencing
 // both envVar and max_tokens_override mitigations, Partial=true, and
 // NextAction = the parsed result's next_action when non-empty, otherwise a
 // generic fallback that points the caller at max_tokens_override.
-func recoverPartialFindings(id string, model config.ModelRef, rawJSON []byte, envVar string) (Envelope, bool) {
+func recoverPartialFindings(rawJSON []byte, envVar string) (verdict.Result, bool) {
 	if len(rawJSON) == 0 {
-		return Envelope{}, false
+		return verdict.Result{}, false
 	}
 	r, ok := verdict.ParseResultPartial(rawJSON)
 	if !ok || len(r.Findings) == 0 {
-		return Envelope{}, false
+		return verdict.Result{}, false
 	}
 	marker := verdict.Finding{
 		Severity:   verdict.SeverityMinor,
@@ -484,26 +497,18 @@ func recoverPartialFindings(id string, model config.ModelRef, rawJSON []byte, en
 		Evidence:   fmt.Sprintf("reviewer output truncated at the max_tokens cap; %d complete findings recovered", len(r.Findings)),
 		Suggestion: "Raise " + envVar + " or pass max_tokens_override on the next call to capture more.",
 	}
-	findings := append([]verdict.Finding{}, r.Findings...)
-	findings = append(findings, marker)
+	r.Findings = append(r.Findings, marker)
 	// AC: next_action MUST mention re-running with max_tokens_override. If the
 	// reviewer returned a NextAction that already mentions it, preserve it;
 	// otherwise append the mitigation hint (or supply a fallback if empty).
-	next := r.NextAction
 	switch {
-	case next == "":
-		next = "Address recovered findings; reviewer output was truncated. Re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
-	case !strings.Contains(next, "max_tokens_override"):
-		next = next + " Reviewer output was truncated; re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
+	case r.NextAction == "":
+		r.NextAction = "Address recovered findings; reviewer output was truncated. Re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
+	case !strings.Contains(r.NextAction, "max_tokens_override"):
+		r.NextAction = r.NextAction + " Reviewer output was truncated; re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
 	}
-	return Envelope{
-		SessionID:  id,
-		Verdict:    string(verdict.VerdictWarn),
-		Findings:   findings,
-		NextAction: next,
-		ModelUsed:  model.String(),
-		Partial:    true,
-	}, true
+	r.Partial = true
+	return r, true
 }
 
 // truncatedPlanResult builds the synthetic PlanResult returned when a
@@ -619,12 +624,14 @@ func recoverPartialPlanFindings(rawJSON []byte, prior verdict.PlanResult) (verdi
 	return pr, true
 }
 
+// tooLargeEnvelope builds the rejection envelope for a payload-too-large hit.
+// Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
 func tooLargeEnvelope(id string, model config.ModelRef, size, limit int, suggestion string) Envelope {
 	return Envelope{
 		SessionID: id,
 		Verdict:   string(verdict.VerdictFail),
 		Findings: []verdict.Finding{{
-			Severity:   verdict.SeverityMajor,
+			Severity:   verdict.SeverityCritical,
 			Category:   verdict.CategoryTooLarge,
 			Criterion:  "payload",
 			Evidence:   fmt.Sprintf("payload %d bytes exceeds cap %d", size, limit),
@@ -680,9 +687,10 @@ func totalCompletionBytes(files []FileArg, finalDiff string) int {
 
 // evidenceTruncationPatterns are case-insensitive substrings that strongly
 // indicate the caller pasted truncated/elided evidence rather than a complete
-// diff or full file contents. The reviewer cannot verify acceptance criteria
-// against placeholder text, so the guard rejects these submissions before the
-// reviewer call to fail-fast with a clear error.
+// diff or full file contents. The checkEvidenceShape walker applies every
+// entry to BOTH final_diff AND every final_files[].content, so adding a
+// pattern here automatically extends both inputs. Patterns must be
+// lowercased; the walker calls strings.ToLower on the input first.
 //
 // The list is intentionally narrow: only patterns that have negligible chance
 // of appearing in legitimate code or diffs. "diff --git with zero @@" is NOT
@@ -692,6 +700,13 @@ var evidenceTruncationPatterns = []string{
 	"[truncated]",
 	"// ... unchanged",
 	"<!-- truncated -->",
+	// Added in v0.5.2 from field reports:
+	"/* ... */",
+	"/* ...rest unchanged */",
+	"// snip",
+	"// elided",
+	"// ... rest unchanged",
+	"/...",
 }
 
 // evidenceEllipsisLine matches a line that contains only `...` (with optional
@@ -815,15 +830,13 @@ func storeRejection(key [32]byte, env Envelope) {
 }
 
 // malformedEvidenceEnvelope builds the rejection envelope for a guard hit.
-// Severity is major (not critical) because the caller can almost always fix
-// the submission by re-sending complete evidence; the work isn't necessarily
-// wrong, just unverifiable.
+// Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
 func malformedEvidenceEnvelope(sessionID, reason, modelUsed string) Envelope {
 	return Envelope{
 		SessionID: sessionID,
 		Verdict:   string(verdict.VerdictFail),
 		Findings: []verdict.Finding{{
-			Severity:   verdict.SeverityMajor,
+			Severity:   verdict.SeverityCritical,
 			Category:   verdict.CategoryMalformedEvidence,
 			Criterion:  "evidence_shape",
 			Evidence:   reason,
@@ -967,6 +980,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return r, env, retErr
 	}
 
+	if clamp.Severity != "" {
+		result.Findings = append([]verdict.Finding{clamp}, result.Findings...)
+	}
+	result = verdict.FinalizeVerdict(result)
+
 	if !lightweight {
 		h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
 		// Re-fetch after SetPostFindings so LastAccessed reflects the final mutation.
@@ -984,7 +1002,6 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
 	}
-	env = prependClamp(env, clamp)
 	if !lightweight {
 		env = h.withSessionTTL(env, sess)
 	}
@@ -1216,11 +1233,13 @@ func noHeadingsPlanResult() verdict.PlanResult {
 	}
 }
 
+// tooLargePlanResult builds the rejection PlanResult for a plan-text-too-large hit.
+// Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
 func tooLargePlanResult(size, limit int) verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictFail,
 		PlanFindings: []verdict.Finding{{
-			Severity:   verdict.SeverityMajor,
+			Severity:   verdict.SeverityCritical,
 			Category:   verdict.CategoryTooLarge,
 			Criterion:  "payload",
 			Evidence:   fmt.Sprintf("plan_text %d bytes exceeds cap %d", size, limit),
@@ -1237,21 +1256,28 @@ func tooLargePlanResult(size, limit int) verdict.PlanResult {
 // partial-recovery, legacy-truncation, too-large, no-headings — gets them
 // for free:
 //
-//  1. verdict.ApplyPlanQualitySanity normalizes plan_quality (handles
-//     synthetic PlanResults that bypass ParsePlan / ParsePlanResultPartial).
+//  1. finalizePlanResult runs unverifiable-claim rollup,
+//     unverifiable-only calibration, and FinalizePlanVerdict (per-task +
+//     plan-level severity ladder + noise_cluster + plan-quality sanity).
 //  2. SummaryBlock is populated with the rendered paste-ready text block.
 func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
 	return planEnvelopeResultFinalized(finalizePlanResult(pr, modelUsed, ms), modelUsed, ms)
 }
 
 func finalizePlanResult(pr verdict.PlanResult, modelUsed string, ms int64) verdict.PlanResult {
-	// Order is load-bearing: rollup first so calibration sees no remaining
-	// task-level unverifiable findings; calibrate before sanity because
-	// calibration owns the verdict→quality mapping for the unverifiable-only
-	// case (sanity is then a passthrough on the already-valid values).
+	// Order is load-bearing:
+	//   1. rollup unverifiable-codebase-claim findings (else calibration sees
+	//      noise);
+	//   2. calibrate verdict for the unverifiable-only case (preserves the
+	//      v0.4.0 verdict→quality mapping for plans whose only findings are
+	//      unverifiable claims);
+	//   3. FinalizePlanVerdict (per-task + plan-level severity ladder +
+	//      noise_cluster + ApplyPlanQualitySanity rerun).
+	// FinalizePlanVerdict's ApplyPlanQualitySanity rerun replaces the
+	// stand-alone call this function previously made.
 	normalizePlanUnverifiableFindings(&pr)
 	calibratePlanVerdictForUnverifiableOnly(&pr)
-	verdict.ApplyPlanQualitySanity(&pr)
+	verdict.FinalizePlanVerdict(&pr)
 	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
 	return pr
 }
