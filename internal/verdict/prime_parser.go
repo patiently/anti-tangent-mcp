@@ -77,8 +77,11 @@ func ParsePrime(raw []byte) (PrimeResult, error) {
 		default:
 			return PrimeResult{}, fmt.Errorf("pick[%d]: invalid priority %q", i, p.Priority)
 		}
-		if p.Permalink == "" || p.Reason == "" {
-			return PrimeResult{}, fmt.Errorf("pick[%d]: permalink and reason are required", i)
+		if p.Permalink == "" {
+			return PrimeResult{}, fmt.Errorf("pick[%d]: permalink is required", i)
+		}
+		if p.Reason == "" {
+			return PrimeResult{}, fmt.Errorf("pick[%d]: reason is required", i)
 		}
 	}
 	for i, c := range r.BMCommands {

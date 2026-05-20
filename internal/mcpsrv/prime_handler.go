@@ -66,12 +66,42 @@ func primeProjectKnowledgeTool() *mcp.Tool {
 // review, parse, post-process — appear in the same canonical order. See
 // design §3.1 / §5.3 for the spec.
 func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolRequest, args PrimeProjectKnowledgeArgs) (*mcp.CallToolResult, verdict.PrimeResult, error) {
+	// Capture per-call outcome so every exit path — happy, validation error,
+	// oversized payload, truncation, reviewer error — emits exactly one
+	// structured JSON log line on stderr per spec §5.6. The deferred logger
+	// reads from these closure vars at return time; each branch updates the
+	// vars before returning so the log reflects the actual outcome. Mirrors
+	// the pattern in ExtractProjectKnowledge.
+	var (
+		logModelUsed string
+		logVerdict   verdict.Verdict
+		logMS        int64
+		logPicks     int
+		logFindings  int
+		logOutcome   = "success"
+	)
+	defer func() {
+		slog.Info("prime_project_knowledge",
+			slog.String("tool", "prime_project_knowledge"),
+			slog.Int64("duration_ms", logMS),
+			slog.String("model", logModelUsed),
+			slog.String("verdict", string(logVerdict)),
+			slog.String("outcome", logOutcome),
+			slog.Int("picks", logPicks),
+			slog.Int("findings", logFindings),
+			slog.Int("kb_index_size", len(args.KBIndex)),
+			slog.String("epic", args.EpicPermalink),
+		)
+	}()
+
 	// 1. Required-field validation. Trim whitespace so a caller can't smuggle
 	// an empty-looking title past the check with a single space.
 	if strings.TrimSpace(args.TaskTitle) == "" || strings.TrimSpace(args.Goal) == "" {
+		logOutcome, logVerdict = "validation_error", verdict.VerdictFail
 		return nil, verdict.PrimeResult{}, errors.New("task_title and goal are required")
 	}
 	if len(args.AcceptanceCriteria) == 0 {
+		logOutcome, logVerdict = "validation_error", verdict.VerdictFail
 		return nil, verdict.PrimeResult{}, errors.New("acceptance_criteria must contain at least one entry")
 	}
 
@@ -103,6 +133,7 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 	// the v0.5.2 ordering established by ValidateCompletion.
 	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PrimeMaxTokens, h.deps.Cfg.MaxTokensCeiling)
 	if err != nil {
+		logOutcome, logVerdict = "validation_error", verdict.VerdictFail
 		return nil, verdict.PrimeResult{}, err
 	}
 
@@ -110,7 +141,9 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 	// cfg.PrimeModel (NOT a resolved override) so callers always see the
 	// configured-default model id — same posture as tooLargeEnvelope.
 	if size > h.deps.Cfg.MaxPayloadBytes {
-		return primeEnvelopeResult(prependPrimeClamp(primeTooLargeResult(size, h.deps.Cfg.MaxPayloadBytes), clamp), h.deps.Cfg.PrimeModel.String(), 0)
+		r := prependPrimeClamp(primeTooLargeResult(size, h.deps.Cfg.MaxPayloadBytes), clamp)
+		logOutcome, logModelUsed, logVerdict, logFindings = "payload_too_large", h.deps.Cfg.PrimeModel.String(), r.Verdict, len(r.Findings)
+		return primeEnvelopeResult(r, h.deps.Cfg.PrimeModel.String(), 0)
 	}
 
 	// 6. Resolve model. Misspelled model_override surfaces here, after the
@@ -118,6 +151,7 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 	// don't see two failure modes interleaved.
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PrimeModel)
 	if err != nil {
+		logOutcome, logVerdict = "model_resolution_error", verdict.VerdictFail
 		return nil, verdict.PrimeResult{}, err
 	}
 
@@ -142,6 +176,7 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 		KBStoreIsBasicMemory: h.deps.Cfg.KBStore == "basic-memory",
 	})
 	if err != nil {
+		logOutcome, logVerdict = "render_error", verdict.VerdictFail
 		return nil, verdict.PrimeResult{}, fmt.Errorf("render prime prompt: %w", err)
 	}
 
@@ -150,10 +185,13 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 	if errors.Is(err, providers.ErrResponseTruncated) {
 		// Synthesise a warn envelope with category:other / criterion:reviewer_response.
 		// Mirrors the per-task truncatedResult path. modelUsed is empty when the
-		// provider call truncated, so cite the configured model ref.
-		return primeEnvelopeResult(prependPrimeClamp(primeTruncationResult(), clamp), model.String(), 0)
+		// provider call truncated, so cite the resolved model ref.
+		r := prependPrimeClamp(primeTruncationResult(), clamp)
+		logOutcome, logModelUsed, logVerdict, logFindings = "truncated", model.String(), r.Verdict, len(r.Findings)
+		return primeEnvelopeResult(r, model.String(), 0)
 	}
 	if err != nil {
+		logOutcome, logModelUsed, logVerdict = "reviewer_error", model.String(), verdict.VerdictFail
 		return nil, verdict.PrimeResult{}, err
 	}
 
@@ -170,18 +208,10 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 	// 11. Prepend the clamp finding (no-op when clamp is zero).
 	result = prependPrimeClamp(result, clamp)
 
-	// 12. Structured log line, single-shot per-call. Mirrors validate_completion's
-	// slog.Info call pattern (key/value attributes, JSON handler on stderr).
-	slog.Info("prime_project_knowledge",
-		slog.String("tool", "prime_project_knowledge"),
-		slog.Int64("duration_ms", ms),
-		slog.String("model", modelUsed),
-		slog.String("verdict", string(result.Verdict)),
-		slog.Int("picks", len(result.Picks)),
-		slog.Int("findings", len(result.Findings)),
-		slog.Int("kb_index_size", len(args.KBIndex)),
-		slog.String("epic", args.EpicPermalink),
-	)
+	// 12. Populate the deferred logger's view (which writes the one structured
+	// JSON line on stderr for this call). The success-path outcome label is
+	// the default "success" set at function entry.
+	logModelUsed, logVerdict, logMS, logPicks, logFindings = modelUsed, result.Verdict, ms, len(result.Picks), len(result.Findings)
 
 	return primeEnvelopeResult(result, modelUsed, ms)
 }

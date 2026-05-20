@@ -55,7 +55,7 @@ Return ONLY a JSON object matching this shape:
 {
   "verdict": "pass | warn | fail",
   "findings": [
-    {"severity": "critical|major|minor", "category": "kb_gap|ambiguous_pick|missing_index_entry|unverifiable_codebase_claim|payload_too_large|other", "criterion": "<string>", "evidence": "<string>", "suggestion": "<string>"}
+    {"severity": "critical|major|minor", "category": "missing_acceptance_criterion|scope_drift|ambiguous_spec|unaddressed_finding|quality|session_not_found|payload_too_large|unverifiable_codebase_claim|convention_deviation|attestation_contradiction|kb_gap|ambiguous_pick|missing_index_entry|insufficient_evidence|redundant_proposal|contradicts_existing|other", "criterion": "<string>", "evidence": "<string>", "suggestion": "<string>"}
   ],
   "picks": [
     {"permalink": "<existing kb_index permalink>", "reason": "<one sentence>", "priority": "critical|major|minor"}

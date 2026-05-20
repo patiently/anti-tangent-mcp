@@ -1,8 +1,11 @@
 package mcpsrv
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -357,6 +360,88 @@ func TestPrime_ClampPropagatesOnTooLargePayload(t *testing.T) {
 	assert.Equal(t, verdict.VerdictFail, r.Verdict)
 	// Reviewer was not called.
 	assert.Equal(t, 0, rv.Calls)
+}
+
+// TestPrime_LogEmitsOnEveryExitPath asserts that every handler exit path emits
+// exactly one structured JSON log line on stderr (the deferred-logger posture
+// backported from extract_handler.go after CodeRabbit flagged that the
+// pre-deferred-logger prime path only logged on success). Spec §5.6 requires
+// the line; the deferred logger ensures synthetic refusals (payload too large)
+// and truncation paths log just like the success path.
+func TestPrime_LogEmitsOnEveryExitPath(t *testing.T) {
+	cases := []struct {
+		name        string
+		setup       func(t *testing.T) (*handlers, PrimeProjectKnowledgeArgs)
+		wantOutcome string
+		wantVerdict string
+	}{
+		{
+			name: "success",
+			setup: func(t *testing.T) (*handlers, PrimeProjectKnowledgeArgs) {
+				rv := &fakeReviewer{name: "anthropic", resp: primePassResp("claude-sonnet-4-6")}
+				d := newDeps(t, rv)
+				return &handlers{deps: d}, primeArgs()
+			},
+			wantOutcome: "success",
+			wantVerdict: "pass",
+		},
+		{
+			name: "payload_too_large",
+			setup: func(t *testing.T) (*handlers, PrimeProjectKnowledgeArgs) {
+				rv := &fakeReviewer{name: "anthropic", resp: primePassResp("claude-sonnet-4-6")}
+				d := newDeps(t, rv)
+				d.Cfg.MaxPayloadBytes = 50
+				args := PrimeProjectKnowledgeArgs{
+					TaskTitle:          "Implement an example task with a slightly longer title",
+					Goal:               "A goal whose text alone is bigger than fifty bytes already",
+					AcceptanceCriteria: []string{"AC1 with a fairly long description"},
+				}
+				return &handlers{deps: d}, args
+			},
+			wantOutcome: "payload_too_large",
+			wantVerdict: "fail",
+		},
+		{
+			name: "truncated",
+			setup: func(t *testing.T) (*handlers, PrimeProjectKnowledgeArgs) {
+				rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+				d := newDeps(t, rv)
+				return &handlers{deps: d}, primeArgs()
+			},
+			wantOutcome: "truncated",
+			wantVerdict: "warn",
+		},
+		{
+			name: "validation_error",
+			setup: func(t *testing.T) (*handlers, PrimeProjectKnowledgeArgs) {
+				rv := &fakeReviewer{name: "anthropic", resp: primePassResp("claude-sonnet-4-6")}
+				d := newDeps(t, rv)
+				return &handlers{deps: d}, PrimeProjectKnowledgeArgs{Goal: "g", AcceptanceCriteria: []string{"a"}}
+			},
+			wantOutcome: "validation_error",
+			wantVerdict: "fail",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+			defer slog.SetDefault(prev)
+			h, args := tc.setup(t)
+			_, _, _ = h.PrimeProjectKnowledge(context.Background(), nil, args)
+
+			// Exactly one log line per call (split on \n, drop the trailing empty entry).
+			lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+			require.Len(t, lines, 1, "expected exactly one structured log line, got %d:\n%s", len(lines), buf.String())
+
+			var rec map[string]any
+			require.NoError(t, json.Unmarshal([]byte(lines[0]), &rec))
+			assert.Equal(t, "prime_project_knowledge", rec["tool"])
+			assert.Equal(t, tc.wantOutcome, rec["outcome"])
+			assert.Equal(t, tc.wantVerdict, rec["verdict"])
+		})
+	}
 }
 
 func TestPrime_TooLargeUsesConfiguredModel_NotResolvedOverride(t *testing.T) {

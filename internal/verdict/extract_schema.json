@@ -53,7 +53,7 @@
           "type":             { "type": "string", "enum": ["decision", "module", "feature", "glossary", "epic"] },
           "permalink":        { "type": "string", "minLength": 1 },
           "title":            { "type": "string", "minLength": 1 },
-          "frontmatter_json": { "type": "string" },
+          "frontmatter_json": { "type": "string", "minLength": 1 },
           "body":             { "type": "string" },
           "body_patch":       { "type": "string" },
           "rationale":        { "type": "string", "minLength": 1 },
@@ -70,7 +70,7 @@
         "additionalProperties": false,
         "properties": {
           "tool":      { "type": "string", "minLength": 1 },
-          "args_json": { "type": "string" }
+          "args_json": { "type": "string", "minLength": 1 }
         }
       }
     },
