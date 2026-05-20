@@ -26,7 +26,8 @@ type File struct {
 }
 
 type PreInput struct {
-	Spec session.TaskSpec
+	Spec             session.TaskSpec
+	ProjectKnowledge string
 }
 
 type MidInput struct {

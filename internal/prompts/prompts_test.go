@@ -47,6 +47,35 @@ func TestRenderPre(t *testing.T) {
 	golden(t, "pre_basic", out.System+"\n---USER---\n"+out.User)
 }
 
+func TestRenderPre_WithProjectKnowledge(t *testing.T) {
+	in := PreInput{
+		Spec:             sampleSpec(),
+		ProjectKnowledge: "Decision 0042: cache pass reviews for 3 minutes.\nModule mcpsrv invariant: stdout is reserved for MCP stdio traffic.",
+	}
+	out, err := RenderPre(in)
+	require.NoError(t, err)
+	golden(t, "pre_with_project_knowledge", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPre_WithoutProjectKnowledgeOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Project knowledge (caller-supplied context from the team's KB):")
+	assert.NotContains(t, out.User, "If a Project knowledge section is present")
+}
+
+func TestRenderPre_WithProjectKnowledge_IncludesGuidance(t *testing.T) {
+	out, err := RenderPre(PreInput{
+		Spec:             sampleSpec(),
+		ProjectKnowledge: "Decision 0042: cache pass reviews for 3 minutes.",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Project knowledge (caller-supplied context from the team's KB):")
+	assert.Contains(t, out.User, "Decision 0042: cache pass reviews for 3 minutes.")
+	assert.Contains(t, out.User, "If a Project knowledge section is present")
+	assert.Contains(t, out.User, "authoritative caller-supplied context (same posture as pinned_by)")
+}
+
 func TestRenderPre_WithControllerVerifiedReferencesIncludesGuidance(t *testing.T) {
 	spec := sampleSpec()
 	spec.ControllerVerifiedReferences = []string{"internal/foo.go:12", "Foo.Bar"}

@@ -76,9 +76,78 @@ type taskSpecInputs struct {
 	TestabilityExtractions       []string
 	NormativeTestBodies          []string
 	HarnessShapeAttestations     []session.HarnessShapeAttestation
+	ProjectKnowledge             string
 }
 
-func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) {
+// normalizeProjectKnowledge trims surrounding whitespace. The cumulative
+// payload-cap check happens in normalizeTaskSpecInputs so it can sum
+// project_knowledge against every other string field on the args. We
+// deliberately do NOT reject here on a per-field cap — a 200 KB
+// project_knowledge alone is still under the cap; what matters is total
+// args size.
+func normalizeProjectKnowledge(raw string) string {
+	return strings.TrimSpace(raw)
+}
+
+// sumLen is a tiny helper used by the error formatter and totalNormalizedTaskSpecBytes.
+func sumLen(ss []string) int {
+	n := 0
+	for _, s := range ss {
+		n += len(s)
+	}
+	return n
+}
+
+// harnessShapeAttestationsBytes returns a conservative byte-cost upper bound
+// for a slice of attestations. We JSON-marshal the slice and use the encoded
+// length as the cost — this is an upper bound (marshalling adds field names,
+// quotes, brackets) but captures the harness + path + assertion text in a
+// single deterministic computation. If marshalling fails (shouldn't, since
+// HarnessShapeAttestation has no unsupported types), we fall back to a manual
+// sum so the cap guard cannot be silently bypassed.
+func harnessShapeAttestationsBytes(entries []session.HarnessShapeAttestation) int {
+	if len(entries) == 0 {
+		return 0
+	}
+	if b, err := json.Marshal(entries); err == nil {
+		return len(b)
+	}
+	// Fallback: manual byte sum across harness + path + assertions.
+	n := 0
+	for _, e := range entries {
+		n += len(e.Harness) + len(e.Path) + sumLen(e.Assertions)
+	}
+	return n
+}
+
+// totalNormalizedTaskSpecBytes returns the byte sum of every user-supplied
+// string field on a task-spec call AFTER per-list normalization (trim +
+// drop-empty via normalizeBoundedStringList). Counting raw args.* would
+// include whitespace-only entries that the renderer drops, producing
+// spurious cap rejections. TaskTitle / Goal / Context / projectKnowledge
+// are not list-normalized — their raw lengths flow through verbatim.
+// HarnessShapeAttestation is a slice of structs; we count via
+// harnessShapeAttestationsBytes (JSON-marshal length as a conservative
+// upper bound). Used to enforce MaxPayloadBytes cumulatively (spec §5.2 / §3.3).
+func totalNormalizedTaskSpecBytes(args ValidateTaskSpecArgs, projectKnowledge string, in taskSpecInputs) int {
+	total := len(args.TaskTitle) + len(args.Goal) + len(args.Context) + len(projectKnowledge)
+	for _, s := range args.AcceptanceCriteria {
+		total += len(s)
+	}
+	for _, s := range args.NonGoals {
+		total += len(s)
+	}
+	total += sumLen(in.PinnedBy)
+	total += sumLen(in.ControllerVerifiedReferences)
+	total += sumLen(in.TestStrategyNotes)
+	total += sumLen(in.CodebaseConventions)
+	total += sumLen(in.TestabilityExtractions)
+	total += sumLen(in.NormativeTestBodies)
+	total += harnessShapeAttestationsBytes(in.HarnessShapeAttestations)
+	return total
+}
+
+func normalizeTaskSpecInputs(args ValidateTaskSpecArgs, maxPayload int) (taskSpecInputs, error) {
 	phase, err := normalizePhase(args.Phase)
 	if err != nil {
 		return taskSpecInputs{}, err
@@ -111,7 +180,8 @@ func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) 
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
-	return taskSpecInputs{
+	projectKnowledge := normalizeProjectKnowledge(args.ProjectKnowledge)
+	in := taskSpecInputs{
 		Phase:                        phase,
 		PinnedBy:                     pinnedBy,
 		ControllerVerifiedReferences: controllerVerifiedReferences,
@@ -120,7 +190,26 @@ func normalizeTaskSpecInputs(args ValidateTaskSpecArgs) (taskSpecInputs, error) 
 		TestabilityExtractions:       testabilityExtractions,
 		NormativeTestBodies:          normativeTestBodies,
 		HarnessShapeAttestations:     harnessShapeAttestations,
-	}, nil
+		ProjectKnowledge:             projectKnowledge,
+	}
+	if total := totalNormalizedTaskSpecBytes(args, projectKnowledge, in); total > maxPayload {
+		// The error names the cumulative cap and reports each major
+		// contributor's byte count so the caller can see at a glance which
+		// field is most likely the cause. We do not single out
+		// project_knowledge unless it is in fact the largest contributor.
+		// Report normalized contributor lengths where available (lists that
+		// went through normalizeBoundedStringList). project_knowledge and
+		// context are not list-normalized — their raw len is what counts.
+		// acceptance_criteria stays raw because it isn't list-normalized
+		// either (no per-entry trim helper applied today).
+		return taskSpecInputs{}, fmt.Errorf(
+			"task spec payload %d bytes > cap %d (project_knowledge: %d, context: %d, normative_test_bodies: %d, acceptance_criteria: %d)",
+			total, maxPayload,
+			len(projectKnowledge), len(args.Context),
+			sumLen(in.NormativeTestBodies), sumLen(args.AcceptanceCriteria),
+		)
+	}
+	return in, nil
 }
 
 // normalizeHarnessShapeAttestation trims whitespace, caps lengths and counts,

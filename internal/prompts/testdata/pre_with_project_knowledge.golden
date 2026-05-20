@@ -1,67 +1,29 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
 ## Task spec
 
-Title: {{.Spec.Title}}
-Goal: {{.Spec.Goal}}
+Title: Add /healthz endpoint
+Goal: Liveness probe for the HTTP server
 
 Acceptance criteria:
-{{range .Spec.AcceptanceCriteria}}- {{.}}
-{{end}}
+- Returns 200 OK with body "ok"
+- Responds in under 50ms p95
+
 Non-goals:
-{{range .Spec.NonGoals}}- {{.}}
-{{end}}{{if .Spec.Context}}
+- Database health (covered separately)
+
 Context:
-{{.Spec.Context}}
-{{end}}{{if .Spec.PinnedBy}}
-Pinned by:
-{{range .Spec.PinnedBy}}- {{.}}
-{{end}}{{end}}{{if .Spec.ControllerVerifiedReferences}}
-Controller-verified references:
-{{range .Spec.ControllerVerifiedReferences}}- {{.}}
-{{end}}{{end}}{{if .Spec.TestStrategyNotes}}
-Test strategy notes (caller-supplied):
-{{range .Spec.TestStrategyNotes}}- {{.}}
-{{end}}{{end}}{{if .Spec.CodebaseConventions}}
-Codebase conventions (caller-supplied):
-{{range .Spec.CodebaseConventions}}- {{.}}
-{{end}}{{end}}{{if .Spec.TestabilityExtractions}}
-Testability extractions (caller-supplied):
-{{range .Spec.TestabilityExtractions}}- {{.}}
-{{end}}{{end}}{{if .Spec.NormativeTestBodies}}
-Normative test bodies (caller-supplied, treat as binding AC):
-{{range .Spec.NormativeTestBodies}}- {{.}}
-{{end}}{{end}}{{if .Spec.HarnessShapeAttestations}}
-## Harness shape attestations (caller-attested)
+Service is a Gin app on port 8080.
 
-The controller has declared the following shape facts about test harnesses or fixtures referenced in this task. Treat each attestation as authoritative context — the controller has verified the assertions before dispatch. The reviewer does NOT independently verify these against the codebase.
-
-These attestations are NOT exhaustive. An assertion list states what the controller confirmed; the absence of a capability from the list means "not asserted," NOT "forbidden." Do NOT flag ACs merely because they depend on a capability that isn't in the list.
-
-Flag ONLY EXPLICIT contradictions:
-
-  (a) An AC asks the implementer to do something a `does not ...` (or analogous negative) assertion explicitly forbids.
-
-  (b) An AC asserts a fixture state, value, or invariant that DIRECTLY contradicts a stated positive assertion (e.g. attestation says "records emitted spans"; AC says "no spans should be recorded").
-
-When (a) or (b) holds, emit a finding with:
-  - `category: attestation_contradiction`
-  - `severity: major` (or `critical` for a structural contradiction that prevents the task from being implementable)
-  - `criterion: <which attestation is contradicted, quoted>`
-  - `evidence: <which AC contradicts it, quoted>`
-  - `suggestion: <revised AC or explicit harness change request>`
-
-{{range .Spec.HarnessShapeAttestations}}- **{{.Harness}}** (at `{{.Path}}`):
-{{range .Assertions}}    - {{.}}
-{{end}}{{end}}
-{{end}}{{if .ProjectKnowledge}}
 Project knowledge (caller-supplied context from the team's KB):
 
-{{.ProjectKnowledge}}
-{{end}}
+Decision 0042: cache pass reviews for 3 minutes.
+Module mcpsrv invariant: stdout is reserved for MCP stdio traffic.
+
 ## What to evaluate
 
-{{if eq .Spec.Phase "post"}}Phase: post-hoc. The caller may already have implemented the task and needs a session/review baseline. Bias toward implementation-alignment risk rather than AC wording polish: prioritize contradictions that could make completion validation unreliable. Do not fail solely because an AC is terse when pinned_by provides concrete existing tests or docs.
-{{else}}You are evaluating the SPEC ITSELF, not any code. The implementer has not started yet.
-{{end}}
+You are evaluating the SPEC ITSELF, not any code. The implementer has not started yet.
+
 Check three things:
 
 1. Structural completeness — is the goal clear? Are there acceptance criteria? Are non-goals declared where they help bound scope?
@@ -85,9 +47,9 @@ If a Codebase conventions section is present, treat each entry as a convention t
 If a Testability extractions section is present, treat each entry as a helper that exists in production code purely so tests can call it directly. When a `scope_drift` finding would name one of these helpers, suppress that specific finding. Continue to emit `scope_drift` for unrelated additions.
 
 If a Normative test bodies section is present, treat each entry as binding test scope — equivalent in authority to a bullet under Acceptance criteria. Do not emit `ambiguous_spec` for "test scope unclear" findings about coverage that one of these bodies already pins. An entry that begins with `// excerpt:` (or an analogous comment marker) is partial — flag invocation-count or assertion-shape gaps only when the excerpt itself reveals them, not when the gap might exist in the omitted portion. Continue to flag invocation-count gaps, missing negative assertions, or unrelated coverage holes when the entry is a complete body.
-{{if .ProjectKnowledge}}
+
 If a Project knowledge section is present, treat its contents as authoritative caller-supplied context (same posture as pinned_by). Decisions, module invariants, glossary terms, and prior-task summaries it carries are trusted; do not emit `unverifiable_codebase_claim` merely because a claim is grounded in that section. You may still emit `ambiguous_spec`, `quality`, or `convention_deviation` findings if the project_knowledge content contradicts the task spec or leaves an AC vague.
-{{end}}
+
 Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
 
 If you would emit a finding with `category: ambiguous_spec` AND `severity: major`, but a normative test body (provided in the `Normative test bodies` section above) explicitly pins the value or assertion that the AC's prose leaves ambiguous, downgrade the severity to `minor` and append `(resolved-by-normative-body: <short citation of which body resolves it, max 80 chars>)` to the `suggestion` field. The `criterion` and `evidence` fields stay as you would have written them.

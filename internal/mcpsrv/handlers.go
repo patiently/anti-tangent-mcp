@@ -50,6 +50,7 @@ type ValidateTaskSpecArgs struct {
 	TestabilityExtractions       []string                          `json:"testability_extractions,omitempty"`
 	NormativeTestBodies          []string                          `json:"normative_test_bodies,omitempty"`
 	HarnessShapeAttestation      []session.HarnessShapeAttestation `json:"harness_shape_attestation,omitempty"`
+	ProjectKnowledge             string                            `json:"project_knowledge,omitempty"`
 	Phase                        string                            `json:"phase,omitempty"`
 	ModelOverride                string                            `json:"model_override,omitempty"`
 	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty"`
@@ -84,7 +85,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, errors.New("task_title and goal are required")
 	}
 
-	inputs, err := normalizeTaskSpecInputs(args)
+	inputs, err := normalizeTaskSpecInputs(args, h.deps.Cfg.MaxPayloadBytes)
 	if err != nil {
 		return nil, Envelope{}, err
 	}
@@ -110,7 +111,9 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		h.deps.Cfg.PerTaskMaxTokens,
 		args.ModelOverride,
 		h.deps.Cfg.PreModel,
-		func() (prompts.Output, error) { return prompts.RenderPre(prompts.PreInput{Spec: spec}) },
+		func() (prompts.Output, error) {
+			return prompts.RenderPre(prompts.PreInput{Spec: spec, ProjectKnowledge: inputs.ProjectKnowledge})
+		},
 		"render pre prompt",
 	)
 	if err != nil {
