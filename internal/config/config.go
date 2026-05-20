@@ -18,14 +18,24 @@ type Config struct {
 	MidModel          ModelRef
 	PostModel         ModelRef
 	PlanModel         ModelRef
+	PrimeModel        ModelRef
+	ExtractModel      ModelRef
 	SessionTTL        time.Duration
 	MaxPayloadBytes   int
 	RequestTimeout    time.Duration
 	LogLevel          slog.Level
 	PerTaskMaxTokens  int
 	PlanMaxTokens     int
+	PrimeMaxTokens    int
+	ExtractMaxTokens  int
 	PlanTasksPerChunk int
 	MaxTokensCeiling  int
+	// KBStore selects the optional knowledge-store integration used for
+	// output adaptation by the prime/extract tools. Empty string (the
+	// default) disables KB-specific output (e.g. paste-ready commands);
+	// "basic-memory" enables Basic Memory-shaped output. Any other value
+	// is rejected at startup.
+	KBStore string
 }
 
 type ModelRef struct {
@@ -56,6 +66,8 @@ func Load(env func(string) string) (Config, error) {
 		LogLevel:          slog.LevelInfo,
 		PerTaskMaxTokens:  4096,
 		PlanMaxTokens:     4096,
+		PrimeMaxTokens:    4096,
+		ExtractMaxTokens:  8192,
 		PlanTasksPerChunk: 8,
 		MaxTokensCeiling:  16384,
 	}
@@ -90,6 +102,42 @@ func Load(env func(string) string) (Config, error) {
 		cfg.PlanModel = mr
 	} else {
 		cfg.PlanModel = cfg.PreModel
+	}
+
+	// PrimeModel / ExtractModel: optional overrides used by the v0.6.0
+	// project-knowledge tools. Resolution order is explicit env override
+	// -> resolved PlanModel -> resolved PreModel. PlanModel itself already
+	// falls back to PreModel above, so assigning PlanModel here gives the
+	// full chain.
+	if v := env("ANTI_TANGENT_PRIME_MODEL"); v != "" {
+		mr, err := ParseModelRef(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_PRIME_MODEL: %w", err)
+		}
+		cfg.PrimeModel = mr
+	} else {
+		cfg.PrimeModel = cfg.PlanModel
+	}
+	if v := env("ANTI_TANGENT_EXTRACT_MODEL"); v != "" {
+		mr, err := ParseModelRef(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_EXTRACT_MODEL: %w", err)
+		}
+		cfg.ExtractModel = mr
+	} else {
+		cfg.ExtractModel = cfg.PlanModel
+	}
+
+	// KBStore: optional knowledge-store selector. Empty (the default)
+	// disables KB-specific output adaptation; "basic-memory" enables it.
+	// Any other value is a startup error naming the env var.
+	if v := env("ANTI_TANGENT_KB_STORE"); v != "" {
+		switch v {
+		case "basic-memory":
+			cfg.KBStore = v
+		default:
+			return Config{}, fmt.Errorf("ANTI_TANGENT_KB_STORE: unknown value %q (allowed: \"\", \"basic-memory\")", v)
+		}
 	}
 
 	if v := env("ANTI_TANGENT_SESSION_TTL"); v != "" {
@@ -141,6 +189,26 @@ func Load(env func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_MAX_TOKENS: must be positive, got %d", n)
 		}
 		cfg.PlanMaxTokens = n
+	}
+	if v := env("ANTI_TANGENT_PRIME_MAX_TOKENS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_PRIME_MAX_TOKENS: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_PRIME_MAX_TOKENS: must be positive, got %d", n)
+		}
+		cfg.PrimeMaxTokens = n
+	}
+	if v := env("ANTI_TANGENT_EXTRACT_MAX_TOKENS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_EXTRACT_MAX_TOKENS: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_EXTRACT_MAX_TOKENS: must be positive, got %d", n)
+		}
+		cfg.ExtractMaxTokens = n
 	}
 	if v := env("ANTI_TANGENT_PLAN_TASKS_PER_CHUNK"); v != "" {
 		n, err := strconv.Atoi(v)
