@@ -46,3 +46,19 @@ func adaptivePrimeMaxTokens(cfg config.Config, kbIndexLen int) int {
 	}
 	return scaled
 }
+
+// adaptiveExtractMaxTokens implements design §5.3 sizing for extract_project_knowledge.
+// Formula: max(cfg.ExtractMaxTokens, min(cfg.MaxTokensCeiling, 2000 + 1200*envelopeCount)).
+// Applied only when no caller-supplied max_tokens_override is set; explicit
+// overrides route through effectiveMaxTokens (with clamp) at the handler
+// boundary. Adaptive bumps do not emit a clamp finding.
+func adaptiveExtractMaxTokens(cfg config.Config, envelopeCount int) int {
+	scaled := 2000 + 1200*envelopeCount
+	if scaled > cfg.MaxTokensCeiling {
+		scaled = cfg.MaxTokensCeiling
+	}
+	if scaled < cfg.ExtractMaxTokens {
+		return cfg.ExtractMaxTokens
+	}
+	return scaled
+}

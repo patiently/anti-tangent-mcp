@@ -31,6 +31,19 @@ func (s *switchingFakeReviewer) Review(ctx context.Context, req providers.Reques
 			InputTokens: 5, OutputTokens: 4,
 		}, nil
 	}
+	// Extract requests render a `## Completion envelopes` header before the
+	// `## Knowledge-base index` header, so check extract FIRST.
+	if strings.Contains(req.User, "## Completion envelopes") {
+		return providers.Response{
+			RawJSON: []byte(`{"verdict":"pass","findings":[],"proposals":[` +
+				`{"action":"create","type":"decision","permalink":"decisions/0099","title":"Cache pass",` +
+				`"frontmatter_json":"{}","body":"## Context\n\nX","body_patch":"","rationale":"capture decision",` +
+				`"evidence_refs":["completion_envelopes[0].summary"],"supersedes":[]}` +
+				`],"bm_commands":[],"next_action":"review and merge"}`),
+			Model:       "claude-sonnet-4-6",
+			InputTokens: 5, OutputTokens: 4,
+		}, nil
+	}
 	// Prime requests are routed to a JSONSchema for verdict.PrimeSchema(),
 	// not the canonical Result schema. Detect via the Knowledge-base index
 	// section header in the rendered prime template.
@@ -324,4 +337,80 @@ func TestIntegration_PrimeProjectKnowledge(t *testing.T) {
 	assert.Equal(t, "decisions/0042", pr.Picks[0].Permalink)
 	assert.NotEmpty(t, pr.SummaryBlock)
 	assert.Equal(t, "anthropic:claude-sonnet-4-6", pr.ModelUsed)
+}
+
+// TestIntegration_ExtractProjectKnowledge exercises extract_project_knowledge
+// end to end through the MCP transport. The switchingFakeReviewer detects the
+// extract prompt body and returns a canned ExtractResult with one proposal;
+// bm_commands MUST be present as an empty array (required by extract_schema.json)
+// even with KBStore="" (which strips bm_commands server-side anyway).
+func TestIntegration_ExtractProjectKnowledge(t *testing.T) {
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	require.NoError(t, err)
+
+	rv := &switchingFakeReviewer{name: "anthropic"}
+	deps := Deps{
+		Cfg:      cfg,
+		Sessions: session.NewStore(1 * time.Hour),
+		Reviews:  providers.Registry{"anthropic": rv},
+	}
+	srv := New(deps)
+
+	st, ct := mcp.NewInMemoryTransports()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		if err := srv.Run(ctx, st); err != nil && ctx.Err() == nil {
+			t.Errorf("srv.Run: %v", err)
+		}
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+	cs, err := client.Connect(ctx, ct, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := cs.Close(); err != nil {
+			t.Errorf("cs.Close: %v", err)
+		}
+	}()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name: "extract_project_knowledge",
+		Arguments: map[string]any{
+			"completion_envelopes": []map[string]any{
+				{
+					"task_title":    "Implement caching",
+					"summary":       "added a cache pass",
+					"verdict":       "pass",
+					"final_diff":    "diff --git a/c.go b/c.go\n@@\n+package c\n",
+					"test_evidence": "go test ./... PASS",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, res.IsError, "tool returned error: %v", res.Content)
+	require.Len(t, res.Content, 1)
+	tc, ok := res.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+
+	var er struct {
+		verdict.ExtractResult
+		ModelUsed string `json:"model_used"`
+		ReviewMS  int64  `json:"review_ms"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(tc.Text), &er))
+	assert.Equal(t, verdict.VerdictPass, er.Verdict)
+	require.Len(t, er.Proposals, 1)
+	assert.Equal(t, "decisions/0099", er.Proposals[0].Permalink)
+	assert.NotEmpty(t, er.SummaryBlock)
+	assert.Equal(t, "anthropic:claude-sonnet-4-6", er.ModelUsed)
+	// bm_commands MUST appear as an empty array even with KBStore="".
+	assert.NotNil(t, er.BMCommands)
+	assert.Len(t, er.BMCommands, 0)
 }

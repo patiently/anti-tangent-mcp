@@ -24,7 +24,7 @@ var Version = "dev"
 
 // New creates and returns a configured MCP server with all registered tools:
 // validate_task_spec, check_progress, validate_completion, validate_plan, and
-// (v0.6.0) prime_project_knowledge.
+// (v0.6.0) prime_project_knowledge, extract_project_knowledge.
 func New(d Deps) *mcp.Server {
 	if d.planCache == nil {
 		d.planCache = newPlanPassCache()
@@ -40,6 +40,7 @@ func New(d Deps) *mcp.Server {
 	mcp.AddTool(srv, validateCompletionTool(), h.ValidateCompletion)
 	mcp.AddTool(srv, validatePlanTool(), h.ValidatePlan)
 	mcp.AddTool(srv, primeProjectKnowledgeTool(), h.PrimeProjectKnowledge)
+	mcp.AddTool(srv, extractProjectKnowledgeTool(), h.ExtractProjectKnowledge)
 
 	return srv
 }
