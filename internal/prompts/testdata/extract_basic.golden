@@ -1,0 +1,144 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
+## Completion envelopes
+
+
+### Envelope 0: Task 8: extract verdict types, schema, parser
+
+Verdict: pass
+
+Summary:
+Added ExtractResult, Proposal, ProposalAction, ProposalType, and JSON schema. ParseExtract enforces action-conditional invariants.
+
+Findings:
+- [minor][quality] schema lockstep — extract_schema.json now in schema_invariants_test.go list (suggestion: none)
+
+Final diff:
+```
+diff --git a/internal/verdict/extract.go b/internal/verdict/extract.go
++++ b/internal/verdict/extract.go
+@@
++type Proposal struct{}
+
+```
+
+Test evidence:
+```
+go test -race ./internal/verdict/... PASS
+```
+
+
+
+## Plan text
+
+```
+## Plan
+
+### Task 9: Add the extract prompt template
+
+```
+
+## Knowledge-base index
+
+
+- [decision] decisions/0042-cache-pass — Cache pass reviews: TTL 3m.
+- [module] modules/mcpsrv — mcpsrv: stdout reserved.
+
+
+## Current KB excerpts
+
+The caller has pre-fetched these existing notes so you can check for redundancy and contradiction against their actual content:
+
+### decisions/0042-cache-pass
+
+```
+---
+status: accepted
+---
+
+# Cache pass reviews
+
+We cache for 3 minutes.
+```
+
+
+## Epic in flight
+
+`epics/2026-q2-project-knowledge` is the currently in-flight epic note. For every newly proposed `decision`, set `frontmatter_json` to include `"epic_origin": "epics/2026-q2-project-knowledge"` so downstream readers can trace the decision back to its epic. Additionally append one progress-ledger entry to the epic's body describing what landed (one bullet, past tense). When `KBStoreIsBasicMemory` is true this ledger append is expressed as an additional `edit_note` `bm_command` targeting the epic's permalink and its `Progress ledger` section; when false, no ledger command is emitted but the `epic_origin` frontmatter on new decisions still applies.
+
+
+## What to do
+
+1. Read each completion envelope above as the authoritative record of what just shipped. Identify durable, generalizable knowledge worth capturing as a KB note: an architectural decision, a new module's invariants, a new feature's behavior, a glossary term, or an epic ledger update.
+2. For every proposal, emit a `Proposal` entry shaped per the output schema below:
+   - `action`: `create` (new note), `update` (mutate an existing note's frontmatter or body), or `supersede` (replace an existing note with a new one and flip the predecessor's status).
+   - `type`: one of `decision`, `module`, `feature`, `glossary`, `epic`.
+   - `permalink`: the BM-style relative path (e.g. `decisions/0099-cache-pass`). Never absolute; never a URL.
+   - `title`: human-readable note title.
+   - `frontmatter_json`: a JSON-encoded **string** (NOT a nested object) carrying the note's frontmatter. Use the literal string `"{}"` when no frontmatter change is intended. For partial updates emit a JSON-object string like `"{\"status\":\"superseded\"}"`. The wire shape is a string because OpenAI strict structured-outputs rejects freeform object schemas.
+   - `body`: full markdown body for `create`. Empty string `""` placeholder for `update` (use `body_patch` instead) and for `supersede` of the predecessor (the predecessor only carries `frontmatter_json`).
+   - `body_patch`: section-scoped patch text for `update`. Empty string `""` placeholder for `create` and `supersede`. Exactly one of `body` or `body_patch` must be non-empty on an `update`.
+   - `rationale`: one sentence explaining why this note is worth writing.
+   - `evidence_refs`: array of references that each name a visible source field, e.g. `completion_envelopes[0].summary`, `completion_envelopes[1].findings[2]`, `completion_envelopes[0].final_diff`, `completion_envelopes[0].final_files[0].path`, or `plan_text`. Every entry must resolve against the inputs above; do not invent refs.
+   - `supersedes`: array of predecessor permalinks. Empty `[]` for `create` and `update`. Non-empty (at least one predecessor) for `supersede`.
+   - All four placeholder fields (`frontmatter_json`, `body`, `body_patch`, `supersedes`) MUST appear on every Proposal — the response schema requires their presence; the parser enforces the action-conditional non-empty rules against the placeholders.
+3. Ground every Proposal in the supplied evidence. Do NOT propose notes whose claims are not visible in an envelope or in `plan_text`. If the envelopes contain no durable signal worth capturing, emit zero proposals and emit one `insufficient_evidence` finding (severity: critical).
+4. If a proposal duplicates a note already present in the KB index (same permalink, same intent, same content shape), emit a `redundant_proposal` finding (severity: minor or major depending on how close the duplicate is) instead of the Proposal.
+5. If a proposal contradicts an existing note's `decided` content (visible in `Current KB excerpts` or strongly implied by the index), emit a `contradicts_existing` finding (severity: major or critical depending on how load-bearing the contradiction is) and prefer a `supersede` Proposal over a silent overwrite.
+6. Always emit `bm_commands`. The response schema requires the field; emit `[]` rather than omitting.
+
+7. The caller's KB store is Basic Memory. For every Proposal, emit one or more `bm_commands` entries per the verified Basic Memory contract. Each entry is shaped exactly:
+
+   `{ "tool": "<verb>", "args_json": "<JSON-object literal as string>" }`
+
+   `args_json` is a JSON-encoded **string** (NOT a nested object); use the literal `"{}"` for an empty arg set. The verb mapping is:
+
+   - `action: "create"` → one `write_note`:
+     `{ "tool": "write_note", "args_json": "{\"permalink\":\"<proposal permalink>\", \"frontmatter\":{ ... }, \"body\":\"<full body>\"}" }`
+   - `action: "update"` → one `edit_note`. For a frontmatter patch:
+     `{ "tool": "edit_note", "args_json": "{\"permalink\":\"<proposal permalink>\", \"frontmatter_patch\":{ ... }}" }`.
+     For a body section patch:
+     `{ "tool": "edit_note", "args_json": "{\"permalink\":\"<proposal permalink>\", \"section\":\"<section heading>\", \"content\":\"<replacement text>\"}" }`.
+   - `action: "supersede"` → emit a PAIR of entries (in this order):
+     1. `{ "tool": "write_note", "args_json": "{\"permalink\":\"<new permalink>\", \"frontmatter\":{\"status\":\"accepted\", \"supersedes\":[\"<predecessor permalink>\"], ...}, \"body\":\"<new body>\"}" }`
+     2. `{ "tool": "edit_note", "args_json": "{\"permalink\":\"<predecessor permalink>\", \"frontmatter_patch\":{\"status\":\"superseded\"}}" }`
+
+   Basic Memory does NOT ship a single-verb supersede operation; do not invent one. Use only the verbs listed above (`write_note`, `edit_note`). If the predecessor permalink is missing or the new note has no body, emit an `insufficient_evidence` finding instead of fabricating either command.
+
+   When you append a progress-ledger entry to `epics/2026-q2-project-knowledge` (per the **Epic in flight** section), emit an additional `edit_note` `bm_command` shaped:
+
+   `{ "tool": "edit_note", "args_json": "{\"permalink\":\"epics/2026-q2-project-knowledge\", \"section\":\"Progress ledger\", \"content\":\"<one-bullet past-tense summary>\"}" }`
+
+   Order `bm_commands` to mirror `proposals` (each proposal's commands grouped together, supersede emitting two consecutive entries). Any epic ledger append goes at the end.
+
+
+## Output schema (paste-ready)
+
+Return ONLY a JSON object matching this shape:
+
+```
+{
+  "verdict": "pass | warn | fail",
+  "findings": [
+    {"severity": "critical|major|minor", "category": "insufficient_evidence|redundant_proposal|contradicts_existing|missing_index_entry|unverifiable_codebase_claim|payload_too_large|quality|other", "criterion": "<string>", "evidence": "<string>", "suggestion": "<string>"}
+  ],
+  "proposals": [
+    {
+      "action": "create|update|supersede",
+      "type": "decision|module|feature|glossary|epic",
+      "permalink": "<bm-style relative path>",
+      "title": "<note title>",
+      "frontmatter_json": "{}",
+      "body": "",
+      "body_patch": "",
+      "rationale": "<one sentence>",
+      "evidence_refs": ["completion_envelopes[0].summary"],
+      "supersedes": []
+    }
+  ],
+  "bm_commands": [
+    {"tool": "write_note", "args_json": "{\"permalink\":\"<proposal permalink>\", \"frontmatter\":{}, \"body\":\"<body>\"}"}
+  ],
+  "next_action": "<one sentence telling the controller what to do next>"
+}
+```

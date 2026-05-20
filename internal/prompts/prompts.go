@@ -76,6 +76,32 @@ type PrimeInput struct {
 	KBStoreIsBasicMemory bool
 }
 
+// CompletionEnvelopeForExtract is one completion-stage envelope the caller
+// has accumulated for extract review. The reviewer treats every field as
+// caller-attested evidence; evidence_refs on emitted Proposals must point
+// at fields visible in one of these envelopes (or at the optional PlanText).
+type CompletionEnvelopeForExtract struct {
+	TaskTitle    string
+	Summary      string
+	Verdict      string
+	Findings     []verdict.Finding
+	FinalDiff    string
+	FinalFiles   []File
+	TestEvidence string
+}
+
+// ExtractInput is the rendering input for extract.tmpl. The reviewer is
+// asked to propose KB writes (decisions/modules/features/glossary/epic
+// ledger entries) grounded in CompletionEnvelopes and PlanText.
+type ExtractInput struct {
+	CompletionEnvelopes  []CompletionEnvelopeForExtract
+	PlanText             string
+	KBIndex              []KBIndexEntry
+	CurrentKBExcerpts    map[string]string
+	EpicPermalink        string
+	KBStoreIsBasicMemory bool
+}
+
 const systemPrompt = `You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.`
 
 func RenderPre(in PreInput) (Output, error) {
@@ -143,6 +169,14 @@ func RenderPlanFindingsOnly(in PlanInput) (Output, error) {
 
 func RenderPrime(in PrimeInput) (Output, error) {
 	body, err := render("prime.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: systemPrompt, User: body}, nil
+}
+
+func RenderExtract(in ExtractInput) (Output, error) {
+	body, err := render("extract.tmpl", in)
 	if err != nil {
 		return Output{}, err
 	}

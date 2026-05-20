@@ -861,3 +861,35 @@ func TestRenderPrime_Basic(t *testing.T) {
 	require.NoError(t, err)
 	golden(t, "prime_basic", out.System+"\n---USER---\n"+out.User)
 }
+
+func TestRenderExtract_Basic(t *testing.T) {
+	in := ExtractInput{
+		CompletionEnvelopes: []CompletionEnvelopeForExtract{{
+			TaskTitle: "Task 8: extract verdict types, schema, parser",
+			Summary:   "Added ExtractResult, Proposal, ProposalAction, ProposalType, and JSON schema. ParseExtract enforces action-conditional invariants.",
+			Verdict:   "pass",
+			Findings: []verdict.Finding{{
+				Severity:   verdict.SeverityMinor,
+				Category:   verdict.CategoryQuality,
+				Criterion:  "schema lockstep",
+				Evidence:   "extract_schema.json now in schema_invariants_test.go list",
+				Suggestion: "none",
+			}},
+			FinalDiff:    "diff --git a/internal/verdict/extract.go b/internal/verdict/extract.go\n+++ b/internal/verdict/extract.go\n@@\n+type Proposal struct{}\n",
+			TestEvidence: "go test -race ./internal/verdict/... PASS",
+		}},
+		PlanText: "## Plan\n\n### Task 9: Add the extract prompt template\n",
+		KBIndex: []KBIndexEntry{
+			{Permalink: "decisions/0042-cache-pass", Type: "decision", Title: "Cache pass reviews", Summary: "TTL 3m."},
+			{Permalink: "modules/mcpsrv", Type: "module", Title: "mcpsrv", Summary: "stdout reserved."},
+		},
+		CurrentKBExcerpts: map[string]string{
+			"decisions/0042-cache-pass": "---\nstatus: accepted\n---\n\n# Cache pass reviews\n\nWe cache for 3 minutes.",
+		},
+		EpicPermalink:        "epics/2026-q2-project-knowledge",
+		KBStoreIsBasicMemory: true,
+	}
+	out, err := RenderExtract(in)
+	require.NoError(t, err)
+	golden(t, "extract_basic", out.System+"\n---USER---\n"+out.User)
+}
