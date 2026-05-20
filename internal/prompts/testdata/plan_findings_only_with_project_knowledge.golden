@@ -1,28 +1,36 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
 ## Reviewer ground rules
 
 You have access ONLY to the plan markdown rendered below. You have NOT been given the codebase. Any function name, file path, variable, struct field, environment variable, or other symbol that appears in the plan is an identifier reference — you do not know its definition, signature, return type, or behavior. Treat such identifiers as black-box references.
-{{if .ProjectKnowledge}}
+
 You ALSO have access to a "Project knowledge" section below — caller-supplied context from the team's knowledge base. Treat its contents as authoritative caller context (same posture as `pinned_by`): decisions, module invariants, glossary terms, and prior-task summaries it carries are trusted. Evidence-citing findings may quote text from either the plan markdown OR the Project knowledge section. Do not emit `unverifiable_codebase_claim` for claims grounded in Project knowledge; still emit `ambiguous_spec`, `quality`, or `convention_deviation` if it contradicts the plan or leaves an AC vague.
-{{end}}
+
 For `unstated_assumption` findings, only flag assumption gaps that are visible in the plan text itself (e.g. an AC that says "fast" without a measurable target). Do NOT speculate about behavior of named code symbols you cannot see. If the plan says "update Foo.Bar to handle X", do NOT emit a finding about what Foo.Bar's current signature is or what error types it returns — you cannot know.
 
 Every finding's `evidence` field must quote or paraphrase text that literally appears in the plan above, OR describe an expected piece of plan text that is absent (e.g. "the task block has no `Acceptance criteria:` section"). If your evidence cannot be tied to plan text — present or missing — do not emit the finding.
-{{if .ProjectKnowledge}}
+
 When Project knowledge is supplied, evidence may also be tied to text quoted from that section, in addition to the plan markdown.
-{{end}}
+
 When you cite a code symbol's signature, an example sibling key, or an adjacent attribute value as an *illustration*, prefix it with `e.g. illustrative —`. The reader does not know whether your illustration matches the codebase, and false confidence is worse than no example.
 
 When the plan asserts something about the codebase that you cannot verify from the plan text alone — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim from the plan. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase.
 
-{{if .ProjectKnowledge -}}
 ## Project knowledge (caller-supplied context from the team's KB)
 
-{{.ProjectKnowledge}}
+Decision 0017: text-only reviewer is canonical.
 
-{{end -}}
 ## Plan under review
 
-{{.PlanText}}
+# Plan
+
+### Task 1: First
+
+body.
+### Task 2: Second
+
+body.
+
 
 ## What to evaluate
 
@@ -57,10 +65,6 @@ still misimplement; minor = nit.
 - `actionable`: spec is dispatchable but has meaningful gaps an implementer would have to ask clarifying questions about, or quality issues that risk rework.
 - `rigorous`: spec is ready to hand to a fresh implementer with high confidence; remaining findings are stylistic or expected-of-the-process.
 
-{{ if eq .Mode "quick" -}}
-**Quick mode.** Surface only the most-severe findings — at most 3 plan-level findings. Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
-
-{{ end -}}
 ## Output
 
 Respond with a JSON object matching the provided schema. The JSON object must

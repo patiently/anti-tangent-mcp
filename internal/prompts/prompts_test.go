@@ -205,6 +205,40 @@ func TestRenderPlanFindingsOnly_Golden(t *testing.T) {
 	golden(t, "plan_findings_only", out.System+"\n---USER---\n"+out.User)
 }
 
+func TestRenderPlan_WithProjectKnowledge(t *testing.T) {
+	in := PlanInput{
+		PlanText:         "# Plan\n\n### Task 1: First\n\nbody.\n",
+		ProjectKnowledge: "Decision 0042: cache pass reviews for 3 minutes.",
+	}
+	out, err := RenderPlan(in)
+	require.NoError(t, err)
+	golden(t, "plan_basic_with_project_knowledge", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPlanTasksChunk_WithProjectKnowledge(t *testing.T) {
+	in := PlanChunkInput{
+		PlanText:         "# Plan\n\n### Task 1: First\n\nbody.\n### Task 2: Second\n\nbody.\n",
+		ProjectKnowledge: "Module mcpsrv invariant: stdout reserved for MCP stdio.",
+		ChunkTasks: []planparser.RawTask{
+			{Title: "Task 1: First", Body: "body.\n"},
+			{Title: "Task 2: Second", Body: "body.\n"},
+		},
+	}
+	out, err := RenderPlanTasksChunk(in)
+	require.NoError(t, err)
+	golden(t, "plan_tasks_chunk_with_project_knowledge", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPlanFindingsOnly_WithProjectKnowledge(t *testing.T) {
+	in := PlanInput{
+		PlanText:         "# Plan\n\n### Task 1: First\n\nbody.\n### Task 2: Second\n\nbody.\n",
+		ProjectKnowledge: "Decision 0017: text-only reviewer is canonical.",
+	}
+	out, err := RenderPlanFindingsOnly(in)
+	require.NoError(t, err)
+	golden(t, "plan_findings_only_with_project_knowledge", out.System+"\n---USER---\n"+out.User)
+}
+
 func TestRenderPost_WithFinalDiff(t *testing.T) {
 	out, err := RenderPost(PostInput{
 		Spec:      sampleSpec(),

@@ -1148,3 +1148,89 @@ func TestValidatePlan_PopulatesNormativeTestBodies_ZeroBasedTaskIndex(t *testing
 	assert.Equal(t, []string{"@Test fun first() {}"}, pr.Tasks[0].NormativeTestBodies)
 	assert.Equal(t, []string{"@Test fun second() {}"}, pr.Tasks[1].NormativeTestBodies)
 }
+
+// ---------------------------------------------------------------------------
+// Task 4 (v0.6.0) — validate_plan project_knowledge field
+// ---------------------------------------------------------------------------
+
+// TestValidatePlan_ProjectKnowledge_OverCap exercises the cumulative payload
+// guard: when plan_text + project_knowledge exceeds MaxPayloadBytes, the
+// synthetic payload_too_large finding's evidence must name both contributors
+// so the caller can tell which to shrink.
+func TestValidatePlan_ProjectKnowledge_OverCap(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed.")}
+	d := newDeps(t, rv)
+	d.Cfg.MaxPayloadBytes = 20
+	h := &handlers{deps: d}
+
+	planText := buildPlanWithNTasks(1) // > 20 bytes
+	pk := "extra context"              // contributes to total
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:         planText,
+		ProjectKnowledge: pk,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
+	assert.Equal(t, 0, rv.Calls, "over-cap rejection must short-circuit the reviewer")
+	require.NotEmpty(t, pr.PlanFindings)
+	require.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
+	evidence := pr.PlanFindings[0].Evidence
+	assert.Contains(t, evidence, "plan_text:")
+	assert.Contains(t, evidence, "project_knowledge:")
+	assert.Contains(t, evidence, strconv.Itoa(len(planText)), "evidence reports plan_text byte count")
+	assert.Contains(t, evidence, strconv.Itoa(len(pk)), "evidence reports project_knowledge byte count")
+}
+
+// TestValidatePlan_ProjectKnowledge_UnderCap_DispatchesReviewer ensures the
+// reviewer is called normally when the cumulative payload fits and that the
+// rendered prompt threaded into the request includes the Project knowledge
+// section.
+func TestValidatePlan_ProjectKnowledge_UnderCap_DispatchesReviewer(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	pk := "Decision 0042: cache pass reviews for 3 minutes."
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:         buildPlanWithNTasks(1),
+		ProjectKnowledge: pk,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+	assert.Equal(t, 1, rv.Calls, "under-cap call must dispatch to reviewer")
+	for _, f := range pr.PlanFindings {
+		assert.NotEqual(t, verdict.CategoryTooLarge, f.Category, "under-cap must not emit payload_too_large")
+	}
+	assert.Contains(t, rv.LastRequest.User, "## Project knowledge", "rendered prompt must include the Project knowledge section")
+	assert.Contains(t, rv.LastRequest.User, pk, "rendered prompt must contain the project_knowledge value")
+}
+
+// TestValidatePlan_ProjectKnowledge_CacheKeySeparation guards against the
+// regression where the plan-pass cache key omits project_knowledge and serves
+// stale grounding. Two calls with identical plan_text but different non-empty
+// project_knowledge values must both dispatch to the reviewer; neither call
+// may be served from the other's cache entry.
+func TestValidatePlan_ProjectKnowledge_CacheKeySeparation(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed.")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	planText := buildPlanWithNTasks(1)
+	_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:         planText,
+		ProjectKnowledge: "Decision 0001: short ttl.",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, first.PlanVerdict)
+	assert.NotContains(t, first.NextAction, "[cached <=3m]")
+	require.Equal(t, 1, rv.Calls)
+
+	_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:         planText,
+		ProjectKnowledge: "Decision 0002: different value.",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, second.PlanVerdict)
+	assert.NotContains(t, second.NextAction, "[cached <=3m]", "different project_knowledge must not hit the first call's cache entry")
+	assert.Equal(t, 2, rv.Calls, "different project_knowledge must dispatch a fresh reviewer call")
+}

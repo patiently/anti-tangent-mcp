@@ -1,71 +1,82 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
 ## Reviewer ground rules
 
 You have access ONLY to the plan markdown rendered below. You have NOT been given the codebase. Any function name, file path, variable, struct field, environment variable, or other symbol that appears in the plan is an identifier reference — you do not know its definition, signature, return type, or behavior. Treat such identifiers as black-box references.
-{{if .ProjectKnowledge}}
+
 You ALSO have access to a "Project knowledge" section below — caller-supplied context from the team's knowledge base. Treat its contents as authoritative caller context (same posture as `pinned_by`): decisions, module invariants, glossary terms, and prior-task summaries it carries are trusted. Evidence-citing findings may quote text from either the plan markdown OR the Project knowledge section. Do not emit `unverifiable_codebase_claim` for claims grounded in Project knowledge; still emit `ambiguous_spec`, `quality`, or `convention_deviation` if it contradicts the plan or leaves an AC vague.
-{{end}}
+
 For `unstated_assumption` findings, only flag assumption gaps that are visible in the plan text itself (e.g. an AC that says "fast" without a measurable target). Do NOT speculate about behavior of named code symbols you cannot see. If the plan says "update Foo.Bar to handle X", do NOT emit a finding about what Foo.Bar's current signature is or what error types it returns — you cannot know.
 
 Every finding's `evidence` field must quote or paraphrase text that literally appears in the plan above, OR describe an expected piece of plan text that is absent (e.g. "the task block has no `Acceptance criteria:` section"). If your evidence cannot be tied to plan text — present or missing — do not emit the finding.
-{{if .ProjectKnowledge}}
+
 When Project knowledge is supplied, evidence may also be tied to text quoted from that section, in addition to the plan markdown.
-{{end}}
+
 When you cite a code symbol's signature, an example sibling key, or an adjacent attribute value as an *illustration*, prefix it with `e.g. illustrative —`. The reader does not know whether your illustration matches the codebase, and false confidence is worse than no example.
 
 When the plan asserts something about the codebase that you cannot verify from the plan text alone — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim from the plan. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase.
 
-{{if .ProjectKnowledge -}}
 ## Project knowledge (caller-supplied context from the team's KB)
 
-{{.ProjectKnowledge}}
+Module mcpsrv invariant: stdout reserved for MCP stdio.
 
-{{end -}}
 ## Plan under review
 
-{{.PlanText}}
+# Plan
 
-## What to evaluate
+### Task 1: First
 
-You are reviewing an entire implementation plan BEFORE any tasks are dispatched.
-Your job in THIS call is **plan-level analysis only** — cross-cutting findings
-that require visibility into the whole plan. Per-task analysis happens in
-separate follow-up calls; do not emit per-task data here.
+body.
+### Task 2: Second
 
-Specifically:
+body.
 
-1. **plan_verdict** — overall: `pass`, `warn`, or `fail` based on plan-wide
-   issues only (not per-task quality).
-2. **plan_findings** — cross-cutting issues only. Examples:
-   - Two tasks have overlapping or contradictory acceptance criteria.
-   - A task depends on something not produced by any earlier task.
-   - The plan is missing an architecture/intro section that an implementer
-     would need.
-   - Duplicate task titles.
-   - Tasks out of logical order (e.g. tests written before the code they test
-     when the codebase is TDD-strict, or deployment before testing).
-   Do NOT emit findings about individual task quality (vague AC on one task,
-   missing Non-goals on one task, etc.) — those are evaluated separately.
-3. **next_action** — one sentence telling the controller what to do next,
-   given the plan-level verdict.
+
+## What to evaluate (this call: per-task analysis, restricted to a subset)
+
+You are reviewing an implementation plan. You have the **full plan** above as
+context, so you can reason about cross-task dependencies — but in this call
+you must emit per-task results for **only the following tasks**, identified
+by their `### Task N: Title` heading:
+
+- Task 1: First
+- Task 2: Second
+
+For each task in the list above, evaluate:
+
+1. **Structural completeness**: Goal / Acceptance criteria / (optional Non-goals
+   and Context) blocks present and well-formed.
+2. **Acceptance criteria quality**: each AC is testable, specific, and
+   unambiguous; ACs are observable outcomes, not implementation steps.
+3. **Unstated assumptions**: knowledge a fresh implementer would lack.
+
+For every task, also emit `lightweight_eligible` and `lightweight_reason`.
+Set `lightweight_eligible` to true only when ALL of these are true:
+
+- the task touches at most two files or is docs/config/data-only;
+- the task is mechanical with no production-design or test-design choices;
+- the plan includes literal text, exact diff, exact command, or exact insertion shape.
+
+Reason required when true, empty when false.
+
+For every task, also emit `exit_contracts` and `exit_contracts_inferred`.
+
+`exit_contracts` is a list of plain-English contract strings — symbols, types, constants, or fields the task introduces that later tasks in the plan explicitly reference. One contract per consumed surface. Emit at most 20 contracts per task, with each contract at most 240 Unicode code points; if more would apply, summarize. If the task's markdown contains an explicit `**Exit contracts:**` bullet section, respect it verbatim and set `exit_contracts_inferred` to false. Otherwise, infer the contracts by reading the plan as a whole and set `exit_contracts_inferred` to true. When no later task references anything the task introduces, emit an empty list and still set `exit_contracts_inferred` honestly.
+
+If a task is missing the structured header block entirely, synthesize one in
+`suggested_header_block` (Goal + ACs + optional Non-goals/Context) and explain
+your reasoning in `suggested_header_reason`. If the header is already adequate,
+leave both empty.
 
 Severity: critical = unimplementable as written; major = implementer would
 still misimplement; minor = nit.
 
-**plan_quality** — emit one of `"rough"`, `"actionable"`, or `"rigorous"`:
-
-- `rough`: implementer cannot start; spec is missing critical pieces, or contradictions block coherent dispatch.
-- `actionable`: spec is dispatchable but has meaningful gaps an implementer would have to ask clarifying questions about, or quality issues that risk rework.
-- `rigorous`: spec is ready to hand to a fresh implementer with high confidence; remaining findings are stylistic or expected-of-the-process.
-
-{{ if eq .Mode "quick" -}}
-**Quick mode.** Surface only the most-severe findings — at most 3 plan-level findings. Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
-
-{{ end -}}
 ## Output
 
-Respond with a JSON object matching the provided schema. The JSON object must
-contain exactly the top-level keys plan_verdict, plan_quality, plan_findings, and next_action.
-Do not return tasks[] or any task objects. Do not emit per-task findings — they
-belong in the per-task calls. Do not include prose outside the JSON.
+Respond with a JSON object matching the provided schema. The `tasks` array
+must contain exactly one entry per task in the list above, **in the same
+order**, with `task_title` matching the heading text verbatim, including the `Task N:` prefix. Do NOT emit
+results for any task outside the list. Do NOT emit `plan_findings` — those
+are handled in a separate call. Do not include prose outside the JSON.
 
 The `next_action` field must name the single highest-leverage finding the author should address next — not generic advice like "address the warnings." If no findings warrant immediate attention, say so explicitly: "no blocking findings; proceed to dispatch."

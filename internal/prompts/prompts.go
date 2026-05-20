@@ -51,8 +51,9 @@ type PostInput struct {
 }
 
 type PlanInput struct {
-	PlanText string
-	Mode     string
+	PlanText         string
+	ProjectKnowledge string
+	Mode             string
 }
 
 const systemPrompt = `You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.`
@@ -93,9 +94,10 @@ func RenderPlan(in PlanInput) (Output, error) {
 // ChunkTasks carries the exact subset of tasks the reviewer should emit
 // results for; PlanText carries the full plan for cross-task reasoning.
 type PlanChunkInput struct {
-	PlanText   string
-	ChunkTasks []planparser.RawTask
-	Mode       string
+	PlanText         string
+	ProjectKnowledge string
+	ChunkTasks       []planparser.RawTask
+	Mode             string
 }
 
 // RenderPlanTasksChunk produces a per-chunk prompt for the chunked validate_plan
