@@ -382,7 +382,7 @@ For the operator-side topology of running BM as a shared service across a team, 
 
 ### Environment variables
 
-- `ANTI_TANGENT_KB_STORE` — default `""` (off). Set to `basic-memory` to enable `bm_commands` arrays in prime/extract outputs. Any other non-empty value is treated as a generic KB store and `bm_commands` are omitted.
+- `ANTI_TANGENT_KB_STORE` — default `""` (off; `bm_commands` arrays are omitted from prime/extract outputs). Set to `basic-memory` to enable `bm_commands` arrays. Any other non-empty value is rejected at startup with a configuration error.
 - `ANTI_TANGENT_PRIME_MODEL` — reviewer for `prime_project_knowledge`. Falls back to `ANTI_TANGENT_PLAN_MODEL` then `ANTI_TANGENT_PRE_MODEL`.
 - `ANTI_TANGENT_EXTRACT_MODEL` — reviewer for `extract_project_knowledge`. Same fallback chain.
 - `ANTI_TANGENT_PRIME_MAX_TOKENS` — output cap for prime; default `4096`. Ceiling-clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`.
