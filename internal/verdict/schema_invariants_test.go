@@ -11,16 +11,16 @@ import (
 )
 
 // reviewerSchema names one of the embedded reviewer-output JSON schemas
-// in this package. The list grows as v0.6.0 adds prime_schema.json and
-// extract_schema.json — until then, the four schemas below are the full set.
+// in this package. v0.6.0 Task 5 added prime_schema.json; Task 8 will
+// add extract_schema.json.
 type reviewerSchema struct {
 	name string
 	raw  []byte
 }
 
 // reviewerSchemas returns the schemas the strict-mode invariants walk.
-// Tasks 5 and 8 (v0.6.0) extend the slice with prime_schema.json and
-// extract_schema.json.
+// Task 5 (v0.6.0) added prime_schema.json; Task 8 will extend the slice
+// further with extract_schema.json.
 //
 // NOTE on OpenAI strict-mode keyword support (verified 2026-05-20 via the
 // platform docs at https://platform.openai.com/docs/guides/structured-outputs):
@@ -38,6 +38,7 @@ func reviewerSchemas() []reviewerSchema {
 		{"plan_schema.json", PlanSchema()},
 		{"tasks_only_schema.json", TasksOnlySchema()},
 		{"plan_findings_only_schema.json", PlanFindingsOnlySchema()},
+		{"prime_schema.json", PrimeSchema()},
 	}
 }
 
