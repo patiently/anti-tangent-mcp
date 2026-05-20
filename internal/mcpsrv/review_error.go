@@ -167,14 +167,25 @@ func (h *handlers) handlePerTaskReviewErr(in perTaskReviewErrInputs) (*mcp.CallT
 	if !errors.Is(in.Err, providers.ErrResponseTruncated) {
 		return nil, Envelope{}, true, in.Err
 	}
-	env, ok := recoverPartialFindings(in.SessionID, in.Model, in.PartialRaw, in.EnvVar)
+	r, ok := recoverPartialFindings(in.PartialRaw, in.EnvVar)
 	if !ok {
-		env = truncatedEnvelope(in.SessionID, in.Model)
+		r = truncatedResult()
 	}
-	env = prependClamp(env, in.Clamp)
+	if in.Clamp.Severity != "" {
+		r.Findings = append([]verdict.Finding{in.Clamp}, r.Findings...)
+	}
+	r = verdict.FinalizeVerdict(r)
+	env := Envelope{
+		SessionID:  in.SessionID,
+		Verdict:    string(r.Verdict),
+		Findings:   r.Findings,
+		NextAction: r.NextAction,
+		ModelUsed:  in.Model.String(),
+		Partial:    r.Partial,
+	}
 	if in.Sess != nil {
 		env = h.withSessionTTL(env, in.Sess)
 	}
-	r, e, err := envelopeResult(env)
-	return r, e, true, err
+	res, e, err := envelopeResult(env)
+	return res, e, true, err
 }

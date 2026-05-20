@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,15 +20,17 @@ import (
 )
 
 type fakeReviewer struct {
-	name  string
-	resp  providers.Response
-	err   error
-	Calls int
+	name        string
+	resp        providers.Response
+	err         error
+	Calls       int
+	LastRequest providers.Request // captured on every Review call; tests inspect rv.LastRequest.User to assert prompt content
 }
 
 func (f *fakeReviewer) Name() string { return f.name }
-func (f *fakeReviewer) Review(ctx context.Context, _ providers.Request) (providers.Response, error) {
+func (f *fakeReviewer) Review(ctx context.Context, req providers.Request) (providers.Response, error) {
 	f.Calls++
+	f.LastRequest = req
 	return f.resp, f.err
 }
 
@@ -529,7 +532,7 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 
 	// No session should be created on truncation.
@@ -559,7 +562,7 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 }
@@ -586,7 +589,7 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, "warn", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
-	assert.Equal(t, verdict.SeverityMinor, env.Findings[0].Severity)
+	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 }
@@ -648,11 +651,11 @@ func TestRecoverPartialFindings_PreservesReviewerNextActionWithOverrideHint(t *t
 		`{"severity":"major","category":"other","criterion":"ac1","evidence":"e1","suggestion":"s1"}` +
 		`],"next_action":"Tighten AC1 wording."}`)
 
-	env, ok := recoverPartialFindings("", config.ModelRef{Provider: "anthropic", Model: "claude-sonnet-4-6"}, raw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	r, ok := recoverPartialFindings(raw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	require.True(t, ok)
-	assert.True(t, env.Partial)
-	assert.Contains(t, env.NextAction, "Tighten AC1 wording.")
-	assert.Contains(t, env.NextAction, "max_tokens_override")
+	assert.True(t, r.Partial)
+	assert.Contains(t, r.NextAction, "Tighten AC1 wording.")
+	assert.Contains(t, r.NextAction, "max_tokens_override")
 }
 
 func TestCheckProgress_PartialFindingsRecoveredOnTruncation(t *testing.T) {
@@ -801,6 +804,7 @@ func TestValidatePlan_PayloadTooLarge(t *testing.T) {
 	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
+	assert.Equal(t, verdict.SeverityCritical, pr.PlanFindings[0].Severity)
 	assert.Equal(t, 0, rv.Calls)
 }
 
@@ -2208,4 +2212,379 @@ func TestValidateCompletion_ExitContractsLimitsRejected(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exit_contracts[0] must be at most 500 characters")
+}
+
+func TestValidateTaskSpec_FinalizeVerdict_ClampParticipatesInLadder(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"pass","findings":[
+				{"severity":"minor","category":"quality","criterion":"a","evidence":"b","suggestion":"c"},
+				{"severity":"minor","category":"quality","criterion":"d","evidence":"e","suggestion":"f"}
+			],"next_action":"n"}`),
+			Model: "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	d.Cfg.MaxTokensCeiling = 1000
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g",
+		AcceptanceCriteria: []string{"ac1"},
+		MaxTokensOverride:  10000,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "warn", env.Verdict, "two minors + clamp minor → warn")
+	hasNoise := false
+	for _, f := range env.Findings {
+		if f.Category == verdict.CategoryOther && f.Criterion == "noise_cluster" {
+			hasNoise = true
+		}
+	}
+	require.True(t, hasNoise, "noise_cluster appended on ≥3 minor → warn")
+	require.Equal(t, "max_tokens_override", env.Findings[0].Criterion)
+}
+
+func TestValidateTaskSpec_SuppressionRunsBeforeFinalize(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"fail","findings":[
+				{"severity":"major","category":"scope_drift","criterion":"a","evidence":"helperFn","suggestion":"x"},
+				{"severity":"major","category":"scope_drift","criterion":"b","evidence":"helperFn","suggestion":"x"},
+				{"severity":"major","category":"scope_drift","criterion":"c","evidence":"helperFn","suggestion":"x"},
+				{"severity":"major","category":"scope_drift","criterion":"d","evidence":"helperFn","suggestion":"x"},
+				{"severity":"major","category":"scope_drift","criterion":"e","evidence":"helperFn","suggestion":"x"}
+			],"next_action":"n"}`),
+			Model: "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g",
+		AcceptanceCriteria:     []string{"ac1"},
+		TestabilityExtractions: []string{"helperFn"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "pass", env.Verdict, "all five suppressed → pass")
+	require.Empty(t, env.Findings, "all findings suppressed before finalize")
+}
+
+func TestValidateTaskSpec_TruncatedResponseSurfacesWarnWithMajorFinding(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "warn", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	require.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity, "truncated finding bumped to major")
+	require.Equal(t, "reviewer_response", env.Findings[0].Criterion)
+}
+
+func TestTooLargeEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
+	env := tooLargeEnvelope("sess-1", config.ModelRef{Provider: "anthropic", Model: "x"}, 1000, 500, "trim")
+	require.Equal(t, "fail", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
+	require.Equal(t, verdict.CategoryTooLarge, env.Findings[0].Category)
+}
+
+func TestMalformedEvidenceEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
+	env := malformedEvidenceEnvelope("sess-1", "reason", "model")
+	require.Equal(t, "fail", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
+	require.Equal(t, verdict.CategoryMalformedEvidence, env.Findings[0].Category)
+}
+
+func TestNotFoundEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
+	env := notFoundEnvelope("sess-1", config.ModelRef{Provider: "anthropic", Model: "x"})
+	require.Equal(t, "fail", env.Verdict)
+	require.Len(t, env.Findings, 1)
+	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
+}
+
+func TestTooLargePlanResult_SyntheticFindingSeverityIsCritical(t *testing.T) {
+	pr := tooLargePlanResult(1000, 500)
+	require.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
+	require.Len(t, pr.PlanFindings, 1)
+	require.Equal(t, verdict.SeverityCritical, pr.PlanFindings[0].Severity)
+	require.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
+}
+
+func TestValidatePlan_FinalizePlanVerdict_ClampParticipatesInLadder(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "openai",
+		resp: providers.Response{
+			RawJSON: []byte(`{"plan_verdict":"pass","plan_findings":[
+				{"severity":"minor","category":"quality","criterion":"a","evidence":"b","suggestion":"c"},
+				{"severity":"minor","category":"quality","criterion":"d","evidence":"e","suggestion":"f"}
+			],"tasks":[{"task_index":1,"task_title":"t","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":"","lightweight_eligible":false,"lightweight_reason":"","exit_contracts":[],"exit_contracts_inferred":false}],"next_action":"n","plan_quality":"actionable"}`),
+			Model: "gpt-5",
+		},
+	}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	d.Cfg.MaxTokensCeiling = 1000
+	h := &handlers{deps: d}
+	planText := "### Task 1: t\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac1\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:          planText,
+		MaxTokensOverride: 10000,
+	})
+	require.NoError(t, err)
+	require.Equal(t, verdict.VerdictWarn, pr.PlanVerdict, "two minors + clamp minor → warn")
+	hasNoise := false
+	for _, f := range pr.PlanFindings {
+		if f.Category == verdict.CategoryOther && f.Criterion == "noise_cluster" {
+			hasNoise = true
+		}
+	}
+	require.True(t, hasNoise, "plan-level noise_cluster appended")
+	require.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion, "clamp at PlanFindings[0]")
+}
+
+func TestTruncatedPlanResult_SeverityIsMajor(t *testing.T) {
+	pr := truncatedPlanResult()
+	require.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
+	require.Len(t, pr.PlanFindings, 1)
+	require.Equal(t, verdict.SeverityMajor, pr.PlanFindings[0].Severity)
+	require.Equal(t, verdict.PlanQualityRough, pr.PlanQuality)
+}
+
+func TestValidatePlan_TruncatedResponse_PreservesFinalizePlanResultSideEffects(t *testing.T) {
+	rv := &fakeReviewer{name: "openai", err: providers.ErrResponseTruncated}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+
+	planText := "### Task 1: t\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac1\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planText})
+	require.NoError(t, err)
+	require.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
+	require.NotEmpty(t, pr.SummaryBlock, "formatPlanSummary must run on the truncation path")
+	require.Equal(t, verdict.PlanQualityRough, pr.PlanQuality, "ApplyPlanQualitySanity (via FinalizePlanVerdict) must have run; truncatedPlanResult explicitly sets rough")
+}
+
+func TestCheckEvidenceShape_NewPatternsRejected(t *testing.T) {
+	patterns := []string{
+		"/* ... */",
+		"/* ...rest unchanged */",
+		"// snip",
+		"// elided",
+		"// ... rest unchanged",
+		"/...",
+	}
+	for _, p := range patterns {
+		t.Run("final_diff:"+p, func(t *testing.T) {
+			args := ValidateCompletionArgs{
+				SessionID: "s",
+				Summary:   "s",
+				FinalDiff: "valid header\n" + p + "\nmore",
+			}
+			reason := checkEvidenceShape(args)
+			require.NotEmpty(t, reason, "must reject %q in final_diff", p)
+			require.Contains(t, reason, "final_diff")
+		})
+		t.Run("final_files:"+p, func(t *testing.T) {
+			args := ValidateCompletionArgs{
+				SessionID:  "s",
+				Summary:    "s",
+				FinalFiles: []FileArg{{Path: "foo.go", Content: "valid header\n" + p + "\nmore"}},
+			}
+			reason := checkEvidenceShape(args)
+			require.NotEmpty(t, reason, "must reject %q in final_files[].content", p)
+			require.Contains(t, reason, "final_files")
+		})
+	}
+}
+
+func TestValidateTaskSpec_CVRSuppressesUnverifiableClaim_ClaimLevel(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[{
+				"severity":"minor",
+				"category":"unverifiable_codebase_claim",
+				"criterion":"spec",
+				"evidence":"XService.findFoo at path/to/file.kt:L42",
+				"suggestion":"verify"
+			}],"next_action":"n"}`),
+			Model: "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"},
+		ControllerVerifiedReferences: []string{"path/to/file.kt"},
+	})
+	require.NoError(t, err)
+	require.Empty(t, env.Findings, "claim suppressed by CVR substring match")
+	require.Equal(t, "pass", env.Verdict, "no findings → pass")
+}
+
+func TestValidateTaskSpec_CVRSuppression_RunsBeforeRollup(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[
+				{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"path/to/file.kt:L1","suggestion":"v"},
+				{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"spec","evidence":"path/to/file.kt:L2","suggestion":"v"}
+			],"next_action":"n"}`),
+			Model: "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"},
+		ControllerVerifiedReferences: []string{"path/to/file.kt"},
+	})
+	require.NoError(t, err)
+	require.Empty(t, env.Findings, "both unverifiables suppressed before rollup; rollup sees zero")
+}
+
+func TestValidateTaskSpec_HarnessShapeAttestationStoredOnSession(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"n"}`), Model: "claude-sonnet-4-6"},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	att := []session.HarnessShapeAttestation{
+		{Harness: "TestHarnessX", Path: "test/foo.kt:L1", Assertions: []string{"records emitted spans", "does not stub validator"}},
+	}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g",
+		AcceptanceCriteria:      []string{"ac1"},
+		HarnessShapeAttestation: att,
+	})
+	require.NoError(t, err)
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	require.Equal(t, att, sess.Spec.HarnessShapeAttestations)
+}
+
+func TestValidateTaskSpec_HarnessShapeAttestationLimitsRejected(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"n"}`), Model: "claude-sonnet-4-6"},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	att := []session.HarnessShapeAttestation{{Harness: "", Path: "p", Assertions: []string{"a"}}}
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g",
+		AcceptanceCriteria:      []string{"ac1"},
+		HarnessShapeAttestation: att,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "harness")
+}
+
+func TestValidateTaskSpecArgs_HarnessShapeAttestation_JSONTag(t *testing.T) {
+	rt := reflect.TypeOf(ValidateTaskSpecArgs{})
+	f, ok := rt.FieldByName("HarnessShapeAttestation")
+	require.True(t, ok, "field must exist on args struct")
+	require.Equal(t, `harness_shape_attestation,omitempty`, f.Tag.Get("json"))
+	require.Equal(t, "[]session.HarnessShapeAttestation", f.Type.String())
+
+	nested := reflect.TypeOf(session.HarnessShapeAttestation{})
+	type want struct{ name, tag, typ string }
+	for _, w := range []want{
+		{"Harness", "harness", "string"},
+		{"Path", "path", "string"},
+		{"Assertions", "assertions", "[]string"},
+	} {
+		fld, ok := nested.FieldByName(w.name)
+		require.True(t, ok, "nested field %s must exist", w.name)
+		require.Equal(t, w.tag, fld.Tag.Get("json"), "nested field %s json tag", w.name)
+		require.Equal(t, w.typ, fld.Type.String(), "nested field %s type", w.name)
+	}
+}
+
+func TestValidateTaskSpec_NewServerBootsAndHandlerAcceptsNewField(t *testing.T) {
+	// Two-part smoke test:
+	//   (a) New(d) — proves mcp.AddTool's schema generation does not panic
+	//       on the new ValidateTaskSpecArgs.HarnessShapeAttestation field.
+	//   (b) Direct h.ValidateTaskSpec(...) call — proves the args-struct →
+	//       normalize → session.TaskSpec round-trip works for the new field.
+	// This is NOT an MCP-protocol-level test (no JSON-RPC encode/decode).
+	// Per design §504, protocol-level decoding reflects on the same JSON
+	// tags the sibling reflection test pins.
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"n"}`),
+			Model:   "claude-sonnet-4-6",
+		},
+	}
+	d := newDeps(t, rv)
+	srv := New(d)
+	require.NotNil(t, srv, "(a) New(d) constructs without panic — mcp.AddTool accepted the new args shape")
+
+	h := &handlers{deps: d}
+	att := []session.HarnessShapeAttestation{
+		{Harness: "TestHarnessX", Path: "test/foo.kt:L1", Assertions: []string{"records emitted spans"}},
+	}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:               "t",
+		Goal:                    "g",
+		AcceptanceCriteria:      []string{"ac1"},
+		HarnessShapeAttestation: att,
+	})
+	require.NoError(t, err, "(b) handler accepts the new field and round-trips it to the session")
+	sess, ok := d.Sessions.Get(env.SessionID)
+	require.True(t, ok)
+	require.Equal(t, att, sess.Spec.HarnessShapeAttestations)
+}
+
+func TestValidateCompletion_NormativeBodiesPropagatedFromSession(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"n"}`), Model: "claude-sonnet-4-6"},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, preEnv, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle:           "t",
+		Goal:                "g",
+		AcceptanceCriteria:  []string{"ac1"},
+		NormativeTestBodies: []string{"@Test fun emits_spans() { /* binding */ }"},
+	})
+	require.NoError(t, err)
+
+	_, _, err = h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: preEnv.SessionID,
+		Summary:   "did it",
+		FinalDiff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n",
+	})
+	require.NoError(t, err)
+	require.Contains(t, rv.LastRequest.User, "## Normative test bodies (binding)",
+		"post-hook prompt must surface the session-stored normative bodies")
+	require.Contains(t, rv.LastRequest.User, "@Test fun emits_spans() { /* binding */ }")
+}
+
+func TestValidateCompletion_LightweightMode_OmitsNormativeBodiesSection(t *testing.T) {
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"n"}`), Model: "claude-sonnet-4-6"},
+	}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: "",
+		Summary:   "did it",
+		FinalDiff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n",
+	})
+	require.NoError(t, err, "lightweight ValidateCompletion must not error")
+	require.NotContains(t, rv.LastRequest.User, "## Normative test bodies (binding)",
+		"lightweight mode (empty session_id) must not render the normative-bodies section")
 }

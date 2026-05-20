@@ -211,6 +211,7 @@ In addition to the existing `task_title` / `goal` / `acceptance_criteria` / `non
 
 - `pinned_by` (optional, v0.3.3+): existing tests, docs, commands, or static checks that pin referenced behavior. The reviewer treats these as caller-supplied anchors, not independently verified codebase facts.
 - `controller_verified_references` (optional, v0.4.0+): paths, symbols, line anchors, commands, or adjacent patterns that the controller already verified before dispatch. The reviewer treats these as caller-supplied attestations and suppresses matching `unverifiable_codebase_claim` findings only by deterministic substring match; contradictions, missing acceptance criteria, and ambiguity still surface.
+- `harness_shape_attestation` (optional, v0.5.2+): list of `{harness, path, assertions[]}` objects declaring caller-attested shape facts about test harnesses or fixtures. Pairs with the new `attestation_contradiction` finding category, which the reviewer emits only when an acceptance criterion explicitly contradicts an attested assertion.
 - `phase` (optional, v0.3.3+): `pre` (default) or `post`. Use `post` only for post-hoc/session-recovery reviews; normal protocol still calls this at task start.
 
 `validate_task_spec` rolls task-level `unverifiable_codebase_claim` findings into a single `codebase_reference_checklist` finding so implementers get one consistent checklist shape instead of raw text-only-reference findings.

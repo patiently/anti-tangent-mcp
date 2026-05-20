@@ -56,7 +56,7 @@ func validCategory(c Category) bool {
 	case CategoryMissingAC, CategoryScopeDrift, CategoryAmbiguousSpec,
 		CategoryUnaddressed, CategoryQuality, CategorySessionMissing,
 		CategoryTooLarge, CategoryUnverifiableCodebaseClaim,
-		CategoryConventionDeviation, CategoryOther:
+		CategoryConventionDeviation, CategoryAttestationContradiction, CategoryOther:
 		return true
 	}
 	return false

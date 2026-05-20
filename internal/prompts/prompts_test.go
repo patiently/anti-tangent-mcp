@@ -635,6 +635,35 @@ func TestRenderPost_WithPinnedByIncludesAnchors(t *testing.T) {
 	assert.Contains(t, out.User, "caller-supplied anchors")
 }
 
+func TestRenderPre_WithHarnessShapeAttestations_IncludesSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{
+		Title: "t", Goal: "g",
+		AcceptanceCriteria: []string{"ac1"},
+		HarnessShapeAttestations: []session.HarnessShapeAttestation{
+			{Harness: "TestHarnessX", Path: "test/foo.kt:L1", Assertions: []string{
+				"records emitted spans via getEmittedSpans()",
+				"does not stub the validator method",
+			}},
+		},
+	}})
+	require.NoError(t, err)
+	require.Contains(t, out.User, "## Harness shape attestations (caller-attested)")
+	require.Contains(t, out.User, "TestHarnessX")
+	require.Contains(t, out.User, "test/foo.kt:L1")
+	require.Contains(t, out.User, "records emitted spans via getEmittedSpans()")
+	require.Contains(t, out.User, "does not stub the validator method")
+	require.Contains(t, out.User, "category: attestation_contradiction")
+	require.Contains(t, out.User, "NOT exhaustive")
+	require.Contains(t, out.User, "the absence of a capability from the list means \"not asserted,\" NOT \"forbidden.\"")
+}
+
+func TestRenderPre_WithoutHarnessShapeAttestations_OmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
+	require.NoError(t, err)
+	require.NotContains(t, out.User, "## Harness shape attestations")
+	require.NotContains(t, out.User, "attestation_contradiction") // category isn't mentioned when no attestations
+}
+
 func TestRenderPost_WithMissingReferencedPathsIncludesEvidenceNote(t *testing.T) {
 	out, err := RenderPost(PostInput{
 		Spec:                           sampleSpec(),
@@ -651,6 +680,17 @@ func TestRenderPost_WithoutMissingReferencedPathsOmitsEvidenceNote(t *testing.T)
 	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "No referenced deliverable."})
 	require.NoError(t, err)
 	assert.NotContains(t, out.User, "summary references these paths")
+}
+
+func TestRenderPre_CVRInstructionIncludesMultiSymbolExample(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{
+		Title: "t", Goal: "g",
+		AcceptanceCriteria:           []string{"ac1"},
+		ControllerVerifiedReferences: []string{"path/to/file.kt"},
+	}})
+	require.NoError(t, err)
+	require.Contains(t, out.User, "XService.findFoo at path/to/file.kt:L42")
+	require.Contains(t, out.User, "the path matches one of the claim's substrings")
 }
 
 func TestRenderPost_WithExplicitExitContractsIncludesSection(t *testing.T) {
@@ -686,4 +726,56 @@ func TestRenderPost_WithoutExitContractsOmitsSection(t *testing.T) {
 	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "x", FinalDiff: "diff"})
 	require.NoError(t, err)
 	assert.NotContains(t, out.User, "Exit contracts (")
+}
+
+func TestRenderPost_WithNormativeTestBodies_IncludesSection(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec: session.TaskSpec{
+			Title: "t", Goal: "g",
+			AcceptanceCriteria:  []string{"ac1"},
+			NormativeTestBodies: []string{"@Test fun emits_spans() { /* binding */ }"},
+		},
+		Summary:   "did it",
+		FinalDiff: "diff --git ...",
+	})
+	require.NoError(t, err)
+	require.Contains(t, out.User, "## Normative test bodies (binding)")
+	require.Contains(t, out.User, "@Test fun emits_spans() { /* binding */ }")
+	require.Contains(t, out.User, "Do NOT flag AC-vs-fixture mismatches when a normative body explicitly pins the value.")
+}
+
+func TestRenderPost_WithoutNormativeTestBodies_OmitsSection(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:      session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}},
+		Summary:   "did it",
+		FinalDiff: "diff --git ...",
+	})
+	require.NoError(t, err)
+	require.NotContains(t, out.User, "## Normative test bodies (binding)")
+}
+
+const anchorDemotionRule = "(resolved-by-normative-body:"
+
+func TestRenderPre_IncludesDemotionRule(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
+	require.NoError(t, err)
+	require.Contains(t, out.User, anchorDemotionRule)
+	require.Contains(t, out.User, "downgrade the severity to `minor`")
+}
+
+func TestRenderPost_IncludesDemotionRule(t *testing.T) {
+	out, err := RenderPost(PostInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}, Summary: "s", FinalDiff: "d"})
+	require.NoError(t, err)
+	require.Contains(t, out.User, anchorDemotionRule)
+	require.Contains(t, out.User, "downgrade the severity to `minor`")
+}
+
+func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
+	require.NoError(t, err)
+	require.Contains(t, out.User, "RAW-STRING TRIMMING CAVEAT")
+	require.Contains(t, out.User, ".trimIndent()")
+	require.Contains(t, out.User, ".trimMargin()")
+	require.Contains(t, out.User, "textwrap.dedent")
+	require.Contains(t, out.User, "INTEGRATION.md §3.7")
 }
