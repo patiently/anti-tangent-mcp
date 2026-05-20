@@ -1886,7 +1886,7 @@ EOF
 - `internal/prompts/templates/prime.tmpl` renders all four sections (task spec / KB index / picking instructions / output instructions) and references the prime schema by description.
 - New golden file `prime_basic.golden` covers a representative input.
 - Empty `KBIndex` causes the template to emit explicit "Index is empty" guidance so the reviewer returns gaps only.
-- `KBStoreIsBasicMemory: true` causes the template to instruct the reviewer to emit one `{ "tool": "read_note", "args": { "permalink": "…" } }` entry per pick; `false` causes the template to instruct the reviewer to emit `bm_commands: []`. The field is ALWAYS present in the rendered output schema — it is required by `prime_schema.json` (strict-mode invariant) and must not be made optional.
+- `KBStoreIsBasicMemory: true` causes the template to instruct the reviewer to emit one `{ "tool": "read_note", "args_json": "{\"permalink\":\"…\"}" }` entry per pick (note: `args_json` is a JSON-encoded string, NOT a nested object — per the "Cross-cutting technical constraints" section and `prime_schema.json`); `false` causes the template to instruct the reviewer to emit `bm_commands: []`. The field is ALWAYS present in the rendered output schema — it is required by `prime_schema.json` (strict-mode invariant) and must not be made optional.
 - `go test -race ./internal/prompts/...` passes.
 
 **Non-goals:**
