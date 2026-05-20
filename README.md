@@ -169,6 +169,13 @@ ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # output cap for the per-task hooks (va
 ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # output cap per reviewer call in validate_plan (single-call and per-chunk); raise if plan validation returns a truncation finding
 ANTI_TANGENT_PLAN_TASKS_PER_CHUNK=8      # plans above this task count are reviewed via the chunked path; also the per-chunk size
 ANTI_TANGENT_MAX_TOKENS_CEILING=16384    # cap on per-call max_tokens_override; over-ceiling values are clamped and emit a minor clamp finding (v0.3.0+)
+
+# Project knowledge (v0.6.0+ optional integration):
+ANTI_TANGENT_KB_STORE=                   # empty (default; bm_commands omitted) or "basic-memory" (only accepted non-empty value); gates bm_commands emission on prime/extract
+ANTI_TANGENT_PRIME_MODEL=                # prime_project_knowledge; falls back to ANTI_TANGENT_PLAN_MODEL → ANTI_TANGENT_PRE_MODEL when unset
+ANTI_TANGENT_EXTRACT_MODEL=              # extract_project_knowledge; falls back to ANTI_TANGENT_PLAN_MODEL → ANTI_TANGENT_PRE_MODEL when unset
+ANTI_TANGENT_PRIME_MAX_TOKENS=4096       # output cap for prime_project_knowledge; raise if a prime call returns a truncation finding
+ANTI_TANGENT_EXTRACT_MAX_TOKENS=8192     # output cap for extract_project_knowledge; raise if an extract call returns a truncation finding
 ```
 
 ### Picking a reviewer model
@@ -185,7 +192,7 @@ The mid-hook (`check_progress`) is called more often — a fast/cheap tier there
 
 ### Smoke test
 
-Launch your MCP host with debug logging on and confirm all four tools — `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion` — appear in the discovered tool catalog. Server-side configuration errors print to stderr at startup.
+Launch your MCP host with debug logging on and confirm all six tools — `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`, `prime_project_knowledge`, `extract_project_knowledge` — appear in the discovered tool catalog. Server-side configuration errors print to stderr at startup.
 
 ### Large plans (chunking)
 
@@ -193,7 +200,7 @@ Launch your MCP host with debug logging on and confirm all four tools — `valid
 
 ### Per-call tool args (v0.3.0+)
 
-All four tools accept an optional `max_tokens_override` non-negative int — replaces the configured default (`PerTaskMaxTokens` or `PlanMaxTokens`) for this call only. Zero or unset uses the configured default; positive values up to `ANTI_TANGENT_MAX_TOKENS_CEILING` are used directly; over-ceiling values are clamped to the ceiling and emit a `minor` clamp finding. Negative values are rejected at the handler boundary with `max_tokens_override must be ≥ 0`. Use when you know one specific call needs a larger reviewer budget without changing global config.
+All six tools accept an optional `max_tokens_override` non-negative int — replaces the configured default (`PerTaskMaxTokens`, `PlanMaxTokens`, `PrimeMaxTokens`, or `ExtractMaxTokens`) for this call only. Zero or unset uses the configured default; positive values up to `ANTI_TANGENT_MAX_TOKENS_CEILING` are used directly; over-ceiling values are clamped to the ceiling and emit a `minor` clamp finding. Negative values are rejected at the handler boundary with `max_tokens_override must be ≥ 0`. Use when you know one specific call needs a larger reviewer budget without changing global config.
 
 `validate_plan` additionally accepts an optional `mode` arg of `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings (at most 3 per scope) — useful for small ASAP plans where you don't want round-after-round of stylistic refinement.
 
@@ -292,12 +299,14 @@ Set `ANTI_TANGENT_*_MODEL` (or pass `model` per call) using `provider:model-id`.
 
 Adding a new model is a one-line change in [`internal/providers/reviewer.go`](internal/providers/reviewer.go) — open a PR.
 
-## The 4 tools
+## The 6 tools
 
 - `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings.
 - `validate_task_spec` — call once before coding. Returns findings on missing goals, weak acceptance criteria, unstated assumptions. Returns a `session_id` you thread through the next two calls.
 - `check_progress` — call at checkpoints during implementation. Catches scope drift, untouched ACs, and unaddressed prior findings.
 - `validate_completion` — call before claiming done. Walks every AC and non-goal explicitly.
+- `prime_project_knowledge` (v0.6.0+, optional) — stateless. Given a task spec and a Basic-Memory-style `kb_index`, returns prioritized note picks for the implementer to read before starting. Emits paste-ready `bm_commands` when `ANTI_TANGENT_KB_STORE=basic-memory`.
+- `extract_project_knowledge` (v0.6.0+, optional) — stateless. Given one or more `validate_completion` envelopes, returns structured create/update/supersede proposals for the project knowledge base. Same env gate for `bm_commands`.
 
 The latter three return the same envelope; `validate_plan` returns a richer `PlanResult` with per-task analysis (see [INTEGRATION.md](INTEGRATION.md) §5.5):
 
@@ -325,6 +334,15 @@ The latter three return the same envelope; `validate_plan` returns a richer `Pla
 `session_expires_at` and `session_ttl_remaining_seconds` are included in stateful-hook responses (v0.2.0+). If a stateful hook returns a `category: other` finding with `criterion: reviewer_response`, the reviewer response was cut off at the token budget — raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` and retry.
 
 `validate_completion` (v0.2.0+) accepts `final_diff` as an alternative or supplement to `final_files`. Pass a unified diff when the changed files are too large to inline. At least one of `final_files`, `final_diff`, or `test_evidence` must be non-empty — summary-only requests are rejected. Timeout errors (default 180s, configurable via `ANTI_TANGENT_REQUEST_TIMEOUT`) include the configured timeout value and the env-var name for self-diagnosis.
+
+## Project knowledge (optional)
+
+On epic-scale projects with multiple agents and authors, implementers drift away from decisions already taken and modules already shaped. v0.6.0 adds an optional knowledge-base loop alongside the review loop: `prime_project_knowledge` recommends notes to attach before a task starts, `extract_project_knowledge` proposes new notes from a completion envelope, and `validate_task_spec` / `validate_plan` accept an optional `project_knowledge` string the reviewer treats as authoritative grounding (same posture as `pinned_by`). The knowledge itself lives in [Basic Memory](https://github.com/basicmachines-co/basic-memory) (recommended) or any markdown-backed store — anti-tangent never reads or writes that store directly.
+
+- Design: [`docs/superpowers/specs/2026-05-18-project-knowledge-design.md`](docs/superpowers/specs/2026-05-18-project-knowledge-design.md)
+- Integration playbook: [INTEGRATION.md, "Project knowledge (optional)"](INTEGRATION.md#project-knowledge-optional)
+- Shared-VM setup: [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md)
+- Note templates: [`examples/project-knowledge/`](examples/project-knowledge/)
 
 ## Integration
 
