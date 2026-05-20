@@ -11,16 +11,17 @@ import (
 )
 
 // reviewerSchema names one of the embedded reviewer-output JSON schemas
-// in this package. v0.6.0 Task 5 added prime_schema.json; Task 8 will
-// add extract_schema.json.
+// in this package. v0.6.0 Task 5 added prime_schema.json; Task 8 added
+// extract_schema.json. The slice now covers all six reviewer-output
+// schemas in lock-step.
 type reviewerSchema struct {
 	name string
 	raw  []byte
 }
 
 // reviewerSchemas returns the schemas the strict-mode invariants walk.
-// Task 5 (v0.6.0) added prime_schema.json; Task 8 will extend the slice
-// further with extract_schema.json.
+// Task 5 (v0.6.0) added prime_schema.json; Task 8 added extract_schema.json,
+// bringing the total to six reviewer-output schemas walked by the invariants.
 //
 // NOTE on OpenAI strict-mode keyword support (verified 2026-05-20 via the
 // platform docs at https://platform.openai.com/docs/guides/structured-outputs):
@@ -39,6 +40,7 @@ func reviewerSchemas() []reviewerSchema {
 		{"tasks_only_schema.json", TasksOnlySchema()},
 		{"plan_findings_only_schema.json", PlanFindingsOnlySchema()},
 		{"prime_schema.json", PrimeSchema()},
+		{"extract_schema.json", ExtractSchema()},
 	}
 }
 
@@ -48,7 +50,7 @@ func reviewerSchemas() []reviewerSchema {
 // as the properties map. OpenAI structured-outputs (response_format strict:true)
 // rejects any schema where a property is absent from required, returning HTTP 400.
 //
-// The test walks each of the four reviewer-output schemas embedded in this package
+// The test walks each of the six reviewer-output schemas embedded in this package
 // and fails with a clear diagnostic naming the file and schema path on any mismatch.
 func TestReviewerSchemas_RequireAllProperties_ForOpenAIStrictMode(t *testing.T) {
 	for _, s := range reviewerSchemas() {
