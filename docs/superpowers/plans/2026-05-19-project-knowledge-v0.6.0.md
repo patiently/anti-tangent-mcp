@@ -4177,3 +4177,36 @@ EOF
 - Do not skip `go test ./internal/prompts/... -update`'s diff review. Golden bloat is a real failure mode.
 - Both spec open questions (BM tool names AND BM transport story) are resolved up front in **Task 0a** and recorded in the "Basic Memory contract (verified <date>)" block at the bottom of this plan. Tasks 6, 7, 9, 10, 12, and 14 read that block — they do not re-do the upstream research. If a later task discovers that the verified block is wrong, update the block first (Task 0a step 2), then propagate via Task 0a step 3 before continuing. Do NOT defer BM verification to Tasks 12 or 14: by the time those tasks run, Tasks 6/7/9/10 have already shipped prompts and handlers that quote the verified names, and a late discovery would force rework in already-merged code.
 - The third open question — whether `epic_origin` belongs on `module` and `feature` proposals — is deliberately deferred. Ship 0.6.0 with `epic_origin` on `decision` only (YAGNI). Revisit on field evidence.
+
+---
+
+## Basic Memory contract (verified 2026-05-20)
+
+- **Upstream version checked:** v0.21.1 (released 2026-05-16; https://github.com/basicmachines-co/basic-memory/releases/tag/v0.21.1).
+- **Verification method:** `gh repo view basicmachines-co/basic-memory`, `gh api /repos/basicmachines-co/basic-memory/releases/latest`, and WebFetch of https://raw.githubusercontent.com/basicmachines-co/basic-memory/main/README.md (2026-05-20).
+- **Canonical tool names actually exposed by BM (the subset relevant to this plan):**
+  - `search_notes` — search across notes by query string.
+  - `read_note` — read a note by permalink.
+  - `write_note` — create or replace a note.
+  - `edit_note` — partial update (frontmatter patch / append / replace section).
+  - `move_note` — rename / relocate a note.
+  - `delete_note` — remove a note.
+  - Plus: `search`, `recent_activity`, `list_directory`, `build_context`, `canvas`, `read_content`, `view_note`, and project/schema/cloud tools (not used by this plan).
+- **Source for the names:** upstream README MCP-tool list (2026-05-20). Verified by WebFetch.
+
+### Supersede mapping
+
+BM does **NOT** ship a `supersede_note` verb (verified 2026-05-20). This plan's logical `Proposal{action: "supersede"}` therefore maps to a **pair** of `bm_commands` entries:
+
+1. `{ "tool": "write_note", "args_json": "{\"permalink\":\"<new>\", \"frontmatter\":{\"status\":\"accepted\", \"supersedes\":[\"<predecessor>\"], ...}, \"body\":\"<new body>\"}" }`
+2. `{ "tool": "edit_note", "args_json": "{\"permalink\":\"<predecessor>\", \"frontmatter_patch\":{\"status\":\"superseded\"}}" }`
+
+If the predecessor permalink is missing or the new note carries no body, the reviewer emits an `insufficient_evidence` finding instead of fabricating either command.
+
+### Transport
+
+- The upstream README does NOT prescribe a remote-MCP transport for shared-VM deployments — BM's default invocation is stdio (`basic-memory mcp`).
+- **Canonical recommendation for shared-VM deployments: stdio-via-SSH-proxy.** Each developer's Claude Code config invokes `ssh -i <key> bm@<vm-host> basic-memory mcp` to launch a per-session stdio MCP process on the shared VM. This requires no extra transport infrastructure beyond OpenSSH and works against the upstream's default mode. Source: upstream README (no explicit remote-transport guidance; SSH-proxy is the conventional pattern for stdio MCP servers).
+- Operators who prefer URL/token-based transport (SSE or streamable-HTTP) can run BM behind a reverse proxy of their choice; that path is out of scope for v0.6.0's team-setup doc and may be revisited if upstream ships a first-class remote transport.
+
+Downstream tasks (6, 7, 9, 10, 12, 14) reference these names and the supersede mapping verbatim. If a future BM release changes anything, update this block first, then propagate.

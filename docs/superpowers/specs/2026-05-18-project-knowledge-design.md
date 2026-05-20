@@ -1,6 +1,6 @@
 # Project knowledge — design
 
-**Status:** draft 2026-05-18
+**Status:** draft 2026-05-18 — Updated 2026-05-20: BM contract verified (v0.21.1; no `supersede_note` verb — see verified-contract block in `docs/superpowers/plans/2026-05-19-project-knowledge-v0.6.0.md`); env-var count reconciled to five; section-8 storage approach updated from cron to systemd-timer-primary; dispatch-clause placement clarified (before Task spec field list).
 **Target version:** 0.6.0 (minor bump)
 **Tracking issue:** _to be filed before implementation_
 
@@ -21,7 +21,7 @@ In scope:
 
 - Two new stateless MCP tools: `prime_project_knowledge` and `extract_project_knowledge`.
 - One new input field, `project_knowledge` (string), on `validate_task_spec` and `validate_plan`.
-- One new env var, `ANTI_TANGENT_KB_STORE`, gating output-format adaptation. Default empty (no behavior change for existing users).
+- Five new env vars, headed by `ANTI_TANGENT_KB_STORE` (gates output-format adaptation; default empty, no behavior change for existing users), plus four optional reviewer-model and max-tokens overrides; see §5.1 for the full list.
 - Five note-type templates under `examples/project-knowledge/`: `decision`, `module`, `feature`, `glossary`, `epic`.
 - Two new content sections in `INTEGRATION.md` ("Project knowledge (optional)") and a new operator-facing doc `docs/team-setup/basic-memory-shared-vm.md`.
 - A 0.6.0 changelog entry.
@@ -175,7 +175,7 @@ Domain-term canonical definitions. Body: short definition + notes.
 
 ### 3. Server surface
 
-Two new stateless tools, one new input field, one new env var. The result envelope follows the existing `Result` shape from `internal/verdict/` so the parser and `summary_block` paths don't fork.
+Two new stateless tools, one new input field, five new env vars (see §5.1). The result envelope follows the existing `Result` shape from `internal/verdict/` so the parser and `summary_block` paths don't fork.
 
 #### 3.1 `prime_project_knowledge`
 
@@ -241,7 +241,7 @@ Outputs:
 
   For `action: "update"`, the reviewer chooses `body` or `body_patch`; the server does not enforce a threshold beyond the existing 200 KB payload cap. `body_patch` uses standard unified-diff format (`diff -u` shape).
 
-- `bm_commands` *(only when `ANTI_TANGENT_KB_STORE=basic-memory`)*: `[]{ tool, args }` — paste-ready `write_note`, `edit_note`, `supersede_note` calls. Tool names anchored in INTEGRATION.md so a BM version bump is a doc-only change.
+- `bm_commands` *(only when `ANTI_TANGENT_KB_STORE=basic-memory`)*: `[]{ tool, args_json }` — paste-ready `write_note` / `edit_note` calls (args_json is a JSON-encoded object string per OpenAI strict-mode requirements; see plan's cross-cutting constraints). For supersede, emit the two-step mapping (`write_note` for the new note + `edit_note` to flip the predecessor's `status`); BM does not expose a `supersede_note` verb. Tool names anchored in INTEGRATION.md so a BM version bump is a doc-only change.
 - Standard envelope.
 
 #### 3.3 `project_knowledge` field on existing tools
@@ -301,7 +301,7 @@ Post-task  (controller, per task or batched per plan)
   │                             current_kb_excerpts,
   │                             epic_permalink)      → proposals
   ├── apply by ladder (see 4.3)
-  └── write via BM write_note / edit_note / supersede_note
+  └── write via BM write_note / edit_note (supersede = two-step write_note + edit_note; no supersede_note verb)
 
 Epic close  (human, once)
   └── set epic.status=closed, closed_at; freeze the progress ledger
@@ -309,7 +309,7 @@ Epic close  (human, once)
 
 #### Implementer dispatch-clause addition
 
-Inserted after the existing "Task spec" section in the paste-verbatim clause:
+Inserted **before** the existing "Task spec" section in the paste-verbatim clause (the implementer must read the project-knowledge brief BEFORE deciding what to pass into the `validate_task_spec` call — the brief informs the call):
 
 ```markdown
 ## Project knowledge (auto-attached by the controller)
@@ -349,7 +349,7 @@ Recommended default disposition (the server doesn't enforce; teams can override)
 #### Behavior with `ANTI_TANGENT_KB_STORE=basic-memory`
 
 - `bm_commands` arrays appear in prime/extract outputs.
-- INTEGRATION.md anchors the recommended BM tool names (`search_notes`, `read_note`, `write_note`, `edit_note`, `supersede_note`).
+- INTEGRATION.md anchors the recommended BM tool names (`search_notes`, `read_note`, `write_note`, `edit_note`; supersede uses a two-step `write_note` + `edit_note` mapping rather than a `supersede_note` verb — BM does not expose one).
 
 ### 5. Operational details
 
@@ -454,10 +454,10 @@ CHANGELOG.md                                    ── 0.6.0 entry
 2. Topology overview (4-dev shared VM, anti-tangent has no direct BM contact)
 3. VM baseline (sizing, OS, firewall rules)
 4. Installing Basic Memory on the VM (link to upstream; systemd unit)
-5. Configuring remote MCP transport (resolved during implementation — depends on BM's current transport story)
-6. Auth & access control (per-dev tokens, rotation, secret storage)
-7. Per-developer Claude Code MCP config (concrete JSON snippet)
-8. Storage & backup (git-on-cron for the KB directory)
+5. Configuring remote MCP transport (stdio-via-SSH-proxy per the verified contract; BM v0.21.1 README does not prescribe a remote transport, so SSH-proxy against BM's default stdio mode is the conventional pattern)
+6. Auth & access control (per-dev SSH keypairs or tokens, depending on the verified transport; rotation, secret storage)
+7. Per-developer Claude Code MCP config (concrete JSON snippet — shape depends on the verified transport)
+8. Storage & backup (git-backed KB directory; systemd timer at 60s primary, inotify-recursive watcher alternative, 5-minute timer/cron fallback — see team-setup doc §8 for the full shape)
 9. Day-2 ops (upgrades, token rotation, adding/removing devs, VM restore)
 10. Verification checklist (5-step smoke test)
 11. License compatibility note (AGPL-3.0; unmodified upstream → network-service pattern → trivially compliant; team policy: no fork-and-patch, bugs go upstream to the BM repo)
@@ -465,9 +465,9 @@ CHANGELOG.md                                    ── 0.6.0 entry
 
 ## Open questions (resolve during implementation)
 
-- Basic Memory's current remote-MCP transport story (SSE? HTTP? stdio-via-proxy?). Resolve when writing section 5 of the team-setup doc.
-- Exact BM tool names for read/write/supersede. Confirm against the current BM release and anchor in INTEGRATION.md.
 - Whether `epic_origin` belongs on `module` and `feature` proposals too (currently only on `decision`). Defer until we see field evidence; YAGNI by default.
+
+*(The previous open questions on BM transport and tool names were resolved by Task 0a — see the verified-contract block at the bottom of `docs/superpowers/plans/2026-05-19-project-knowledge-v0.6.0.md`.)*
 
 ## Non-goals (reaffirmed)
 
