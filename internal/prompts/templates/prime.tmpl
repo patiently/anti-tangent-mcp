@@ -1,0 +1,72 @@
+## Task spec
+
+Title: {{.TaskTitle}}
+Goal:  {{.Goal}}
+
+Acceptance criteria:
+{{range .AcceptanceCriteria}}- {{.}}
+{{end}}{{if .NonGoals}}
+Non-goals:
+{{range .NonGoals}}- {{.}}
+{{end}}{{end}}{{if .Context}}
+Context:
+{{.Context}}
+{{end}}{{if .EpicPermalink}}
+Epic in flight: {{.EpicPermalink}}
+Bias picks toward this epic's `touches_modules` and linked decisions.
+{{end}}
+
+## Knowledge-base index
+
+Limit: at most {{.MaxPicks}} picks.
+
+{{if .KBIndex}}
+{{range .KBIndex}}- [{{.Type}}] {{.Permalink}} — {{.Title}}: {{.Summary}}
+{{end}}{{else}}
+The index is empty. Do NOT fabricate picks. Return zero picks and emit one `kb_gap` finding describing the absence.
+{{end}}
+
+## What to do
+
+1. Recommend the smallest set of notes (≤ {{.MaxPicks}}) the implementer must read before starting this task. For each, set `priority`:
+   - `critical` — without it the implementer will almost certainly produce wrong code.
+   - `major` — the implementer can make the change without it but is very likely to violate an invariant or duplicate prior work.
+   - `minor` — useful background that won't independently cause regressions.
+2. If the index contains no note that plausibly grounds the task, emit a `kb_gap` finding naming what is missing.
+3. If the task spec mentions a concept that has no glossary or feature note in the index, emit a `missing_index_entry` finding.
+4. If two notes look like plausible authorities for the same decision (e.g. two ADRs with overlapping `supersedes` chains), emit an `ambiguous_pick` finding.
+5. Each pick must reference a `permalink` present in the supplied index. Do not invent permalinks.
+{{if .EpicPermalink}}
+6. The `epic_permalink` field above identifies an in-flight epic note. If it is not present in the index, emit a `missing_index_entry` finding with `severity: major`.
+{{end}}
+{{if .KBStoreIsBasicMemory}}
+7. The caller will paste the prime output into a Basic Memory MCP client. For every pick, also emit one entry under `bm_commands` shaped exactly:
+
+   `{ "tool": "read_note", "args_json": "{\"permalink\":\"<pick permalink>\"}" }`
+
+   `args_json` is a JSON-encoded string (NOT a nested object) — OpenAI strict structured-outputs rejects freeform object schemas, so the wire format flattens args to a string the caller parses. Always emit `args_json` as a JSON object literal in string form (use `"{}"` if there are no args).
+
+   Order `bm_commands` to mirror `picks`.
+{{else}}
+7. The caller is not using Basic Memory. Emit `bm_commands` as an empty array `[]`. Do NOT omit the field — the response schema requires it.
+{{end}}
+
+## Output schema (paste-ready)
+
+Return ONLY a JSON object matching this shape:
+
+```
+{
+  "verdict": "pass | warn | fail",
+  "findings": [
+    {"severity": "critical|major|minor", "category": "kb_gap|ambiguous_pick|missing_index_entry|unverifiable_codebase_claim|payload_too_large|other", "criterion": "<string>", "evidence": "<string>", "suggestion": "<string>"}
+  ],
+  "picks": [
+    {"permalink": "<existing kb_index permalink>", "reason": "<one sentence>", "priority": "critical|major|minor"}
+  ],
+  "bm_commands": [{{if .KBStoreIsBasicMemory}}
+    {"tool": "read_note", "args_json": "{\"permalink\":\"<pick permalink>\"}"}
+  {{end}}],
+  "next_action": "<one sentence telling the controller what to do next>"
+}
+```

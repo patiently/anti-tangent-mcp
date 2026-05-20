@@ -56,6 +56,26 @@ type PlanInput struct {
 	Mode             string
 }
 
+type KBIndexEntry struct {
+	Permalink string
+	Type      string
+	Title     string
+	Summary   string
+	Tags      []string
+}
+
+type PrimeInput struct {
+	TaskTitle            string
+	Goal                 string
+	AcceptanceCriteria   []string
+	NonGoals             []string
+	Context              string
+	KBIndex              []KBIndexEntry
+	EpicPermalink        string
+	MaxPicks             int
+	KBStoreIsBasicMemory bool
+}
+
 const systemPrompt = `You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.`
 
 func RenderPre(in PreInput) (Output, error) {
@@ -115,6 +135,14 @@ func RenderPlanTasksChunk(in PlanChunkInput) (Output, error) {
 // path: full plan as context, plan-level findings only, no per-task data.
 func RenderPlanFindingsOnly(in PlanInput) (Output, error) {
 	body, err := render("plan_findings_only.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: systemPrompt, User: body}, nil
+}
+
+func RenderPrime(in PrimeInput) (Output, error) {
+	body, err := render("prime.tmpl", in)
 	if err != nil {
 		return Output{}, err
 	}

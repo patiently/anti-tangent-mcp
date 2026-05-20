@@ -842,3 +842,22 @@ func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
 	require.Contains(t, out.User, "textwrap.dedent")
 	require.Contains(t, out.User, "INTEGRATION.md §3.7")
 }
+
+func TestRenderPrime_Basic(t *testing.T) {
+	in := PrimeInput{
+		TaskTitle:          "Task 7: extract handler",
+		Goal:               "Implement extract_project_knowledge.",
+		AcceptanceCriteria: []string{"Returns Proposals when given a completion envelope."},
+		Context:            "Anti-tangent stays stateless.",
+		KBIndex: []KBIndexEntry{
+			{Permalink: "decisions/0042-cache-pass", Type: "decision", Title: "Cache pass reviews", Summary: "TTL 3m."},
+			{Permalink: "modules/mcpsrv", Type: "module", Title: "mcpsrv", Summary: "stdout reserved."},
+		},
+		EpicPermalink:        "epics/2026-q2-large-project-support",
+		MaxPicks:             10,
+		KBStoreIsBasicMemory: true,
+	}
+	out, err := RenderPrime(in)
+	require.NoError(t, err)
+	golden(t, "prime_basic", out.System+"\n---USER---\n"+out.User)
+}
