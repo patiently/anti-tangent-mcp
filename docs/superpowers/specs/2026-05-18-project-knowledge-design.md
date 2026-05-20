@@ -2,7 +2,7 @@
 
 **Status:** draft 2026-05-18 — Updated 2026-05-20: BM contract verified (v0.21.1; no `supersede_note` verb — see verified-contract block in `docs/superpowers/plans/2026-05-19-project-knowledge-v0.6.0.md`); env-var count reconciled to five; section-8 storage approach updated from cron to systemd-timer-primary; dispatch-clause placement clarified (before Task spec field list).
 **Target version:** 0.6.0 (minor bump)
-**Tracking issue:** _to be filed before implementation_
+**Tracking issue:** [patiently/anti-tangent-mcp#23](https://github.com/patiently/anti-tangent-mcp/issues/23)
 
 ## Background
 
