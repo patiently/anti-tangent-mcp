@@ -99,7 +99,6 @@ func TestReviewerSchemas_AdditionalPropertiesFalse_ForOpenAIStrictMode(t *testin
 // directly, mirroring the required-vs-properties walker.
 func TestReviewerSchemas_CategoryEnumsAreInLockstep(t *testing.T) {
 	var canonical []string
-	schemaEnums := map[string][]string{}
 	for _, s := range reviewerSchemas() {
 		var root map[string]any
 		require.NoError(t, json.Unmarshal(s.raw, &root), "schema must be valid JSON")
@@ -110,10 +109,8 @@ func TestReviewerSchemas_CategoryEnumsAreInLockstep(t *testing.T) {
 			sort.Strings(sorted)
 			if canonical == nil {
 				canonical = sorted
-				schemaEnums[s.name] = sorted
 				continue
 			}
-			schemaEnums[s.name] = sorted
 			if !stringSlicesEqual(canonical, sorted) {
 				t.Errorf("%s: category enum diverges from canonical set\n  canonical: %v\n  this file: %v", s.name, canonical, sorted)
 			}
