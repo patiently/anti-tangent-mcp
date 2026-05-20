@@ -59,7 +59,18 @@ const (
 	// intentionally NOT included in validCategory and NOT included in any
 	// JSON schema, so a reviewer cannot emit it.
 	CategoryMalformedEvidence Category = "malformed_evidence"
-	CategoryOther             Category = "other"
+
+	// Categories emitted by prime_project_knowledge (v0.6.0).
+	CategoryKBGap             Category = "kb_gap"
+	CategoryAmbiguousPick     Category = "ambiguous_pick"
+	CategoryMissingIndexEntry Category = "missing_index_entry"
+
+	// Categories emitted by extract_project_knowledge (v0.6.0).
+	CategoryInsufficientEvidence Category = "insufficient_evidence"
+	CategoryRedundantProposal    Category = "redundant_proposal"
+	CategoryContradictsExisting  Category = "contradicts_existing"
+
+	CategoryOther Category = "other"
 )
 
 type Finding struct {

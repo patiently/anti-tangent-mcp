@@ -56,6 +56,12 @@
             "unverifiable_codebase_claim",
             "convention_deviation",
             "attestation_contradiction",
+            "kb_gap",
+            "ambiguous_pick",
+            "missing_index_entry",
+            "insufficient_evidence",
+            "redundant_proposal",
+            "contradicts_existing",
             "other"
           ]
         },

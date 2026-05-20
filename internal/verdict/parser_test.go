@@ -130,3 +130,62 @@ func TestParse_DemotedAmbiguousSpec_PassesThroughUnchanged(t *testing.T) {
 	require.Equal(t, CategoryAmbiguousSpec, r.Findings[0].Category)
 	require.Contains(t, r.Findings[0].Suggestion, "(resolved-by-normative-body:")
 }
+
+func TestParse_AcceptsProjectKnowledgeCategories(t *testing.T) {
+	// Six new categories added in v0.6.0 for prime_project_knowledge and
+	// extract_project_knowledge. Asserts each is accepted by Parse when a
+	// reviewer emits it on a finding.
+	categories := []Category{
+		CategoryKBGap,
+		CategoryAmbiguousPick,
+		CategoryMissingIndexEntry,
+		CategoryInsufficientEvidence,
+		CategoryRedundantProposal,
+		CategoryContradictsExisting,
+	}
+	for _, c := range categories {
+		c := c
+		t.Run(string(c), func(t *testing.T) {
+			raw := []byte(`{"verdict":"warn","findings":[{"severity":"minor","category":"` + string(c) + `","criterion":"x","evidence":"y","suggestion":"z"}],"next_action":"go"}`)
+			r, err := Parse(raw)
+			require.NoError(t, err)
+			require.Len(t, r.Findings, 1)
+			require.Equal(t, c, r.Findings[0].Category)
+		})
+	}
+}
+
+func TestParse_RejectsEmptyFindingStrings(t *testing.T) {
+	// Parser-side belt-and-braces enforcement of non-empty criterion /
+	// evidence / suggestion. Schemas enforce this via minLength:1 today, but
+	// the parser is the durable enforcement point.
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "empty criterion",
+			raw:  `{"verdict":"warn","findings":[{"severity":"minor","category":"quality","criterion":"","evidence":"e","suggestion":"s"}],"next_action":"go"}`,
+			want: "criterion is required",
+		},
+		{
+			name: "empty evidence",
+			raw:  `{"verdict":"warn","findings":[{"severity":"minor","category":"quality","criterion":"c","evidence":"","suggestion":"s"}],"next_action":"go"}`,
+			want: "evidence is required",
+		},
+		{
+			name: "empty suggestion",
+			raw:  `{"verdict":"warn","findings":[{"severity":"minor","category":"quality","criterion":"c","evidence":"e","suggestion":""}],"next_action":"go"}`,
+			want: "suggestion is required",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.raw))
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
