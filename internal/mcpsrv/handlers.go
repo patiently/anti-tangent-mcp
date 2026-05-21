@@ -50,6 +50,7 @@ type ValidateTaskSpecArgs struct {
 	TestabilityExtractions       []string                          `json:"testability_extractions,omitempty"`
 	NormativeTestBodies          []string                          `json:"normative_test_bodies,omitempty"`
 	HarnessShapeAttestation      []session.HarnessShapeAttestation `json:"harness_shape_attestation,omitempty"`
+	ProjectKnowledge             string                            `json:"project_knowledge,omitempty"`
 	Phase                        string                            `json:"phase,omitempty"`
 	ModelOverride                string                            `json:"model_override,omitempty"`
 	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty"`
@@ -84,7 +85,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, errors.New("task_title and goal are required")
 	}
 
-	inputs, err := normalizeTaskSpecInputs(args)
+	inputs, err := normalizeTaskSpecInputs(args, h.deps.Cfg.MaxPayloadBytes)
 	if err != nil {
 		return nil, Envelope{}, err
 	}
@@ -110,7 +111,9 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		h.deps.Cfg.PerTaskMaxTokens,
 		args.ModelOverride,
 		h.deps.Cfg.PreModel,
-		func() (prompts.Output, error) { return prompts.RenderPre(prompts.PreInput{Spec: spec}) },
+		func() (prompts.Output, error) {
+			return prompts.RenderPre(prompts.PreInput{Spec: spec, ProjectKnowledge: inputs.ProjectKnowledge})
+		},
 		"render pre prompt",
 	)
 	if err != nil {
@@ -666,6 +669,7 @@ type ValidateCompletionArgs struct {
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
 type ValidatePlanArgs struct {
 	PlanText          string `json:"plan_text"      jsonschema:"required"`
+	ProjectKnowledge  string `json:"project_knowledge,omitempty"`
 	ModelOverride     string `json:"model_override,omitempty"`
 	MaxTokensOverride int    `json:"max_tokens_override,omitempty"`
 	Mode              string `json:"mode,omitempty"`
@@ -1021,8 +1025,11 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return nil, verdict.PlanResult{}, err
 	}
 
-	if size := len(args.PlanText); size > h.deps.Cfg.MaxPayloadBytes {
-		return planEnvelopeResult(prependPlanClamp(tooLargePlanResult(size, h.deps.Cfg.MaxPayloadBytes), clamp), h.deps.Cfg.PlanModel.String(), 0)
+	projectKnowledge := strings.TrimSpace(args.ProjectKnowledge)
+	planBytes := len(args.PlanText)
+	pkBytes := len(projectKnowledge)
+	if total := planBytes + pkBytes; total > h.deps.Cfg.MaxPayloadBytes {
+		return planEnvelopeResult(prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, h.deps.Cfg.MaxPayloadBytes), clamp), h.deps.Cfg.PlanModel.String(), 0)
 	}
 	tasks, _ := planparser.SplitTasks(args.PlanText)
 	if len(tasks) == 0 {
@@ -1041,11 +1048,17 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}
-	rendered, err := renderPlanReview(args.PlanText, tasks, h.deps.Cfg.PlanTasksPerChunk, args.Mode)
+	rendered, err := renderPlanReview(renderPlanReviewInputs{
+		PlanText:         args.PlanText,
+		ProjectKnowledge: projectKnowledge,
+		Tasks:            tasks,
+		ChunkSize:        h.deps.Cfg.PlanTasksPerChunk,
+		Mode:             args.Mode,
+	})
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}
-	cacheKey := planPassCacheKey(args.PlanText, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
+	cacheKey := planPassCacheKey(args.PlanText, projectKnowledge, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
 	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey); ok {
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
@@ -1109,32 +1122,53 @@ func (r renderedPlanReview) cachePrompts() []planCachePrompt {
 	return prompts
 }
 
-func renderPlanReview(planText string, tasks []planparser.RawTask, chunkSize int, mode string) (renderedPlanReview, error) {
-	if len(tasks) <= chunkSize {
-		rendered, err := prompts.RenderPlan(prompts.PlanInput{PlanText: planText, Mode: mode})
+// renderPlanReviewInputs bundles the inputs to renderPlanReview. Carrying
+// these on a struct keeps the helper signature narrow (1 arg vs. 5) and
+// matches CodeScene's "max arguments = 4" code-health threshold; mirrors
+// the planReviewErrInputs pattern at review_error.go.
+type renderPlanReviewInputs struct {
+	PlanText         string
+	ProjectKnowledge string
+	Tasks            []planparser.RawTask
+	ChunkSize        int
+	Mode             string
+}
+
+func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
+	if len(in.Tasks) <= in.ChunkSize {
+		rendered, err := prompts.RenderPlan(prompts.PlanInput{
+			PlanText:         in.PlanText,
+			ProjectKnowledge: in.ProjectKnowledge,
+			Mode:             in.Mode,
+		})
 		if err != nil {
 			return renderedPlanReview{}, fmt.Errorf("render plan prompt: %w", err)
 		}
 		return renderedPlanReview{Single: &rendered}, nil
 	}
-	if chunkSize <= 0 {
-		return renderedPlanReview{}, fmt.Errorf("renderPlanReview: chunkSize must be positive, got %d", chunkSize)
+	if in.ChunkSize <= 0 {
+		return renderedPlanReview{}, fmt.Errorf("renderPlanReview: chunkSize must be positive, got %d", in.ChunkSize)
 	}
-	findingsOnly, err := prompts.RenderPlanFindingsOnly(prompts.PlanInput{PlanText: planText, Mode: mode})
+	findingsOnly, err := prompts.RenderPlanFindingsOnly(prompts.PlanInput{
+		PlanText:         in.PlanText,
+		ProjectKnowledge: in.ProjectKnowledge,
+		Mode:             in.Mode,
+	})
 	if err != nil {
 		return renderedPlanReview{}, fmt.Errorf("render plan_findings_only: %w", err)
 	}
 	rendered := renderedPlanReview{FindingsOnly: &findingsOnly}
-	for i := 0; i < len(tasks); i += chunkSize {
-		end := i + chunkSize
-		if end > len(tasks) {
-			end = len(tasks)
+	for i := 0; i < len(in.Tasks); i += in.ChunkSize {
+		end := i + in.ChunkSize
+		if end > len(in.Tasks) {
+			end = len(in.Tasks)
 		}
-		chunkTasks := tasks[i:end]
+		chunkTasks := in.Tasks[i:end]
 		chunkPrompt, err := prompts.RenderPlanTasksChunk(prompts.PlanChunkInput{
-			PlanText:   planText,
-			ChunkTasks: chunkTasks,
-			Mode:       mode,
+			PlanText:         in.PlanText,
+			ProjectKnowledge: in.ProjectKnowledge,
+			ChunkTasks:       chunkTasks,
+			Mode:             in.Mode,
 		})
 		if err != nil {
 			return renderedPlanReview{}, fmt.Errorf("render plan_tasks_chunk: %w", err)
@@ -1233,16 +1267,19 @@ func noHeadingsPlanResult() verdict.PlanResult {
 	}
 }
 
-// tooLargePlanResult builds the rejection PlanResult for a plan-text-too-large hit.
-// Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
-func tooLargePlanResult(size, limit int) verdict.PlanResult {
+// tooLargePlanResult builds the rejection PlanResult for a cumulative
+// payload-too-large hit on (plan_text + project_knowledge). The evidence
+// names both contributors so the caller can tell which input to shrink.
+// Critical so the ladder derives fail from one critical, matching the
+// explicit Verdict: fail.
+func tooLargePlanResult(total, planBytes, pkBytes, limit int) verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictFail,
 		PlanFindings: []verdict.Finding{{
 			Severity:   verdict.SeverityCritical,
 			Category:   verdict.CategoryTooLarge,
 			Criterion:  "payload",
-			Evidence:   fmt.Sprintf("plan_text %d bytes exceeds cap %d", size, limit),
+			Evidence:   fmt.Sprintf("payload %d bytes > cap %d (plan_text: %d, project_knowledge: %d)", total, limit, planBytes, pkBytes),
 			Suggestion: "Split the plan into smaller chunks or pass a unified diff.",
 		}},
 		Tasks:      []verdict.PlanTaskResult{},

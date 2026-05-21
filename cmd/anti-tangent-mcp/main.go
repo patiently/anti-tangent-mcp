@@ -54,6 +54,12 @@ func main() {
 	if err := providers.ValidateModel(cfg.PlanModel); err != nil {
 		fail(logger, "plan model invalid", err)
 	}
+	if err := providers.ValidateModel(cfg.PrimeModel); err != nil {
+		fail(logger, "prime model invalid", err)
+	}
+	if err := providers.ValidateModel(cfg.ExtractModel); err != nil {
+		fail(logger, "extract model invalid", err)
+	}
 
 	registry := providers.Registry{}
 	if cfg.AnthropicKey != "" {

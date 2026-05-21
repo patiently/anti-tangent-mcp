@@ -26,7 +26,8 @@ type File struct {
 }
 
 type PreInput struct {
-	Spec session.TaskSpec
+	Spec             session.TaskSpec
+	ProjectKnowledge string
 }
 
 type MidInput struct {
@@ -50,8 +51,55 @@ type PostInput struct {
 }
 
 type PlanInput struct {
-	PlanText string
-	Mode     string
+	PlanText         string
+	ProjectKnowledge string
+	Mode             string
+}
+
+type KBIndexEntry struct {
+	Permalink string
+	Type      string
+	Title     string
+	Summary   string
+	Tags      []string
+}
+
+type PrimeInput struct {
+	TaskTitle            string
+	Goal                 string
+	AcceptanceCriteria   []string
+	NonGoals             []string
+	Context              string
+	KBIndex              []KBIndexEntry
+	EpicPermalink        string
+	MaxPicks             int
+	KBStoreIsBasicMemory bool
+}
+
+// CompletionEnvelopeForExtract is one completion-stage envelope the caller
+// has accumulated for extract review. The reviewer treats every field as
+// caller-attested evidence; evidence_refs on emitted Proposals must point
+// at fields visible in one of these envelopes (or at the optional PlanText).
+type CompletionEnvelopeForExtract struct {
+	TaskTitle    string
+	Summary      string
+	Verdict      string
+	Findings     []verdict.Finding
+	FinalDiff    string
+	FinalFiles   []File
+	TestEvidence string
+}
+
+// ExtractInput is the rendering input for extract.tmpl. The reviewer is
+// asked to propose KB writes (decisions/modules/features/glossary/epic
+// ledger entries) grounded in CompletionEnvelopes and PlanText.
+type ExtractInput struct {
+	CompletionEnvelopes  []CompletionEnvelopeForExtract
+	PlanText             string
+	KBIndex              []KBIndexEntry
+	CurrentKBExcerpts    map[string]string
+	EpicPermalink        string
+	KBStoreIsBasicMemory bool
 }
 
 const systemPrompt = `You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.`
@@ -92,9 +140,10 @@ func RenderPlan(in PlanInput) (Output, error) {
 // ChunkTasks carries the exact subset of tasks the reviewer should emit
 // results for; PlanText carries the full plan for cross-task reasoning.
 type PlanChunkInput struct {
-	PlanText   string
-	ChunkTasks []planparser.RawTask
-	Mode       string
+	PlanText         string
+	ProjectKnowledge string
+	ChunkTasks       []planparser.RawTask
+	Mode             string
 }
 
 // RenderPlanTasksChunk produces a per-chunk prompt for the chunked validate_plan
@@ -112,6 +161,22 @@ func RenderPlanTasksChunk(in PlanChunkInput) (Output, error) {
 // path: full plan as context, plan-level findings only, no per-task data.
 func RenderPlanFindingsOnly(in PlanInput) (Output, error) {
 	body, err := render("plan_findings_only.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: systemPrompt, User: body}, nil
+}
+
+func RenderPrime(in PrimeInput) (Output, error) {
+	body, err := render("prime.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: systemPrompt, User: body}, nil
+}
+
+func RenderExtract(in ExtractInput) (Output, error) {
+	body, err := render("extract.tmpl", in)
 	if err != nil {
 		return Output{}, err
 	}

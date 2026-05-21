@@ -75,6 +75,9 @@ func validateFinding(f *Finding, where string) error {
 		return fmt.Errorf("plan: %s.category invalid %q", where, f.Category)
 	}
 	*f = applySeverityFloor(*f)
+	if err := validateFindingStrings(*f, where); err != nil {
+		return fmt.Errorf("plan: %w", err)
+	}
 	return nil
 }
 

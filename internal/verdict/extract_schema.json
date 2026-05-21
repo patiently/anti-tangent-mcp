@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExtractResult",
+  "type": "object",
+  "required": ["verdict", "findings", "proposals", "bm_commands", "next_action"],
+  "additionalProperties": false,
+  "properties": {
+    "verdict": { "type": "string", "enum": ["pass", "warn", "fail"] },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "category", "criterion", "evidence", "suggestion"],
+        "additionalProperties": false,
+        "properties": {
+          "severity":   { "type": "string", "enum": ["critical", "major", "minor"] },
+          "category": {
+            "type": "string",
+            "enum": [
+              "missing_acceptance_criterion",
+              "scope_drift",
+              "ambiguous_spec",
+              "unaddressed_finding",
+              "quality",
+              "session_not_found",
+              "payload_too_large",
+              "unverifiable_codebase_claim",
+              "convention_deviation",
+              "attestation_contradiction",
+              "kb_gap",
+              "ambiguous_pick",
+              "missing_index_entry",
+              "insufficient_evidence",
+              "redundant_proposal",
+              "contradicts_existing",
+              "other"
+            ]
+          },
+          "criterion":  { "type": "string", "minLength": 1 },
+          "evidence":   { "type": "string", "minLength": 1 },
+          "suggestion": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["action", "type", "permalink", "title", "frontmatter_json", "body", "body_patch", "rationale", "evidence_refs", "supersedes"],
+        "additionalProperties": false,
+        "properties": {
+          "action":           { "type": "string", "enum": ["create", "update", "supersede"] },
+          "type":             { "type": "string", "enum": ["decision", "module", "feature", "glossary", "epic"] },
+          "permalink":        { "type": "string", "minLength": 1 },
+          "title":            { "type": "string", "minLength": 1 },
+          "frontmatter_json": { "type": "string", "minLength": 1 },
+          "body":             { "type": "string" },
+          "body_patch":       { "type": "string" },
+          "rationale":        { "type": "string", "minLength": 1 },
+          "evidence_refs":    { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "supersedes":       { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
+    "bm_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "args_json"],
+        "additionalProperties": false,
+        "properties": {
+          "tool":      { "type": "string", "minLength": 1 },
+          "args_json": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "next_action": { "type": "string", "minLength": 1 }
+  }
+}

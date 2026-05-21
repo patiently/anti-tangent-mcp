@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PrimeResult",
+  "type": "object",
+  "required": ["verdict", "findings", "picks", "bm_commands", "next_action"],
+  "additionalProperties": false,
+  "properties": {
+    "verdict": { "type": "string", "enum": ["pass", "warn", "fail"] },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "category", "criterion", "evidence", "suggestion"],
+        "additionalProperties": false,
+        "properties": {
+          "severity":   { "type": "string", "enum": ["critical", "major", "minor"] },
+          "category": {
+            "type": "string",
+            "enum": [
+              "missing_acceptance_criterion",
+              "scope_drift",
+              "ambiguous_spec",
+              "unaddressed_finding",
+              "quality",
+              "session_not_found",
+              "payload_too_large",
+              "unverifiable_codebase_claim",
+              "convention_deviation",
+              "attestation_contradiction",
+              "kb_gap",
+              "ambiguous_pick",
+              "missing_index_entry",
+              "insufficient_evidence",
+              "redundant_proposal",
+              "contradicts_existing",
+              "other"
+            ]
+          },
+          "criterion":  { "type": "string", "minLength": 1 },
+          "evidence":   { "type": "string", "minLength": 1 },
+          "suggestion": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "picks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["permalink", "reason", "priority"],
+        "additionalProperties": false,
+        "properties": {
+          "permalink": { "type": "string", "minLength": 1 },
+          "reason":    { "type": "string", "minLength": 1 },
+          "priority":  { "type": "string", "enum": ["critical", "major", "minor"] }
+        }
+      }
+    },
+    "bm_commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "args_json"],
+        "additionalProperties": false,
+        "properties": {
+          "tool":      { "type": "string", "minLength": 1 },
+          "args_json": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "next_action": { "type": "string", "minLength": 1 }
+  }
+}

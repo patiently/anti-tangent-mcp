@@ -2309,7 +2309,8 @@ func TestNotFoundEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
 }
 
 func TestTooLargePlanResult_SyntheticFindingSeverityIsCritical(t *testing.T) {
-	pr := tooLargePlanResult(1000, 500)
+	// Preserves pre-change semantics: total = planBytes when project_knowledge is empty.
+	pr := tooLargePlanResult(1000, 1000, 0, 500)
 	require.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
 	require.Len(t, pr.PlanFindings, 1)
 	require.Equal(t, verdict.SeverityCritical, pr.PlanFindings[0].Severity)
@@ -2587,4 +2588,174 @@ func TestValidateCompletion_LightweightMode_OmitsNormativeBodiesSection(t *testi
 	require.NoError(t, err, "lightweight ValidateCompletion must not error")
 	require.NotContains(t, rv.LastRequest.User, "## Normative test bodies (binding)",
 		"lightweight mode (empty session_id) must not render the normative-bodies section")
+}
+
+func TestValidateTaskSpec_ProjectKnowledgeNeverPersistedToSession(t *testing.T) {
+	// Sentinel string that no other field in TaskSpec would naturally
+	// contain. If it ends up in any stored session.Spec field, the
+	// non-persistence invariant from spec §3.3 is broken.
+	const sentinel = "PK-SENTINEL-39d8b1f0-pls-do-not-store-this"
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	deps := newDeps(t, rv)
+	h := &handlers{deps: deps}
+
+	args := ValidateTaskSpecArgs{
+		TaskTitle:          "T",
+		Goal:               "G",
+		AcceptanceCriteria: []string{"AC"},
+		ProjectKnowledge:   sentinel,
+	}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.NotEmpty(t, env.SessionID, "session should be created on a passing review")
+
+	sess, ok := deps.Sessions.Get(env.SessionID)
+	require.True(t, ok, "session must be retrievable")
+
+	// Walk every string, []string, and struct-slice field on the stored Spec
+	// and assert none contains the sentinel. The struct-slice case covers
+	// v0.5.2's HarnessShapeAttestations: a future leak might route
+	// project_knowledge into a struct field rather than a plain string.
+	specVal := reflect.ValueOf(sess.Spec)
+	specType := specVal.Type()
+	for i := 0; i < specVal.NumField(); i++ {
+		f := specVal.Field(i)
+		name := specType.Field(i).Name
+		switch f.Kind() {
+		case reflect.String:
+			if strings.Contains(f.String(), sentinel) {
+				t.Fatalf("session.Spec.%s leaked project_knowledge sentinel", name)
+			}
+		case reflect.Slice:
+			elemKind := f.Type().Elem().Kind()
+			switch elemKind {
+			case reflect.String:
+				for j := 0; j < f.Len(); j++ {
+					if strings.Contains(f.Index(j).String(), sentinel) {
+						t.Fatalf("session.Spec.%s[%d] leaked project_knowledge sentinel", name, j)
+					}
+				}
+			case reflect.Struct:
+				// For struct-slice fields (e.g. HarnessShapeAttestations),
+				// marshal each element to JSON and scan the encoded bytes.
+				// This is the cheapest deterministic way to walk all string
+				// fields nested inside the struct.
+				for j := 0; j < f.Len(); j++ {
+					b, mErr := json.Marshal(f.Index(j).Interface())
+					require.NoError(t, mErr)
+					if strings.Contains(string(b), sentinel) {
+						t.Fatalf("session.Spec.%s[%d] leaked project_knowledge sentinel", name, j)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestValidateTaskSpec_PayloadCap_OverCapRejected(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	deps := newDeps(t, rv)
+	deps.Cfg.MaxPayloadBytes = 200
+	h := &handlers{deps: deps}
+
+	// project_knowledge is the dominant contributor here.
+	args := ValidateTaskSpecArgs{
+		TaskTitle:          "T",
+		Goal:               "G",
+		AcceptanceCriteria: []string{"AC1"},
+		Context:            "ctx",
+		ProjectKnowledge:   strings.Repeat("p", 300),
+	}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, args)
+	require.Error(t, err, "args > cap must error")
+	require.Empty(t, env.SessionID, "no session should be created when payload is rejected")
+
+	msg := err.Error()
+	require.Contains(t, msg, "task spec payload")
+	require.Contains(t, msg, "> cap 200")
+	require.Contains(t, msg, "project_knowledge:")
+	require.Contains(t, msg, "context:")
+	require.Contains(t, msg, "normative_test_bodies:")
+	require.Contains(t, msg, "acceptance_criteria:")
+
+	// Reviewer must not be called when payload is rejected fast.
+	require.Equal(t, 0, rv.Calls, "reviewer must not be invoked on payload rejection")
+}
+
+func TestValidateTaskSpec_PayloadCap_UnderCapAccepted(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	deps := newDeps(t, rv)
+	deps.Cfg.MaxPayloadBytes = 200
+	h := &handlers{deps: deps}
+
+	// Total bytes well under cap.
+	args := ValidateTaskSpecArgs{
+		TaskTitle:          "T",
+		Goal:               "G",
+		AcceptanceCriteria: []string{"AC1"},
+		Context:            "ctx",
+		ProjectKnowledge:   "small note",
+	}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.NotEmpty(t, env.SessionID)
+	require.Equal(t, "pass", env.Verdict)
+}
+
+func TestValidateTaskSpec_PayloadCap_PerContributorEvidence(t *testing.T) {
+	// When project_knowledge is the dominant contributor, the per-contributor
+	// breakdown in the error must show its byte count as the largest among
+	// the four named contributors.
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	deps := newDeps(t, rv)
+	deps.Cfg.MaxPayloadBytes = 200
+	h := &handlers{deps: deps}
+
+	args := ValidateTaskSpecArgs{
+		TaskTitle:          "T",
+		Goal:               "G",
+		AcceptanceCriteria: []string{"AC1"}, // 3 bytes
+		Context:            "ctx",           // 3 bytes
+		ProjectKnowledge:   strings.Repeat("p", 500),
+		NormativeTestBodies: []string{"body"}, // 4 bytes
+	}
+	_, _, err := h.ValidateTaskSpec(context.Background(), nil, args)
+	require.Error(t, err)
+
+	msg := err.Error()
+	// Parse the per-contributor counts and assert project_knowledge is the largest.
+	pkN := extractContributorBytes(t, msg, "project_knowledge")
+	ctxN := extractContributorBytes(t, msg, "context")
+	ntbN := extractContributorBytes(t, msg, "normative_test_bodies")
+	acN := extractContributorBytes(t, msg, "acceptance_criteria")
+
+	require.Equal(t, 500, pkN, "project_knowledge byte count must reflect raw input")
+	require.Greater(t, pkN, ctxN, "project_knowledge must be larger than context")
+	require.Greater(t, pkN, ntbN, "project_knowledge must be larger than normative_test_bodies")
+	require.Greater(t, pkN, acN, "project_knowledge must be larger than acceptance_criteria")
+}
+
+// extractContributorBytes parses the per-contributor byte count for a given
+// label from the cumulative-cap error message. Returns -1 if not found.
+func extractContributorBytes(t *testing.T, msg, label string) int {
+	t.Helper()
+	prefix := label + ": "
+	i := strings.Index(msg, prefix)
+	if i < 0 {
+		t.Fatalf("contributor %q not present in error message: %s", label, msg)
+	}
+	rest := msg[i+len(prefix):]
+	// Read digits up to non-digit.
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		t.Fatalf("could not parse byte count for %q in %q", label, msg)
+	}
+	n := 0
+	for _, c := range rest[:end] {
+		n = n*10 + int(c-'0')
+	}
+	return n
 }

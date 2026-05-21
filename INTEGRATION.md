@@ -1,6 +1,6 @@
 # Integrating anti-tangent-mcp
 
-`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It exposes four tools: a plan-level handoff gate (`validate_plan`) and three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`). The reviewer LLM is intentionally a different model from the implementer, so reviews are not blind to the implementer's blind spots. See [`README.md`](README.md) for the tool surface and [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md) for the authoritative design.
+`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It exposes six tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`), and an optional project-knowledge pair (`prime_project_knowledge` / `extract_project_knowledge`). The reviewer LLM is intentionally a different model from the implementer, so reviews are not blind to the implementer's blind spots. See [`README.md`](README.md) for the tool surface and [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md) for the authoritative design.
 
 **Install and configure:** see [`README.md`](README.md). This document covers the using-the-MCP protocol.
 
@@ -198,6 +198,17 @@ Anti-tangent remains advisory-only; CodeScene findings are
 codebase-grounded signal that the text-only reviewer can't produce.
 If codescene-mcp is not configured, skip this step silently.
 
+## Project knowledge (auto-attached by the controller)
+
+The task brief above includes a "Project knowledge" section with excerpts
+the controller pre-selected from the project KB. Read it before
+`validate_task_spec` — it carries decisions, module invariants, and prior
+context relevant to this task. Treat it as authoritative.
+
+When calling `validate_task_spec`, also pass that same section verbatim as
+`project_knowledge` so the reviewer has the same grounding you do. (Omit
+this block if there is no KB attached.)
+
 ## Task spec (pass these fields verbatim to validate_task_spec)
 
 - task_title:           <from the task block>
@@ -207,6 +218,7 @@ If codescene-mcp is not configured, skip this step silently.
 - context:              <from "Context:" if present>
 - pinned_by:            <optional anchors for existing behavior>
 - controller_verified_references: <optional references the controller already verified>
+- project_knowledge:    <optional, v0.6.0+; markdown excerpts the controller pre-selected from the KB>
 - harness_shape_attestation: <optional structured input; see §3.8>
 - phase:                <optional; "pre" (default) or "post" for post-hoc/session-recovery>
 ```
@@ -223,6 +235,7 @@ Use anti-tangent per the standard dispatch protocol. For this task:
 - Call `validate_completion` before DONE and paste its `summary_block`.
 - If CodeScene MCP is configured, run `pre_commit_code_health_safeguard` after meaningful code changes.
 - If any major pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
+- If a Project knowledge section is auto-attached, read it before validate_task_spec and pass it verbatim as project_knowledge.
 ````
 
 **Language-scoping prose caveat.** Reviewers can surface `ambiguous_spec` findings around closure/scoping semantics — Kotlin `var` captured by a lambda, Python `nonlocal`, JS `let`/`const` in arrow bodies — when the prose AC reads ambiguously even though the verbatim code block in the plan is unambiguous. Trust the verbatim plan code block; only deviate if the *tests* disagree with the prose. If you genuinely cannot reconcile code and prose, stop and ask the controller.
@@ -271,6 +284,111 @@ The two tools are complementary, not redundant:
 **The retry loop.** Parse failures on the reviewer's response are handled inside the server (one retry with a JSON-only reminder). The implementer does not need to handle that.
 
 **Session not found.** If `check_progress` or `validate_completion` returns a finding with `category: session_not_found`, the session expired (default TTL 4h) or was never created. Call `validate_task_spec` again to start a fresh session and continue with the new ID.
+
+---
+
+## Project knowledge (optional)
+
+Project knowledge is an optional v0.6.0+ loop that lets the reviewer LLM ground its review in **what's already true about your project** — decisions taken (and why), module invariants, feature surfaces, glossary terms, and the in-flight epic's progress. It earns its keep on epic-scale projects with multiple agents and multiple human authors, where each task validates cleanly on its own but the pieces stop composing into a working end product. Skip it when the project is single-author or short-lived; anti-tangent's text-only reviewer is otherwise stuck inferring project context from the plan text alone.
+
+The loop has two new MCP tools — `prime_project_knowledge` (pre-task; recommends notes to read) and `extract_project_knowledge` (post-task; proposes notes to write) — plus a `project_knowledge` field on `validate_task_spec` and `validate_plan`. The knowledge itself lives in [Basic Memory](https://github.com/basicmachines-co/basic-memory) (recommended) or any other markdown-backed store; anti-tangent has **zero code dependency** on Basic Memory and never reads or writes that store directly.
+
+### Architecture
+
+```
+Multiple agents          Anti-tangent MCP                Reviewer LLM
+& human authors          (advisory, stateless)           (different provider)
+─────────────────        ─────────────────────           ────────────────
+                                                                ▲
+       ┌──── kb_index, excerpts ──▶ prime_project_knowledge ────┘
+       │      (from BM queries)         │
+       │                                ▼
+       │                          "read these notes;
+       │                           KB gaps: …"
+       │
+       └──── validate_task_spec(+project_knowledge) ──▶ existing review,
+       │                                                grounded in KB excerpts
+       │
+       │                          completion envelopes
+       │                                │
+       │     ┌──── envelopes,     ──▶ extract_project_knowledge ──▶ proposals
+       │     │     kb_index,            │                          (create/update/
+       │     │     excerpts             ▼                           supersede)
+       │     │                    structured proposals
+       │     │                          │
+       ▼     ▼                          ▼
+┌────────────────────────┐  caller applies proposals
+│   Basic Memory MCP     │◀────────────┘
+│  (shared local store)  │
+└────────────────────────┘
+```
+
+### Controller workflow (per epic)
+
+The server is stateless; everything that ties prime → implement → extract together lives in the controller's dispatch logic.
+
+1. **Per task, before dispatch.** Search the KB for notes relevant to the task (by task terms plus the epic's `touches_modules` and `relates`) → that's the `kb_index`. Call `prime_project_knowledge` with the task fields + `kb_index` + `epic_permalink` → it returns `picks` (and `bm_commands` when `ANTI_TANGENT_KB_STORE=basic-memory`). Read the picked notes from the KB → assemble them into a `kb_excerpts` markdown string.
+2. **Dispatch.** Include the `kb_excerpts` block in the implementer's brief AND pass that same string as `project_knowledge` into `validate_task_spec`. The subagent itself makes no prime/extract calls — those are controller responsibilities (the controller owns epic context).
+3. **Per task, after DONE.** Call `extract_project_knowledge` with the completion envelope(s), the `kb_index`, optional `current_kb_excerpts` for notes likely to be edited, and the `epic_permalink`. It returns `proposals` (and `bm_commands` when configured) describing new or updated notes.
+4. **Apply.** A human (or the controller, gated by the ladder below) reviews the proposals and pastes the `bm_commands` to apply them.
+
+### Five note types
+
+| Type | Layer | Body |
+|---|---|---|
+| `decision` | durable | ADR-style; append-only; new decisions supersede old ones |
+| `module` | durable | internal structural notes (purpose, invariants, conventions, touch-points) |
+| `feature` | durable | user-facing capability catalog with release-tagged change pointers |
+| `glossary` | durable | canonical domain-term definitions |
+| `epic` | epic-scoped | charter + scope + acceptance + progress ledger; closed at epic-done |
+
+Templates live in [`examples/project-knowledge/`](examples/project-knowledge/) — copy one into your shared KB, fill it in, and start linking. See [`examples/project-knowledge/README.md`](examples/project-knowledge/README.md) for the layering and maintenance-ownership conventions.
+
+### The `project_knowledge` field
+
+`validate_task_spec` and `validate_plan` accept an optional `project_knowledge` string (plain text; markdown is fine). The reviewer treats it as **authoritative** — same posture as `pinned_by` — so stated facts are not flagged as `unverifiable_codebase_claim`. The field counts against the existing 200 KB payload cap; keep it under ~16 KB per call in practice (the prime call's picks are what keep it bounded).
+
+`check_progress` and `validate_completion` deliberately do **not** accept `project_knowledge` (spec §3.3). The field is session-context-only, never persisted: KB content can change during a task's session lifetime, and a snapshot stored at `validate_task_spec` time would silently drift. Field evidence can drive a follow-up minor bump if completion-time KB grounding turns out to be load-bearing.
+
+### Auto-apply ladder for extract proposals
+
+Recommended default disposition (the server doesn't enforce; teams can override):
+
+| Proposal kind | Default disposition |
+|---|---|
+| `epic` progress-ledger append | Auto-apply |
+| `feature` "Recent material changes" append | Auto-apply |
+| `decision` create with `status: proposed` | Auto-apply (draft for humans to review) |
+| `decision` create with `status: accepted` | **Human review** |
+| `decision` supersede | **Human review** |
+| `module` invariant/convention edit | **Human review** |
+| `glossary` create | Auto-apply |
+| Anything with `contradicts_existing` finding | **Human review, blocking** |
+
+### Anchored Basic Memory tool names
+
+When `ANTI_TANGENT_KB_STORE=basic-memory`, prime and extract emit `bm_commands` arrays that reference these canonical Basic Memory tool names (verified against BM v0.21.1 on 2026-05-20):
+
+- `search_notes` — search across notes by query string.
+- `read_note` — read a note by permalink.
+- `write_note` — create or replace a note.
+- `edit_note` — partial update (frontmatter patch / append / replace section).
+- `move_note` — rename / relocate a note.
+- `delete_note` — remove a note.
+
+**Supersede mapping.** Basic Memory does **NOT** ship a `supersede_note` verb. A logical `Proposal{action: "supersede"}` therefore maps to a **pair** of `bm_commands` entries: (1) `write_note` to create the new note with `frontmatter.status: accepted` and `supersedes: [<predecessor>]`, then (2) `edit_note` to flip the predecessor's `frontmatter.status` to `superseded`. The prompts and goldens reference these names verbatim — a future BM rename is a doc + prompt-template change only.
+
+For the operator-side topology of running BM as a shared service across a team, see [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md).
+
+### Environment variables
+
+- `ANTI_TANGENT_KB_STORE` — default `""` (off; `bm_commands` arrays are omitted from prime/extract outputs). Set to `basic-memory` to enable `bm_commands` arrays. Any other non-empty value is rejected at startup with a configuration error.
+- `ANTI_TANGENT_PRIME_MODEL` — reviewer for `prime_project_knowledge`. Falls back to `ANTI_TANGENT_PLAN_MODEL` then `ANTI_TANGENT_PRE_MODEL`.
+- `ANTI_TANGENT_EXTRACT_MODEL` — reviewer for `extract_project_knowledge`. Same fallback chain.
+- `ANTI_TANGENT_PRIME_MAX_TOKENS` — output cap for prime; default `4096`. Ceiling-clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`.
+- `ANTI_TANGENT_EXTRACT_MAX_TOKENS` — output cap for extract; default `8192`. Ceiling-clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`.
+
+Existing flows are unaffected when `ANTI_TANGENT_KB_STORE` is empty and `project_knowledge` is unset — that's the backward-compat guarantee.
 
 ---
 
@@ -323,7 +441,7 @@ The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`. While
 
 ### 5.6 Per-call tool args and partial-response handling (v0.3.0+)
 
-**`max_tokens_override`** (all four tools): optional non-negative int. Replaces the configured `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` clamp finding is appended. Negative values are rejected with `max_tokens_override must be ≥ 0`. Use when one specific call needs a larger reviewer budget without changing global config.
+**`max_tokens_override`** (all six tools): optional non-negative int. Replaces the configured `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` clamp finding is appended. Negative values are rejected with `max_tokens_override must be ≥ 0`. Use when one specific call needs a larger reviewer budget without changing global config.
 
 **`mode`** (`validate_plan` only): optional `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings — at most 3 per scope — and omit stylistic nits. Useful for small ASAP plans where late rounds surface only polish. Invalid values rejected with `mode must be "quick" or "thorough"`.
 

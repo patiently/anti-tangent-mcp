@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-05-20
+
+### Added
+- New stateless `prime_project_knowledge` MCP tool: given a task spec and a Basic-Memory-style `kb_index`, returns prioritized note picks the controller should attach to the implementer's brief. Optional `bm_commands` paste-ready calls when `ANTI_TANGENT_KB_STORE=basic-memory`.
+- New stateless `extract_project_knowledge` MCP tool: given one or more `validate_completion` envelopes, returns structured create/update/supersede proposals for the project KB. Optional `bm_commands` paste-ready calls under the same env gate.
+- `validate_task_spec` and `validate_plan` accept an optional `project_knowledge` string. The reviewer treats its contents as authoritative caller-supplied context (same posture as `pinned_by`).
+- Six new finding categories: `kb_gap`, `ambiguous_pick`, `missing_index_entry` (prime); `insufficient_evidence`, `redundant_proposal`, `contradicts_existing` (extract).
+- Five new env vars: `ANTI_TANGENT_KB_STORE`, `ANTI_TANGENT_PRIME_MODEL`, `ANTI_TANGENT_EXTRACT_MODEL`, `ANTI_TANGENT_PRIME_MAX_TOKENS` (default 4096), `ANTI_TANGENT_EXTRACT_MAX_TOKENS` (default 8192).
+- Five note-type templates under `examples/project-knowledge/`: `decision`, `module`, `feature`, `glossary`, `epic`, plus a `README.md`.
+- New operator-facing doc `docs/team-setup/basic-memory-shared-vm.md` for teams running a shared Basic Memory on a VM.
+- New `INTEGRATION.md` section "Project knowledge (optional)" plus a ~5-line addition to the dispatch clause covering the auto-attached project-knowledge block.
+- `README.md` gains one paragraph + link describing the optional KB integration.
+
+### Changed
+- INTEGRATION.md and README.md "four tools" references updated to "six tools" — the v0.6.0 pair lands on top of the existing four (`validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`). README's tool-catalog smoke-test assertion and `max_tokens_override` posture extended to all six.
+- `prime_handler` now emits one structured `slog.Info` line on every exit path (success / validation_error / payload_too_large / model_resolution_error / render_error / truncated / reviewer_error) via a deferred logger, matching the pattern shipped for `extract_handler`. Previously only the success path logged.
+- `prime_schema.json` and `extract_schema.json` add `minLength: 1` on `bm_commands.args_json`, and `extract_schema.json` additionally constrains `proposals.frontmatter_json` — closes the gap at the OpenAI strict-mode layer before the parser-side rejection fires. `body` and `body_patch` remain unconstrained because empty-string placeholders are valid for those fields per the action-conditional parser path.
+- The output-schema hint inside `prime.tmpl` and `extract.tmpl` now enumerates the full 17-category vocabulary (was a truncated subset) so the reviewer is not biased away from valid categories like `scope_drift`, `ambiguous_spec`, or `convention_deviation`.
+
+### Fixed
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.5.2] - 2026-05-19
 
 ### Added

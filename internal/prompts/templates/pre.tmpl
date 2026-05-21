@@ -52,6 +52,10 @@ When (a) or (b) holds, emit a finding with:
 {{range .Spec.HarnessShapeAttestations}}- **{{.Harness}}** (at `{{.Path}}`):
 {{range .Assertions}}    - {{.}}
 {{end}}{{end}}
+{{end}}{{if .ProjectKnowledge}}
+Project knowledge (caller-supplied context from the team's KB):
+
+{{.ProjectKnowledge}}
 {{end}}
 ## What to evaluate
 
@@ -81,7 +85,9 @@ If a Codebase conventions section is present, treat each entry as a convention t
 If a Testability extractions section is present, treat each entry as a helper that exists in production code purely so tests can call it directly. When a `scope_drift` finding would name one of these helpers, suppress that specific finding. Continue to emit `scope_drift` for unrelated additions.
 
 If a Normative test bodies section is present, treat each entry as binding test scope — equivalent in authority to a bullet under Acceptance criteria. Do not emit `ambiguous_spec` for "test scope unclear" findings about coverage that one of these bodies already pins. An entry that begins with `// excerpt:` (or an analogous comment marker) is partial — flag invocation-count or assertion-shape gaps only when the excerpt itself reveals them, not when the gap might exist in the omitted portion. Continue to flag invocation-count gaps, missing negative assertions, or unrelated coverage holes when the entry is a complete body.
-
+{{if .ProjectKnowledge}}
+If a Project knowledge section is present, treat its contents as authoritative caller-supplied context (same posture as pinned_by). Decisions, module invariants, glossary terms, and prior-task summaries it carries are trusted; do not emit `unverifiable_codebase_claim` merely because a claim is grounded in that section. You may still emit `ambiguous_spec`, `quality`, or `convention_deviation` findings if the project_knowledge content contradicts the task spec or leaves an AC vague.
+{{end}}
 Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
 
 If you would emit a finding with `category: ambiguous_spec` AND `severity: major`, but a normative test body (provided in the `Normative test bodies` section above) explicitly pins the value or assertion that the AC's prose leaves ambiguous, downgrade the severity to `minor` and append `(resolved-by-normative-body: <short citation of which body resolves it, max 80 chars>)` to the `suggestion` field. The `criterion` and `evidence` fields stay as you would have written them.

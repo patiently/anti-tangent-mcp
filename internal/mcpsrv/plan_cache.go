@@ -35,10 +35,11 @@ type planCachePrompt struct {
 	User   string `json:"user"`
 }
 
-func planPassCacheKey(planText, mode, model string, maxTokens, maxTokensOverride int, rendered renderedPlanReview) [32]byte {
+func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens, maxTokensOverride int, rendered renderedPlanReview) [32]byte {
 	keyInput := struct {
 		Version           string            `json:"version"`
 		PlanText          string            `json:"plan_text"`
+		ProjectKnowledge  string            `json:"project_knowledge"`
 		Mode              string            `json:"mode"`
 		Model             string            `json:"model"`
 		MaxTokens         int               `json:"max_tokens"`
@@ -47,6 +48,7 @@ func planPassCacheKey(planText, mode, model string, maxTokens, maxTokensOverride
 	}{
 		Version:           planPassCacheVersion,
 		PlanText:          planText,
+		ProjectKnowledge:  projectKnowledge,
 		Mode:              mode,
 		Model:             model,
 		MaxTokens:         maxTokens,

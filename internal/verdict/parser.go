@@ -43,6 +43,9 @@ func Parse(raw []byte) (Result, error) {
 		// list of categories that get capped at minor (the reviewer can't
 		// know if the claim/deviation is wrong).
 		r.Findings[i] = applySeverityFloor(r.Findings[i])
+		if err := validateFindingStrings(r.Findings[i], fmt.Sprintf("finding[%d]", i)); err != nil {
+			return Result{}, err
+		}
 	}
 	return r, nil
 }
@@ -56,10 +59,32 @@ func validCategory(c Category) bool {
 	case CategoryMissingAC, CategoryScopeDrift, CategoryAmbiguousSpec,
 		CategoryUnaddressed, CategoryQuality, CategorySessionMissing,
 		CategoryTooLarge, CategoryUnverifiableCodebaseClaim,
-		CategoryConventionDeviation, CategoryAttestationContradiction, CategoryOther:
+		CategoryConventionDeviation, CategoryAttestationContradiction,
+		CategoryKBGap, CategoryAmbiguousPick, CategoryMissingIndexEntry,
+		CategoryInsufficientEvidence, CategoryRedundantProposal, CategoryContradictsExisting,
+		CategoryOther:
 		return true
 	}
 	return false
+}
+
+// validateFindingStrings rejects findings whose criterion/evidence/suggestion
+// are empty strings. The reviewer-output JSON schemas enforce this via
+// minLength:1 today, but the parser is the durable enforcement point and
+// the schemas are belt-and-braces. Called from Parse and from
+// validateFinding (used by ParsePlan / ParseTasksOnly); ParsePrime and
+// ParseExtract (v0.6.0) will call this from their own loops.
+func validateFindingStrings(f Finding, where string) error {
+	if f.Criterion == "" {
+		return fmt.Errorf("%s: criterion is required", where)
+	}
+	if f.Evidence == "" {
+		return fmt.Errorf("%s: evidence is required", where)
+	}
+	if f.Suggestion == "" {
+		return fmt.Errorf("%s: suggestion is required", where)
+	}
+	return nil
 }
 
 func stripFences(b []byte) []byte {

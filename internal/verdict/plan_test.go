@@ -564,3 +564,45 @@ func TestParsePlanResultPartial_AppliesPlanQualitySanity(t *testing.T) {
 		t.Errorf("PlanQuality = %q, want %q (critical finding should override even in partial recovery)", got, want)
 	}
 }
+
+func TestParsePlan_RejectsEmptyFindingStrings(t *testing.T) {
+	// Plan-shape parser must enforce non-empty criterion / evidence /
+	// suggestion the same way the per-task parser does (v0.6.0 helper
+	// validateFindingStrings called from validateFinding).
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "empty criterion (plan_findings)",
+			in:   `{"plan_verdict":"warn","plan_findings":[{"severity":"minor","category":"quality","criterion":"","evidence":"e","suggestion":"s"}],"tasks":[],"next_action":"go"}`,
+			want: "criterion is required",
+		},
+		{
+			name: "empty evidence (task findings)",
+			in:   `{"plan_verdict":"warn","plan_findings":[],"tasks":[{"task_index":0,"task_title":"T","verdict":"warn","findings":[{"severity":"minor","category":"quality","criterion":"c","evidence":"","suggestion":"s"}],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"go"}`,
+			want: "evidence is required",
+		},
+		{
+			name: "empty suggestion (plan_findings)",
+			in:   `{"plan_verdict":"warn","plan_findings":[{"severity":"minor","category":"quality","criterion":"c","evidence":"e","suggestion":""}],"tasks":[],"next_action":"go"}`,
+			want: "suggestion is required",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParsePlan([]byte(tc.in))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestParseTasksOnly_RejectsEmptyFindingStrings(t *testing.T) {
+	in := `{"tasks":[{"task_index":0,"task_title":"T","verdict":"warn","findings":[{"severity":"minor","category":"quality","criterion":"","evidence":"e","suggestion":"s"}],"suggested_header_block":"","suggested_header_reason":""}]}`
+	_, err := ParseTasksOnly([]byte(in))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "criterion is required")
+}

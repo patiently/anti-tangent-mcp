@@ -47,6 +47,35 @@ func TestRenderPre(t *testing.T) {
 	golden(t, "pre_basic", out.System+"\n---USER---\n"+out.User)
 }
 
+func TestRenderPre_WithProjectKnowledge(t *testing.T) {
+	in := PreInput{
+		Spec:             sampleSpec(),
+		ProjectKnowledge: "Decision 0042: cache pass reviews for 3 minutes.\nModule mcpsrv invariant: stdout is reserved for MCP stdio traffic.",
+	}
+	out, err := RenderPre(in)
+	require.NoError(t, err)
+	golden(t, "pre_with_project_knowledge", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPre_WithoutProjectKnowledgeOmitsSection(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "Project knowledge (caller-supplied context from the team's KB):")
+	assert.NotContains(t, out.User, "If a Project knowledge section is present")
+}
+
+func TestRenderPre_WithProjectKnowledge_IncludesGuidance(t *testing.T) {
+	out, err := RenderPre(PreInput{
+		Spec:             sampleSpec(),
+		ProjectKnowledge: "Decision 0042: cache pass reviews for 3 minutes.",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Project knowledge (caller-supplied context from the team's KB):")
+	assert.Contains(t, out.User, "Decision 0042: cache pass reviews for 3 minutes.")
+	assert.Contains(t, out.User, "If a Project knowledge section is present")
+	assert.Contains(t, out.User, "authoritative caller-supplied context (same posture as pinned_by)")
+}
+
 func TestRenderPre_WithControllerVerifiedReferencesIncludesGuidance(t *testing.T) {
 	spec := sampleSpec()
 	spec.ControllerVerifiedReferences = []string{"internal/foo.go:12", "Foo.Bar"}
@@ -174,6 +203,40 @@ func TestRenderPlanFindingsOnly_Golden(t *testing.T) {
 		t.Fatalf("RenderPlanFindingsOnly: %v", err)
 	}
 	golden(t, "plan_findings_only", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPlan_WithProjectKnowledge(t *testing.T) {
+	in := PlanInput{
+		PlanText:         "# Plan\n\n### Task 1: First\n\nbody.\n",
+		ProjectKnowledge: "Decision 0042: cache pass reviews for 3 minutes.",
+	}
+	out, err := RenderPlan(in)
+	require.NoError(t, err)
+	golden(t, "plan_basic_with_project_knowledge", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPlanTasksChunk_WithProjectKnowledge(t *testing.T) {
+	in := PlanChunkInput{
+		PlanText:         "# Plan\n\n### Task 1: First\n\nbody.\n### Task 2: Second\n\nbody.\n",
+		ProjectKnowledge: "Module mcpsrv invariant: stdout reserved for MCP stdio.",
+		ChunkTasks: []planparser.RawTask{
+			{Title: "Task 1: First", Body: "body.\n"},
+			{Title: "Task 2: Second", Body: "body.\n"},
+		},
+	}
+	out, err := RenderPlanTasksChunk(in)
+	require.NoError(t, err)
+	golden(t, "plan_tasks_chunk_with_project_knowledge", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPlanFindingsOnly_WithProjectKnowledge(t *testing.T) {
+	in := PlanInput{
+		PlanText:         "# Plan\n\n### Task 1: First\n\nbody.\n### Task 2: Second\n\nbody.\n",
+		ProjectKnowledge: "Decision 0017: text-only reviewer is canonical.",
+	}
+	out, err := RenderPlanFindingsOnly(in)
+	require.NoError(t, err)
+	golden(t, "plan_findings_only_with_project_knowledge", out.System+"\n---USER---\n"+out.User)
 }
 
 func TestRenderPost_WithFinalDiff(t *testing.T) {
@@ -778,4 +841,55 @@ func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
 	require.Contains(t, out.User, ".trimMargin()")
 	require.Contains(t, out.User, "textwrap.dedent")
 	require.Contains(t, out.User, "INTEGRATION.md §3.7")
+}
+
+func TestRenderPrime_Basic(t *testing.T) {
+	in := PrimeInput{
+		TaskTitle:          "Task 7: extract handler",
+		Goal:               "Implement extract_project_knowledge.",
+		AcceptanceCriteria: []string{"Returns Proposals when given a completion envelope."},
+		Context:            "Anti-tangent stays stateless.",
+		KBIndex: []KBIndexEntry{
+			{Permalink: "decisions/0042-cache-pass", Type: "decision", Title: "Cache pass reviews", Summary: "TTL 3m."},
+			{Permalink: "modules/mcpsrv", Type: "module", Title: "mcpsrv", Summary: "stdout reserved."},
+		},
+		EpicPermalink:        "epics/2026-q2-large-project-support",
+		MaxPicks:             10,
+		KBStoreIsBasicMemory: true,
+	}
+	out, err := RenderPrime(in)
+	require.NoError(t, err)
+	golden(t, "prime_basic", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderExtract_Basic(t *testing.T) {
+	in := ExtractInput{
+		CompletionEnvelopes: []CompletionEnvelopeForExtract{{
+			TaskTitle: "Task 8: extract verdict types, schema, parser",
+			Summary:   "Added ExtractResult, Proposal, ProposalAction, ProposalType, and JSON schema. ParseExtract enforces action-conditional invariants.",
+			Verdict:   "pass",
+			Findings: []verdict.Finding{{
+				Severity:   verdict.SeverityMinor,
+				Category:   verdict.CategoryQuality,
+				Criterion:  "schema lockstep",
+				Evidence:   "extract_schema.json now in schema_invariants_test.go list",
+				Suggestion: "none",
+			}},
+			FinalDiff:    "diff --git a/internal/verdict/extract.go b/internal/verdict/extract.go\n+++ b/internal/verdict/extract.go\n@@\n+type Proposal struct{}\n",
+			TestEvidence: "go test -race ./internal/verdict/... PASS",
+		}},
+		PlanText: "## Plan\n\n### Task 9: Add the extract prompt template\n",
+		KBIndex: []KBIndexEntry{
+			{Permalink: "decisions/0042-cache-pass", Type: "decision", Title: "Cache pass reviews", Summary: "TTL 3m."},
+			{Permalink: "modules/mcpsrv", Type: "module", Title: "mcpsrv", Summary: "stdout reserved."},
+		},
+		CurrentKBExcerpts: map[string]string{
+			"decisions/0042-cache-pass": "---\nstatus: accepted\n---\n\n# Cache pass reviews\n\nWe cache for 3 minutes.",
+		},
+		EpicPermalink:        "epics/2026-q2-project-knowledge",
+		KBStoreIsBasicMemory: true,
+	}
+	out, err := RenderExtract(in)
+	require.NoError(t, err)
+	golden(t, "extract_basic", out.System+"\n---USER---\n"+out.User)
 }

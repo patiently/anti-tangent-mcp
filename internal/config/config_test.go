@@ -186,3 +186,114 @@ func TestLoad_TokenBudgetsAndChunkSize_Reject(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+// --- v0.6.0 project-knowledge env vars ----------------------------------
+
+func TestLoad_KBStore_Default(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"ANTHROPIC_API_KEY": "k"}))
+	require.NoError(t, err)
+	assert.Equal(t, "", cfg.KBStore)
+}
+
+func TestLoad_KBStore_BasicMemoryAccepted(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":    "k",
+		"ANTI_TANGENT_KB_STORE": "basic-memory",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "basic-memory", cfg.KBStore)
+}
+
+func TestLoad_KBStore_InvalidValueRejected(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":    "k",
+		"ANTI_TANGENT_KB_STORE": "bogus",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_KB_STORE")
+}
+
+func TestLoad_PrimeAndExtractModel_FallbackToPre(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"ANTHROPIC_API_KEY": "k"}))
+	require.NoError(t, err)
+	// With no PLAN/PRIME/EXTRACT overrides, PlanModel falls back to PreModel,
+	// and PrimeModel/ExtractModel chain through PlanModel to land on PreModel.
+	assert.Equal(t, cfg.PreModel, cfg.PrimeModel)
+	assert.Equal(t, cfg.PreModel, cfg.ExtractModel)
+}
+
+func TestLoad_PrimeAndExtractModel_FallbackToPlan(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":       "k",
+		"ANTI_TANGENT_PLAN_MODEL": "anthropic:claude-opus-4-7",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, ModelRef{Provider: "anthropic", Model: "claude-opus-4-7"}, cfg.PlanModel)
+	assert.Equal(t, cfg.PlanModel, cfg.PrimeModel)
+	assert.Equal(t, cfg.PlanModel, cfg.ExtractModel)
+	// Sanity: PlanModel did not collapse onto PreModel.
+	assert.NotEqual(t, cfg.PreModel, cfg.PlanModel)
+}
+
+func TestLoad_PrimeAndExtractModel_ExplicitOverrideWins(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":          "k",
+		"ANTI_TANGENT_PLAN_MODEL":    "anthropic:claude-opus-4-7",
+		"ANTI_TANGENT_PRIME_MODEL":   "anthropic:claude-sonnet-4-6",
+		"ANTI_TANGENT_EXTRACT_MODEL": "anthropic:claude-haiku-4-5-20251001",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, ModelRef{Provider: "anthropic", Model: "claude-sonnet-4-6"}, cfg.PrimeModel)
+	assert.Equal(t, ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"}, cfg.ExtractModel)
+	// PlanModel itself still reflects its own explicit override.
+	assert.Equal(t, ModelRef{Provider: "anthropic", Model: "claude-opus-4-7"}, cfg.PlanModel)
+}
+
+func TestLoad_PrimeAndExtractModel_BadModelRef(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":        "k",
+		"ANTI_TANGENT_PRIME_MODEL": "no-colon",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_PRIME_MODEL")
+
+	_, err = Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":          "k",
+		"ANTI_TANGENT_EXTRACT_MODEL": "no-colon",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_EXTRACT_MODEL")
+}
+
+func TestLoad_PrimeExtractMaxTokens_Defaults(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"ANTHROPIC_API_KEY": "k"}))
+	require.NoError(t, err)
+	assert.Equal(t, 4096, cfg.PrimeMaxTokens)
+	assert.Equal(t, 8192, cfg.ExtractMaxTokens)
+}
+
+func TestLoad_PrimeExtractMaxTokens_Overrides(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":               "k",
+		"ANTI_TANGENT_PRIME_MAX_TOKENS":   "2048",
+		"ANTI_TANGENT_EXTRACT_MAX_TOKENS": "16384",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 2048, cfg.PrimeMaxTokens)
+	assert.Equal(t, 16384, cfg.ExtractMaxTokens)
+}
+
+func TestLoad_PrimeExtractMaxTokens_Reject(t *testing.T) {
+	cases := []map[string]string{
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PRIME_MAX_TOKENS": "0"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PRIME_MAX_TOKENS": "-1"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_PRIME_MAX_TOKENS": "not-an-int"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_EXTRACT_MAX_TOKENS": "0"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_EXTRACT_MAX_TOKENS": "-1"},
+		{"ANTHROPIC_API_KEY": "x", "ANTI_TANGENT_EXTRACT_MAX_TOKENS": "not-an-int"},
+	}
+	for _, tc := range cases {
+		_, err := Load(env(tc))
+		require.Error(t, err)
+	}
+}
