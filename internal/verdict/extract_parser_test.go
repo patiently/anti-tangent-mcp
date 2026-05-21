@@ -433,3 +433,79 @@ func TestParseExtract_SeverityFloorAppliedToConventionDeviation(t *testing.T) {
 		t.Fatalf("convention_deviation should floor to minor, got %q", r.Findings[0].Severity)
 	}
 }
+
+func TestParseExtract_AcceptsStoryType(t *testing.T) {
+	raw := []byte(`{
+		"verdict": "pass",
+		"findings": [],
+		"proposals": [{
+			"action": "create",
+			"type": "story",
+			"permalink": "monorepo/stories/ABC-42/main",
+			"title": "Add network probe healthcheck",
+			"frontmatter_json": "{\"status\":\"planned\"}",
+			"body": "## Story brief\n\nProbe the SSE listener via socket-connect.",
+			"body_patch": "",
+			"rationale": "Documents the story for ticket ABC-42 under the conventions",
+			"evidence_refs": ["completion_envelopes[0].summary"],
+			"supersedes": []
+		}],
+		"bm_commands": [],
+		"next_action": "Apply the story note before next milestone."
+	}`)
+	r, err := verdict.ParseExtract(raw)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(r.Proposals) != 1 {
+		t.Fatalf("expected 1 proposal, got %d", len(r.Proposals))
+	}
+	if r.Proposals[0].Type != verdict.ProposalTypeStory {
+		t.Fatalf("expected type story, got %q", r.Proposals[0].Type)
+	}
+}
+
+func TestParseExtract_AcceptsAllSixTypes(t *testing.T) {
+	// Path-segment differs from the type name for `glossary` (singular) and
+	// `story` (plural is "stories"). Use an explicit map rather than
+	// `tc.typ + "s"` to avoid generating malformed permalinks like
+	// `glossarys` / `storys`.
+	pathSeg := map[string]string{
+		"decision": "decisions",
+		"module":   "modules",
+		"feature":  "features",
+		"glossary": "glossary",
+		"epic":     "epics",
+		"story":    "stories",
+	}
+	types := []string{"decision", "module", "feature", "glossary", "epic", "story"}
+	for _, typ := range types {
+		t.Run(typ, func(t *testing.T) {
+			raw := []byte(`{
+				"verdict": "pass",
+				"findings": [],
+				"proposals": [{
+					"action": "create",
+					"type": "` + typ + `",
+					"permalink": "monorepo/` + pathSeg[typ] + `/abc/main",
+					"title": "round-trip ` + typ + `",
+					"frontmatter_json": "{}",
+					"body": "## Body\n\ncontent",
+					"body_patch": "",
+					"rationale": "round-trip regression check",
+					"evidence_refs": ["completion_envelopes[0].summary"],
+					"supersedes": []
+				}],
+				"bm_commands": [],
+				"next_action": "noop"
+			}`)
+			r, err := verdict.ParseExtract(raw)
+			if err != nil {
+				t.Fatalf("type %q: parse error: %v", typ, err)
+			}
+			if len(r.Proposals) != 1 || string(r.Proposals[0].Type) != typ {
+				t.Fatalf("type %q: round-trip failed, got %+v", typ, r.Proposals)
+			}
+		})
+	}
+}
