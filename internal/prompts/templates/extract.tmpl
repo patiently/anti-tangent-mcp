@@ -122,9 +122,9 @@ The caller has pre-fetched these existing notes so you can check for redundancy 
 
    For the full mapping from extract's emitted `bm_commands` shape to BM v0.21.1's literal `write_note` / `edit_note` MCP signatures, see INTEGRATION.md § "Applying bm_commands to BM v0.21.1" (added in v0.6.2).
 {{if .EpicPermalink}}
-   When you append a progress-ledger entry to `{{.EpicPermalink}}` (per the **Epic in flight** section), emit an additional `edit_note` `bm_command` shaped:
+   When you append a progress-ledger entry to `{{.EpicPermalink}}` (per the **Epic in flight** section), emit an additional `edit_note` `bm_command` using `insert_before_section` keyed on the section that FOLLOWS `## Progress ledger` (usually `## Open questions`) so the new bullet appends to the end of the ledger without clobbering prior entries:
 
-   `{ "tool": "edit_note", "args_json": "{\"permalink\":\"{{.EpicPermalink}}\", \"section\":\"Progress ledger\", \"content\":\"<one-bullet past-tense summary>\"}" }`
+   `{ "tool": "edit_note", "args_json": "{\"permalink\":\"{{.EpicPermalink}}\", \"operation\":\"insert_before_section\", \"section\":\"## Open questions\", \"content\":\"- <YYYY-MM-DD> — <one-bullet past-tense summary>\"}" }`
 {{end}}
    Order `bm_commands` to mirror `proposals` (each proposal's commands grouped together, supersede emitting two consecutive entries). Any epic ledger append goes at the end.
 {{else}}
