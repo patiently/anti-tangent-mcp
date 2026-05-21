@@ -3,68 +3,65 @@ You are an exacting reviewer. You return ONLY a JSON object matching the provide
 ## Completion envelopes
 
 
-### Envelope 0: Task 8: extract verdict types, schema, parser
+### Envelope 0: Land network-probe healthcheck
 
 Verdict: pass
 
 Summary:
-Added ExtractResult, Proposal, ProposalAction, ProposalType, and JSON schema. ParseExtract enforces action-conditional invariants.
-
-Findings:
-- [minor][quality] schema lockstep — extract_schema.json now in schema_invariants_test.go list (suggestion: none)
+Implemented the network-probe healthcheck variant per spec §13.3. PR #42 merged into main; deploy to staging triggered.
 
 Final diff:
 ```
-diff --git a/internal/verdict/extract.go b/internal/verdict/extract.go
-+++ b/internal/verdict/extract.go
-@@
-+type Proposal struct{}
-
+diff --git a/docs/team-setup/basic-memory-shared-vm.md b/docs/team-setup/basic-memory-shared-vm.md
+@@ -100,3 +100,5 @@
++  healthcheck:
++    test: [...]
 ```
 
 Test evidence:
 ```
-go test -race ./internal/verdict/... PASS
+go test -race ./... PASS
 ```
 
 
-
-## Plan text
-
-```
-## Plan
-
-### Task 9: Add the extract prompt template
-
-```
 
 ## Knowledge-base index
 
 
-- [decision] decisions/0042-cache-pass — Cache pass reviews: TTL 3m.
-- [module] modules/mcpsrv — mcpsrv: stdout reserved.
+- [epic] monorepo/epics/ABC-100/main — v0.7.0 healthcheck rework: Epic covering the BM Docker healthcheck variant + per-story tracking
+- [story] monorepo/stories/ABC-101/main — Story for the network-probe healthcheck: Single PR (PR #42); subtask: write the python socket probe
 
 
 ## Current KB excerpts
 
 The caller has pre-fetched these existing notes so you can check for redundancy and contradiction against their actual content:
 
-### decisions/0042-cache-pass
+### monorepo/epics/ABC-100/main
 
 ```
----
-status: accepted
----
+## Stories
 
-# Cache pass reviews
+| Story | Status | Deployment | Tracker |
+|---|---|---|---|
+| [ABC-101](monorepo/stories/ABC-101/main) — Story title | in_progress | none | [ABC-101](https://example.com/ABC-101) |
 
-We cache for 3 minutes.
+```
+
+### monorepo/stories/ABC-101/main
+
+```
+## PRs
+
+| PR | State | Branch | Relationship | Merged into | Deployed |
+|---|---|---|---|---|---|
+| #42 | review | story/probe | initial | — | none |
+
 ```
 
 
 ## Epic in flight
 
-`epics/2026-q2-project-knowledge` is the currently in-flight epic note. For every newly proposed `decision`, set `frontmatter_json` to include `"epic_origin": "epics/2026-q2-project-knowledge"` so downstream readers can trace the decision back to its epic. Additionally append one progress-ledger entry to the epic's body describing what landed (one bullet, past tense). When `KBStoreIsBasicMemory` is true this ledger append is expressed as an additional `edit_note` `bm_command` targeting the epic's permalink and its `Progress ledger` section; when false, no ledger command is emitted but the `epic_origin` frontmatter on new decisions still applies.
+`monorepo/epics/ABC-100/main` is the currently in-flight epic note. For every newly proposed `decision`, set `frontmatter_json` to include `"epic_origin": "monorepo/epics/ABC-100/main"` so downstream readers can trace the decision back to its epic. Additionally append one progress-ledger entry to the epic's body describing what landed (one bullet, past tense). When `KBStoreIsBasicMemory` is true this ledger append is expressed as an additional `edit_note` `bm_command` targeting the epic's permalink and its `Progress ledger` section; when false, no ledger command is emitted but the `epic_origin` frontmatter on new decisions still applies.
 
 
 ## What to do
@@ -128,9 +125,9 @@ We cache for 3 minutes.
 
    For the full mapping from extract's emitted `bm_commands` shape to BM v0.21.1's literal `write_note` / `edit_note` MCP signatures, see INTEGRATION.md § "Applying bm_commands to BM v0.21.1" (added in v0.6.2).
 
-   When you append a progress-ledger entry to `epics/2026-q2-project-knowledge` (per the **Epic in flight** section), emit an additional `edit_note` `bm_command` shaped:
+   When you append a progress-ledger entry to `monorepo/epics/ABC-100/main` (per the **Epic in flight** section), emit an additional `edit_note` `bm_command` shaped:
 
-   `{ "tool": "edit_note", "args_json": "{\"permalink\":\"epics/2026-q2-project-knowledge\", \"section\":\"Progress ledger\", \"content\":\"<one-bullet past-tense summary>\"}" }`
+   `{ "tool": "edit_note", "args_json": "{\"permalink\":\"monorepo/epics/ABC-100/main\", \"section\":\"Progress ledger\", \"content\":\"<one-bullet past-tense summary>\"}" }`
 
    Order `bm_commands` to mirror `proposals` (each proposal's commands grouped together, supersede emitting two consecutive entries). Any epic ledger append goes at the end.
 

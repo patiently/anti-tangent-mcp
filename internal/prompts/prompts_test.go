@@ -893,3 +893,29 @@ func TestRenderExtract_Basic(t *testing.T) {
 	require.NoError(t, err)
 	golden(t, "extract_basic", out.System+"\n---USER---\n"+out.User)
 }
+
+func TestRenderExtract_Milestone(t *testing.T) {
+	in := ExtractInput{
+		CompletionEnvelopes: []CompletionEnvelopeForExtract{{
+			TaskTitle:    "Land network-probe healthcheck",
+			Summary:      "Implemented the network-probe healthcheck variant per spec §13.3. PR #42 merged into main; deploy to staging triggered.",
+			Verdict:      "pass",
+			Findings:     []verdict.Finding{},
+			FinalDiff:    "diff --git a/docs/team-setup/basic-memory-shared-vm.md b/docs/team-setup/basic-memory-shared-vm.md\n@@ -100,3 +100,5 @@\n+  healthcheck:\n+    test: [...]",
+			TestEvidence: "go test -race ./... PASS",
+		}},
+		KBIndex: []KBIndexEntry{
+			{Permalink: "monorepo/epics/ABC-100/main", Type: "epic", Title: "v0.7.0 healthcheck rework", Summary: "Epic covering the BM Docker healthcheck variant + per-story tracking", Tags: []string{"epic"}},
+			{Permalink: "monorepo/stories/ABC-101/main", Type: "story", Title: "Story for the network-probe healthcheck", Summary: "Single PR (PR #42); subtask: write the python socket probe", Tags: []string{"story"}},
+		},
+		CurrentKBExcerpts: map[string]string{
+			"monorepo/epics/ABC-100/main":    "## Stories\n\n| Story | Status | Deployment | Tracker |\n|---|---|---|---|\n| [ABC-101](monorepo/stories/ABC-101/main) — Story title | in_progress | none | [ABC-101](https://example.com/ABC-101) |\n",
+			"monorepo/stories/ABC-101/main":  "## PRs\n\n| PR | State | Branch | Relationship | Merged into | Deployed |\n|---|---|---|---|---|---|\n| #42 | review | story/probe | initial | — | none |\n",
+		},
+		EpicPermalink:        "monorepo/epics/ABC-100/main",
+		KBStoreIsBasicMemory: true,
+	}
+	out, err := RenderExtract(in)
+	require.NoError(t, err)
+	golden(t, "extract_milestone", out.System+"\n---USER---\n"+out.User)
+}
