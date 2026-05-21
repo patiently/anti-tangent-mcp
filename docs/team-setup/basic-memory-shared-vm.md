@@ -822,7 +822,7 @@ services:
       BASIC_MEMORY_DEFAULT_PROJECT: main
       BASIC_MEMORY_SYNC_CHANGES: "true"
       BASIC_MEMORY_LOG_LEVEL: INFO
-      BASIC_MEMORY_SYNC_DELAY: "1000"
+      BASIC_MEMORY_SYNC_DELAY: "1000"   # milliseconds; debounce window before a markdown edit is committed to the index
     volumes:
       - /var/lib/basic-memory/kb:/app/data
       - basic-memory-config:/home/appuser/.basic-memory
@@ -832,6 +832,14 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
+      # Mirrors upstream's Dockerfile HEALTHCHECK. Verifies the binary
+      # resolves — NOT that the SSE listener is bound on :8000. If BM
+      # starts but fails to bind the port the container still reports
+      # `healthy`. For the stricter "listener accepted a connection"
+      # guarantee, override with a network probe using the in-image
+      # python interpreter (no curl/nc in python:3.12-slim):
+      #   test: ["CMD", "python3", "-c", "import socket,sys; s=socket.socket(); s.settimeout(2); sys.exit(0) if s.connect_ex(('127.0.0.1', 8000)) == 0 else sys.exit(1)"]
+      # and bump `start_period` to 30s to cover slower hosts.
       test: ["CMD", "basic-memory", "--version"]
       interval: 30s
       timeout: 10s
@@ -892,7 +900,7 @@ bm.<team>.example.com {
 }
 ```
 
-Generate per-dev tokens with `openssl rand -base64 32` and store them in your secrets manager (1Password, Vault, AWS Secrets Manager — whatever your team already uses). Rotating a single dev's access is `caddy reload` after editing the matcher. The matcher list is plaintext in the Caddyfile because the file is operator-only; `chmod 0640 root:caddy /etc/caddy/Caddyfile` and audit access.
+Generate per-dev tokens with `openssl rand -base64 32` and store them in your secrets manager (1Password, Vault, AWS Secrets Manager — whatever your team already uses). Rotating a single dev's access is `systemctl reload caddy` after editing the matcher (§13.8.7 covers why `caddy reload` alone is sometimes cache-stale on header-matcher updates). The matcher list is plaintext in the Caddyfile because the file is operator-only; `chmod 0640 root:caddy /etc/caddy/Caddyfile` and audit access.
 
 If you prefer nginx, the equivalent shape is `map $http_authorization $allowed { default 0; "Bearer <PER_DEV_TOKEN_1>" 1; ... }` plus `if ($allowed = 0) { return 401; }` plus `proxy_pass http://127.0.0.1:8000;` with `proxy_buffering off;` and `proxy_read_timeout 1h;`. The SSE buffering and timeout settings are the load-bearing pieces — anything else is incidental.
 
