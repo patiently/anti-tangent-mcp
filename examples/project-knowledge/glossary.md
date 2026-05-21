@@ -1,5 +1,5 @@
 ---
-permalink: glossary/<term>
+permalink: <PROJECT>/glossary/<term-slug>/main
 type: glossary
 title: <Term>
 status: stable

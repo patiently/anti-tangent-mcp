@@ -69,10 +69,12 @@ We cache for 3 minutes.
 
 ## What to do
 
-1. Read each completion envelope above as the authoritative record of what just shipped. Identify durable, generalizable knowledge worth capturing as a KB note: an architectural decision, a new module's invariants, a new feature's behavior, a glossary term, or an epic ledger update.
+1. Read each completion envelope above as the authoritative record of what just shipped. Identify two distinct kinds of signal:
+   - **Durable knowledge** worth capturing as a new note: an architectural decision, a module's invariants, a new feature's behavior, a glossary term. Always proposable; not gated on milestones.
+   - **Milestone events** that warrant a dashboard update on an existing `epic` or `story` note. A milestone is ONE of: a PR opened (draft or ready), a PR transitioning state (`draft → review`, `review → merged`, `review → closed-without-merge`), a deployment landing in any environment, or a decision finalizing (`status: accepted`). Story-done is NOT a separate milestone — it's the natural consequence of the last PR for a story merging.
 2. For every proposal, emit a `Proposal` entry shaped per the output schema below:
    - `action`: `create` (new note), `update` (mutate an existing note's frontmatter or body), or `supersede` (replace an existing note with a new one and flip the predecessor's status).
-   - `type`: one of `decision`, `module`, `feature`, `glossary`, `epic`.
+   - `type`: one of `decision`, `module`, `feature`, `glossary`, `epic`, `story`.
    - `permalink`: the BM-style relative path (e.g. `decisions/0099-cache-pass`). Never absolute; never a URL.
    - `title`: human-readable note title.
    - `frontmatter_json`: a JSON-encoded **string** (NOT a nested object) carrying the note's frontmatter. Use the literal string `"{}"` when no frontmatter change is intended. For partial updates emit a JSON-object string like `"{\"status\":\"superseded\"}"`. The wire shape is a string because OpenAI strict structured-outputs rejects freeform object schemas.
@@ -82,7 +84,26 @@ We cache for 3 minutes.
    - `evidence_refs`: array of references that each name a visible source field, e.g. `completion_envelopes[0].summary`, `completion_envelopes[1].findings[2]`, `completion_envelopes[0].final_diff`, `completion_envelopes[0].final_files[0].path`, or `plan_text`. Every entry must resolve against the inputs above; do not invent refs.
    - `supersedes`: array of predecessor permalinks. Empty `[]` for `create` and `update`. Non-empty (at least one predecessor) for `supersede`.
    - All four placeholder fields (`frontmatter_json`, `body`, `body_patch`, `supersedes`) MUST appear on every Proposal — the response schema requires their presence; the parser enforces the action-conditional non-empty rules against the placeholders.
+2a. **Permalink shape and project-prefix inference.** All permalinks use the shape `<PROJECT>/<type>/<slug-or-ticket-id>/main`. Infer `<PROJECT>` from the most common prefix in `kb_index` permalinks. Tie-break: if two or more prefixes are tied on count, prefer the prefix that matches a repo or project name referenced in the task spec or `plan_text` (when present); failing that, take the alphabetically first prefix. If `kb_index` is empty or no prefix can be inferred even with tie-break, fall back to the literal placeholder `<PROJECT>` in your proposal permalinks AND emit one `missing_index_entry` (severity: major) finding naming the absence — callers must then resolve the placeholder before applying the bm_commands.
+
+    Note: `missing_index_entry` is reused from the v0.6.0 prime-side finding vocabulary — no new finding category is introduced. The same finding fires from both prime and extract, on different triggers.
 3. Ground every Proposal in the supplied evidence. Do NOT propose notes whose claims are not visible in an envelope or in `plan_text`. If the envelopes contain no durable signal worth capturing, emit zero proposals and emit one `insufficient_evidence` finding (severity: critical).
+3a. **Dashboard updates require a milestone.** If a completion envelope surfaces a milestone, propose `action: update` on the relevant `epic` or `story` note with a `replace_section` (or `frontmatter_patch` / `insert_before_section`) bm_command that rewrites the affected section or frontmatter field verbatim. To produce the new section content, use the matching entry from `current_kb_excerpts` to read the current section, identify the row(s) that change, and emit the full updated section text (NOT a diff). If `current_kb_excerpts` has no entry for the target note, emit an `insufficient_evidence` finding rather than fabricating a section body.
+
+    **Detecting "last PR for story":** the reviewer treats a PR merge as the story's terminal PR ONLY when the story's frontmatter `status` in `current_kb_excerpts` is already `done`. The caller — the agent or human who closes the story — sets `status: done` on the story note BEFORE invoking extract for the terminal-merge milestone. This makes story closure an explicit caller gesture rather than an LLM-inferred heuristic; the reviewer's role is to amplify the closure into all the dashboard consequences. The reviewer does NOT scan `## PRs` rows or `## Subtasks` checkboxes to infer terminality — those signals are not authoritative across reviewer models. If `status` is anything other than `done` when a PR merges (including `in_progress`, `review`, or absent), the merge falls into the "PR merged, NOT last for story" row instead.
+
+    Map of milestone → sections to update:
+
+    | Milestone | Story-side update | Epic-side update |
+    |---|---|---|
+    | PR opened or state change (still open) | story `## PRs` (row state) | epic `## Open PRs` (add/update row) |
+    | PR closed without merge | story `## PRs` (row state → closed) | epic `## Open PRs` (drop row) |
+    | PR merged, NOT last for story | story `## PRs` (row state → merged) | epic `## Open PRs` (drop row) |
+    | PR merged + last for story (caller has set story `status: done`) | story frontmatter (`status: done`, `closed_at: <YYYY-MM-DD>`), story `## PRs` (row state → merged), story `## Deployment state` (if landed) | epic `## Stories` (status → done), epic `## Open PRs` (drop row) |
+    | Deployment landed | story `## Deployment state`, story `## PRs` (Deployed column) | epic `## Stories` (Deployment column — highest env reached) |
+    | Decision finalized | story `## Decisions produced` (append link) | epic `## Progress ledger` (append entry), epic frontmatter `produces_decisions` (append permalink) |
+
+    **Epic `## Acceptance` ticking is intentionally NOT in the table.** Matching a closed story to an epic-level AC requires semantic judgement that an LLM can't reliably make across reviewer models. Epic-AC ticks remain a human curation step done at story-close or epic-close.
 4. If a proposal duplicates a note already present in the KB index (same permalink, same intent, same content shape), emit a `redundant_proposal` finding (severity: minor or major depending on how close the duplicate is) instead of the Proposal.
 5. If a proposal contradicts an existing note's `decided` content (visible in `Current KB excerpts` or strongly implied by the index), emit a `contradicts_existing` finding (severity: major or critical depending on how load-bearing the contradiction is) and prefer a `supersede` Proposal over a silent overwrite.
 6. Always emit `bm_commands`. The response schema requires the field; emit `[]` rather than omitting.
@@ -95,19 +116,21 @@ We cache for 3 minutes.
 
    - `action: "create"` → one `write_note`:
      `{ "tool": "write_note", "args_json": "{\"permalink\":\"<proposal permalink>\", \"frontmatter\":{ ... }, \"body\":\"<full body>\"}" }`
-   - `action: "update"` → one `edit_note`. For a frontmatter patch:
-     `{ "tool": "edit_note", "args_json": "{\"permalink\":\"<proposal permalink>\", \"frontmatter_patch\":{ ... }}" }`.
-     For a body section patch:
-     `{ "tool": "edit_note", "args_json": "{\"permalink\":\"<proposal permalink>\", \"section\":\"<section heading>\", \"content\":\"<replacement text>\"}" }`.
+   - `action: "update"` → one `edit_note` with an explicit `operation`:
+     - For dashboard sections, use `replace_section` (overwrites the whole section with a new body — correct because dashboard tables are reconstructed in full from `current_kb_excerpts`).
+     - For frontmatter cross-ref appends (e.g., adding to `produces_decisions`), use `frontmatter_patch`.
+     - For the epic's append-only `## Progress ledger`, use `insert_before_section` keyed on the section that FOLLOWS the ledger (usually `## Open questions`). The ledger uses `insert_before_section` rather than `replace_section` because the ledger accumulates entries over an epic's lifetime — `replace_section` would clobber prior entries. Do NOT default to `replace_section` for ledger appends.
    - `action: "supersede"` → emit a PAIR of entries (in this order):
      1. `{ "tool": "write_note", "args_json": "{\"permalink\":\"<new permalink>\", \"frontmatter\":{\"status\":\"accepted\", \"supersedes\":[\"<predecessor permalink>\"], ...}, \"body\":\"<new body>\"}" }`
-     2. `{ "tool": "edit_note", "args_json": "{\"permalink\":\"<predecessor permalink>\", \"frontmatter_patch\":{\"status\":\"superseded\"}}" }`
+     2. `{ "tool": "edit_note", "args_json": "{\"permalink\":\"<predecessor permalink>\", \"operation\":\"frontmatter_patch\", \"frontmatter_patch\":{\"status\":\"superseded\"}}" }`
 
    Basic Memory does NOT ship a single-verb supersede operation; do not invent one. Use only the verbs listed above (`write_note`, `edit_note`). If the predecessor permalink is missing or the new note has no body, emit an `insufficient_evidence` finding instead of fabricating either command.
 
-   When you append a progress-ledger entry to `epics/2026-q2-project-knowledge` (per the **Epic in flight** section), emit an additional `edit_note` `bm_command` shaped:
+   For the full mapping from extract's emitted `bm_commands` shape to BM v0.21.1's literal `write_note` / `edit_note` MCP signatures, see INTEGRATION.md § "Applying bm_commands to BM v0.21.1" (added in v0.6.2).
 
-   `{ "tool": "edit_note", "args_json": "{\"permalink\":\"epics/2026-q2-project-knowledge\", \"section\":\"Progress ledger\", \"content\":\"<one-bullet past-tense summary>\"}" }`
+   When you append a progress-ledger entry to `epics/2026-q2-project-knowledge` (per the **Epic in flight** section), emit an additional `edit_note` `bm_command` using `insert_before_section` keyed on the section that FOLLOWS `## Progress ledger` (usually `## Open questions`) so the new bullet appends to the end of the ledger without clobbering prior entries:
+
+   `{ "tool": "edit_note", "args_json": "{\"permalink\":\"epics/2026-q2-project-knowledge\", \"operation\":\"insert_before_section\", \"section\":\"## Open questions\", \"content\":\"- <YYYY-MM-DD> — <one-bullet past-tense summary>\"}" }`
 
    Order `bm_commands` to mirror `proposals` (each proposal's commands grouped together, supersede emitting two consecutive entries). Any epic ledger append goes at the end.
 
@@ -125,7 +148,7 @@ Return ONLY a JSON object matching this shape:
   "proposals": [
     {
       "action": "create|update|supersede",
-      "type": "decision|module|feature|glossary|epic",
+      "type": "decision|module|feature|glossary|epic|story",
       "permalink": "<bm-style relative path>",
       "title": "<note title>",
       "frontmatter_json": "{}",

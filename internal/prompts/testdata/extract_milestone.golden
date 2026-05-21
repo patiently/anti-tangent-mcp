@@ -1,65 +1,68 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
 ## Completion envelopes
 
-{{if .CompletionEnvelopes}}
-{{range $i, $e := .CompletionEnvelopes}}### Envelope {{$i}}: {{$e.TaskTitle}}
 
-Verdict: {{$e.Verdict}}
+### Envelope 0: Land network-probe healthcheck
+
+Verdict: pass
 
 Summary:
-{{$e.Summary}}
-{{if $e.Findings}}
-Findings:
-{{range $e.Findings}}- [{{.Severity}}][{{.Category}}] {{.Criterion}} — {{.Evidence}}{{if .Suggestion}} (suggestion: {{.Suggestion}}){{end}}
-{{end}}{{end}}{{if $e.FinalDiff}}
+Implemented the network-probe healthcheck variant per spec §13.3. PR #42 merged into main; deploy to staging triggered.
+
 Final diff:
 ```
-{{$e.FinalDiff}}
+diff --git a/docs/team-setup/basic-memory-shared-vm.md b/docs/team-setup/basic-memory-shared-vm.md
+@@ -100,3 +100,5 @@
++  healthcheck:
++    test: [...]
 ```
-{{end}}{{if $e.FinalFiles}}
-Final files:
-{{range $e.FinalFiles}}- {{.Path}}
-```
-{{.Content}}
-```
-{{end}}{{end}}{{if $e.TestEvidence}}
+
 Test evidence:
 ```
-{{$e.TestEvidence}}
+go test -race ./... PASS
 ```
-{{end}}
-{{end}}{{else}}
-No completion envelopes were supplied. Emit zero proposals and one `insufficient_evidence` finding (severity: critical) describing the absence. Emit `bm_commands: []`.
-{{end}}
-{{if .PlanText}}
-## Plan text
 
-```
-{{.PlanText}}
-```
-{{end}}
+
+
 ## Knowledge-base index
 
-{{if .KBIndex}}
-{{range .KBIndex}}- [{{.Type}}] {{.Permalink}} — {{.Title}}: {{.Summary}}
-{{end}}{{else}}
-The index is empty. Treat every proposal as a potential `create`. Do NOT emit `redundant_proposal` (nothing to be redundant with) or `contradicts_existing` (nothing to contradict) findings on an empty index.
-{{end}}
-{{if .CurrentKBExcerpts}}
+
+- [epic] monorepo/epics/ABC-100/main — v0.7.0 healthcheck rework: Epic covering the BM Docker healthcheck variant + per-story tracking
+- [story] monorepo/stories/ABC-101/main — Story for the network-probe healthcheck: Single PR (PR #42); subtask: write the python socket probe
+
+
 ## Current KB excerpts
 
 The caller has pre-fetched these existing notes so you can check for redundancy and contradiction against their actual content:
 
-{{range $perma, $body := .CurrentKBExcerpts}}### {{$perma}}
+### monorepo/epics/ABC-100/main
 
 ```
-{{$body}}
+## Stories
+
+| Story | Status | Deployment | Tracker |
+|---|---|---|---|
+| [ABC-101](monorepo/stories/ABC-101/main) — Story title | in_progress | none | [ABC-101](https://example.com/ABC-101) |
+
 ```
 
-{{end}}{{end}}{{if .EpicPermalink}}
+### monorepo/stories/ABC-101/main
+
+```
+## PRs
+
+| PR | State | Branch | Relationship | Merged into | Deployed |
+|---|---|---|---|---|---|
+| #42 | review | story/probe | initial | — | none |
+
+```
+
+
 ## Epic in flight
 
-`{{.EpicPermalink}}` is the currently in-flight epic note. For every newly proposed `decision`, set `frontmatter_json` to include `"epic_origin": "{{.EpicPermalink}}"` so downstream readers can trace the decision back to its epic. Additionally append one progress-ledger entry to the epic's body describing what landed (one bullet, past tense). When `KBStoreIsBasicMemory` is true this ledger append is expressed as an additional `edit_note` `bm_command` targeting the epic's permalink and its `Progress ledger` section; when false, no ledger command is emitted but the `epic_origin` frontmatter on new decisions still applies.
-{{end}}
+`monorepo/epics/ABC-100/main` is the currently in-flight epic note. For every newly proposed `decision`, set `frontmatter_json` to include `"epic_origin": "monorepo/epics/ABC-100/main"` so downstream readers can trace the decision back to its epic. Additionally append one progress-ledger entry to the epic's body describing what landed (one bullet, past tense). When `KBStoreIsBasicMemory` is true this ledger append is expressed as an additional `edit_note` `bm_command` targeting the epic's permalink and its `Progress ledger` section; when false, no ledger command is emitted but the `epic_origin` frontmatter on new decisions still applies.
+
 
 ## What to do
 
@@ -101,7 +104,7 @@ The caller has pre-fetched these existing notes so you can check for redundancy 
 4. If a proposal duplicates a note already present in the KB index (same permalink, same intent, same content shape), emit a `redundant_proposal` finding (severity: minor or major depending on how close the duplicate is) instead of the Proposal.
 5. If a proposal contradicts an existing note's `decided` content (visible in `Current KB excerpts` or strongly implied by the index), emit a `contradicts_existing` finding (severity: major or critical depending on how load-bearing the contradiction is) and prefer a `supersede` Proposal over a silent overwrite.
 6. Always emit `bm_commands`. The response schema requires the field; emit `[]` rather than omitting.
-{{if .KBStoreIsBasicMemory}}
+
 7. The caller's KB store is Basic Memory. For every Proposal, emit one or more `bm_commands` entries per the verified Basic Memory contract. Each entry is shaped exactly:
 
    `{ "tool": "<verb>", "args_json": "<JSON-object literal as string>" }`
@@ -121,15 +124,13 @@ The caller has pre-fetched these existing notes so you can check for redundancy 
    Basic Memory does NOT ship a single-verb supersede operation; do not invent one. Use only the verbs listed above (`write_note`, `edit_note`). If the predecessor permalink is missing or the new note has no body, emit an `insufficient_evidence` finding instead of fabricating either command.
 
    For the full mapping from extract's emitted `bm_commands` shape to BM v0.21.1's literal `write_note` / `edit_note` MCP signatures, see INTEGRATION.md § "Applying bm_commands to BM v0.21.1" (added in v0.6.2).
-{{if .EpicPermalink}}
-   When you append a progress-ledger entry to `{{.EpicPermalink}}` (per the **Epic in flight** section), emit an additional `edit_note` `bm_command` using `insert_before_section` keyed on the section that FOLLOWS `## Progress ledger` (usually `## Open questions`) so the new bullet appends to the end of the ledger without clobbering prior entries:
 
-   `{ "tool": "edit_note", "args_json": "{\"permalink\":\"{{.EpicPermalink}}\", \"operation\":\"insert_before_section\", \"section\":\"## Open questions\", \"content\":\"- <YYYY-MM-DD> — <one-bullet past-tense summary>\"}" }`
-{{end}}
+   When you append a progress-ledger entry to `monorepo/epics/ABC-100/main` (per the **Epic in flight** section), emit an additional `edit_note` `bm_command` using `insert_before_section` keyed on the section that FOLLOWS `## Progress ledger` (usually `## Open questions`) so the new bullet appends to the end of the ledger without clobbering prior entries:
+
+   `{ "tool": "edit_note", "args_json": "{\"permalink\":\"monorepo/epics/ABC-100/main\", \"operation\":\"insert_before_section\", \"section\":\"## Open questions\", \"content\":\"- <YYYY-MM-DD> — <one-bullet past-tense summary>\"}" }`
+
    Order `bm_commands` to mirror `proposals` (each proposal's commands grouped together, supersede emitting two consecutive entries). Any epic ledger append goes at the end.
-{{else}}
-7. The caller is not using Basic Memory. Emit `bm_commands` as an empty array `[]`. Do NOT omit the field — the response schema requires it. `epic_origin` frontmatter on new decisions still applies; the ledger append is simply not expressed as a command in this mode.
-{{end}}
+
 
 ## Output schema (paste-ready)
 
@@ -155,9 +156,9 @@ Return ONLY a JSON object matching this shape:
       "supersedes": []
     }
   ],
-  "bm_commands": [{{if .KBStoreIsBasicMemory}}
+  "bm_commands": [
     {"tool": "write_note", "args_json": "{\"permalink\":\"<proposal permalink>\", \"frontmatter\":{}, \"body\":\"<body>\"}"}
-  {{end}}],
+  ],
   "next_action": "<one sentence telling the controller what to do next>"
 }
 ```

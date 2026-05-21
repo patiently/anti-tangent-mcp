@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-05-21
+
+### Added
+- New 6th note type `story` under the project-knowledge taxonomy. Frontmatter scoped to ticket-driven workflow (issue ID, parent epic, owners, tracker URL); body provides a live operational dashboard with multi-PR list + relationships, subtasks, deployment state, and decisions produced. Template lands as `examples/project-knowledge/story.md`. Schema enum `proposals[].type` in `internal/verdict/extract_schema.json` gains `"story"`; `ProposalTypeStory` constant added to `internal/verdict/extract.go`. Parser is backwards-compatible — v0.6.x five-type proposals continue to parse.
+- New adopter conventions doc at `docs/team-setup/project-knowledge-conventions.md`: when this pattern earns its keep, the one-BM-project-per-repo recommendation (with the monorepo namespacing exception), issue-ID format guidance, folder convention, milestone-event list, project-prefix bootstrap, tracker integration, and maintenance ownership.
+- New committed dogfood directory `examples/project-knowledge/dogfood/` with frozen-snapshot real anti-tangent example notes (epics/gh-23, stories/gh-25, decisions/0001-text-only-reviewer, modules/review-pipeline). Re-snapshotted manually on major releases.
+- Optional `story_origin` frontmatter field on `decision` notes alongside the existing `epic_origin`. Enables extract to populate a story's `## Decisions produced` section by walking `story_origin` matches across decision notes.
+
+### Changed
+- `examples/project-knowledge/epic.md` rewritten with live operational dashboard sections (`## Stories` table with status + deployment, `## Open PRs` table aggregated across stories in the epic, `## Acceptance (epic-level)` checklist). Charter + progress-ledger sections from v0.6.0 kept as supporting context.
+- All six note templates adopt the project-prefixed folder-per-ticket permalink shape: `<PROJECT>/<type>/<key>/main`. Cross-references in frontmatter become permalink strings. Backwards-compatible — pre-v0.7.0 extract outputs without the project prefix continue to parse.
+- `internal/prompts/templates/extract.tmpl` recognises the `story` type, infers the project prefix from `kb_index` permalinks (falls back to `<PROJECT>` placeholder + emits `missing_index_entry` finding when no prefix can be inferred), and proposes dashboard updates only on milestone events (PR opened, PR state transition, deployment landed, decision finalized) via `replace_section` operation bm_commands.
+- `INTEGRATION.md` "Project knowledge (optional)" section gains a one-line mention of the 6-type taxonomy and a link to the new conventions doc. Total file size kept under the 40,000-byte user-instructions threshold.
+
+### Fixed
+- `docs/team-setup/basic-memory-shared-vm.md` §8 `commit-and-push.sh` script: `GIT_SSH_COMMAND` now includes `-o IdentitiesOnly=yes -o IdentityAgent=none` alongside the existing `StrictHostKeyChecking=yes`. Without `IdentitiesOnly=yes` SSH tries every key in `~/.ssh/` before the explicit `-i` deploy key, so a key that belongs to a different account can auth first and the BM repo push fails with "Permission denied" or "Repository not found". `IdentityAgent=none` defends against `SSH_AUTH_SOCK` leaking into the systemd unit's environment and the agent's keys overriding the deploy key. Both options are now documented inline next to the script with rationale for each.
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.6.2] - 2026-05-21
 
 ### Added
