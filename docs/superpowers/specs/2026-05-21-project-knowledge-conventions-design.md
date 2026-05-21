@@ -72,6 +72,7 @@ internal/prompts/testdata/
 internal/verdict/
 ├── extract.go                    [MODIFY]   add `ProposalTypeStory ProposalType = "story"`
 ├── extract_schema.json           [MODIFY]   `proposals[].type` enum gains "story"
+├── extract_parser.go             [MODIFY]   `proposalWire` switch-case gains `ProposalTypeStory`
 └── extract_parser_test.go        [MODIFY]   regression tests covering all 6 types
 
 CHANGELOG.md                      [NEW]      ## [0.7.0] entry
@@ -140,7 +141,7 @@ Body sections (in order):
 1. `## Charter` — two to three sentences naming the user-visible goal and the success criterion.
 2. `## In scope / Out of scope` — bullet lists.
 3. `## Acceptance (epic-level)` — checklist (`- [ ] / - [x]`); per-story ACs live in story notes.
-4. `## Stories` — table: `Story (linked) | Status | Deployment | Tracker`.
+4. `## Stories` — table: `Story (linked) | Status | Deployment | Tracker`. The Deployment column shows the **highest environment the story has reached** (rank: `prod > staging > none`); when a story is deployed to staging but not prod, the cell reads `staging`; when nothing has landed, the cell reads `none`. Pick a consistent rank for the team's env ladder in the conventions doc.
 5. `## Open PRs` — table aggregating open PRs across all stories in this epic: `PR | Story (linked) | State | Title`. Once a PR merges or closes, it leaves this table; the story's own dashboard keeps the durable per-story PR history.
 6. `## Progress ledger` — append-only; one entry per milestone.
 7. `## Open questions` — bullets.
@@ -168,6 +169,8 @@ tags: []
 Body sections unchanged from v0.6.0: `## Context / Decision / Consequences / Alternatives considered`.
 
 `story_origin` enables extract to populate a story's `## Decisions produced` section by walking `story_origin` matches across decision notes. `epic_origin` stays the broader category for decisions made at epic level (not under a specific story).
+
+**Mutual exclusivity:** in practice, set EITHER `story_origin` OR `epic_origin`, not both. When `story_origin` is set, the story's own `parent_epic` frontmatter provides the epic context transitively. Set `epic_origin` only when the decision was made at the epic level without a specific owning story (e.g., the decision predates any of the stories, or spans multiple stories at the epic-shaping layer). The parser does NOT enforce mutual exclusivity — both may be set if the decision genuinely has both origins — but the reviewer prompt instructs extract to prefer `story_origin` when a story-scoped completion envelope produced the decision.
 
 #### 2.4 `module`
 
@@ -250,7 +253,7 @@ Five changes to the `## What to do` section of `extract.tmpl`:
 
 > Read each completion envelope as the authoritative record of what just shipped. Identify two distinct kinds of signal:
 > - **Durable knowledge** worth capturing as a new note: an architectural decision, a module's invariants, a new feature's behavior, a glossary term. Always proposable; not gated on milestones.
-> - **Milestone events** that warrant a dashboard update on an existing `epic` or `story` note. A milestone is ONE of: a PR opened, a PR transitioning state (draft→ready / review→merged / merged→closed), a deployment landing in any environment, or a decision finalizing (status: accepted). Story-done is NOT a separate milestone — it's the natural consequence of the last PR for a story merging.
+> - **Milestone events** that warrant a dashboard update on an existing `epic` or `story` note. A milestone is ONE of: a PR opened (draft or ready), a PR transitioning state (`draft → review`, `review → merged`, `review → closed-without-merge`), a deployment landing in any environment, or a decision finalizing (`status: accepted`). Story-done is NOT a separate milestone — it's the natural consequence of the last PR for a story merging.
 
 **Step 2 (modified)** — `type` enum gains `story`. Otherwise unchanged.
 
@@ -271,14 +274,17 @@ Five changes to the `## What to do` section of `extract.tmpl`:
 > | Milestone | Story-side update | Epic-side update |
 > |---|---|---|
 > | PR opened or state change (still open) | story `## PRs` (row state) | epic `## Open PRs` (add/update row) |
+> | PR closed without merge | story `## PRs` (row state → closed) | epic `## Open PRs` (drop row) |
 > | PR merged, NOT last for story | story `## PRs` (row state → merged) | epic `## Open PRs` (drop row) |
 > | PR merged + last for story (caller has set story `status: done`) | story frontmatter (`status: done`, `closed_at: <YYYY-MM-DD>`), story `## PRs` (row state → merged), story `## Deployment state` (if landed) | epic `## Stories` (status → done), epic `## Open PRs` (drop row) |
-> | Deployment landed | story `## Deployment state`, story `## PRs` (Deployed column) | epic `## Stories` (Deployment column) |
+> | Deployment landed | story `## Deployment state`, story `## PRs` (Deployed column) | epic `## Stories` (Deployment column — highest env reached) |
 > | Decision finalized | story `## Decisions produced` (append link) | epic `## Progress ledger` (append entry), epic frontmatter `produces_decisions` (append permalink) |
 >
 > **Epic `## Acceptance` ticking is intentionally NOT in the table.** Matching a closed story to an epic-level AC requires semantic judgement that an LLM can't reliably make across reviewer models (AC text ⊇ story title? frontmatter `relates` link? semantic similarity?). Per the §4.1 "extract proposes, humans curate" posture, epic-AC ticks remain a human curation step done at story-close or epic-close. If field signal later shows a deterministic rule that works (e.g., explicit AC-permalink references in the story body), revisit in a follow-up minor.
 
 **Step 7 (modified, basic-memory branch)** — `replace_section` operation explicit. The reviewer is told to use `edit_note` with explicit `operation` enum values: `replace_section` for dashboard sections (overwrites the whole section with a new body — correct because dashboard tables are reconstructed in full from `current_kb_excerpts`), `frontmatter_patch` for frontmatter cross-ref appends (e.g., adding to `produces_decisions`), and `insert_before_section` (keyed on the section AFTER the target) for the epic's append-only `## Progress ledger`. The progress ledger uses `insert_before_section` rather than `replace_section` because the ledger accumulates entries over an epic's lifetime — `replace_section` would clobber prior entries; targeting `insert_before_section` keyed on the section that FOLLOWS `## Progress ledger` (usually `## Open questions`) appends the new entry to the end of the ledger without touching what's already there. An implementing agent must not default to `replace_section` for ledger appends.
+
+For the full mapping from extract's emitted `bm_commands` shape to BM v0.21.1's literal `write_note` / `edit_note` MCP signatures, see [`INTEGRATION.md` § "Applying bm_commands to BM v0.21.1"](../../INTEGRATION.md#applying-bm_commands-to-bm-v0211) (added in v0.6.2). The reviewer prompt and that subsection should stay in sync; if BM's MCP surface changes, update both.
 
 The remaining steps (3, 4, 5, 6) stay unchanged.
 
@@ -309,6 +315,8 @@ Frozen snapshots of anti-tangent's actual KB at v0.7.0 release. Live versions li
 | `dogfood/decisions/0001-text-only-reviewer/main.md` | Seminal anti-tangent decision: reviewer is text-only. |
 | `dogfood/modules/review-pipeline/main.md` | Coherent capability across mcpsrv + verdict + prompts + providers. |
 
+**Snapshot timing.** Snapshot the dogfood AFTER v0.7.0's PR merges to main, but BEFORE tagging the v0.7.0 release. Reason: the snapshot should reflect the state of anti-tangent's epics/stories AS OF v0.7.0 having shipped — including the v0.7.0 release itself appearing in the gh-23 epic's progress ledger. The implementation plan's final task lands the snapshot files in a follow-up commit after the substantive code+template+doc changes pass CR; they don't need to round-trip through the CR loop themselves (they're frozen reference content, not load-bearing surface).
+
 No feature or glossary dogfood — the shipped templates cover those types, and INTEGRATION.md already documents anti-tangent's features and glossary terms; KB notes would duplicate.
 
 ### 5. Testing & validation
@@ -329,9 +337,9 @@ No feature or glossary dogfood — the shipped templates cover those types, and 
 
 After PR merges, before declaring v0.7.0 stable:
 
-1. Write one `story` note in a real BM instance using the new template. Confirm BM accepts the frontmatter + permalink shape.
-2. Call `extract_project_knowledge` against a small completion envelope mentioning "PR #42 merged" in `final_diff`. Verify extract emits a `replace_section` `bm_command` targeting an existing epic's `## Stories` section.
-3. Apply the bm_command. Confirm the dashboard updates without clobbering unrelated content.
+1. Write a seed `epic` note in a real BM instance using the new v0.7.0 template (with empty `## Stories` and `## Open PRs` tables). Then write one `story` note linked to that epic via `parent_epic`. Confirm BM accepts both frontmatter shapes + the folder-per-ticket permalink.
+2. Call `extract_project_knowledge` against a small completion envelope mentioning "PR #42 merged" in `final_diff`, with `epic_permalink` set to the seed epic's permalink and `current_kb_excerpts` carrying the epic's `## Stories` section. Verify extract emits a `replace_section` `bm_command` targeting that epic's `## Stories` section AND (if applicable) a separate `bm_command` for the story's `## PRs` row.
+3. Apply both bm_commands. Confirm the dashboard updates without clobbering unrelated content. Inspect the resulting markdown: the `## Stories` table should reflect the new state; sections before and after must be byte-identical to what was there.
 
 #### 5.4 Doc consistency
 
@@ -371,6 +379,13 @@ If this fails, trim other prose in the same PR until it passes. The v0.7.0 addit
 v0.6.x → v0.7.0 is strictly additive. Pre-v0.7.0 extract outputs (5-type proposals with v0.6.x permalink shapes — no project prefix, no folder-per-ticket) parse against the v0.7.0 parser without modification. Adopters who don't switch templates keep working; they just don't get the `story` type or dashboard features.
 
 The v0.7.0 reviewer prompt assumes the project-prefix convention but degrades gracefully when `kb_index` lacks a consistent prefix — it falls back to the literal `<PROJECT>` placeholder and emits a `missing_index_entry` finding. Existing v0.6.x KBs without project prefixes will trigger this finding on their first v0.7.0 extract call; resolving it once (by establishing a project prefix in the KB) restores quiet operation.
+
+**Migration path for existing v0.6.x KBs.** Two options for adopters with notes already in BM:
+
+1. **Bulk rename via `move_note`** — for each existing note, call BM's `move_note` to relocate it under the new project-prefixed folder shape (e.g., `decisions/0042-x` → `<PROJECT>/decisions/0042-x/main`). One-time setup; future extract calls see a consistent prefix immediately. Recommended for small KBs (< 50 notes).
+2. **Leave legacy notes; tag new notes with the prefix** — write all NEW notes under the v0.7.0 shape; let the legacy notes keep their old permalinks. The `missing_index_entry` finding will fire on the first extract call (because the legacy notes diluted the prefix-count vote); once enough new-shape notes accumulate, the prefix becomes the majority and inference stabilises. Suitable for larger KBs where bulk renames are operationally noisy.
+
+The conventions doc (§6 "Project-prefix bootstrap") covers both paths concretely with paste-ready `move_note` invocations. Either way, the v0.7.0 reviewer never modifies existing notes' permalinks — it proposes NEW notes under the new shape and emits `replace_section` updates against existing notes at their current permalinks.
 
 No schema breaking changes; no env-var additions; no tool surface additions. Pure documentation, template, and reviewer-prompt expansion.
 
