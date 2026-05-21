@@ -145,6 +145,8 @@ Body sections (in order):
 6. `## Progress ledger` — append-only; one entry per milestone.
 7. `## Open questions` — bullets.
 
+**Note on terminal-status asymmetry.** Stories terminate with `status: done`; epics terminate with `status: closed`. The asymmetry is deliberate — engineering finishes a story (`done`); product management closes an epic (`closed`) once all its stories are done AND any post-merge follow-through (deployment, retro, AC confirmation) has landed. Both states are functionally terminal; the divergent vocabulary signals the divergent gesture.
+
 #### 2.3 `decision`
 
 ```yaml
@@ -254,22 +256,29 @@ Five changes to the `## What to do` section of `extract.tmpl`:
 
 **New Step 2a (added)** — project-prefix inference:
 
-> All permalinks use the shape `<PROJECT>/<type>/<slug-or-ticket-id>/main`. Infer `<PROJECT>` from the most common prefix in `kb_index` permalinks. If `kb_index` is empty or has no consistent prefix, fall back to the literal placeholder `<PROJECT>` in your proposal permalinks AND emit one `missing_index_entry` (severity: major) finding naming the absence — callers must then resolve the placeholder before applying the bm_commands.
+> All permalinks use the shape `<PROJECT>/<type>/<slug-or-ticket-id>/main`. Infer `<PROJECT>` from the most common prefix in `kb_index` permalinks. **Tie-break:** if two or more prefixes are tied on count, prefer the prefix that matches a repo / project name referenced in the task spec or `plan_text` (when present); failing that, take the alphabetically first prefix. If `kb_index` is empty or no prefix can be inferred even with tie-break, fall back to the literal placeholder `<PROJECT>` in your proposal permalinks AND emit one `missing_index_entry` (severity: major) finding naming the absence — callers must then resolve the placeholder before applying the bm_commands.
+>
+> Note: `missing_index_entry` is reused from the v0.6.0 prime-side finding vocabulary — no new finding category is introduced. The same finding fires from both prime and extract, on different triggers.
 
 **New Step 3a (added)** — milestone-only dashboard-update rule:
 
-> Dashboard updates require a milestone. If a completion envelope surfaces a milestone, propose `action: update` on the relevant `epic` or `story` note with a `replace_section` bm_command that rewrites ONE dashboard section verbatim. To produce the new section content, use the matching entry from `current_kb_excerpts` to read the current section, identify the row(s) that change, and emit the full updated section text (NOT a diff). If `current_kb_excerpts` has no entry for the target note, emit an `insufficient_evidence` finding rather than fabricating a section body.
+> Dashboard updates require a milestone. If a completion envelope surfaces a milestone, propose `action: update` on the relevant `epic` or `story` note with a `replace_section` (or `frontmatter_patch` / `insert_before_section`) bm_command that rewrites the affected section or frontmatter field verbatim. To produce the new section content, use the matching entry from `current_kb_excerpts` to read the current section, identify the row(s) that change, and emit the full updated section text (NOT a diff). If `current_kb_excerpts` has no entry for the target note, emit an `insufficient_evidence` finding rather than fabricating a section body.
+>
+> **Detecting "last PR for story":** the reviewer treats a PR merge as the story's terminal PR ONLY when the story's frontmatter `status` in `current_kb_excerpts` is already `done` (or `review`, when the merging PR is the last `draft`/`review` row in the story's `## PRs` table). The caller — the agent or human who closes the story — sets `status: done` on the story note BEFORE invoking extract for the terminal-merge milestone. This makes story closure an explicit caller gesture rather than an LLM-inferred heuristic; the reviewer's role is to amplify the closure into all the dashboard consequences. If `status` is still `in_progress` (or absent) when a PR merges, the merge falls into the "PR merged, NOT last for story" row instead.
 >
 > Map of milestone → sections to update:
 >
 > | Milestone | Story-side update | Epic-side update |
 > |---|---|---|
 > | PR opened or state change (still open) | story `## PRs` (row state) | epic `## Open PRs` (add/update row) |
-> | PR merged + last for story | story `## PRs` (merged), story `## Deployment state` (if landed) | epic `## Stories` (status), epic `## Open PRs` (drop row), epic `## Acceptance` (tick AC if matched) |
+> | PR merged, NOT last for story | story `## PRs` (row state → merged) | epic `## Open PRs` (drop row) |
+> | PR merged + last for story (caller has set story `status: done`) | story frontmatter (`status: done`, `closed_at: <YYYY-MM-DD>`), story `## PRs` (row state → merged), story `## Deployment state` (if landed) | epic `## Stories` (status → done), epic `## Open PRs` (drop row) |
 > | Deployment landed | story `## Deployment state`, story `## PRs` (Deployed column) | epic `## Stories` (Deployment column) |
 > | Decision finalized | story `## Decisions produced` (append link) | epic `## Progress ledger` (append entry), epic frontmatter `produces_decisions` (append permalink) |
+>
+> **Epic `## Acceptance` ticking is intentionally NOT in the table.** Matching a closed story to an epic-level AC requires semantic judgement that an LLM can't reliably make across reviewer models (AC text ⊇ story title? frontmatter `relates` link? semantic similarity?). Per the §4.1 "extract proposes, humans curate" posture, epic-AC ticks remain a human curation step done at story-close or epic-close. If field signal later shows a deterministic rule that works (e.g., explicit AC-permalink references in the story body), revisit in a follow-up minor.
 
-**Step 7 (modified, basic-memory branch)** — `replace_section` operation explicit. The reviewer is told to use `edit_note` with explicit `operation` enum values: `replace_section` for dashboard sections, `frontmatter_patch` for frontmatter cross-ref appends, `insert_before_section` (keyed on the section AFTER the target) for the epic's append-only `## Progress ledger`.
+**Step 7 (modified, basic-memory branch)** — `replace_section` operation explicit. The reviewer is told to use `edit_note` with explicit `operation` enum values: `replace_section` for dashboard sections (overwrites the whole section with a new body — correct because dashboard tables are reconstructed in full from `current_kb_excerpts`), `frontmatter_patch` for frontmatter cross-ref appends (e.g., adding to `produces_decisions`), and `insert_before_section` (keyed on the section AFTER the target) for the epic's append-only `## Progress ledger`. The progress ledger uses `insert_before_section` rather than `replace_section` because the ledger accumulates entries over an epic's lifetime — `replace_section` would clobber prior entries; targeting `insert_before_section` keyed on the section that FOLLOWS `## Progress ledger` (usually `## Open questions`) appends the new entry to the end of the ledger without touching what's already there. An implementing agent must not default to `replace_section` for ledger appends.
 
 The remaining steps (3, 4, 5, 6) stay unchanged.
 
