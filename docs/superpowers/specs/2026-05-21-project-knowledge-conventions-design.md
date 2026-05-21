@@ -2,7 +2,7 @@
 
 **Status:** draft 2026-05-21
 **Target version:** 0.7.0 (minor bump)
-**Tracking issue:** _to be filed before implementation_
+**Tracking issue:** [patiently/anti-tangent-mcp#31](https://github.com/patiently/anti-tangent-mcp/issues/31)
 
 ## Background
 
