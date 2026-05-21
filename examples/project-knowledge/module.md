@@ -1,11 +1,11 @@
 ---
-permalink: modules/<name>
+permalink: <PROJECT>/modules/<module-name>/main
 type: module
 title: <one-line title>
-status: stable
+status: stable                   # experimental | stable | deprecated | removed
 last_changed_in: <X.Y.Z>
-relates_features: []
-shaped_by_decisions: []
+relates_features: []             # list of <PROJECT>/features/<slug>/main permalinks
+shaped_by_decisions: []          # list of <PROJECT>/decisions/<NNNN>-<slug>/main permalinks
 tags: [module]
 ---
 
@@ -23,4 +23,4 @@ tags: [module]
 
 ## Touch-points
 
-- <module/file path>
+- <module path or capability boundary>
