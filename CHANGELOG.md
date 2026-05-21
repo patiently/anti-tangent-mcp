@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-05-21
+
+### Added
+- New subsection in `INTEGRATION.md`'s "Project knowledge (optional)" block titled "Applying bm_commands to BM v0.21.1": short tables mapping extract's emitted `bm_commands` arg shape (`{permalink, frontmatter, body}` / `{permalink, section, content}`) to BM v0.21.1's literal `write_note` / `edit_note` MCP signatures, plus a note on the permalink-slug divergence between anti-tangent's proposed slugs and BM's auto-derived ones. Closes #28.
+
+### Changed
+- `INTEGRATION.md` trimmed back under the 40k user-instructions context budget. v0.6.0's "Project knowledge (optional)" section is the primary target: the architecture diagram is dropped in favor of a one-line link to the spec, the anchored BM tool-names list is compressed to a link to the verified-contract block in the v0.6.0 plan, and the auto-apply ladder + controller-workflow prose is tightened. Protocol contracts, env var names, error categories, and field names are preserved verbatim — only prose density and content duplicated with the spec are reduced. Mirrors the v0.5.1 trim's posture.
+
+### Fixed
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.6.1] - 2026-05-21
 
 ### Added
