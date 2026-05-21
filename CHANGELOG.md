@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `INTEGRATION.md` "Project knowledge (optional)" section gains a one-line mention of the 6-type taxonomy and a link to the new conventions doc. Total file size kept under the 40,000-byte user-instructions threshold.
 
 ### Fixed
+- `docs/team-setup/basic-memory-shared-vm.md` §8 `commit-and-push.sh` script: `GIT_SSH_COMMAND` now includes `-o IdentitiesOnly=yes -o IdentityAgent=none` alongside the existing `StrictHostKeyChecking=yes`. Without `IdentitiesOnly=yes` SSH tries every key in `~/.ssh/` before the explicit `-i` deploy key, so a key that belongs to a different account can auth first and the BM repo push fails with "Permission denied" or "Repository not found". `IdentityAgent=none` defends against `SSH_AUTH_SOCK` leaking into the systemd unit's environment and the agent's keys overriding the deploy key. Both options are now documented inline next to the script with rationale for each.
 
 ### Removed
 

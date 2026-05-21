@@ -269,7 +269,7 @@ Save as `basic-memory-commit-and-push.sh` in your provisioning bundle; install i
 # /usr/local/bin/basic-memory-commit-and-push.sh
 set -euo pipefail
 cd /var/lib/basic-memory/kb
-export GIT_SSH_COMMAND="ssh -i /etc/basic-memory/deploy_key -o StrictHostKeyChecking=yes"
+export GIT_SSH_COMMAND="ssh -i /etc/basic-memory/deploy_key -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=yes"
 
 git add -A
 
@@ -327,6 +327,14 @@ if ! git push origin main; then
   git push --force-with-lease origin main
 fi
 ```
+
+**Note on the `GIT_SSH_COMMAND` flags.** The three `-o` flags are load-bearing — dropping any of them risks SSH using the wrong key:
+
+- `IdentitiesOnly=yes` — forces SSH to authenticate with ONLY the explicit `-i` deploy key. Without this, SSH tries every key in `~/.ssh/` first; if GitHub recognises one as belonging to a different account, it auths with that account, which usually lacks deploy access to the BM repo (resulting in "Permission denied" or "Repository not found").
+- `IdentityAgent=none` — disables the SSH agent socket. If `SSH_AUTH_SOCK` leaks into the systemd unit's environment (or is inherited via cron), agent-held keys take priority over `-i`. Hard-disabling the agent forces deterministic key selection.
+- `StrictHostKeyChecking=yes` — the script invokes `git push` non-interactively from a daemon; without strict host-key checking, SSH would prompt to accept the remote's key on first connect and the prompt would silently fail in non-interactive context, killing the push. This is why the `bm` user's `known_hosts` must be provisioned (see §6).
+
+If pushes start failing with "Permission denied" or auth-related errors after a working setup, the most common cause is `SSH_AUTH_SOCK` leaking in from a recently-changed shell or service environment; check `journalctl -u basic-memory-git-sync` for the underlying SSH error.
 
 Install the script(s):
 
