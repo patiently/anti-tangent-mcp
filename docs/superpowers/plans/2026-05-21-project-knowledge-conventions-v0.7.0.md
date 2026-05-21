@@ -18,6 +18,8 @@ These two constraints apply across multiple tasks; each task references them by 
 
 **(B) Backwards compatibility.** v0.6.x extract outputs (5-type proposals with v0.6.x permalink shapes) MUST continue to parse against v0.7.0's `ParseExtract`. Task 1's regression test (`TestParseExtract_AcceptsAllSixTypes`) covers all six values, and a separate v0.6.x fixture test confirms the legacy shape still works.
 
+**(C) Table column schemas are normative across templates AND reviewer prompt.** The `## PRs` table in `story.md` (Task 2), the `## Stories` and `## Open PRs` tables in `epic.md` (Task 3), and the section-update prose in `extract.tmpl`'s Step 3a (Task 5) must agree on column headers and order. Any future change to a column set requires a simultaneous update to the template AND the reviewer prompt AND a golden regen — the reviewer emits `replace_section` payloads with column shapes lifted directly from `current_kb_excerpts`, so the templates and the prompt are coupled at the column-schema layer. If a column drifts in one place, the reviewer will emit tables with the wrong shape and the dashboards corrupt silently.
+
 ---
 
 ## File Structure
@@ -235,27 +237,29 @@ Append to the same test file:
 
 ```go
 func TestParseExtract_AcceptsAllSixTypes(t *testing.T) {
-	types := []struct {
-		typ      string
-		extra    string
-	}{
-		{"decision", ""},
-		{"module", ""},
-		{"feature", ""},
-		{"glossary", ""},
-		{"epic", ""},
-		{"story", ""},
+	// Path-segment differs from the type name for `glossary` (singular) and
+	// `story` (plural is "stories"). Use an explicit map rather than
+	// `tc.typ + "s"` to avoid generating malformed permalinks like
+	// `glossarys` / `storys`.
+	pathSeg := map[string]string{
+		"decision": "decisions",
+		"module":   "modules",
+		"feature":  "features",
+		"glossary": "glossary",
+		"epic":     "epics",
+		"story":    "stories",
 	}
-	for _, tc := range types {
-		t.Run(tc.typ, func(t *testing.T) {
+	types := []string{"decision", "module", "feature", "glossary", "epic", "story"}
+	for _, typ := range types {
+		t.Run(typ, func(t *testing.T) {
 			raw := []byte(`{
 				"verdict": "pass",
 				"findings": [],
 				"proposals": [{
 					"action": "create",
-					"type": "` + tc.typ + `",
-					"permalink": "monorepo/` + tc.typ + `s/abc/main",
-					"title": "round-trip ` + tc.typ + `",
+					"type": "` + typ + `",
+					"permalink": "monorepo/` + pathSeg[typ] + `/abc/main",
+					"title": "round-trip ` + typ + `",
 					"frontmatter_json": "{}",
 					"body": "## Body\n\ncontent",
 					"body_patch": "",
@@ -268,17 +272,17 @@ func TestParseExtract_AcceptsAllSixTypes(t *testing.T) {
 			}`)
 			r, err := verdict.ParseExtract(raw)
 			if err != nil {
-				t.Fatalf("type %q: parse error: %v", tc.typ, err)
+				t.Fatalf("type %q: parse error: %v", typ, err)
 			}
-			if len(r.Proposals) != 1 || string(r.Proposals[0].Type) != tc.typ {
-				t.Fatalf("type %q: round-trip failed, got %+v", tc.typ, r.Proposals)
+			if len(r.Proposals) != 1 || string(r.Proposals[0].Type) != typ {
+				t.Fatalf("type %q: round-trip failed, got %+v", typ, r.Proposals)
 			}
 		})
 	}
 }
 ```
 
-Note the permalink shape (`monorepo/<type>s/abc/main`) — that's the v0.7.0 project-prefixed folder-per-ticket convention.
+The permalink shape is `monorepo/<path-segment>/abc/main` — that's the v0.7.0 project-prefixed folder-per-ticket convention. The `pathSeg` map keeps the singular-vs-plural mapping explicit (glossary stays singular; story → stories) so the fixture doesn't quietly drift away from the documented convention.
 
 - [ ] **Step 7: Run the new tests, then the full verdict suite**
 
@@ -499,7 +503,7 @@ tags: [epic]
 
 | PR | Story | State | Title |
 |---|---|---|---|
-| #<N> | [<TICKET-ID>](<PROJECT>/stories/<TICKET-ID>/main) | draft\|review | <PR title> |
+| #<N> | [<TICKET-ID>](<PROJECT>/stories/<TICKET-ID>/main) | draft or review | <PR title> |
 
 ## Progress ledger
 
@@ -614,7 +618,7 @@ tags: []
 - <bullet>
 ```
 
-**Note on origins:** in practice set EITHER `story_origin` OR `epic_origin`, not both. When `story_origin` is set, the story's own `parent_epic` provides the epic context transitively. Set `epic_origin` only when the decision was made at the epic level without a specific owning story.
+**Plan-only context for the implementer (do NOT add to the template file):** in practice an adopter should set EITHER `story_origin` OR `epic_origin`, not both. When `story_origin` is set, the story's own `parent_epic` provides the epic context transitively. Set `epic_origin` only when the decision was made at the epic level without a specific owning story. This rule lives in the spec and the conventions doc; do not duplicate it into `decision.md` — the template stays minimal.
 
 - [ ] **Step 2: Update `module.md`**
 
@@ -1016,6 +1020,17 @@ Expected diff: only the Step 1 milestone enumeration prose change, new Step 2a, 
 
 If the diff shows unrelated changes, the template edit in Task 5 introduced something that shouldn't be there — fix and re-run.
 
+- [ ] **Step 3 (pre-flight): Verify the struct field names referenced in the test fixture**
+
+Before writing the fixture, confirm the v0.6.0 structs use the exact field names referenced below (`EpicPermalink`, `KBStoreIsBasicMemory`, `CurrentKBExcerpts`, `TaskTitle`, etc.). If any drifted (e.g. `KBStore` instead of `KBStoreIsBasicMemory`), the fixture below won't compile.
+
+Run:
+```bash
+grep -n "EpicPermalink\|KBStoreIsBasicMemory\|CurrentKBExcerpts\|TaskTitle\|CompletionEnvelopeForExtract\|ExtractInput" internal/prompts/prompts.go
+```
+
+Expected: each name appears in `prompts.go`. If a name is missing, substitute the actual field name in the fixture below before writing.
+
 - [ ] **Step 3: Add `TestRenderExtract_Milestone`**
 
 Append to `internal/prompts/prompts_test.go`:
@@ -1352,17 +1367,25 @@ Ship the optional project-knowledge MCP layer: two new stateless tools (prime + 
 
 ## Stories
 
+<!-- This frozen snapshot includes only the story note that exists in dogfood/.
+     Anti-tangent's live KB has rows for gh-29 (INTEGRATION.md trim) and gh-31
+     (v0.7.0 conventions) as well; those are omitted here to keep the dogfood
+     navigable without dangling cross-refs. -->
+
 | Story | Status | Deployment | Tracker |
 |---|---|---|---|
 | [gh-25](anti-tangent-mcp/stories/gh-25/main) — shape-guard false-positive fix | done | prod | [#25](https://github.com/patiently/anti-tangent-mcp/issues/25) |
-| [gh-29](anti-tangent-mcp/stories/gh-29/main) — INTEGRATION.md trim + bm_commands translation | done | prod | [#29](https://github.com/patiently/anti-tangent-mcp/issues/29) |
-| [gh-31](anti-tangent-mcp/stories/gh-31/main) — v0.7.0 project-knowledge conventions | in_progress | none | [#31](https://github.com/patiently/anti-tangent-mcp/issues/31) |
+| _additional stories omitted in this frozen snapshot_ | — | — | — |
 
 ## Open PRs
 
+<!-- Same trimming rationale as `## Stories` above — the live KB had a row
+     for PR #32 (the spec+plan PR) referencing gh-31's story note, which isn't
+     in this snapshot. -->
+
 | PR | Story | State | Title |
 |---|---|---|---|
-| #32 | [gh-31](anti-tangent-mcp/stories/gh-31/main) | draft | v0.7.0: project-knowledge conventions design (spec-only) |
+| _no open PRs in this frozen snapshot_ | — | — | — |
 
 ## Progress ledger
 
@@ -1445,7 +1468,8 @@ status: accepted
 supersedes: []
 proposed_by: "@pgilmore"
 decided_at: 2026-05-07
-epic_origin: anti-tangent-mcp/epics/v0.1-design-and-mvp/main
+epic_origin: null
+story_origin: null
 relates: []
 tags: [architecture, seminal]
 ---
@@ -1753,4 +1777,4 @@ EOF
 - INTEGRATION.md size budget (constraint A) is checked twice: Task 9 (after the addition) and Task 10 (final pre-release check). If the budget overshoots at Task 9, trim in Task 9 — don't defer.
 - Backwards compatibility (constraint B) is verified by `TestParseExtract_AcceptsAllSixTypes` (Task 1) AND by the smoke test (Task 10).
 - Tasks are sequential — Tasks 5 and 6 are paired (template edit + golden regen). Don't reorder.
-- After all tasks: PR review by CodeRabbit; address findings per the standard repo CR loop; merge to main with `[minor]` in the merge commit subject so the release workflow bumps 0.6.2 → 0.7.0.
+- After all tasks: PR review by CodeRabbit; address findings per the standard repo CR loop; merge to main with `[minor]` in the merge commit subject so the release workflow bumps 0.6.2 → 0.7.0. The bump convention is parsed in `.github/workflows/release.yml` (look for the `[major]` / `[minor]` / default-patch case statement); verify the workflow file before merging if you're unsure of the exact magic string.
