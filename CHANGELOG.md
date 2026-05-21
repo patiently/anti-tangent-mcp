@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-05-21
+
+### Added
+- New "Alternative: Docker container on an existing host" section in [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md): run upstream's `ghcr.io/basicmachines-co/basic-memory:0.21.1` (pinned; bump deliberately) against a host bind-mount, expose its SSE transport via a reverse proxy with per-dev bearer-token auth, reuse the existing git-backed sync (host-side systemd timer against the bind-mount). For teams that already run a Docker host and don't want to provision a dedicated VM.
+
+### Changed
+
+### Fixed
+- `validate_completion`'s `malformed_evidence` shape-guard no longer false-positives on Go's `./pkg/...` package-recursion syntax in `test_evidence` strings or test-file contents. The `/...` substring pattern added to `evidenceTruncationPatterns` in v0.5.2 was too aggressive — every other v0.5.2 placeholder in the list is comment-form (`/* ... */`, `// snip`, `// elided`, `// ... rest unchanged`) and unambiguous; the bare `/...` is removed. If a real `/...` truncation pattern surfaces in the field, we'll re-add it with a tighter regex (preceded by a comment marker). Fixes #25.
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.6.0] - 2026-05-20
 
 ### Added

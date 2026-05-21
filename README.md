@@ -341,7 +341,7 @@ On epic-scale projects with multiple agents and authors, implementers drift away
 
 - Design: [`docs/superpowers/specs/2026-05-18-project-knowledge-design.md`](docs/superpowers/specs/2026-05-18-project-knowledge-design.md)
 - Integration playbook: [INTEGRATION.md, "Project knowledge (optional)"](INTEGRATION.md#project-knowledge-optional)
-- Shared-VM setup: [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md)
+- Shared-VM or Docker-container setup: [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md)
 - Note templates: [`examples/project-knowledge/`](examples/project-knowledge/)
 
 ## Integration
