@@ -699,6 +699,15 @@ func totalCompletionBytes(files []FileArg, finalDiff string) int {
 // The list is intentionally narrow: only patterns that have negligible chance
 // of appearing in legitimate code or diffs. "diff --git with zero @@" is NOT
 // included — it false-fires on mode-only / rename-only / binary diffs.
+//
+// The bare `/...` substring that v0.5.2 added has been removed in v0.6.1
+// because it false-positives on Go's standard `./pkg/...` package-recursion
+// syntax in `test_evidence` strings and test-file contents (see #25). Every
+// other v0.5.2 placeholder in the list is comment-form (`/* ... */`,
+// `// snip`, etc.) and unambiguous; the bare form was the outlier. If a real
+// `/...` truncation pattern surfaces in the field, re-add it as a regex that
+// requires a leading comment marker (`//`, `/*`, `#`, or start-of-line) so
+// the path case can never match.
 var evidenceTruncationPatterns = []string{
 	"(truncated)",
 	"[truncated]",
@@ -710,7 +719,6 @@ var evidenceTruncationPatterns = []string{
 	"// snip",
 	"// elided",
 	"// ... rest unchanged",
-	"/...",
 }
 
 // evidenceEllipsisLine matches a line that contains only `...` (with optional

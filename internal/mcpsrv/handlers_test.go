@@ -2374,13 +2374,16 @@ func TestValidatePlan_TruncatedResponse_PreservesFinalizePlanResultSideEffects(t
 }
 
 func TestCheckEvidenceShape_NewPatternsRejected(t *testing.T) {
+	// v0.5.2 added six placeholder/truncation patterns. v0.6.1 removed `/...`
+	// because it false-positives on Go's `./pkg/...` package-recursion syntax
+	// (see TestCheckEvidenceShape_GoPackageRecursionAccepted below). The other
+	// five entries are all comment-form and unambiguous; they remain rejected.
 	patterns := []string{
 		"/* ... */",
 		"/* ...rest unchanged */",
 		"// snip",
 		"// elided",
 		"// ... rest unchanged",
-		"/...",
 	}
 	for _, p := range patterns {
 		t.Run("final_diff:"+p, func(t *testing.T) {
@@ -2402,6 +2405,51 @@ func TestCheckEvidenceShape_NewPatternsRejected(t *testing.T) {
 			reason := checkEvidenceShape(args)
 			require.NotEmpty(t, reason, "must reject %q in final_files[].content", p)
 			require.Contains(t, reason, "final_files")
+		})
+	}
+}
+
+// TestCheckEvidenceShape_GoPackageRecursionAccepted is the regression test for
+// #25: the shape-guard must NOT reject `final_diff` / `final_files[].content`
+// just because they contain Go's `./pkg/...` package-recursion syntax. v0.5.2
+// added a bare `/...` substring to the truncation-pattern list which made
+// every test file or test_evidence string containing `go test ./pkg/...`
+// trigger a malformed_evidence rejection (encountered repeatedly during the
+// v0.6.0 implementation; subagents on Tasks 9 and 10 had to work around it).
+// v0.6.1 removes the `/...` entry; this test pins that decision.
+func TestCheckEvidenceShape_GoPackageRecursionAccepted(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"single-package-recursion", "go test -race ./internal/verdict/..."},
+		{"all-packages-recursion", "go test ./..."},
+		{"diff-context-line", "+    cmd := \"go test ./internal/mcpsrv/...\""},
+		{"test-evidence-quote", "Run: `go test -race ./internal/prompts/...` → PASS"},
+		// A bare `/...` token outside a Go path is no longer flagged. This is
+		// the conservative side of the trade-off documented above the
+		// evidenceTruncationPatterns slice: if a real `/...` truncation marker
+		// surfaces in the field, re-add it as a comment-form-only regex.
+		{"bare-ellipsis-token", "the patch is /... omitted /..."},
+	}
+	for _, tc := range cases {
+		t.Run("final_diff:"+tc.name, func(t *testing.T) {
+			args := ValidateCompletionArgs{
+				SessionID: "s",
+				Summary:   "s",
+				FinalDiff: "diff --git a/x b/x\n@@ -1,1 +1,1 @@\n" + tc.content + "\n",
+			}
+			require.Empty(t, checkEvidenceShape(args),
+				"shape-guard must accept Go package-recursion / bare-ellipsis content: %q", tc.content)
+		})
+		t.Run("final_files:"+tc.name, func(t *testing.T) {
+			args := ValidateCompletionArgs{
+				SessionID:  "s",
+				Summary:    "s",
+				FinalFiles: []FileArg{{Path: "x_test.go", Content: tc.content}},
+			}
+			require.Empty(t, checkEvidenceShape(args),
+				"shape-guard must accept Go package-recursion / bare-ellipsis content: %q", tc.content)
 		})
 	}
 }
