@@ -285,17 +285,18 @@ The server is stateless; the controller's dispatch logic ties prime → implemen
 3. **After DONE.** Call `extract_project_knowledge` with the completion envelope(s), `kb_index`, optional `current_kb_excerpts`, and `epic_permalink`. Returns `proposals` (and `bm_commands` when configured).
 4. **Apply.** A human (or the controller, gated by the ladder below) reviews proposals and pastes the `bm_commands`.
 
-### Five note types
+### Six note types in two layers
 
 | Type | Layer | Body |
 |---|---|---|
 | `decision` | durable | ADR-style; append-only; new decisions supersede old ones |
-| `module` | durable | internal structural notes (purpose, invariants, conventions, touch-points) |
+| `module` | durable | coherent capabilities (user-facing surface), not 1:1 Go packages |
 | `feature` | durable | user-facing capability catalog with release-tagged change pointers |
 | `glossary` | durable | canonical domain-term definitions |
-| `epic` | epic-scoped | charter + scope + acceptance + progress ledger; closed at epic-done |
+| `epic` | operational | live dashboard: charter, stories table, open PRs, acceptance checklist, progress ledger |
+| `story` | operational | live dashboard: brief, multi-PR table, subtasks, deployment state, decisions produced (v0.7.0+) |
 
-Templates live in [`examples/project-knowledge/`](examples/project-knowledge/) — copy one into your shared KB, fill it in, and start linking. See [`examples/project-knowledge/README.md`](examples/project-knowledge/README.md) for the layering and maintenance-ownership conventions.
+Templates live in [`examples/project-knowledge/`](examples/project-knowledge/); frozen-snapshot real anti-tangent examples in [`examples/project-knowledge/dogfood/`](examples/project-knowledge/dogfood/). For the per-project tuning loop — issue-ID format, folder convention, milestone events, project-prefix bootstrap (including v0.6.x→v0.7.0 migration) — see [`docs/team-setup/project-knowledge-conventions.md`](docs/team-setup/project-knowledge-conventions.md).
 
 ### The `project_knowledge` field
 
