@@ -18,20 +18,20 @@ The integration is **system-agnostic**: it works with superpowers, hone-ai, vani
 
 ## Scope and limits
 
-**What `anti-tangent-mcp` is good at.** Plan-internal consistency: contradictions between ACs, missing observable assertions, scope creep relative to non-goals, structural completeness of task headers, hedge language in acceptance criteria.
+**Good at.** Plan-internal consistency: contradictions between ACs, missing observable assertions, scope creep relative to non-goals, structural completeness of task headers, hedge language in ACs.
 
-**What it structurally cannot catch.** The reviewer reasons over the plan text and submitted evidence — *not* the codebase. It will not detect:
+**Structurally cannot catch.** The reviewer reasons over plan text and submitted evidence — *not* the codebase. It will not detect:
 
 - Field/symbol names that don't exist in the codebase.
 - Function signatures or insertion points that don't exist.
-- Repo-wide invariants encoded elsewhere (e.g. a constant containing characters another module's validator rejects).
+- Repo-wide invariants encoded elsewhere (e.g. a constant whose characters another module's validator rejects).
 - Existing conventions in adjacent code.
 - CI/test policy declared in `CLAUDE.md` / `AGENTS.md`.
 - Type-system facts (required fields with no default).
 
-**Pair with a codebase-aware review for any plan that lands in real code.** A text-only reviewer paired with a codebase-aware pass catches both classes of bugs; either alone has a known blind spot.
+**Pair with a codebase-aware review for any plan that lands in real code.** Text-only + codebase-aware catches both classes; either alone has a known blind spot.
 
-When the reviewer encounters a plan or task-spec statement about codebase facts it cannot verify text-only, as of v0.3.1 it flags an `unverifiable_codebase_claim` finding rather than silently passing. These are explicitly *not failures* — they're a checklist for the human or a codebase-aware follow-up review. A plan that converges to `pass` with several `unverifiable_codebase_claim` findings is still implementable; treat the findings as "things to grep before dispatching."
+When the reviewer encounters a plan claim it cannot verify text-only, as of v0.3.1 it flags `unverifiable_codebase_claim` rather than silently passing. These are *not failures* — treat them as "things to grep before dispatching."
 
 ### Reducing text-only review noise
 
@@ -44,35 +44,33 @@ When the reviewer encounters a plan or task-spec statement about codebase facts 
 
 ### Choosing `pinned_by`, `context`, and `controller_verified_references`
 
-Use `context` for background a fresh implementer needs to understand the task: product constraints, repo policy carve-outs, prior decisions, or why a non-obvious approach is required. It helps the reviewer judge ambiguity, but it is not a claim that a specific code reference exists.
-
-Use `pinned_by` for anchors that preserve behavior: existing tests, docs, commands, or static checks that pin a terse AC such as "retry behavior remains unchanged." The reviewer treats these entries as caller-supplied anchors, not independently verified codebase facts.
-
-Use `controller_verified_references` for codebase references the controller has already checked before dispatch: paths, symbols, line anchors, commands, or adjacent patterns. The pre-task reviewer suppresses `unverifiable_codebase_claim` only when the task claim and a controller-verified entry match by deterministic substring; contradictions, missing ACs, ambiguity, and `convention_deviation` findings are NOT suppressed. CVR is a single-category suppression — use `testability_extractions` to suppress `scope_drift` on intentional helper extractions and `codebase_conventions` to actively trigger `convention_deviation` findings.
+- **`context`** — background a fresh implementer needs (constraints, repo policy carve-outs, prior decisions, why a non-obvious approach is required). Helps the reviewer judge ambiguity; not a claim that a specific code reference exists.
+- **`pinned_by`** — anchors that preserve behavior: existing tests, docs, commands, or static checks pinning a terse AC such as "retry behavior remains unchanged." Treated as caller-supplied anchors, not independently verified codebase facts.
+- **`controller_verified_references`** — codebase references the controller already grep-verified (paths, symbols, line anchors, commands, adjacent patterns). The pre-task reviewer suppresses `unverifiable_codebase_claim` only when the task claim and a CVR entry match by deterministic substring; contradictions, missing ACs, ambiguity, and `convention_deviation` findings are NOT suppressed. Use `testability_extractions` to suppress `scope_drift` on intentional helper extractions and `codebase_conventions` to actively trigger `convention_deviation` findings.
 
 ---
 
 ## 1. When the protocol applies
 
-**Strict trigger:** the work item is a task from an implementation plan that has the structured **Goal / Acceptance criteria / (Non-goals) / (Context)** header (see §3 for the exact shape). If those fields are present, the protocol applies — whether you do the work directly or dispatch it to a subagent.
+**Strict trigger:** the work is a task from an implementation plan with the structured **Goal / Acceptance criteria / (Non-goals) / (Context)** header (see §3). If those fields are present, the protocol applies — whether you implement directly or dispatch to a subagent.
 
-**Skip the protocol entirely** for any of:
+**Skip the protocol entirely** for:
 
-- Read-only research, exploration, or Q&A.
+- Read-only research, exploration, Q&A.
 - Code review of existing code.
-- Plan or spec authoring (the plan author isn't implementing yet — they're producing the task spec the implementer will validate against).
+- Plan or spec authoring (the author isn't implementing yet).
 - Brainstorming / design discussions.
-- Ad-hoc one-off changes that didn't come from a plan: a quick typo fix, a small config tweak, a refactor that arose mid-conversation, debugging help, etc.
-- Subagents dispatched for non-implementation work (Explore, summarizers, code reviewers, security reviewers, etc.).
+- Ad-hoc one-off changes that didn't come from a plan (typo fixes, config tweaks, mid-conversation refactors, debugging help).
+- Subagents dispatched for non-implementation work (Explore, summarizers, code/security reviewers).
 - Doc-only edits unless the doc IS the planned task.
 
-If you're unsure whether work is in scope, look for the structured task block. No structured task block → no protocol. Don't fire the tools "for safety" on ad-hoc work; the calls have real cost and noise findings dilute the signal when it actually matters.
+If you're unsure, look for the structured task block. No block → no protocol. Don't fire the tools "for safety" on ad-hoc work — calls have real cost and noise dilutes the signal.
 
 ---
 
 ## 3. For plan authors — the anti-tangent-friendly task format
 
-When you write a plan, give each task a small structured header block. The implementing subagent will pass these fields verbatim into `validate_task_spec`, and the reviewer LLM uses them to decide whether the spec is implementable as written.
+Give each task a small structured header block. The implementing subagent passes these fields verbatim into `validate_task_spec`; the reviewer uses them to decide whether the spec is implementable as written.
 
 ### 3.1 The required shape
 
@@ -129,29 +127,29 @@ Acceptance criteria describe *what done looks like*, not *how to get there*. Imp
 
 ### 3.6 Normative test bodies (binding test code in plans)
 
-When a task's plan pastes verbatim test code that the implementer must land as written, wrap each test body in a fenced block immediately under a literal `**NORMATIVE TEST BODIES (verbatim):**` header. `validate_plan` extracts each fence server-side (deterministic markdown parsing) and threads the list into the per-task `validate_task_spec` `normative_test_bodies` input; the reviewer then treats each entry as binding scope. Adjacent fences extract as separate entries. Bodies exceeding 4000 Unicode code points are server-truncated with a `// truncated` marker; for legitimately longer bodies, paraphrase or excerpt and start the body with `// excerpt:` so the reviewer treats it as partial coverage.
+When a task pastes verbatim test code the implementer must land as written, wrap each test body in a fenced block immediately under a literal `**NORMATIVE TEST BODIES (verbatim):**` header. `validate_plan` extracts each fence server-side and threads the list into the per-task `validate_task_spec` `normative_test_bodies` input; the reviewer treats each entry as binding scope. Adjacent fences extract as separate entries. Bodies > 4000 Unicode code points are server-truncated with a `// truncated` marker; for legitimately longer bodies, paraphrase or excerpt and prefix with `// excerpt:` so the reviewer treats it as partial coverage.
 
 ### 3.7 `.trimIndent()` raw-string caveat
 
-When a plan snippet is wrapped in `.trimIndent()` (or any equivalent raw-string trim), multi-line source phrases render newlines exactly where they sit in the markdown — anti-tangent reads the source, not the rendered output. Keep example strings the implementation will compare against on a single source line, and phrase ACs against the rendered string (e.g. "output contains `please decline politely`"), not against source layout.
+When a plan snippet is wrapped in `.trimIndent()` (or any equivalent raw-string trim), multi-line source phrases render newlines exactly where they sit in the markdown — anti-tangent reads the source, not the rendered output. Keep example strings on a single source line, and phrase ACs against the rendered string (e.g. "output contains `please decline politely`"), not against source layout.
 
 ### 3.8 Harness shape attestations (v0.5.2+)
 
-`harness_shape_attestation` is a structured optional input on `validate_task_spec`. Each entry is `{harness: string, path: string, assertions: []string}`. Use it when a task's acceptance criteria depend on a test harness's stated capabilities (or stated non-capabilities). The reviewer treats each attestation as authoritative caller-attested context (no independent verification) and flags ACs that EXPLICITLY contradict an entry — e.g. an AC asks for behavior a `does not …` assertion forbids, or an AC asserts a state that directly contradicts a positive assertion — as `attestation_contradiction` findings. Absence of a capability is NOT a contradiction; do not list things to forbid them.
+`harness_shape_attestation` is a structured optional input on `validate_task_spec`. Each entry is `{harness: string, path: string, assertions: []string}`. Use it when ACs depend on a test harness's stated capabilities (or non-capabilities). The reviewer treats each attestation as authoritative caller-attested context (no independent verification) and flags ACs that EXPLICITLY contradict an entry — e.g. an AC asking for behavior a `does not …` assertion forbids, or asserting a state directly contradicting a positive assertion — as `attestation_contradiction` findings. Absence of a capability is NOT a contradiction; do not list things to forbid them.
 
 ---
 
 ## 4. For implementers — the lifecycle protocol
 
-> **Lightweight eligibility first.** Many tasks qualify for lightweight mode (skip `validate_task_spec`, skip `check_progress`, keep `validate_completion` as the sanity gate). Lightweight applies when ALL of: (a) the task touches ≤ 2 files OR is docs/config/data-only; (b) it is mechanical (no production-design or test-design choices); (c) the spec includes the literal text, exact diff, exact command, or exact insertion shape. `validate_plan` may pre-annotate tasks with `lightweight_eligible: true` and `lightweight_reason` — advisory only. See [Lightweight protocol mode](#lightweight-protocol-mode-v031) below for the reference clause.
+> **Lightweight eligibility first.** Many tasks qualify for lightweight mode (skip `validate_task_spec` and `check_progress`; keep `validate_completion` as the sanity gate). See [Lightweight protocol mode](#lightweight-protocol-mode-v031) below for criteria and reference clause.
 
 | Phase | Tool | Required? | When to call |
 |---|---|---|---|
 | Start | `validate_task_spec` | **Yes** | Once, before writing any code |
-| During | `check_progress` | Optional (advisory; low-signal in field data — call only when you suspect drift, OR when a test that 'should' fail doesn't, OR you've spent >5 min debugging behavior the spec leaves under-specified) | When you suspect drift mid-task |
+| During | `check_progress` | Optional (advisory; low-signal in field data) | When you suspect drift, a test that 'should' fail doesn't, or you've spent >5 min on behavior the spec leaves under-specified |
 | End | `validate_completion` | **Yes** | Before reporting DONE |
 
-One task = one session = one subagent. The session_id returned by `validate_task_spec` lives in the implementer's context for the lifetime of the task; it is not handed off to anyone else.
+One task = one session = one subagent. The `session_id` returned by `validate_task_spec` lives in the implementer's context for the lifetime of the task.
 
 ### 4.2 The implementer-prompt clause (paste this into every dispatch)
 
@@ -223,9 +221,9 @@ this block if there is no KB attached.)
 - phase:                <optional; "pre" (default) or "post" for post-hoc/session-recovery>
 ```
 
-If any `severity: major` pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE so `validate_completion` and the controller can see how the risk was handled.
+If a `severity: major` pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
 
-**Short variant for agents with the protocol already in their system prompt.** If the implementer already has the full clause above in its system prompt or local instructions, controllers may dispatch the shorter clause:
+**Short variant** — for agents that already carry the full clause in their system prompt:
 
 ````markdown
 ## Drift protection
@@ -238,99 +236,54 @@ Use anti-tangent per the standard dispatch protocol. For this task:
 - If a Project knowledge section is auto-attached, read it before validate_task_spec and pass it verbatim as project_knowledge.
 ````
 
-**Language-scoping prose caveat.** Reviewers can surface `ambiguous_spec` findings around closure/scoping semantics — Kotlin `var` captured by a lambda, Python `nonlocal`, JS `let`/`const` in arrow bodies — when the prose AC reads ambiguously even though the verbatim code block in the plan is unambiguous. Trust the verbatim plan code block; only deviate if the *tests* disagree with the prose. If you genuinely cannot reconcile code and prose, stop and ask the controller.
+**Language-scoping prose caveat.** Reviewers can surface `ambiguous_spec` findings around closure/scoping semantics (Kotlin `var` captured by a lambda, Python `nonlocal`, JS `let`/`const` in arrow bodies) when the prose AC reads ambiguously even though the verbatim code block in the plan is unambiguous. Trust the verbatim plan code; only deviate if the *tests* disagree with the prose. If you can't reconcile code and prose, ask the controller.
 
 ### Lightweight protocol mode (v0.3.1+)
 
-For trivial tasks — doc-only edits, single-file mechanical relocations, dependency bumps — the full dispatch clause is overhead-heavy (~50 lines of boilerplate for ~15 lines of actual work). Controllers may use a **lightweight clause** for these tasks:
+For trivial tasks — doc-only edits, single-file mechanical relocations, dependency bumps — the full clause is overhead-heavy. Controllers may dispatch a **lightweight clause**: skip `validate_task_spec`, skip `check_progress`, keep `validate_completion` as the sanity gate (its handler accepts an empty `session_id` when at least one of `final_files` / `final_diff` / `test_evidence` is non-empty).
 
-- **Skip** `validate_task_spec` (the spec is fully prescriptive; no design choices for the reviewer to shape).
-- **Skip** `check_progress` (already optional in full mode).
-- **Keep** `validate_completion` as a sanity gate before reporting DONE. The handler accepts an empty `session_id` when at least one of `final_files` / `final_diff` / `test_evidence` is non-empty.
+Use lightweight mode when ALL of: (a) ≤ 2 files or docs/config/data-only; (b) mechanical (no new logic, no test-design choices); (c) the spec includes literal text, exact diff, exact command, or exact insertion shape. `validate_plan`'s `lightweight_eligible` / `lightweight_reason` hints are advisory, not permission to skip judgment.
 
-Use lightweight mode when ALL of: (a) the task touches ≤ 2 files or is docs/config/data-only; (b) the task is mechanical (no new logic, no test-design choices); (c) the spec includes the literal text, exact diff, exact command, or exact insertion shape. `validate_plan` may annotate tasks with `lightweight_eligible` and `lightweight_reason`, but those fields are advisory controller hints rather than permission to skip judgment.
-
-Use the full protocol for: any task that produces new production logic, any task with test-design choices, any task whose ACs require observable invariants.
-
-A reference lightweight dispatch clause is at `examples/lightweight-dispatch.md`.
+Use the full protocol for: new production logic, test-design choices, or ACs requiring observable invariants. Reference lightweight dispatch clause: `examples/lightweight-dispatch.md`.
 
 ### CodeScene MCP companion (optional)
 
-Anti-tangent's `## Scope and limits` section above documents what the text-only reviewer structurally cannot catch — codebase-grounded facts like field/symbol existence, function signatures, repo-wide invariants, and adjacent-code conventions. The recommended pairing for that blind spot is the open-source [CodeScene MCP server](https://github.com/codescene-oss/codescene-mcp-server), which exposes deterministic Code Health analysis as MCP tools.
+The recommended pairing for anti-tangent's text-only blind spot (see `## Scope and limits`) is the open-source [CodeScene MCP server](https://github.com/codescene-oss/codescene-mcp-server), which exposes deterministic Code Health analysis as MCP tools. The two are complementary: anti-tangent reasons over plan text via an LLM reviewer; CodeScene reasons over the actual files on disk via static analysis.
 
-The two tools are complementary, not redundant:
+**Tool-to-phase mapping.** When CodeScene MCP is configured alongside anti-tangent, instruct implementers to also call:
 
-| Surface | anti-tangent-mcp | codescene-mcp |
-| --- | --- | --- |
-| Reasons over | plan text + submitted evidence | actual files on disk |
-| Verdict basis | LLM reviewer (different provider than implementer) | deterministic static analysis |
-| Strength | plan-internal consistency, AC quality, scope drift | Code Health regressions, complexity, cohesion |
-| Cost | one LLM call per hook | local, near-zero |
+- Mid-task: `pre_commit_code_health_safeguard` after meaningful changes (uncommitted/staged files only; deterministic and fast). High-signal, unlike anti-tangent's `check_progress`.
+- Before DONE (alongside `validate_completion`): `analyze_change_set` for the full branch-vs-base view. If the Code Health delta is negative, surface it in the DONE summary and consider iterating.
+- Drill-down on a flagged issue: `code_health_review`.
 
-**Tool-to-phase mapping.** When CodeScene MCP is configured in your host alongside anti-tangent, instruct dispatched implementers to also call:
-
-- During mid-task work: call CodeScene's `pre_commit_code_health_safeguard` after meaningful code changes. It analyzes only uncommitted/staged files and is fast enough to run repeatedly. The field-data rationale for demoting anti-tangent's `check_progress` to OPTIONAL (low-signal mid-task LLM reviews) does NOT apply to CodeScene — its mid-task call is deterministic and high-signal. Many implementations should skip anti-tangent `check_progress` unless they suspect drift, while still running `pre_commit_code_health_safeguard` when CodeScene is configured.
-- Before reporting DONE (alongside `validate_completion`): call CodeScene's `analyze_change_set` for the full branch-vs-base view. If the Code Health delta is negative or a regression is reported, surface it in the DONE summary and consider iterating — anti-tangent itself remains advisory-only, but the implementer-side judgment call benefits from the codebase-grounded second opinion.
-- For drill-down on a flagged issue: `code_health_review`.
-
-**Advisory posture.** Anti-tangent never enforces CodeScene findings server-side. The integration lives at the dispatch-clause / convention layer: a controller that has CodeScene MCP installed updates the dispatch clause to include the companion calls; the implementer cites the findings in its DONE summary. If CodeScene MCP isn't configured in the host, the companion calls are simply skipped — anti-tangent's own protocol is unchanged.
-
-**Lightweight mode.** Tasks dispatched under the lightweight protocol (doc-only edits, mechanical relocations) skip `validate_task_spec`, `check_progress`, and the CodeScene companion calls, while still requiring `validate_completion` as the sanity gate.
+Anti-tangent never enforces CodeScene findings server-side; the integration lives at the dispatch-clause layer. If CodeScene MCP isn't configured, the companion calls are skipped. Lightweight-protocol tasks (doc-only / mechanical) skip all CodeScene calls too.
 
 ### 4.3 How to address findings
 
-**Address vs. push back.** Reviewer LLMs can be wrong. If a finding misreads the code, document the disagreement in the next call's `working_on` field — for example, `working_on: "addressed all findings except F#3 which is incorrect because the helper does in fact perform the length check, see handlers.go line 42"` — and re-validate. Don't silently ignore: the next reviewer call won't see your reasoning unless you write it.
+**Address vs. push back.** Reviewer LLMs can be wrong. If a finding misreads the code, document the disagreement in the next call's `working_on` field — e.g. `working_on: "addressed all findings except F#3 which is incorrect because the helper does perform the length check, see handlers.go line 42"` — and re-validate. Don't silently ignore: the next reviewer call won't see your reasoning unless you write it.
 
-**The retry loop.** Parse failures on the reviewer's response are handled inside the server (one retry with a JSON-only reminder). The implementer does not need to handle that.
+**The retry loop.** Parse failures on the reviewer's response are handled inside the server (one retry with a JSON-only reminder); the implementer does not handle that.
 
-**Session not found.** If `check_progress` or `validate_completion` returns a finding with `category: session_not_found`, the session expired (default TTL 4h) or was never created. Call `validate_task_spec` again to start a fresh session and continue with the new ID.
+**Session not found.** A `category: session_not_found` finding means the session expired (default TTL 4h) or was never created. Call `validate_task_spec` again to start a fresh session and continue with the new ID.
 
 ---
 
 ## Project knowledge (optional)
 
-Project knowledge is an optional v0.6.0+ loop that lets the reviewer LLM ground its review in **what's already true about your project** — decisions taken (and why), module invariants, feature surfaces, glossary terms, and the in-flight epic's progress. It earns its keep on epic-scale projects with multiple agents and multiple human authors, where each task validates cleanly on its own but the pieces stop composing into a working end product. Skip it when the project is single-author or short-lived; anti-tangent's text-only reviewer is otherwise stuck inferring project context from the plan text alone.
+An optional v0.6.0+ loop that grounds the reviewer in **what's already true about your project** — decisions, module invariants, feature surfaces, glossary terms, epic progress. Earns its keep on epic-scale projects with multiple agents and multiple authors where each task validates cleanly but the pieces stop composing into a working end product. Skip on single-author or short-lived projects.
 
-The loop has two new MCP tools — `prime_project_knowledge` (pre-task; recommends notes to read) and `extract_project_knowledge` (post-task; proposes notes to write) — plus a `project_knowledge` field on `validate_task_spec` and `validate_plan`. The knowledge itself lives in [Basic Memory](https://github.com/basicmachines-co/basic-memory) (recommended) or any other markdown-backed store; anti-tangent has **zero code dependency** on Basic Memory and never reads or writes that store directly.
+Two new MCP tools — `prime_project_knowledge` (pre-task; recommends notes to read) and `extract_project_knowledge` (post-task; proposes notes to write) — plus a `project_knowledge` field on `validate_task_spec` and `validate_plan`. Knowledge lives in [Basic Memory](https://github.com/basicmachines-co/basic-memory) (recommended) or any markdown-backed store; anti-tangent has **zero code dependency** on Basic Memory.
 
-### Architecture
-
-```
-Multiple agents          Anti-tangent MCP                Reviewer LLM
-& human authors          (advisory, stateless)           (different provider)
-─────────────────        ─────────────────────           ────────────────
-                                                                ▲
-       ┌──── kb_index, excerpts ──▶ prime_project_knowledge ────┘
-       │      (from BM queries)         │
-       │                                ▼
-       │                          "read these notes;
-       │                           KB gaps: …"
-       │
-       └──── validate_task_spec(+project_knowledge) ──▶ existing review,
-       │                                                grounded in KB excerpts
-       │
-       │                          completion envelopes
-       │                                │
-       │     ┌──── envelopes,     ──▶ extract_project_knowledge ──▶ proposals
-       │     │     kb_index,            │                          (create/update/
-       │     │     excerpts             ▼                           supersede)
-       │     │                    structured proposals
-       │     │                          │
-       ▼     ▼                          ▼
-┌────────────────────────┐  caller applies proposals
-│   Basic Memory MCP     │◀────────────┘
-│  (shared local store)  │
-└────────────────────────┘
-```
+Architecture diagram and component boundaries: see [project-knowledge design spec §1](docs/superpowers/specs/2026-05-18-project-knowledge-design.md#1-architecture--boundaries).
 
 ### Controller workflow (per epic)
 
-The server is stateless; everything that ties prime → implement → extract together lives in the controller's dispatch logic.
+The server is stateless; the controller's dispatch logic ties prime → implement → extract together.
 
-1. **Per task, before dispatch.** Search the KB for notes relevant to the task (by task terms plus the epic's `touches_modules` and `relates`) → that's the `kb_index`. Call `prime_project_knowledge` with the task fields + `kb_index` + `epic_permalink` → it returns `picks` (and `bm_commands` when `ANTI_TANGENT_KB_STORE=basic-memory`). Read the picked notes from the KB → assemble them into a `kb_excerpts` markdown string.
-2. **Dispatch.** Include the `kb_excerpts` block in the implementer's brief AND pass that same string as `project_knowledge` into `validate_task_spec`. The subagent itself makes no prime/extract calls — those are controller responsibilities (the controller owns epic context).
-3. **Per task, after DONE.** Call `extract_project_knowledge` with the completion envelope(s), the `kb_index`, optional `current_kb_excerpts` for notes likely to be edited, and the `epic_permalink`. It returns `proposals` (and `bm_commands` when configured) describing new or updated notes.
-4. **Apply.** A human (or the controller, gated by the ladder below) reviews the proposals and pastes the `bm_commands` to apply them.
+1. **Before dispatch.** Search the KB by task terms + epic's `touches_modules` / `relates` → `kb_index`. Call `prime_project_knowledge` with task fields + `kb_index` + `epic_permalink`; it returns `picks` (and `bm_commands` when `ANTI_TANGENT_KB_STORE=basic-memory`). Read the picked notes into a `kb_excerpts` markdown string.
+2. **Dispatch.** Include `kb_excerpts` in the implementer's brief AND pass it verbatim as `project_knowledge` into `validate_task_spec`. The subagent makes no prime/extract calls.
+3. **After DONE.** Call `extract_project_knowledge` with the completion envelope(s), `kb_index`, optional `current_kb_excerpts`, and `epic_permalink`. Returns `proposals` (and `bm_commands` when configured).
+4. **Apply.** A human (or the controller, gated by the ladder below) reviews proposals and pastes the `bm_commands`.
 
 ### Five note types
 
@@ -346,9 +299,9 @@ Templates live in [`examples/project-knowledge/`](examples/project-knowledge/) �
 
 ### The `project_knowledge` field
 
-`validate_task_spec` and `validate_plan` accept an optional `project_knowledge` string (plain text; markdown is fine). The reviewer treats it as **authoritative** — same posture as `pinned_by` — so stated facts are not flagged as `unverifiable_codebase_claim`. The field counts against the existing 200 KB payload cap; keep it under ~16 KB per call in practice (the prime call's picks are what keep it bounded).
+`validate_task_spec` and `validate_plan` accept an optional `project_knowledge` string (markdown ok). The reviewer treats it as **authoritative** — same posture as `pinned_by` — so stated facts are not flagged as `unverifiable_codebase_claim`. Counts against the 200 KB payload cap; keep under ~16 KB per call (prime's picks keep it bounded).
 
-`check_progress` and `validate_completion` deliberately do **not** accept `project_knowledge` (spec §3.3). The field is session-context-only, never persisted: KB content can change during a task's session lifetime, and a snapshot stored at `validate_task_spec` time would silently drift. Field evidence can drive a follow-up minor bump if completion-time KB grounding turns out to be load-bearing.
+`check_progress` and `validate_completion` deliberately do **not** accept `project_knowledge` (spec §3.3): the field is session-context-only, never persisted, because KB content can change during a task's session and a snapshot taken at `validate_task_spec` time would silently drift.
 
 ### Auto-apply ladder for extract proposals
 
@@ -367,22 +320,15 @@ Recommended default disposition (the server doesn't enforce; teams can override)
 
 ### Anchored Basic Memory tool names
 
-When `ANTI_TANGENT_KB_STORE=basic-memory`, prime and extract emit `bm_commands` arrays that reference these canonical Basic Memory tool names (verified against BM v0.21.1 on 2026-05-20):
+When `ANTI_TANGENT_KB_STORE=basic-memory`, prime and extract emit `bm_commands` arrays referencing the canonical BM tool names (`search_notes`, `read_note`, `write_note`, `edit_note`, `move_note`, `delete_note`). BM does NOT ship a `supersede_note` verb — a logical `Proposal{action: "supersede"}` maps to a pair: `write_note` for the new note (`status: accepted`, `supersedes: [<predecessor>]`), then `edit_note` to flip the predecessor's `status` to `superseded`. Full verified contract (BM version, tool names, supersede mapping, transport recommendation) lives in the [Basic Memory contract block](docs/superpowers/plans/2026-05-19-project-knowledge-v0.6.0.md#basic-memory-contract-verified-yyyy-mm-dd) at the bottom of the v0.6.0 plan.
 
-- `search_notes` — search across notes by query string.
-- `read_note` — read a note by permalink.
-- `write_note` — create or replace a note.
-- `edit_note` — partial update (frontmatter patch / append / replace section).
-- `move_note` — rename / relocate a note.
-- `delete_note` — remove a note.
-
-**Supersede mapping.** Basic Memory does **NOT** ship a `supersede_note` verb. A logical `Proposal{action: "supersede"}` therefore maps to a **pair** of `bm_commands` entries: (1) `write_note` to create the new note with `frontmatter.status: accepted` and `supersedes: [<predecessor>]`, then (2) `edit_note` to flip the predecessor's `frontmatter.status` to `superseded`. The prompts and goldens reference these names verbatim — a future BM rename is a doc + prompt-template change only.
-
-For the operator-side topology of running BM as a shared service across a team, see [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md) — that doc covers two operator-supported paths (a dedicated VM via stdio-over-SSH, and a Docker container on an existing host via SSE behind a reverse proxy).
+For the operator-side topology of running BM as a shared service across a team, see [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md) — covers a dedicated VM via stdio-over-SSH and a Docker container via SSE behind a reverse proxy.
 
 ### Environment variables
 
-- `ANTI_TANGENT_KB_STORE` — default `""` (off; `bm_commands` arrays are omitted from prime/extract outputs). Set to `basic-memory` to enable `bm_commands` arrays. Any other non-empty value is rejected at startup with a configuration error.
+Defaults shown; see [`README.md`](README.md) for the full dotenv block.
+
+- `ANTI_TANGENT_KB_STORE` — `""` (off). Set to `basic-memory` to enable `bm_commands` arrays in prime/extract outputs. Any other non-empty value is rejected at startup.
 - `ANTI_TANGENT_PRIME_MODEL` — reviewer for `prime_project_knowledge`. Falls back to `ANTI_TANGENT_PLAN_MODEL` then `ANTI_TANGENT_PRE_MODEL`.
 - `ANTI_TANGENT_EXTRACT_MODEL` — reviewer for `extract_project_knowledge`. Same fallback chain.
 - `ANTI_TANGENT_PRIME_MAX_TOKENS` — output cap for prime; default `4096`. Ceiling-clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`.
@@ -390,29 +336,51 @@ For the operator-side topology of running BM as a shared service across a team, 
 
 Existing flows are unaffected when `ANTI_TANGENT_KB_STORE` is empty and `project_knowledge` is unset — that's the backward-compat guarantee.
 
+### Applying bm_commands to BM v0.21.1
+
+Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the tool names match BM verbatim, but the arg shapes track the spec's logical model rather than each BM release's literal signature (the explicit non-goal: don't couple anti-tangent to BM's per-release API churn). Field-tested against BM v0.21.1 on 2026-05-21, three small translation steps land between paste and apply.
+
+**`write_note` arg mapping** (extract's `Proposal{action: "create"}` and supersede-leg-1):
+
+| Extract emits | BM v0.21.1 takes | Mapping |
+|---|---|---|
+| `permalink: "<dir>/<slug>"` | `directory` + `title` | Split on the last `/`; prefix is `directory`. Pass `proposal.title` directly as `title` rather than slug-back-to-title. |
+| `frontmatter: {…}` | `metadata: {…}` | Verbatim — BM merges into the YAML frontmatter at the top of the file. |
+| `body: "…"` | `content: "…"` | Verbatim. |
+| `proposal.type` | `note_type` | E.g. `"decision"`, `"epic"`, `"feature"`, `"module"`, `"glossary"`. |
+
+**`edit_note` operation hints.** BM v0.21.1's `edit_note` requires an explicit `operation` enum that extract does not emit; the agent picks based on the target note's structure:
+
+- Ledger / "Recent material changes" appends — `insert_before_section` keyed on the section AFTER your target (puts the new entry at the bottom of the target section without clobbering).
+- Supersede-leg-2 (flipping a predecessor's `status` to `superseded`) — `find_replace` against the frontmatter line, or BM's frontmatter-patch verb if available in your version.
+- Replacing a whole section's body — `replace_section`.
+- Appending to the very end of the note (no section anchor) — `append`.
+
+**Permalink-slug expectations.** BM auto-derives the stored slug from the `title` (lowercased, hyphenated, no date prefix unless the title carries one), so the permalink proposed by extract (e.g. `decisions/2026-05-docker-bm-deployment-is-alternative`) often diverges from what BM stores (e.g. `main/decisions/docker-basic-memory-deployment-is-an-alternative-path`). If the same extract run proposes cross-links (e.g. an `epic_origin` ledger entry referencing the new note), they won't resolve against BM's actual slug. Cleanest fix: `move_note` after `write_note` to rename to the anti-tangent-proposed permalink, keeping cross-links load-bearing across calls.
+
 ---
 
 ## 5. For controllers — plan-handoff gate + dispatch addendum
 
-If you orchestrate implementer subagents — superpowers' `subagent-driven-development`, hone-ai's equivalent, or a hand-rolled dispatch loop — you have **two** responsibilities that the implementer can't cover on its own.
+Controllers (superpowers' `subagent-driven-development`, hone-ai's equivalent, or a hand-rolled loop) have **two** responsibilities the implementer can't cover.
 
 ### 5.1 Plan-handoff gate (REQUIRED before any dispatch)
 
-When you are about to execute a multi-task plan — whether you do the work yourself or dispatch each task to a subagent — **first call `validate_plan` once with the full plan markdown**, before any implementation work begins.
+Before executing a multi-task plan — whether you implement it yourself or dispatch to subagents — **call `validate_plan` once with the full plan markdown** first.
 
 **Procedure:**
 
-1. Call `validate_plan` once with the full plan markdown. Capture the `PlanResult`.
-2. **Surface results to the user.** Show `plan_verdict`, plan-level findings, and per-task verdicts/findings. For any task whose `suggested_header_block` is non-empty, show the proposed header and ask the human to adopt or revise. If task results include `lightweight_eligible` / `lightweight_reason`, treat them as advisory hints for choosing the full or lightweight dispatch clause.
-3. **Apply the proposed header blocks** (the controller may apply automatically when verdicts are `pass`/`warn` and the human approves; always defer to the human for `fail`).
-4. If anything material changed (headers added, ACs rewritten), call `validate_plan` again to confirm. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified).
+1. Call `validate_plan` with the full plan markdown. Capture the `PlanResult`.
+2. **Surface results to the user.** Show `plan_verdict`, plan-level findings, and per-task verdicts/findings. For any task whose `suggested_header_block` is non-empty, show the proposed header and ask the human to adopt or revise. If task results include `lightweight_eligible` / `lightweight_reason`, treat them as advisory hints.
+3. **Apply the proposed header blocks** (the controller may apply automatically when verdicts are `pass`/`warn` and the human approves; defer to the human for `fail`).
+4. If anything material changed, call `validate_plan` again. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified).
 5. **Only proceed to dispatch when the plan-level gate passes.**
 
-The implementing subagent still calls `validate_task_spec` at task start in its own session — see §4. The plan-level gate (`validate_plan`) and the per-task implementer gate (`validate_task_spec`) are two different responsibilities at two different lifecycle moments.
+The implementing subagent still calls `validate_task_spec` at task start in its own session — see §4. The plan-level gate and the per-task implementer gate are two different responsibilities at two different moments.
 
-**Why this matters:** catching a vague AC at handoff time costs one `validate_plan` call (~$0.01–$0.02 for a typical plan); catching it after a subagent has spent 10 minutes implementing against a misread of the spec costs a wasted dispatch. The plan-handoff gate is the cheap insurance.
+**Why this matters:** catching a vague AC at handoff costs one `validate_plan` call (~$0.01–$0.02); catching it after a subagent spent 10 minutes against a misread spec costs a wasted dispatch.
 
-**Skip this gate** when the plan only has one task (just go straight to per-task validation), or when the work item didn't come from a plan at all (see §1).
+**Skip this gate** when the plan has only one task (go straight to per-task validation), or when the work didn't come from a plan at all (see §1).
 
 ### 5.2 Dispatch addendum (paste the §4.2 clause into every implementer prompt)
 
@@ -424,7 +392,7 @@ After the subagent reports DONE, you may want to require evidence that `validate
 
 ### 5.4 Anti-pattern: don't re-validate completion from the controller
 
-Do NOT have the controller call `validate_completion` itself after the subagent reports DONE. The implementer's session was created in its own context — the controller doesn't have the `session_id`, so a fresh `validate_completion` call from the controller would either fail with a `session_not_found` finding (no session to thread) or, if the controller passed an arbitrary id, return spurious findings. Either way it duplicates the post-hook gate the subagent already cleared and adds noise. The subagent's post-hook IS the gate.
+Do NOT have the controller call `validate_completion` itself after the subagent reports DONE. The implementer's session was created in its own context — the controller doesn't have the `session_id`, so a fresh `validate_completion` call from the controller would either fail with a `session_not_found` finding or, if the controller passed an arbitrary id, return spurious findings. The subagent's post-hook IS the gate.
 
 (This is different from §5.1, which is `validate_plan` at plan-handoff time before any subagent has started — that's pre-implementation and lives in the controller's own context.)
 
@@ -435,91 +403,65 @@ Do NOT have the controller call `validate_completion` itself after the subagent 
 | `validate_plan` | Controller | Once, before any dispatch | Plan-wide + per-task analysis with ready-to-paste header blocks. Stateless. |
 | `validate_task_spec` | Implementing subagent | Once at task start, after dispatch | Per-task structural/quality review. **Creates a session** that the implementer threads through `check_progress` and `validate_completion`. |
 
-The two tools' analyses overlap intentionally: the plan gate catches plan-wide and per-task issues at handoff; the implementer gate catches anything that changed between handoff and dispatch (e.g. another agent edited the plan in the meantime) and produces the session that the rest of the implementer's lifecycle uses.
+The two analyses overlap intentionally: the plan gate catches plan-wide and per-task issues at handoff; the implementer gate catches anything that changed between handoff and dispatch and produces the session that the rest of the lifecycle uses.
 
-The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`. While `plan_verdict` answers "is this dispatchable?" (pass / warn / fail), `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When you see consecutive `warn` verdicts that aren't changing, watch `plan_quality` for convergence: `actionable → rigorous` is a meaningful improvement even if the verdict stays `warn`. Use `plan_quality` to decide when to stop iterating: most callers can ship at `actionable` for ASAP work, and at `rigorous` for quarterly-rewrite scope.
+The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`: `plan_verdict` answers "is this dispatchable?" (pass / warn / fail); `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When consecutive `warn` verdicts aren't changing, watch `plan_quality` for convergence — `actionable → rigorous` is meaningful even when the verdict stays `warn`. Ship at `actionable` for ASAP work, `rigorous` for quarterly-rewrite scope.
 
 ### 5.6 Per-call tool args and partial-response handling (v0.3.0+)
 
-**`max_tokens_override`** (all six tools): optional non-negative int. Replaces the configured `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` clamp finding is appended. Negative values are rejected with `max_tokens_override must be ≥ 0`. Use when one specific call needs a larger reviewer budget without changing global config.
+**`max_tokens_override`** (all six tools): optional non-negative int. Replaces `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` finding appended. Negative values rejected with `max_tokens_override must be ≥ 0`.
 
-**`mode`** (`validate_plan` only): optional `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` instructs the reviewer to surface only the most-severe findings — at most 3 per scope — and omit stylistic nits. Useful for small ASAP plans where late rounds surface only polish. Invalid values rejected with `mode must be "quick" or "thorough"`.
+**`mode`** (`validate_plan` only): optional `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` surfaces only the most-severe findings (at most 3 per scope) and omits stylistic nits. Invalid values rejected with `mode must be "quick" or "thorough"`.
 
-**`partial: true`** envelope field: when the reviewer's output was truncated at its `max_tokens` cap but at least one complete finding could be recovered, the response carries `"partial": true` and the synthetic truncation finding is `severity: minor` rather than `major`. The field is `omitempty` — absent in the common case. If partial recovery fails (no complete finding before the cap), the envelope falls back to the legacy single `severity: major` truncation finding with no `partial` field set.
+**`partial: true`** envelope field: when the reviewer's output was truncated at its `max_tokens` cap but at least one complete finding could be recovered, the response carries `"partial": true` and the synthetic truncation finding is `severity: minor`. `omitempty` — absent in the common case. If no complete finding survives, the envelope falls back to the legacy `severity: major` truncation marker with no `partial` field.
 
-Passing `validate_plan` calls are cached in memory for 3 minutes when the rendered prompt, model, mode, and token budget are identical. Cache hits return `review_ms: 0` and prefix the original `next_action` with `[cached <=3m]`.
+Passing `validate_plan` calls are cached for 3 minutes when the rendered prompt, model, mode, and token budget are identical. Cache hits return `review_ms: 0` and prefix `next_action` with `[cached <=3m]`.
 
 ### 5.7 Using review-context features
 
-Use `pinned_by` when a terse acceptance criterion is backed by existing tests, docs, commands, or static checks:
+Use `pinned_by` when a terse AC is backed by existing tests, docs, commands, or static checks. Example shape:
 
 ```json
 {
-  "task_title": "Preserve retry behavior",
-  "goal": "Change request parsing without changing retry semantics.",
   "acceptance_criteria": ["Existing retry behavior remains unchanged."],
-  "pinned_by": [
-    "RetryHandlerTest.retries_transient_errors",
-    "go test ./internal/retry -run RetryHandler",
-    "docs/retry-contract.md"
-  ]
+  "pinned_by": ["RetryHandlerTest.retries_transient_errors", "go test ./internal/retry -run RetryHandler", "docs/retry-contract.md"]
 }
 ```
 
-Use `phase: "post"` only to recover a task session after implementation already happened; normal task execution still calls `validate_task_spec` before coding.
+Use `phase: "post"` only to recover a task session after implementation already happened; normal execution still calls `validate_task_spec` before coding.
 
-Use `controller_verified_references` when the controller has already grep-verified specific file paths, symbols, line anchors, commands, or adjacent patterns and wants to reduce text-only reviewer noise:
+Use `controller_verified_references` when the controller has already grep-verified specific file paths, symbols, line anchors, commands, or adjacent patterns. Example: `controller_verified_references: ["cmd/import.go", "ParserOptions.Strict", "ParseFile"]`.
 
-```json
-{
-  "task_title": "Update parser call site",
-  "goal": "Wire the new parser option into the existing command path.",
-  "acceptance_criteria": ["cmd/import.go passes ParserOptions.Strict through to ParseFile."],
-  "controller_verified_references": [
-    "cmd/import.go",
-    "ParserOptions.Strict",
-    "ParseFile"
-  ]
-}
-```
-
-These entries are attestations from the caller. They suppress matching `unverifiable_codebase_claim` findings by substring match only; they do not suppress real contradictions or ambiguity.
-
-Suppression now runs server-side (deterministic) as well as in the reviewer prompt: a CVR-entry substring match against the finding's `evidence` or `criterion` (either direction; 4-code-point floor on CVR entries) suppresses the entire `unverifiable_codebase_claim`. The behavior is independent of reviewer compliance.
+CVR entries are caller attestations: they suppress matching `unverifiable_codebase_claim` findings by substring match only, not real contradictions or ambiguity. Suppression runs server-side (deterministic) as well as in the reviewer prompt — a substring match against the finding's `evidence` or `criterion` (either direction; 4-code-point floor on CVR entries) suppresses the entire `unverifiable_codebase_claim`, independent of reviewer compliance.
 
 ---
 
 ## 6. FAQ / failure modes
 
-**My implementer is also Claude Sonnet — does this still help?**
-Less than if they were different models. Same model + same training data ≈ same blind spots. If you can't run a different provider, at least pick a different family (Sonnet implementer, Opus reviewer; or Sonnet implementer, Haiku for cheap mid-checks plus Opus for post). Different provider is best.
+**Finding categories.** Canonical set surfaced by the reviewer (see `internal/verdict/verdict.go` for the authoritative enum):
 
-**How do I know my session expired?**
-You'll get a finding with `category: session_not_found`. Default TTL is 4h. Re-call `validate_task_spec` to start a new session and continue with the new ID.
+- Spec / lifecycle: `missing_acceptance_criterion`, `scope_drift`, `ambiguous_spec`, `unaddressed_finding`, `quality`, `convention_deviation`, `attestation_contradiction`, `unverifiable_codebase_claim`, `other`.
+- Operational: `session_not_found`, `payload_too_large`.
+- Project-knowledge (v0.6.0+): `kb_gap`, `ambiguous_pick`, `missing_index_entry` (prime); `insufficient_evidence`, `redundant_proposal`, `contradicts_existing` (extract).
 
-**My payload is too big.**
-The MCP returns a finding with `category: payload_too_large`. Default cap is 200 KB across `changed_files`, `final_files`, and `final_diff` (the unified-diff body, when present on `validate_completion`). The finding includes a tool-specific suggestion: for `validate_completion`, pass `final_diff` instead of or in addition to `final_files`; for `check_progress`, reduce `changed_files` or split the call. The `ANTI_TANGENT_MAX_PAYLOAD_BYTES` env var controls the cap.
+**My implementer is also Claude Sonnet — does this still help?** Less than if they were different models — same model + same training data ≈ same blind spots. Different provider is best; failing that, different family (Sonnet implementer, Opus reviewer; or Haiku for cheap mid-checks plus Opus for post).
 
-**A `validate_completion` call returned a finding with `category: malformed_evidence`.**
-The server's evidence-shape guard rejected your submission before sending it to the reviewer. The `evidence` field names the specific pattern that matched — typically a truncation marker like `(truncated)`, `[truncated]`, `// ... unchanged`, or a placeholder line consisting only of `...`, or empty `Path` entries in `final_files`. Re-submit with full file contents in `final_files` or a complete unified diff in `final_diff`. The rejection is cached for 5 minutes by canonical content hash, so identical re-submissions are short-circuited. **Note:** if your file legitimately contains one of these literal strings (e.g., a test fixture or documentation file), pass a complete unified diff via `final_diff` instead of pasting the file content via `final_files`.
+**How do I know my session expired?** A `category: session_not_found` finding. Default TTL is 4h. Re-call `validate_task_spec` to start a fresh session.
 
-**A hook returned a finding with `category: other` and `criterion: reviewer_response`.**
-The reviewer's response was cut off at the output token budget. As of v0.3.0, the server runs truncated responses through a tolerant parser and surfaces any complete findings produced before the cap — look for `"partial": true` on the envelope and a `severity: minor` truncation marker. To get the full response on the next call, either raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` / `ANTI_TANGENT_PLAN_MAX_TOKENS` globally, or pass `max_tokens_override` (clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING`, default 16384) for that single call. Pre-0.3.0 servers would emit a single `severity: major` truncation finding and discard any partial output.
+**My payload is too big.** A `category: payload_too_large` finding. Default cap is 200 KB across `changed_files`, `final_files`, and `final_diff`. For `validate_completion`, pass `final_diff` instead of or alongside `final_files`; for `check_progress`, reduce `changed_files` or split the call. `ANTI_TANGENT_MAX_PAYLOAD_BYTES` controls the cap.
 
-**A finding has `category: attestation_contradiction` — what is that?**
-Emitted when an AC explicitly contradicts a `harness_shape_attestation` entry (see §3.8). NOT severity-floored (unlike `convention_deviation` / `unverifiable_codebase_claim`); the reviewer's chosen severity is preserved.
+**A `validate_completion` call returned `category: malformed_evidence`.** The server's evidence-shape guard rejected your submission pre-review. The `evidence` field names the offending pattern — typically a truncation marker (`(truncated)`, `[truncated]`, `// ... unchanged`), a `...`-only placeholder line, or empty `Path` entries in `final_files`. Re-submit with full file contents or a complete unified diff. Rejection is cached for 5 minutes by canonical content hash. If your file legitimately contains one of these literal strings (e.g. a fixture or doc), pass a complete `final_diff` rather than `final_files`.
 
-**`validate_task_spec` is asking for ACs my plan doesn't have.**
-That's the spec quality gate working as designed. Either (a) add the missing ACs to the plan and re-validate, or (b) acknowledge the gap in the next `working_on` description so the reviewer knows to expect implementer-discretion choices.
+**A hook returned `category: other` with `criterion: reviewer_response`.** Reviewer output was cut off at the token budget. As of v0.3.0, the server runs truncated responses through a tolerant parser and surfaces any complete findings before the cap (look for `"partial": true` and a `severity: minor` truncation marker). To get the full response next call, raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` / `ANTI_TANGENT_PLAN_MAX_TOKENS` globally, or pass `max_tokens_override`.
 
-**What if the implementer skips the post-hook?**
-Two defenses: the implementer-prompt clause (§4.2) marks post REQUIRED, and the controller can require the post-hook envelope in the subagent's DONE report (see §5.3).
+**A finding has `category: attestation_contradiction` — what is that?** An AC explicitly contradicts a `harness_shape_attestation` entry (see §3.8). NOT severity-floored (unlike `convention_deviation` / `unverifiable_codebase_claim`); the reviewer's chosen severity is preserved.
 
-**Does `check_progress` catch failing tests?**
-No — the reviewer LLM reasons over text, not execution. Use mid-checks for drift detection (scope creep, untouched ACs, unaddressed prior findings), not for debugging. Run tests separately.
+**`validate_task_spec` is asking for ACs my plan doesn't have.** Spec quality gate working as designed. Either (a) add the missing ACs and re-validate, or (b) acknowledge the gap in the next `working_on` description so the reviewer expects implementer-discretion choices.
 
-**Cost / latency overhead.**
-Roughly 1–2 s and $0.001–$0.02 per call, depending on payload size and model choice. One mandatory `validate_plan` call per plan-handoff, and two mandatory implementer calls per task minimum (pre + post). Use a cheap-fast model for mid-checks and a stronger model for handoff/post.
+**What if the implementer skips the post-hook?** Two defenses: §4.2 marks post REQUIRED in the implementer prompt, and the controller can require the post-hook envelope in the DONE report (§5.3).
 
-**Where do I file bugs?**
-[`https://github.com/patiently/anti-tangent-mcp/issues`](https://github.com/patiently/anti-tangent-mcp/issues).
+**Does `check_progress` catch failing tests?** No — the reviewer reasons over text, not execution. Use it for drift detection (scope creep, untouched ACs, unaddressed prior findings); run tests separately.
+
+**Cost / latency overhead.** Roughly 1–2 s and $0.001–$0.02 per call. One mandatory `validate_plan` per handoff, two mandatory implementer calls per task (pre + post). Use a cheap-fast model for mid-checks and a stronger model for handoff/post.
+
+**Where do I file bugs?** [`https://github.com/patiently/anti-tangent-mcp/issues`](https://github.com/patiently/anti-tangent-mcp/issues).
