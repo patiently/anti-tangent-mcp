@@ -378,7 +378,7 @@ When `ANTI_TANGENT_KB_STORE=basic-memory`, prime and extract emit `bm_commands` 
 
 **Supersede mapping.** Basic Memory does **NOT** ship a `supersede_note` verb. A logical `Proposal{action: "supersede"}` therefore maps to a **pair** of `bm_commands` entries: (1) `write_note` to create the new note with `frontmatter.status: accepted` and `supersedes: [<predecessor>]`, then (2) `edit_note` to flip the predecessor's `frontmatter.status` to `superseded`. The prompts and goldens reference these names verbatim — a future BM rename is a doc + prompt-template change only.
 
-For the operator-side topology of running BM as a shared service across a team, see [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md).
+For the operator-side topology of running BM as a shared service across a team, see [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md) — that doc covers two operator-supported paths (a dedicated VM via stdio-over-SSH, and a Docker container on an existing host via SSE behind a reverse proxy).
 
 ### Environment variables
 

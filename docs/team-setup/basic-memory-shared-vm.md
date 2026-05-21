@@ -16,6 +16,19 @@ This doc is intentionally narrow: it documents the topology `anti-tangent-mcp` r
 
 ---
 
+## Two deployment paths
+
+This doc covers two operator-supported topologies. Pick one:
+
+| Path | Best when | Transport | Auth | Section |
+|---|---|---|---|---|
+| **Dedicated VM** (recommended primary) | You're standing up a new BM host from scratch. | stdio over SSH | per-dev SSH keypair | §§2–12 (rest of this doc) |
+| **Docker container on an existing host** | You already operate a Docker host and don't want to provision a dedicated VM for BM. | SSE on HTTP(S) | per-dev bearer token via reverse proxy | §13 |
+
+Both paths reuse the §8 git-backed sync pattern (markdown is the source of truth; SQLite index is regenerated). Both paths consume the same `anti-tangent-mcp` integration on the client side.
+
+---
+
 ## 2. Topology overview
 
 ```
@@ -756,6 +769,240 @@ systemctl restart basic-memory-git-sync.service
 ```
 
 If you cannot confirm the rotation, treat it as a potential MITM, halt the sync, and escalate.
+
+---
+
+## 13. Alternative deployment: Docker container on an existing host
+
+Upstream BM publishes a container image at `ghcr.io/basicmachines-co/basic-memory` (also tagged `:v0.21.1`; `:latest` tracks upstream's most recent release). This section documents the operator-supported alternative to the dedicated-VM path: running that container on a host you already operate, exposing its SSE endpoint behind a reverse proxy with per-developer bearer-token auth, and reusing §8's git-backed sync against a host-side bind-mount.
+
+### 13.1 Scope & prerequisites
+
+Pick this path when you already operate a Docker host (production, staging, or a team-shared utility box) and you'd rather add a container than provision a dedicated VM. Pick the dedicated-VM path instead if you're standing up a new host from scratch — there is no compelling reason to choose Docker on a fresh box.
+
+Prerequisites:
+
+- Existing host with Docker Engine and the `docker compose` plugin installed.
+- A dedicated unprivileged user (e.g. `bm`) on the host to own the bind-mount. Do NOT reuse a personal or general-purpose service account.
+- A private git remote for the §8 sync (same shape as the dedicated-VM path).
+- A TLS-capable reverse-proxy stack. Caddy is strongly recommended because it handles Let's Encrypt automatically and proxies SSE correctly with one directive (`flush_interval -1`). nginx works too with the equivalent settings called out in §13.4.
+
+### 13.2 Host bind-mount setup
+
+One-time host provisioning. Run as root.
+
+```bash
+# Provision a bm user and a bind-mount path. Mirrors §8a of the dedicated-VM
+# path so the same commit-and-push.sh runs unchanged on this host, against
+# the same /var/lib/basic-memory/kb directory the container writes into.
+id -u bm >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/basic-memory --shell /bin/bash bm
+install -d -o bm -g bm -m 0750 /var/lib/basic-memory/kb
+
+# Initialize as a git working tree pointing at the team's private remote.
+sudo -u bm git -C /var/lib/basic-memory/kb init -b main
+sudo -u bm git -C /var/lib/basic-memory/kb remote add origin git@<remote>:<org>/<repo>.git
+sudo -u bm git -C /var/lib/basic-memory/kb config user.email "basic-memory@<team>.local"
+sudo -u bm git -C /var/lib/basic-memory/kb config user.name  "Basic Memory"
+```
+
+Bind-mounting the BM data dir under `/var/lib/basic-memory/kb` keeps it path-compatible with §8 — the systemd timer, the commit-and-push script, the verification commands, and the troubleshooting recipes all reference that exact path. The container will mount this host directory as `/app/data` (the container's knowledge dir).
+
+### 13.3 docker-compose for the BM container
+
+Save as `/etc/basic-memory/docker-compose.yml`:
+
+```yaml
+services:
+  basic-memory:
+    image: ghcr.io/basicmachines-co/basic-memory:0.21.1   # pinned; bump deliberately
+    container_name: basic-memory
+    restart: unless-stopped
+    user: "<BM_UID>:<BM_GID>"   # MUST match the host's bm user/group so bind-mount writes don't end up root-owned. Compute with `id -u bm` / `id -g bm`.
+    environment:
+      BASIC_MEMORY_DEFAULT_PROJECT: main
+      BASIC_MEMORY_SYNC_CHANGES: "true"
+      BASIC_MEMORY_LOG_LEVEL: INFO
+      BASIC_MEMORY_SYNC_DELAY: "1000"
+    volumes:
+      - /var/lib/basic-memory/kb:/app/data
+      - basic-memory-config:/home/appuser/.basic-memory
+    # Bind to the loopback only so the reverse proxy (§13.4) is the sole
+    # entry point; the SSE endpoint must never be reachable directly from
+    # the public internet.
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "basic-memory", "--version"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  basic-memory-config:
+```
+
+Bring it up:
+
+```bash
+docker compose -f /etc/basic-memory/docker-compose.yml pull
+docker compose -f /etc/basic-memory/docker-compose.yml up -d
+docker compose -f /etc/basic-memory/docker-compose.yml logs --tail=50
+```
+
+The container's healthcheck flips to `healthy` within ~30s of `up -d`; `docker ps` shows the state.
+
+**Important constraint.** The `user:` directive is load-bearing. Without it the container runs as `appuser` (UID 1000 inside the image), which on most hosts isn't your `bm` user. Bind-mount writes then end up owned by random UIDs and the §8 systemd timer's `commit-and-push.sh` fails with `fatal: Unable to create '.git/index.lock': Permission denied` (the same failure mode as §12.6). Compute the right UID/GID on the host with `id -u bm` / `id -g bm` and pin them in compose; do NOT just guess `1000:1000`.
+
+### 13.4 Reverse proxy with per-dev bearer tokens
+
+The container's SSE port is bound to `127.0.0.1:8000` and unreachable from the network. Expose it through a reverse proxy that adds TLS and per-developer bearer-token auth.
+
+Paste-ready Caddyfile entry (strongly recommended — Caddy handles TLS automatically and proxies SSE correctly with one flag):
+
+```caddy
+bm.<team>.example.com {
+    @authorized {
+        header Authorization "Bearer <PER_DEV_TOKEN_1>"
+        header Authorization "Bearer <PER_DEV_TOKEN_2>"
+        header Authorization "Bearer <PER_DEV_TOKEN_3>"
+    }
+
+    handle @authorized {
+        reverse_proxy 127.0.0.1:8000 {
+            # SSE-specific tuning: long-lived streams, no response buffering,
+            # generous read timeout so an idle session doesn't get killed.
+            flush_interval -1
+            transport http {
+                read_timeout 1h
+            }
+        }
+    }
+
+    handle {
+        respond "Unauthorized" 401 {
+            close
+        }
+    }
+
+    log {
+        output file /var/log/caddy/basic-memory.log
+        format json
+    }
+}
+```
+
+Generate per-dev tokens with `openssl rand -base64 32` and store them in your secrets manager (1Password, Vault, AWS Secrets Manager — whatever your team already uses). Rotating a single dev's access is `caddy reload` after editing the matcher. The matcher list is plaintext in the Caddyfile because the file is operator-only; `chmod 0640 root:caddy /etc/caddy/Caddyfile` and audit access.
+
+If you prefer nginx, the equivalent shape is `map $http_authorization $allowed { default 0; "Bearer <PER_DEV_TOKEN_1>" 1; ... }` plus `if ($allowed = 0) { return 401; }` plus `proxy_pass http://127.0.0.1:8000;` with `proxy_buffering off;` and `proxy_read_timeout 1h;`. The SSE buffering and timeout settings are the load-bearing pieces — anything else is incidental.
+
+### 13.5 Per-developer Claude Code MCP config (SSE shape)
+
+Each developer adds an SSE-shaped MCP entry to their Claude Code config. Adjust the `<team>` and `<PER_DEV_TOKEN>` placeholders; the rest is fixed.
+
+```json
+{
+  "mcpServers": {
+    "basic-memory": {
+      "transport": "sse",
+      "url": "https://bm.<team>.example.com/sse",
+      "headers": {
+        "Authorization": "Bearer <PER_DEV_TOKEN>"
+      }
+    }
+  }
+}
+```
+
+Verify the SSE endpoint path against the upstream Dockerfile CMD — at v0.21.1 it's `basic-memory mcp --transport sse --host 0.0.0.0 --port 8000`. The exact URL path the SSE endpoint serves on depends on the BM version; if `/sse` 404s, try the bare host (`https://bm.<team>.example.com`) and consult `docker compose logs basic-memory` for the routes it registers at startup.
+
+### 13.6 Git-backed sync (same as §8)
+
+The host's existing systemd timer + `commit-and-push.sh` from §8 covers this path unchanged — both topologies have the markdown KB at `/var/lib/basic-memory/kb`, and the container is just one more writer against that bind-mount. **Install §§8a–8f verbatim if you haven't already.** If you previously installed them for the dedicated-VM path and you're now adding the Docker container alongside it, no §8 changes are needed.
+
+### 13.7 Day-2 ops (Docker-specific)
+
+- **Bumping the BM version.** Edit `image:` in `/etc/basic-memory/docker-compose.yml`, then `docker compose -f /etc/basic-memory/docker-compose.yml pull && docker compose -f /etc/basic-memory/docker-compose.yml up -d`. The container restarts; the bind-mounted KB is preserved. Read upstream's changelog first (§9a logic applies).
+- **Backing up.** The bind-mount tree at `/var/lib/basic-memory/kb` is the canonical state and §8's git-backed sync already covers it. The `basic-memory-config` Docker volume holds the SQLite index, which BM regenerates from markdown on startup — back it up only if startup-time matters; otherwise skip.
+- **Adding a developer.** Append a `Bearer <PER_DEV_TOKEN>` matcher to the Caddyfile, `systemctl reload caddy`, ship the token to the new dev's secrets store.
+- **Removing a developer.** Drop their `Bearer <PER_DEV_TOKEN>` matcher line, `systemctl reload caddy`, and rotate any remaining tokens out of caution.
+
+### 13.8 Troubleshooting (Docker-specific)
+
+Mirrors §12's "Symptom / Cause / Resolution" format. The §12 entries that are not Docker-specific (BM index drift, `git push` failures, rebase conflicts, host-key rotation on the git remote) apply unchanged on this path — read §12 in addition to this section.
+
+#### 13.8.1 Image pull fails
+
+**Symptom.** `docker compose pull` exits non-zero with `manifest unknown`, `denied`, or `unauthorized`.
+
+**Cause.** Tag typo, or (rare) GHCR is being treated as a private registry by an aggressively-configured Docker daemon. BM's image is public, so no auth is required for the default case.
+
+**Resolution.** Re-check the tag against the upstream repo. If the registry is being treated as private, `docker login ghcr.io` with a personal access token will unblock the pull. Fix the tag and rerun `docker compose pull`.
+
+#### 13.8.2 Container restarts in a loop
+
+**Symptom.** `docker ps` shows the container in `Restarting (1) ...` state. `docker compose logs --tail=200 basic-memory` shows BM exiting on startup with a permissions error, or no useful output at all.
+
+**Cause.** Bind-mount path doesn't exist on the host, or the `user:` UID doesn't have write access to `/var/lib/basic-memory/kb`.
+
+**Resolution.**
+
+```bash
+install -d -o bm -g bm /var/lib/basic-memory/kb
+chown -R bm:bm /var/lib/basic-memory/kb
+docker compose -f /etc/basic-memory/docker-compose.yml up -d
+```
+
+Confirm the `user:` directive in compose matches `id -u bm`:`id -g bm`.
+
+#### 13.8.3 SSE endpoint returns 401 from Claude Code
+
+**Symptom.** Claude Code reports the MCP server failed to start, or returns a 401 from `bm.<team>.example.com`. `journalctl -u caddy` (or the equivalent log path) shows `handler=respond` lines for the dev's IP.
+
+**Cause.** Missing or malformed `Authorization` header.
+
+**Resolution.** Verify the `headers.Authorization` value in the dev's `.mcp.json` matches a `Bearer <PER_DEV_TOKEN>` matcher in the Caddyfile exactly. The `Bearer ` prefix is case-sensitive and the matcher is string-comparison — no whitespace, no trailing newlines, no quote characters.
+
+#### 13.8.4 SSE endpoint hangs or cuts off mid-stream
+
+**Symptom.** MCP handshake completes but tool calls time out or the connection drops a few seconds after opening. Caddy logs show successful 200s; client logs show truncated responses.
+
+**Cause.** Reverse proxy is buffering the SSE response stream or applying a default read timeout.
+
+**Resolution.** Confirm `flush_interval -1` is set on the `reverse_proxy` directive in the Caddyfile (§13.4). nginx equivalent: `proxy_buffering off;` plus `proxy_read_timeout 1h;`. Reload the proxy and reconnect from a dev workstation.
+
+#### 13.8.5 `commit-and-push.sh` fails after Docker writes
+
+**Symptom.** `journalctl -u basic-memory-git-sync` shows `fatal: Unable to create '.git/index.lock': Permission denied` (same shape as §12.6) — but the host wasn't touched by root, so the §12.6 recipe alone doesn't explain it.
+
+**Cause.** Bind-mount permissions wrong. The compose file's `user: "<BM_UID>:<BM_GID>"` doesn't match the host's `bm` user, so the container wrote files as some other UID and the systemd timer (running as `bm`) can't grab the index lock.
+
+**Resolution.**
+
+```bash
+id -u bm        # expect the value pinned in compose
+id -g bm
+chown -R bm:bm /var/lib/basic-memory/kb
+docker compose -f /etc/basic-memory/docker-compose.yml up -d
+```
+
+The §12.6 ownership-recovery command applies here too — it cleans up whatever the wrong-UID writes already left behind.
+
+#### 13.8.6 Healthcheck flaps
+
+**Symptom.** `docker ps` shows the container alternating between `healthy` and `unhealthy`; `docker inspect basic-memory` reports the healthcheck failing during startup.
+
+**Cause.** BM startup is taking longer than the 5s `start_period` in the compose healthcheck, especially on slow disks or when the SQLite index is rebuilding from a large KB.
+
+**Resolution.** Bump `start_period: 30s` (or higher, if your host is genuinely slow) in the healthcheck block and `docker compose up -d` to apply.
+
+#### 13.8.7 Caddy reload doesn't pick up a new token
+
+**Symptom.** After editing the Caddyfile and running `caddy reload`, the new dev's bearer token still 401s.
+
+**Cause.** Caddy aggressively caches the matcher list in process memory; `caddy reload` occasionally misses a header-matcher update.
+
+**Resolution.** Use `systemctl reload caddy` as the safe form. If that still doesn't propagate, `systemctl restart caddy` — that drops in-flight SSE streams, but clients reconnect within seconds.
 
 ---
 
