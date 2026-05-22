@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - New design spec `docs/superpowers/specs/2026-05-21-bm-scribe-design.md` for the BM-scribe plugin: twelve subcommands across project-knowledge creators and personal-namespace verbs, the three-step `write_note → move_note → edit_note` permalink-canonicalization contract field-tested against BM v0.21.1, and the personal-namespace shape.
 - New `plugin/bm-scribe/` Claude Code plugin scaffolding: `package.json` + `gemini-extension.json` manifests, `README.md` with the twelve-subcommand catalogue, `CLAUDE.md` instructing the plugin's posture (always emit the three-step pattern, never short-cut step 3), and `docs/three-step-pattern.md` with a literal worked example for the load-bearing `write_note → move_note → edit_note` contract.
+- Six project-knowledge creator skills under `plugin/bm-scribe/skills/`: `create-epic`, `create-story`, `create-decision` (with `search_notes`-based ADR auto-numbering), `create-module`, `create-feature`, `create-glossary`. All six encode the three-step `write_note → move_note → edit_note` BM v0.21.1 pattern and land at canonical v0.7.0 permalinks (`<PROJECT>/<type-plural>/<key>/main`).
 
 ### Changed
 
