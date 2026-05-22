@@ -68,6 +68,16 @@ your reports — redact to `***` whenever a step would otherwise print one.
      `## Active integrations` heading (create the heading if absent). Skip if
      the same import is already present.
    - If it doesn't exist, create it with that heading and one import line.
+9. Optional: install the bm-scribe companion plugin (v0.7.1+). It wraps the
+   standard `basic-memory` MCP tools with twelve skills that enforce the
+   v0.7.0 project-knowledge layout and the BM v0.21.1 three-step permalink-
+   canonicalization pattern. Ask me whether to enable it. If yes:
+       claude plugin marketplace add patiently/anti-tangent-mcp
+       claude plugin install bm-scribe@anti-tangent-mcp
+   Verify with `claude plugin list`. Tell me to set `BM_SCRIBE_PROJECT` (and
+   optionally `BM_SCRIBE_USERNAME`) in my shell env before using any of the
+   `bm-scribe:*` skills. Skip this step if I say no — the MCP install from
+   steps 1-8 is complete and useful without the plugin.
 
 Report: installed version, binary path, `claude mcp list` output (with any
 key values redacted), and the final contents of `~/.claude/CLAUDE.md`.
@@ -343,6 +353,36 @@ On epic-scale projects with multiple agents and authors, implementers drift away
 - Integration playbook: [INTEGRATION.md, "Project knowledge (optional)"](INTEGRATION.md#project-knowledge-optional)
 - Shared-VM or Docker-container setup: [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md)
 - Note templates: [`examples/project-knowledge/`](examples/project-knowledge/)
+
+## Companion: bm-scribe plugin (v0.7.1+)
+
+`bm-scribe` is a Claude Code plugin co-located in this repo at [`plugin/bm-scribe/`](plugin/bm-scribe/). It wraps the standard `basic-memory` MCP tools with twelve narrowly-scoped skills that enforce the v0.7.0 project-knowledge layout and the BM v0.21.1 three-step permalink-canonicalization pattern automatically — so calling agents don't rediscover step 3 (`edit_note(find_replace)` against the YAML `permalink:` line) empirically.
+
+**Install (Claude Code only — opencode does not load Claude Code plugins):**
+
+```bash
+claude plugin marketplace add patiently/anti-tangent-mcp
+claude plugin install bm-scribe@anti-tangent-mcp
+```
+
+Verify with `claude plugin list`. The plugin exposes twelve skills under the `bm-scribe:` namespace — six project-knowledge creators (`create-epic`, `create-story`, `create-decision`, `create-module`, `create-feature`, `create-glossary`) plus six personal-namespace verbs (`add-todo`, `list-todos`, `tick-todo`, `add-note`, `fetch-note`, `list-notes`).
+
+Two environment variables: `BM_SCRIBE_PROJECT` (BM project slug to write to) and `BM_SCRIBE_USERNAME` (handle for the personal namespace, defaults to `$USER`). The plugin asks for these at first use if unset.
+
+For ephemeral testing without persistent install:
+
+```bash
+claude --plugin-dir /path/to/anti-tangent-mcp/plugin/bm-scribe
+```
+
+References:
+
+- Plugin README: [`plugin/bm-scribe/README.md`](plugin/bm-scribe/README.md)
+- Design spec: [`docs/superpowers/specs/2026-05-21-bm-scribe-design.md`](docs/superpowers/specs/2026-05-21-bm-scribe-design.md)
+- The load-bearing BM v0.21.1 contract: [`plugin/bm-scribe/docs/three-step-pattern.md`](plugin/bm-scribe/docs/three-step-pattern.md)
+- Personal-namespace conventions: [`docs/team-setup/project-knowledge-conventions.md`](docs/team-setup/project-knowledge-conventions.md) § 9
+
+bm-scribe is **advisory wrapper** over Basic Memory — it doesn't replace the `basic-memory` MCP server. Configure the BM server separately (see Basic Memory's own docs).
 
 ## Integration
 

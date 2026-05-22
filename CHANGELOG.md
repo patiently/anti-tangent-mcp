@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-05-22
+
+### Added
+- New design spec `docs/superpowers/specs/2026-05-21-bm-scribe-design.md` for the BM-scribe plugin: twelve subcommands across project-knowledge creators and personal-namespace verbs, the three-step `write_note → move_note → edit_note` permalink-canonicalization contract field-tested against BM v0.21.1, and the personal-namespace shape.
+- New `plugin/bm-scribe/` Claude Code plugin scaffolding: `package.json` + `gemini-extension.json` manifests, `README.md` with the twelve-subcommand catalogue, `CLAUDE.md` instructing the plugin's posture (always emit the three-step pattern, never short-cut step 3), and `docs/three-step-pattern.md` with a literal worked example for the load-bearing `write_note → move_note → edit_note` contract.
+- Six project-knowledge creator skills under `plugin/bm-scribe/skills/`: `create-epic`, `create-story`, `create-decision` (with `search_notes`-based ADR auto-numbering), `create-module`, `create-feature`, `create-glossary`. All six encode the three-step `write_note → move_note → edit_note` BM v0.21.1 pattern and land at canonical v0.7.0 permalinks (`<PROJECT>/<type-plural>/<key>/main`).
+- Three personal-namespace todo skills under `plugin/bm-scribe/skills/`: `add-todo` (handles both create-on-first-use via the three-step pattern and subsequent appends via `insert_before_section`), `list-todos` (prints bullets with numeric indices), `tick-todo` (flips an unchecked bullet to checked with date stamp via `find_replace`). All three target `<USERNAME>/todo/main`.
+- Three personal-namespace note skills under `plugin/bm-scribe/skills/`: `add-note` (three-step create at `<USERNAME>/notes/<slug>/main`), `fetch-note` (read + print), `list-notes` (search by `<USERNAME>/notes/` prefix and print titles + permalinks).
+- New personal-namespace templates under `examples/project-knowledge/personal/`: `README.md` (overview), `todo.md` (rolling checkbox list at `<USERNAME>/todo/main` with `## Active` / `## Done` sections), and `note.md` (one note per topic at `<USERNAME>/notes/<slug>/main`). The `bm-scribe:add-todo` skill instantiates `todo.md` on first-use create.
+- New §9 "Personal namespace (`<USERNAME>/`)" in `docs/team-setup/project-knowledge-conventions.md` documenting the `<USERNAME>/todo/main` and `<USERNAME>/notes/<slug>/main` layouts, the same-BM-project posture, the explicit boundary that anti-tangent's `prime` / `extract` never scan the personal namespace, and a pointer to `plugin/bm-scribe/` for the write side.
+- New `.claude-plugin/marketplace.json` at the repo root listing `bm-scribe` as a v0.1.0 plugin, plus `plugin/bm-scribe/.claude-plugin/plugin.json` per Claude Code's plugin-manifest convention. Users can now install the companion plugin via `claude plugin marketplace add patiently/anti-tangent-mcp` followed by `claude plugin install bm-scribe@anti-tangent-mcp`. Both manifests pass `claude plugin validate` (one informational warning that the plugin-root `CLAUDE.md` is not auto-loaded as project context — the Hard Rules it carries are duplicated inside each SKILL.md body, so functionality is unaffected; consider folding them into an auto-loaded skill in a follow-up release).
+- README.md gains a "Companion: bm-scribe plugin (v0.7.1+)" section with the two-line `marketplace add` + `plugin install` commands and an ephemeral `--plugin-dir` fallback. The Claude Code one-shot install prompt gains an optional step 9 that installs the companion plugin if the user wants it. The opencode prompt is left untouched — opencode does not load Claude Code plugins.
+- `plugin/bm-scribe/README.md` gains an Install section covering both the persistent (marketplace) and ephemeral (`--plugin-dir`) paths.
+
+### Changed
+- `INTEGRATION.md` "Project knowledge (optional)" section: moved the "Applying bm_commands to BM v0.21.1" subsection up so it sits directly under "Controller workflow (per epic)" — readers now see the translation contract **before** any bm_commands paste step. The full literal worked example (`write_note → move_note → read_note → edit_note(find_replace)` with annotated BM responses) lives at [`plugin/bm-scribe/docs/three-step-pattern.md`](plugin/bm-scribe/docs/three-step-pattern.md); INTEGRATION.md links to it rather than duplicating to stay under the 40,000-byte user-instructions context budget. Subsection points at `plugin/bm-scribe/` as the encoded form of the contract.
+- `INTEGRATION.md` gains a new "v0.7.0 canonical layout" subsection inline (between "Six note types in two layers" and "The `project_knowledge` field"). Tabulates the canonical permalink shape per note type with concrete examples, calls out plural type folders, ADR-numbered decisions (not date-prefix), and the legacy posture of v0.6.x flat shapes. References `plugin/bm-scribe/` as the canonical writer.
+
+### Fixed
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.7.0] - 2026-05-21
 
 ### Added

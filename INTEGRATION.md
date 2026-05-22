@@ -44,9 +44,9 @@ When the reviewer encounters a plan claim it cannot verify text-only, as of v0.3
 
 ### Choosing `pinned_by`, `context`, and `controller_verified_references`
 
-- **`context`** — background a fresh implementer needs (constraints, repo policy carve-outs, prior decisions, why a non-obvious approach is required). Helps the reviewer judge ambiguity; not a claim that a specific code reference exists.
-- **`pinned_by`** — anchors that preserve behavior: existing tests, docs, commands, or static checks pinning a terse AC such as "retry behavior remains unchanged." Treated as caller-supplied anchors, not independently verified codebase facts.
-- **`controller_verified_references`** — codebase references the controller already grep-verified (paths, symbols, line anchors, commands, adjacent patterns). The pre-task reviewer suppresses `unverifiable_codebase_claim` only when the task claim and a CVR entry match by deterministic substring; contradictions, missing ACs, ambiguity, and `convention_deviation` findings are NOT suppressed. Use `testability_extractions` to suppress `scope_drift` on intentional helper extractions and `codebase_conventions` to actively trigger `convention_deviation` findings.
+- **`context`** — background a fresh implementer needs (constraints, repo carve-outs, prior decisions). Helps the reviewer judge ambiguity; not a code-reference claim.
+- **`pinned_by`** — existing tests, docs, commands, or static checks pinning a terse AC like "retry behavior remains unchanged." Caller-supplied anchors, not verified facts.
+- **`controller_verified_references`** — code refs the controller already grep-verified (paths, symbols, anchors). Pre-task reviewer suppresses `unverifiable_codebase_claim` on deterministic substring match only; contradictions, missing ACs, ambiguity, `convention_deviation` findings are NOT suppressed. `testability_extractions` suppresses `scope_drift` on intentional extractions; `codebase_conventions` triggers `convention_deviation` findings.
 
 ---
 
@@ -283,7 +283,31 @@ The server is stateless; the controller's dispatch logic ties prime → implemen
 1. **Before dispatch.** Search the KB by task terms + epic's `touches_modules` / `relates` → `kb_index`. Call `prime_project_knowledge` with task fields + `kb_index` + `epic_permalink`; it returns `picks` (and `bm_commands` when `ANTI_TANGENT_KB_STORE=basic-memory`). Read the picked notes into a `kb_excerpts` markdown string.
 2. **Dispatch.** Include `kb_excerpts` in the implementer's brief AND pass it verbatim as `project_knowledge` into `validate_task_spec`. The subagent makes no prime/extract calls.
 3. **After DONE.** Call `extract_project_knowledge` with the completion envelope(s), `kb_index`, optional `current_kb_excerpts`, and `epic_permalink`. Returns `proposals` (and `bm_commands` when configured).
-4. **Apply.** A human (or the controller, gated by the ladder below) reviews proposals and pastes the `bm_commands`.
+4. **Apply.** A human (or the controller, gated by the ladder below) reviews proposals and pastes the `bm_commands` — see the "Applying bm_commands to BM v0.21.1" subsection immediately below for the translation steps **before** you paste.
+
+### Applying bm_commands to BM v0.21.1
+
+Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the tool names match BM verbatim, but the arg shapes track the spec's logical model rather than each BM release's literal signature (the explicit non-goal: don't couple anti-tangent to BM's per-release API churn). Field-tested against BM v0.21.1 on 2026-05-21, three small translation steps land between paste and apply.
+
+**`write_note` arg mapping** (extract's `Proposal{action: "create"}` and supersede-leg-1):
+
+| Extract emits | BM v0.21.1 takes | Mapping |
+|---|---|---|
+| `permalink: "<dir>/<slug>"` | `directory` + `title` | Split on the last `/`; prefix is `directory`. Pass `proposal.title` directly as `title` rather than slug-back-to-title. |
+| `frontmatter: {…}` | `metadata: {…}` | Verbatim — BM merges into the YAML frontmatter at the top of the file. |
+| `body: "…"` | `content: "…"` | Verbatim. |
+| `proposal.type` | `note_type` | E.g. `"decision"`, `"epic"`, `"feature"`, `"module"`, `"glossary"`. |
+
+**`edit_note` operation hints.** BM v0.21.1's `edit_note` requires an explicit `operation` enum that extract does not emit; the agent picks based on the target note's structure:
+
+- Ledger / "Recent material changes" appends — `insert_before_section` keyed on the section AFTER your target (puts the new entry at the bottom of the target section without clobbering).
+- Supersede-leg-2 (flipping a predecessor's `status` to `superseded`) — `find_replace` against the frontmatter line, or BM's frontmatter-patch verb if available in your version.
+- Replacing a whole section's body — `replace_section`.
+- Appending to the very end of the note (no section anchor) — `append`.
+
+**Permalink-slug expectations.** BM auto-derives the stored slug from `title` (lowercased, hyphenated), so the permalink extract proposes (e.g. `<PROJECT>/decisions/0042-docker-bm-deployment-is-alternative`) diverges from what BM stores. Cross-links (`epic_origin`, etc.) then won't resolve. Cleanest fix: a **three-step pattern** — `write_note` to create, `move_note` to the canonical path, `edit_note(find_replace)` to rewrite the YAML `permalink:` line. Step 3 is load-bearing; steps 1+2 alone leave wikilinks broken.
+
+**Worked example.** See [`plugin/bm-scribe/docs/three-step-pattern.md`](plugin/bm-scribe/docs/three-step-pattern.md) for a literal end-to-end example showing `write_note → move_note → read_note → edit_note(find_replace)` with annotated BM responses at each step. The `plugin/bm-scribe/` plugin shipped from this repo encodes this pattern across every creator skill so calling agents don't have to rediscover step 3 empirically.
 
 ### Six note types in two layers
 
@@ -296,7 +320,11 @@ The server is stateless; the controller's dispatch logic ties prime → implemen
 | `epic` | operational | live dashboard: charter, stories table, open PRs, acceptance checklist, progress ledger |
 | `story` | operational | live dashboard: brief, multi-PR table, subtasks, deployment state, decisions produced (v0.7.0+) |
 
-Templates live in [`examples/project-knowledge/`](examples/project-knowledge/); frozen-snapshot real anti-tangent examples in [`examples/project-knowledge/dogfood/`](examples/project-knowledge/dogfood/). For the per-project tuning loop — issue-ID format, folder convention, milestone events, project-prefix bootstrap (including v0.6.x→v0.7.0 migration) — see [`docs/team-setup/project-knowledge-conventions.md`](docs/team-setup/project-knowledge-conventions.md).
+Templates: [`examples/project-knowledge/`](examples/project-knowledge/); frozen real examples: [`examples/project-knowledge/dogfood/`](examples/project-knowledge/dogfood/). Per-project tuning (issue-ID format, folder convention, milestone events, project-prefix bootstrap incl. v0.6.x→v0.7.0 migration): [`docs/team-setup/project-knowledge-conventions.md`](docs/team-setup/project-knowledge-conventions.md).
+
+### v0.7.0 canonical layout
+
+Permalinks follow `<PROJECT>/<type>/<key>/main` with `main.md` as a literal filename (leaves room for `charter.md` / `retro.md` side-docs per ticket). Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered, not date-prefixed) for decisions, a `<slug>` for modules/features, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. Date-prefix forms (`2026-05-…`) are a v0.6.x artifact — migrate to ADR shape on first edit (see conventions doc § 6, Path A). The `plugin/bm-scribe/` plugin (v0.7.1+) auto-picks the next ADR number on `create-decision` and enforces this layout for every other type.
 
 ### The `project_knowledge` field
 
@@ -321,7 +349,7 @@ Recommended default disposition (the server doesn't enforce; teams can override)
 
 ### Anchored Basic Memory tool names
 
-When `ANTI_TANGENT_KB_STORE=basic-memory`, prime and extract emit `bm_commands` arrays referencing the canonical BM tool names (`search_notes`, `read_note`, `write_note`, `edit_note`, `move_note`, `delete_note`). BM does NOT ship a `supersede_note` verb — a logical `Proposal{action: "supersede"}` maps to a pair: `write_note` for the new note (`status: accepted`, `supersedes: [<predecessor>]`), then `edit_note` to flip the predecessor's `status` to `superseded`. Full verified contract (BM version, tool names, supersede mapping, transport recommendation) lives in the [Basic Memory contract block](docs/superpowers/plans/2026-05-19-project-knowledge-v0.6.0.md#basic-memory-contract-verified-yyyy-mm-dd) at the bottom of the v0.6.0 plan.
+When `ANTI_TANGENT_KB_STORE=basic-memory`, prime and extract emit `bm_commands` arrays referencing canonical BM tool names (`search_notes`, `read_note`, `write_note`, `edit_note`, `move_note`, `delete_note`). BM has no `supersede_note` verb — a `Proposal{action: "supersede"}` maps to `write_note` (new note with `status: accepted`, `supersedes: [<predecessor>]`) plus `edit_note` flipping the predecessor's `status` to `superseded`. Full contract: [Basic Memory contract block](docs/superpowers/plans/2026-05-19-project-knowledge-v0.6.0.md#basic-memory-contract-verified-yyyy-mm-dd) at the bottom of the v0.6.0 plan.
 
 For the operator-side topology of running BM as a shared service across a team, see [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md) — covers a dedicated VM via stdio-over-SSH and a Docker container via SSE behind a reverse proxy.
 
@@ -335,29 +363,7 @@ Defaults shown; see [`README.md`](README.md) for the full dotenv block.
 - `ANTI_TANGENT_PRIME_MAX_TOKENS` — output cap for prime; default `4096`. Ceiling-clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`.
 - `ANTI_TANGENT_EXTRACT_MAX_TOKENS` — output cap for extract; default `8192`. Ceiling-clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`.
 
-Existing flows are unaffected when `ANTI_TANGENT_KB_STORE` is empty and `project_knowledge` is unset — that's the backward-compat guarantee.
-
-### Applying bm_commands to BM v0.21.1
-
-Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the tool names match BM verbatim, but the arg shapes track the spec's logical model rather than each BM release's literal signature (the explicit non-goal: don't couple anti-tangent to BM's per-release API churn). Field-tested against BM v0.21.1 on 2026-05-21, three small translation steps land between paste and apply.
-
-**`write_note` arg mapping** (extract's `Proposal{action: "create"}` and supersede-leg-1):
-
-| Extract emits | BM v0.21.1 takes | Mapping |
-|---|---|---|
-| `permalink: "<dir>/<slug>"` | `directory` + `title` | Split on the last `/`; prefix is `directory`. Pass `proposal.title` directly as `title` rather than slug-back-to-title. |
-| `frontmatter: {…}` | `metadata: {…}` | Verbatim — BM merges into the YAML frontmatter at the top of the file. |
-| `body: "…"` | `content: "…"` | Verbatim. |
-| `proposal.type` | `note_type` | E.g. `"decision"`, `"epic"`, `"feature"`, `"module"`, `"glossary"`. |
-
-**`edit_note` operation hints.** BM v0.21.1's `edit_note` requires an explicit `operation` enum that extract does not emit; the agent picks based on the target note's structure:
-
-- Ledger / "Recent material changes" appends — `insert_before_section` keyed on the section AFTER your target (puts the new entry at the bottom of the target section without clobbering).
-- Supersede-leg-2 (flipping a predecessor's `status` to `superseded`) — `find_replace` against the frontmatter line, or BM's frontmatter-patch verb if available in your version.
-- Replacing a whole section's body — `replace_section`.
-- Appending to the very end of the note (no section anchor) — `append`.
-
-**Permalink-slug expectations.** BM auto-derives the stored slug from the `title` (lowercased, hyphenated, no date prefix unless the title carries one), so the permalink proposed by extract (e.g. `decisions/2026-05-docker-bm-deployment-is-alternative`) often diverges from what BM stores (e.g. `main/decisions/docker-basic-memory-deployment-is-an-alternative-path`). If the same extract run proposes cross-links (e.g. an `epic_origin` ledger entry referencing the new note), they won't resolve against BM's actual slug. Cleanest fix: `move_note` after `write_note` to rename to the anti-tangent-proposed permalink, keeping cross-links load-bearing across calls.
+Existing flows are unaffected when both `ANTI_TANGENT_KB_STORE` and `project_knowledge` are unset (backward-compat guarantee).
 
 ---
 
