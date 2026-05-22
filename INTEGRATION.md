@@ -361,6 +361,21 @@ The `plugin/bm-scribe/` plugin shipped from this repo encodes this pattern acros
 
 Templates live in [`examples/project-knowledge/`](examples/project-knowledge/); frozen-snapshot real anti-tangent examples in [`examples/project-knowledge/dogfood/`](examples/project-knowledge/dogfood/). For the per-project tuning loop — issue-ID format, folder convention, milestone events, project-prefix bootstrap (including v0.6.x→v0.7.0 migration) — see [`docs/team-setup/project-knowledge-conventions.md`](docs/team-setup/project-knowledge-conventions.md).
 
+### v0.7.0 canonical layout
+
+All note permalinks follow `<PROJECT>/<type>/<key>/main`, with `main.md` as a literal filename (leaves room for `charter.md`, `retro.md`, etc. as side-docs per ticket):
+
+| Type | Permalink shape | Example |
+|---|---|---|
+| `epic` | `<PROJECT>/epics/<TICKET-ID>/main` | `monorepo/epics/YN-10206/main` |
+| `story` | `<PROJECT>/stories/<TICKET-ID>/main` | `monorepo/stories/YN-10211/main` |
+| `decision` | `<PROJECT>/decisions/<NNNN>-<slug>/main` | `monorepo/decisions/0001-text-only-reviewer/main` |
+| `module` | `<PROJECT>/modules/<slug>/main` | `monorepo/modules/review-pipeline/main` |
+| `feature` | `<PROJECT>/features/<slug>/main` | `monorepo/features/project-knowledge-loop/main` |
+| `glossary` | `<PROJECT>/glossary/<term>/main` | `monorepo/glossary/dispatch-clause/main` |
+
+Type folders are **plural**. Decisions are **ADR-numbered** (`NNNN-<slug>`), not date-prefixed — date-prefix forms (`2026-05-<slug>`) are a v0.6.x artifact and should be migrated to ADR shape on first edit (see conventions doc § 6, Path A). The `plugin/bm-scribe/` plugin (shipped from this repo as of v0.7.1) auto-picks the next ADR number when creating a decision and enforces this layout for every other type.
+
 ### The `project_knowledge` field
 
 `validate_task_spec` and `validate_plan` accept an optional `project_knowledge` string (markdown ok). The reviewer treats it as **authoritative** — same posture as `pinned_by` — so stated facts are not flagged as `unverifiable_codebase_claim`. Counts against the 200 KB payload cap; keep under ~16 KB per call (prime's picks keep it bounded).

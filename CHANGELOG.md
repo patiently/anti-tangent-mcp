@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `INTEGRATION.md` "Project knowledge (optional)" section: moved the "Applying bm_commands to BM v0.21.1" subsection up so it sits directly under "Controller workflow (per epic)" — readers now see the translation contract **before** any bm_commands paste step. Added an end-to-end worked example showing `write_note → move_note → edit_note` with annotated outputs so the three-step permalink-canonicalization pattern is concrete, not implicit. Subsection points at `plugin/bm-scribe/` as the encoded form of the contract. Prior 0.6.2 file-size constraint (40k user-instructions threshold) is dropped — INTEGRATION.md grows as needed.
+- `INTEGRATION.md` gains a new "v0.7.0 canonical layout" subsection inline (between "Six note types in two layers" and "The `project_knowledge` field"). Tabulates the canonical permalink shape per note type with concrete examples, calls out plural type folders, ADR-numbered decisions (not date-prefix), and the legacy posture of v0.6.x flat shapes. References `plugin/bm-scribe/` as the canonical writer.
 
 ### Fixed
 
