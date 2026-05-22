@@ -11,8 +11,7 @@ Creates a project-knowledge `decision` note at `<PROJECT>/decisions/<NNNN>-<slug
 
 Ask the user for:
 
-- `<slug>` (a kebab-case slug for the decision) — required, comes from the invocation argument if provided.
-- `slug` — kebab-case description (e.g. `text-only-reviewer`).
+- `<slug>` — kebab-case slug for the decision (e.g. `text-only-reviewer`). Required; comes from the invocation argument if provided.
 - `title` — one-line human title for the decision.
 - `status` — `proposed` (default) or `accepted`.
 - `epic_origin` — optional permalink of the epic that triggered this decision.
