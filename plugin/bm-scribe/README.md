@@ -8,7 +8,7 @@ Persistent (recommended), via the anti-tangent-mcp marketplace:
 
 ```bash
 claude plugin marketplace add patiently/anti-tangent-mcp
-claude plugin install bm-scribe
+claude plugin install bm-scribe@anti-tangent-mcp
 ```
 
 Verify with `claude plugin list`. The plugin's twelve skills become available under the `bm-scribe:` namespace immediately.

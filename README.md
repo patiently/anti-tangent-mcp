@@ -73,7 +73,7 @@ your reports — redact to `***` whenever a step would otherwise print one.
    v0.7.0 project-knowledge layout and the BM v0.21.1 three-step permalink-
    canonicalization pattern. Ask me whether to enable it. If yes:
        claude plugin marketplace add patiently/anti-tangent-mcp
-       claude plugin install bm-scribe
+       claude plugin install bm-scribe@anti-tangent-mcp
    Verify with `claude plugin list`. Tell me to set `BM_SCRIBE_PROJECT` (and
    optionally `BM_SCRIBE_USERNAME`) in my shell env before using any of the
    `bm-scribe:*` skills. Skip this step if I say no — the MCP install from
@@ -362,7 +362,7 @@ On epic-scale projects with multiple agents and authors, implementers drift away
 
 ```bash
 claude plugin marketplace add patiently/anti-tangent-mcp
-claude plugin install bm-scribe
+claude plugin install bm-scribe@anti-tangent-mcp
 ```
 
 Verify with `claude plugin list`. The plugin exposes twelve skills under the `bm-scribe:` namespace — six project-knowledge creators (`create-epic`, `create-story`, `create-decision`, `create-module`, `create-feature`, `create-glossary`) plus six personal-namespace verbs (`add-todo`, `list-todos`, `tick-todo`, `add-note`, `fetch-note`, `list-notes`).
