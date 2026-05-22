@@ -283,7 +283,70 @@ The server is stateless; the controller's dispatch logic ties prime → implemen
 1. **Before dispatch.** Search the KB by task terms + epic's `touches_modules` / `relates` → `kb_index`. Call `prime_project_knowledge` with task fields + `kb_index` + `epic_permalink`; it returns `picks` (and `bm_commands` when `ANTI_TANGENT_KB_STORE=basic-memory`). Read the picked notes into a `kb_excerpts` markdown string.
 2. **Dispatch.** Include `kb_excerpts` in the implementer's brief AND pass it verbatim as `project_knowledge` into `validate_task_spec`. The subagent makes no prime/extract calls.
 3. **After DONE.** Call `extract_project_knowledge` with the completion envelope(s), `kb_index`, optional `current_kb_excerpts`, and `epic_permalink`. Returns `proposals` (and `bm_commands` when configured).
-4. **Apply.** A human (or the controller, gated by the ladder below) reviews proposals and pastes the `bm_commands`.
+4. **Apply.** A human (or the controller, gated by the ladder below) reviews proposals and pastes the `bm_commands` — see the "Applying bm_commands to BM v0.21.1" subsection immediately below for the translation steps **before** you paste.
+
+### Applying bm_commands to BM v0.21.1
+
+Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the tool names match BM verbatim, but the arg shapes track the spec's logical model rather than each BM release's literal signature (the explicit non-goal: don't couple anti-tangent to BM's per-release API churn). Field-tested against BM v0.21.1 on 2026-05-21, three small translation steps land between paste and apply.
+
+**`write_note` arg mapping** (extract's `Proposal{action: "create"}` and supersede-leg-1):
+
+| Extract emits | BM v0.21.1 takes | Mapping |
+|---|---|---|
+| `permalink: "<dir>/<slug>"` | `directory` + `title` | Split on the last `/`; prefix is `directory`. Pass `proposal.title` directly as `title` rather than slug-back-to-title. |
+| `frontmatter: {…}` | `metadata: {…}` | Verbatim — BM merges into the YAML frontmatter at the top of the file. |
+| `body: "…"` | `content: "…"` | Verbatim. |
+| `proposal.type` | `note_type` | E.g. `"decision"`, `"epic"`, `"feature"`, `"module"`, `"glossary"`. |
+
+**`edit_note` operation hints.** BM v0.21.1's `edit_note` requires an explicit `operation` enum that extract does not emit; the agent picks based on the target note's structure:
+
+- Ledger / "Recent material changes" appends — `insert_before_section` keyed on the section AFTER your target (puts the new entry at the bottom of the target section without clobbering).
+- Supersede-leg-2 (flipping a predecessor's `status` to `superseded`) — `find_replace` against the frontmatter line, or BM's frontmatter-patch verb if available in your version.
+- Replacing a whole section's body — `replace_section`.
+- Appending to the very end of the note (no section anchor) — `append`.
+
+**Permalink-slug expectations.** BM auto-derives the stored slug from the `title` (lowercased, hyphenated, no date prefix unless the title carries one), so the permalink proposed by extract (e.g. `<PROJECT>/decisions/0042-docker-bm-deployment-is-alternative`) often diverges from what BM stores (e.g. `main/decisions/docker-basic-memory-deployment-is-an-alternative-path`). If the same extract run proposes cross-links (e.g. an `epic_origin` ledger entry referencing the new note), they won't resolve against BM's actual slug. Cleanest fix: a **three-step pattern** — `write_note` to create, `move_note` to relocate to the canonical path, `edit_note` to rewrite the YAML `permalink:` line so the in-frontmatter permalink matches the canonical path. Step 3 is the load-bearing one; steps 1+2 alone leave wikilinks broken.
+
+**Worked example — landing one epic note end-to-end.**
+
+```text
+# Step 1 — create the note. BM ignores metadata.permalink and auto-derives.
+write_note(
+  title="YN-10206 — DriverInvite testability",
+  directory="monorepo/epics/YN-10206",
+  note_type="epic",
+  content="<charter body>",
+  metadata={ permalink: "monorepo/epics/YN-10206/main", … }
+)
+# → BM creates: main/monorepo/epics/yn-10206-driverinvite-testability.md
+# → Frontmatter has: permalink: main/monorepo/epics/yn-10206-driverinvite-testability
+# → NOT the canonical permalink we asked for.
+
+# Step 2 — move the file to the canonical path.
+move_note(
+  identifier="main/monorepo/epics/yn-10206-driverinvite-testability",
+  destination_path="monorepo/epics/YN-10206/main.md"
+)
+# → File now lives at: monorepo/epics/YN-10206/main.md
+# → BUT the YAML frontmatter still says: permalink: main/monorepo/epics/yn-10206-driverinvite-testability
+# → Wikilinks like [[monorepo/epics/YN-10206/main]] do NOT resolve yet.
+
+# Step 3a — read the moved note to capture the YAML permalink line verbatim.
+read_note(identifier="monorepo/epics/YN-10206/main")
+# → Returns the note. Extract the YAML `permalink:` line — call it CURRENT_PERMALINK_LINE.
+# → Do NOT guess this string: BM normalises slugs in ways that can surprise.
+
+# Step 3b — rewrite the YAML permalink line. Load-bearing.
+edit_note(
+  identifier="monorepo/epics/YN-10206/main",
+  operation="find_replace",
+  find_text=CURRENT_PERMALINK_LINE,
+  replace_text="permalink: monorepo/epics/YN-10206/main"
+)
+# → Frontmatter updated. Wikilinks [[monorepo/epics/YN-10206/main]] now resolve.
+```
+
+The `plugin/bm-scribe/` plugin shipped from this repo encodes this pattern across every creator skill so calling agents don't have to rediscover step 3 empirically. See [`plugin/bm-scribe/docs/three-step-pattern.md`](plugin/bm-scribe/docs/three-step-pattern.md) for the load-bearing reference.
 
 ### Six note types in two layers
 
@@ -336,28 +399,6 @@ Defaults shown; see [`README.md`](README.md) for the full dotenv block.
 - `ANTI_TANGENT_EXTRACT_MAX_TOKENS` — output cap for extract; default `8192`. Ceiling-clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`.
 
 Existing flows are unaffected when `ANTI_TANGENT_KB_STORE` is empty and `project_knowledge` is unset — that's the backward-compat guarantee.
-
-### Applying bm_commands to BM v0.21.1
-
-Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the tool names match BM verbatim, but the arg shapes track the spec's logical model rather than each BM release's literal signature (the explicit non-goal: don't couple anti-tangent to BM's per-release API churn). Field-tested against BM v0.21.1 on 2026-05-21, three small translation steps land between paste and apply.
-
-**`write_note` arg mapping** (extract's `Proposal{action: "create"}` and supersede-leg-1):
-
-| Extract emits | BM v0.21.1 takes | Mapping |
-|---|---|---|
-| `permalink: "<dir>/<slug>"` | `directory` + `title` | Split on the last `/`; prefix is `directory`. Pass `proposal.title` directly as `title` rather than slug-back-to-title. |
-| `frontmatter: {…}` | `metadata: {…}` | Verbatim — BM merges into the YAML frontmatter at the top of the file. |
-| `body: "…"` | `content: "…"` | Verbatim. |
-| `proposal.type` | `note_type` | E.g. `"decision"`, `"epic"`, `"feature"`, `"module"`, `"glossary"`. |
-
-**`edit_note` operation hints.** BM v0.21.1's `edit_note` requires an explicit `operation` enum that extract does not emit; the agent picks based on the target note's structure:
-
-- Ledger / "Recent material changes" appends — `insert_before_section` keyed on the section AFTER your target (puts the new entry at the bottom of the target section without clobbering).
-- Supersede-leg-2 (flipping a predecessor's `status` to `superseded`) — `find_replace` against the frontmatter line, or BM's frontmatter-patch verb if available in your version.
-- Replacing a whole section's body — `replace_section`.
-- Appending to the very end of the note (no section anchor) — `append`.
-
-**Permalink-slug expectations.** BM auto-derives the stored slug from the `title` (lowercased, hyphenated, no date prefix unless the title carries one), so the permalink proposed by extract (e.g. `decisions/2026-05-docker-bm-deployment-is-alternative`) often diverges from what BM stores (e.g. `main/decisions/docker-basic-memory-deployment-is-an-alternative-path`). If the same extract run proposes cross-links (e.g. an `epic_origin` ledger entry referencing the new note), they won't resolve against BM's actual slug. Cleanest fix: `move_note` after `write_note` to rename to the anti-tangent-proposed permalink, keeping cross-links load-bearing across calls.
 
 ---
 
