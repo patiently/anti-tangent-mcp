@@ -122,11 +122,26 @@ Who updates what:
 
 The principle: **extract proposes dashboard updates from milestone events; humans curate the durable layer**.
 
+## 9. Personal namespace (`<USERNAME>/`)
+
+v0.7.1 introduces an optional personal namespace that lives **inside the same BM project** as project knowledge, namespaced by each user's handle:
+
+- `<USERNAME>/todo/main.md` — one rolling personal todo list per user (markdown checkbox bullets).
+- `<USERNAME>/notes/<slug>/main.md` — one personal note per topic.
+
+The personal namespace is **invisible to anti-tangent**. `prime_project_knowledge` and `extract_project_knowledge` operate over the `<PROJECT>/` prefix only; controllers should pass a `kb_index` that excludes `<USERNAME>/*` permalinks before calling either tool. This is the boundary that lets personal notes coexist with project knowledge in one BM project without leaking into the reviewer's context.
+
+The `plugin/bm-scribe/` plugin owns the write side (`bm-scribe:add-todo`, `bm-scribe:add-note`, etc.); see [BM scribe design spec](../superpowers/specs/2026-05-21-bm-scribe-design.md) for the contract and [`examples/project-knowledge/personal/`](../../examples/project-knowledge/personal/) for ready-to-paste templates.
+
+`<USERNAME>` is the user's chosen handle, not necessarily their OS username. One value per Claude Code installation; the plugin caches it in local state.
+
 ---
 
 ## See also
 
 - [`examples/project-knowledge/`](../../examples/project-knowledge/) — the shipped templates.
 - [`examples/project-knowledge/dogfood/`](../../examples/project-knowledge/dogfood/) — frozen-snapshot real anti-tangent example notes.
+- [`examples/project-knowledge/personal/`](../../examples/project-knowledge/personal/) — personal-namespace templates (v0.7.1).
+- [`plugin/bm-scribe/`](../../plugin/bm-scribe/) — the Claude Code plugin that writes notes per these conventions (v0.7.1).
 - [v0.6.0 spec](../superpowers/specs/2026-05-18-project-knowledge-design.md) and [v0.7.0 spec](../superpowers/specs/2026-05-21-project-knowledge-conventions-design.md) — authoritative design docs.
 - [`INTEGRATION.md` § "Project knowledge (optional)"](../../INTEGRATION.md#project-knowledge-optional) — generic-adopter integration guide.

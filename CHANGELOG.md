@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Three personal-namespace todo skills under `plugin/bm-scribe/skills/`: `add-todo` (handles both create-on-first-use via the three-step pattern and subsequent appends via `insert_before_section`), `list-todos` (prints bullets with numeric indices), `tick-todo` (flips an unchecked bullet to checked with date stamp via `find_replace`). All three target `<USERNAME>/todo/main`.
 - Three personal-namespace note skills under `plugin/bm-scribe/skills/`: `add-note` (three-step create at `<USERNAME>/notes/<slug>/main`), `fetch-note` (read + print), `list-notes` (search by `<USERNAME>/notes/` prefix and print titles + permalinks).
 - New personal-namespace templates under `examples/project-knowledge/personal/`: `README.md` (overview), `todo.md` (rolling checkbox list at `<USERNAME>/todo/main` with `## Active` / `## Done` sections), and `note.md` (one note per topic at `<USERNAME>/notes/<slug>/main`). The `bm-scribe:add-todo` skill instantiates `todo.md` on first-use create.
+- New §9 "Personal namespace (`<USERNAME>/`)" in `docs/team-setup/project-knowledge-conventions.md` documenting the `<USERNAME>/todo/main` and `<USERNAME>/notes/<slug>/main` layouts, the same-BM-project posture, the explicit boundary that anti-tangent's `prime` / `extract` never scan the personal namespace, and a pointer to `plugin/bm-scribe/` for the write side.
 
 ### Changed
 
