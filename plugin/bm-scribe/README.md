@@ -2,6 +2,25 @@
 
 A Claude Code plugin that writes Basic Memory notes per the v0.7.0 project-knowledge conventions (see [`anti-tangent-mcp`](https://github.com/patiently/anti-tangent-mcp)) and the BM v0.21.1 three-step permalink-canonicalization pattern (see [`docs/three-step-pattern.md`](docs/three-step-pattern.md)).
 
+## Install
+
+Persistent (recommended), via the anti-tangent-mcp marketplace:
+
+```bash
+claude plugin marketplace add patiently/anti-tangent-mcp
+claude plugin install bm-scribe
+```
+
+Verify with `claude plugin list`. The plugin's twelve skills become available under the `bm-scribe:` namespace immediately.
+
+Ephemeral (single-session test), via `--plugin-dir`:
+
+```bash
+claude --plugin-dir /path/to/anti-tangent-mcp/plugin/bm-scribe
+```
+
+Both forms require the `basic-memory` MCP server to be separately configured in Claude Code — bm-scribe is advisory wrapper, not a storage replacement.
+
 ## What it does
 
 Wraps the standard `basic-memory` MCP tools (`write_note`, `move_note`, `edit_note`, `read_note`, `search_notes`) with twelve narrowly-scoped skills that enforce:
