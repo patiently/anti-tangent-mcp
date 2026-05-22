@@ -44,9 +44,9 @@ When the reviewer encounters a plan claim it cannot verify text-only, as of v0.3
 
 ### Choosing `pinned_by`, `context`, and `controller_verified_references`
 
-- **`context`** — background a fresh implementer needs (constraints, repo policy carve-outs, prior decisions, why a non-obvious approach is required). Helps the reviewer judge ambiguity; not a claim that a specific code reference exists.
-- **`pinned_by`** — anchors that preserve behavior: existing tests, docs, commands, or static checks pinning a terse AC such as "retry behavior remains unchanged." Treated as caller-supplied anchors, not independently verified codebase facts.
-- **`controller_verified_references`** — codebase references the controller already grep-verified (paths, symbols, line anchors, commands, adjacent patterns). The pre-task reviewer suppresses `unverifiable_codebase_claim` only when the task claim and a CVR entry match by deterministic substring; contradictions, missing ACs, ambiguity, and `convention_deviation` findings are NOT suppressed. Use `testability_extractions` to suppress `scope_drift` on intentional helper extractions and `codebase_conventions` to actively trigger `convention_deviation` findings.
+- **`context`** — background a fresh implementer needs (constraints, repo carve-outs, prior decisions). Helps the reviewer judge ambiguity; not a code-reference claim.
+- **`pinned_by`** — existing tests, docs, commands, or static checks pinning a terse AC like "retry behavior remains unchanged." Caller-supplied anchors, not verified facts.
+- **`controller_verified_references`** — code refs the controller already grep-verified (paths, symbols, anchors). Pre-task reviewer suppresses `unverifiable_codebase_claim` on deterministic substring match only; contradictions, missing ACs, ambiguity, `convention_deviation` findings are NOT suppressed. `testability_extractions` suppresses `scope_drift` on intentional extractions; `codebase_conventions` triggers `convention_deviation` findings.
 
 ---
 
@@ -305,48 +305,9 @@ Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the t
 - Replacing a whole section's body — `replace_section`.
 - Appending to the very end of the note (no section anchor) — `append`.
 
-**Permalink-slug expectations.** BM auto-derives the stored slug from the `title` (lowercased, hyphenated, no date prefix unless the title carries one), so the permalink proposed by extract (e.g. `<PROJECT>/decisions/0042-docker-bm-deployment-is-alternative`) often diverges from what BM stores (e.g. `main/decisions/docker-basic-memory-deployment-is-an-alternative-path`). If the same extract run proposes cross-links (e.g. an `epic_origin` ledger entry referencing the new note), they won't resolve against BM's actual slug. Cleanest fix: a **three-step pattern** — `write_note` to create, `move_note` to relocate to the canonical path, `edit_note` to rewrite the YAML `permalink:` line so the in-frontmatter permalink matches the canonical path. Step 3 is the load-bearing one; steps 1+2 alone leave wikilinks broken.
+**Permalink-slug expectations.** BM auto-derives the stored slug from `title` (lowercased, hyphenated), so the permalink extract proposes (e.g. `<PROJECT>/decisions/0042-docker-bm-deployment-is-alternative`) diverges from what BM stores. Cross-links (`epic_origin`, etc.) then won't resolve. Cleanest fix: a **three-step pattern** — `write_note` to create, `move_note` to the canonical path, `edit_note(find_replace)` to rewrite the YAML `permalink:` line. Step 3 is load-bearing; steps 1+2 alone leave wikilinks broken.
 
-**Worked example — landing one epic note end-to-end.**
-
-```text
-# Step 1 — create the note. BM ignores metadata.permalink and auto-derives.
-write_note(
-  title="YN-10206 — DriverInvite testability",
-  directory="monorepo/epics/YN-10206",
-  note_type="epic",
-  content="<charter body>",
-  metadata={ permalink: "monorepo/epics/YN-10206/main", … }
-)
-# → BM creates: main/monorepo/epics/yn-10206-driverinvite-testability.md
-# → Frontmatter has: permalink: main/monorepo/epics/yn-10206-driverinvite-testability
-# → NOT the canonical permalink we asked for.
-
-# Step 2 — move the file to the canonical path.
-move_note(
-  identifier="main/monorepo/epics/yn-10206-driverinvite-testability",
-  destination_path="monorepo/epics/YN-10206/main.md"
-)
-# → File now lives at: monorepo/epics/YN-10206/main.md
-# → BUT the YAML frontmatter still says: permalink: main/monorepo/epics/yn-10206-driverinvite-testability
-# → Wikilinks like [[monorepo/epics/YN-10206/main]] do NOT resolve yet.
-
-# Step 3a — read the moved note to capture the YAML permalink line verbatim.
-read_note(identifier="monorepo/epics/YN-10206/main")
-# → Returns the note. Extract the YAML `permalink:` line — call it CURRENT_PERMALINK_LINE.
-# → Do NOT guess this string: BM normalises slugs in ways that can surprise.
-
-# Step 3b — rewrite the YAML permalink line. Load-bearing.
-edit_note(
-  identifier="monorepo/epics/YN-10206/main",
-  operation="find_replace",
-  find_text=CURRENT_PERMALINK_LINE,
-  replace_text="permalink: monorepo/epics/YN-10206/main"
-)
-# → Frontmatter updated. Wikilinks [[monorepo/epics/YN-10206/main]] now resolve.
-```
-
-The `plugin/bm-scribe/` plugin shipped from this repo encodes this pattern across every creator skill so calling agents don't have to rediscover step 3 empirically. See [`plugin/bm-scribe/docs/three-step-pattern.md`](plugin/bm-scribe/docs/three-step-pattern.md) for the load-bearing reference.
+**Worked example.** See [`plugin/bm-scribe/docs/three-step-pattern.md`](plugin/bm-scribe/docs/three-step-pattern.md) for a literal end-to-end example showing `write_note → move_note → read_note → edit_note(find_replace)` with annotated BM responses at each step. The `plugin/bm-scribe/` plugin shipped from this repo encodes this pattern across every creator skill so calling agents don't have to rediscover step 3 empirically.
 
 ### Six note types in two layers
 
@@ -359,22 +320,11 @@ The `plugin/bm-scribe/` plugin shipped from this repo encodes this pattern acros
 | `epic` | operational | live dashboard: charter, stories table, open PRs, acceptance checklist, progress ledger |
 | `story` | operational | live dashboard: brief, multi-PR table, subtasks, deployment state, decisions produced (v0.7.0+) |
 
-Templates live in [`examples/project-knowledge/`](examples/project-knowledge/); frozen-snapshot real anti-tangent examples in [`examples/project-knowledge/dogfood/`](examples/project-knowledge/dogfood/). For the per-project tuning loop — issue-ID format, folder convention, milestone events, project-prefix bootstrap (including v0.6.x→v0.7.0 migration) — see [`docs/team-setup/project-knowledge-conventions.md`](docs/team-setup/project-knowledge-conventions.md).
+Templates: [`examples/project-knowledge/`](examples/project-knowledge/); frozen real examples: [`examples/project-knowledge/dogfood/`](examples/project-knowledge/dogfood/). Per-project tuning (issue-ID format, folder convention, milestone events, project-prefix bootstrap incl. v0.6.x→v0.7.0 migration): [`docs/team-setup/project-knowledge-conventions.md`](docs/team-setup/project-knowledge-conventions.md).
 
 ### v0.7.0 canonical layout
 
-All note permalinks follow `<PROJECT>/<type>/<key>/main`, with `main.md` as a literal filename (leaves room for `charter.md`, `retro.md`, etc. as side-docs per ticket):
-
-| Type | Permalink shape | Example |
-|---|---|---|
-| `epic` | `<PROJECT>/epics/<TICKET-ID>/main` | `monorepo/epics/YN-10206/main` |
-| `story` | `<PROJECT>/stories/<TICKET-ID>/main` | `monorepo/stories/YN-10211/main` |
-| `decision` | `<PROJECT>/decisions/<NNNN>-<slug>/main` | `monorepo/decisions/0001-text-only-reviewer/main` |
-| `module` | `<PROJECT>/modules/<slug>/main` | `monorepo/modules/review-pipeline/main` |
-| `feature` | `<PROJECT>/features/<slug>/main` | `monorepo/features/project-knowledge-loop/main` |
-| `glossary` | `<PROJECT>/glossary/<term>/main` | `monorepo/glossary/dispatch-clause/main` |
-
-Type folders are **plural**. Decisions are **ADR-numbered** (`NNNN-<slug>`), not date-prefixed — date-prefix forms (`2026-05-<slug>`) are a v0.6.x artifact and should be migrated to ADR shape on first edit (see conventions doc § 6, Path A). The `plugin/bm-scribe/` plugin (shipped from this repo as of v0.7.1) auto-picks the next ADR number when creating a decision and enforces this layout for every other type.
+Permalinks follow `<PROJECT>/<type>/<key>/main` with `main.md` as a literal filename (leaves room for `charter.md` / `retro.md` side-docs per ticket). Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered, not date-prefixed) for decisions, a `<slug>` for modules/features, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. Date-prefix forms (`2026-05-…`) are a v0.6.x artifact — migrate to ADR shape on first edit (see conventions doc § 6, Path A). The `plugin/bm-scribe/` plugin (v0.7.1+) auto-picks the next ADR number on `create-decision` and enforces this layout for every other type.
 
 ### The `project_knowledge` field
 
@@ -399,7 +349,7 @@ Recommended default disposition (the server doesn't enforce; teams can override)
 
 ### Anchored Basic Memory tool names
 
-When `ANTI_TANGENT_KB_STORE=basic-memory`, prime and extract emit `bm_commands` arrays referencing the canonical BM tool names (`search_notes`, `read_note`, `write_note`, `edit_note`, `move_note`, `delete_note`). BM does NOT ship a `supersede_note` verb — a logical `Proposal{action: "supersede"}` maps to a pair: `write_note` for the new note (`status: accepted`, `supersedes: [<predecessor>]`), then `edit_note` to flip the predecessor's `status` to `superseded`. Full verified contract (BM version, tool names, supersede mapping, transport recommendation) lives in the [Basic Memory contract block](docs/superpowers/plans/2026-05-19-project-knowledge-v0.6.0.md#basic-memory-contract-verified-yyyy-mm-dd) at the bottom of the v0.6.0 plan.
+When `ANTI_TANGENT_KB_STORE=basic-memory`, prime and extract emit `bm_commands` arrays referencing canonical BM tool names (`search_notes`, `read_note`, `write_note`, `edit_note`, `move_note`, `delete_note`). BM has no `supersede_note` verb — a `Proposal{action: "supersede"}` maps to `write_note` (new note with `status: accepted`, `supersedes: [<predecessor>]`) plus `edit_note` flipping the predecessor's `status` to `superseded`. Full contract: [Basic Memory contract block](docs/superpowers/plans/2026-05-19-project-knowledge-v0.6.0.md#basic-memory-contract-verified-yyyy-mm-dd) at the bottom of the v0.6.0 plan.
 
 For the operator-side topology of running BM as a shared service across a team, see [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md) — covers a dedicated VM via stdio-over-SSH and a Docker container via SSE behind a reverse proxy.
 
@@ -413,7 +363,7 @@ Defaults shown; see [`README.md`](README.md) for the full dotenv block.
 - `ANTI_TANGENT_PRIME_MAX_TOKENS` — output cap for prime; default `4096`. Ceiling-clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`.
 - `ANTI_TANGENT_EXTRACT_MAX_TOKENS` — output cap for extract; default `8192`. Ceiling-clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`.
 
-Existing flows are unaffected when `ANTI_TANGENT_KB_STORE` is empty and `project_knowledge` is unset — that's the backward-compat guarantee.
+Existing flows are unaffected when both `ANTI_TANGENT_KB_STORE` and `project_knowledge` are unset (backward-compat guarantee).
 
 ---
 
