@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-05-23
+
+### Added
+- New design spec `docs/superpowers/specs/2026-05-23-gotcha-note-type-design.md` for a seventh project-knowledge note type, `gotcha`: ADR-numbered permalink at `<PROJECT>/gotchas/<NNNN>-<slug>/main`, `modules: [...]` + `origin:` + `severity` frontmatter, `accepted | superseded` lifecycle with the same supersede-chain mechanics as `decision`. Two intake paths — post-plan via `extract_project_knowledge`'s new `ProposalTypeGotcha`, and post-review via a new `bm-scribe:create-gotcha` skill that mines CodeRabbit / `/ultrareview` / `/code-review` / `/security-review` output inline. Prime side requires no anti-tangent code change; the existing `prime_project_knowledge` loop finds gotchas via their `modules:` frontmatter once they exist as notes.
+
+### Changed
+
+### Fixed
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.7.1] - 2026-05-22
 
 ### Added
