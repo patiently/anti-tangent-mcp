@@ -8,7 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.0] - 2026-05-23
 
 ### Added
-- New design spec `docs/superpowers/specs/2026-05-23-gotcha-note-type-design.md` for a seventh project-knowledge note type, `gotcha`: ADR-numbered permalink at `<PROJECT>/gotchas/<NNNN>-<slug>/main`, `modules: [...]` + `origin:` + `severity` frontmatter, `accepted | superseded` lifecycle with the same supersede-chain mechanics as `decision`. Two intake paths — post-plan via `extract_project_knowledge`'s new `ProposalTypeGotcha`, and post-review via a new `bm-scribe:create-gotcha` skill that mines CodeRabbit / `/ultrareview` / `/code-review` / `/security-review` output inline. Prime side requires no anti-tangent code change; the existing `prime_project_knowledge` loop finds gotchas via their `modules:` frontmatter once they exist as notes.
+- New design spec `docs/superpowers/specs/2026-05-23-gotcha-note-type-design.md` proposing a seventh project-knowledge note type, `gotcha` (implementation planned for v0.8.0; not yet landed — `ProposalTypeGotcha` is not yet in the `internal/verdict/extract.go` enum). The spec covers:
+  - **Storage and frontmatter.** ADR-numbered permalink at `<PROJECT>/gotchas/<NNNN>-<slug>/main`. Frontmatter carries `modules: [...]`, `origin:`, `severity`, `status: accepted | superseded`, `discovered_at`, `supersedes: []`.
+  - **Lifecycle.** Supersede-chain mechanics mirroring `decision`: new note carries `supersedes: [<predecessor>]`, and a follow-up `edit_note(find_replace)` flips the predecessor's `status` to `superseded`.
+  - **Two intake paths.** Post-plan via `extract_project_knowledge` proposing `ProposalTypeGotcha` records (anti-tangent server change); post-review via a new `bm-scribe:create-gotcha` skill that mines CodeRabbit / `/ultrareview` / `/code-review` / `/security-review` output inline (plugin-only — no anti-tangent change for this path).
+  - **Prime integration.** Read side requires no anti-tangent code change. Existing `prime_project_knowledge` loop finds gotchas via canonical-encoded `tags` entries (`status:<value>`, `module:<slug>`) in the existing `KBIndexEntryArg` wire schema. Reviewer prompt and BM schema are unchanged.
 
 ### Changed
 

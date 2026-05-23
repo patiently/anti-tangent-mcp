@@ -219,7 +219,15 @@ validate_plan's reviewer treats gotchas as authoritative
 ### 7.2 Doc updates in `docs/team-setup/project-knowledge-conventions.md`
 
 1. **Search hint for controllers.** Add gotchas to the list of note types the pre-dispatch search should query. One-line addition: "search for gotchas matching the plan's `touches_modules` and include hits in kb_index."
-2. **Superseded ranking note.** Document that controllers should include each gotcha's `status` field in its `kb_index` entry (alongside `permalink`, `title`, `modules`). Prime's reviewer reads `status: superseded` and naturally ranks those lower than `status: accepted` peers when both match a task's module set — no code change, no prompt change, the mechanism is just "give the reviewer the signal it needs." Superseded entries still carry "we used to have this, here's the resolution" value, so they remain in scope rather than being filtered out. If reviewer over-weighting becomes a problem in practice, revisit with a status-aware filter (deferred per §10).
+2. **Encoding gotcha metadata into kb_index `tags`.** The existing `KBIndexEntryArg` wire schema (`internal/mcpsrv/prime_handler.go`) exposes `permalink / type / title / summary / tags` — no dedicated `status` or `modules` fields, and the spec explicitly does **not** extend the schema (per §7.3 + §3). Instead, controllers MUST encode gotcha-specific signals into the existing `tags` array using two canonical key:value formats:
+   - `status:accepted` or `status:superseded` — one entry per gotcha.
+   - `module:<slug>` — one entry per module in the gotcha's frontmatter `modules:` array (so a two-module gotcha contributes two `module:` tags).
+
+   Example `tags` payload for a gotcha at `yc/gotchas/0042-graphql-n+1-on-driver-search/main` with `status: accepted, modules: [driver-search, driver-network]`:
+   ```json
+   ["status:accepted", "module:driver-search", "module:driver-network"]
+   ```
+   This encoding works for *any* note type the controller wants to surface `status` or `module` signals for — it is not gotcha-specific, but gotchas are the first type to require it. Prime's reviewer prompt already considers `tags` when ranking relevance, so no prompt change is needed: a task touching `driver-search` matches the `module:driver-search` tag organically, and `status:superseded` reads as a de-prioritization signal to the reviewer's natural-language ranking. Superseded entries remain in scope (they still carry "we used to have this, here's the resolution" value). If reviewer over-weighting becomes a problem in practice, revisit with a status-aware filter (deferred per §10).
 
 ### 7.3 What stays unchanged
 
