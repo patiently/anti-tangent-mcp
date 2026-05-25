@@ -23,7 +23,7 @@ Both forms require the `basic-memory` MCP server to be separately configured in 
 
 ## What it does
 
-Wraps the standard `basic-memory` MCP tools (`write_note`, `move_note`, `edit_note`, `read_note`, `search_notes`) with twelve narrowly-scoped skills that enforce:
+Wraps the standard `basic-memory` MCP tools (`write_note`, `move_note`, `edit_note`, `read_note`, `search_notes`) with thirteen narrowly-scoped skills that enforce:
 
 - v0.7.0 canonical permalink layout: `<PROJECT>/<type>/<key>/main`, plural type folders, ADR-numbered decisions.
 - The three-step pattern: `write_note` (BM auto-derives the wrong slug) → `move_note` (path moves, permalink stays auto-derived) → `edit_note` find_replace on the YAML `permalink:` line (canonical permalink finally sticks).
