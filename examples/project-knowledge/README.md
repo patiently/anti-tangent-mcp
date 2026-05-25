@@ -22,7 +22,7 @@ frontmatter; copy a template into your shared KB and fill it in.
 All seven types use the shape `<PROJECT>/<type>/<key>/main`, where:
 - `<PROJECT>` is the BM project name (one BM project per git repo; see the conventions doc).
 - `<type>` is one of `decisions`, `modules`, `features`, `glossary`, `epics`, `stories`, `gotchas`.
-- `<key>` is either a slug (decisions, modules, features, glossary) or a ticket ID (epics, stories).
+- `<key>` is either a slug (decisions, modules, features, glossary, gotchas — gotchas use ADR-numbered slugs like decisions) or a ticket ID (epics, stories).
 - The trailing `/main` allows arbitrary side-docs (charter, retro, sub-decisions) to live in the same folder.
 
 ## Modules describe coherent capabilities, not Go packages

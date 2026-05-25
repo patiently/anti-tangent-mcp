@@ -40,7 +40,7 @@ The templates use `<TICKET-ID>` placeholder; adopters substitute. Don't mix form
 
 ## 4. Folder convention
 
-All seven note types use `<PROJECT>/<type>/<key>/main` where `<key>` is either a slug (`decisions`, `modules`, `features`, `glossary`) or a ticket ID (`epics`, `stories`, `gotchas`). The trailing `/main.md` allows arbitrary side-docs per ticket:
+All seven note types use `<PROJECT>/<type>/<key>/main` where `<key>` is either a slug (`decisions`, `modules`, `features`, `glossary`, `gotchas`) or a ticket ID (`epics`, `stories`). Gotchas use ADR-numbered slugs (`0042-graphql-n+1-on-driver-search`) like decisions, not ticket IDs. The trailing `/main.md` allows arbitrary side-docs per ticket:
 
 - `<PROJECT>/epics/<TICKET-ID>/main.md` — the live operational dashboard.
 - `<PROJECT>/epics/<TICKET-ID>/charter.md` — extended charter (optional).
