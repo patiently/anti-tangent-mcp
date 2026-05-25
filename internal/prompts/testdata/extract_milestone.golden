@@ -67,11 +67,11 @@ The caller has pre-fetched these existing notes so you can check for redundancy 
 ## What to do
 
 1. Read each completion envelope above as the authoritative record of what just shipped. Identify two distinct kinds of signal:
-   - **Durable knowledge** worth capturing as a new note: an architectural decision, a module's invariants, a new feature's behavior, a glossary term. Always proposable; not gated on milestones.
+   - **Durable knowledge** worth capturing as a new note: an architectural decision, a module's invariants, a new feature's behavior, a glossary term, or a **gotcha** (a project-and-module-scoped lesson learned — an N+1 query that bit us, a CSV parser that strips trailing newlines, a deploy step that races a cache invalidation). Always proposable; not gated on milestones.
    - **Milestone events** that warrant a dashboard update on an existing `epic` or `story` note. A milestone is ONE of: a PR opened (draft or ready), a PR transitioning state (`draft → review`, `review → merged`, `review → closed-without-merge`), a deployment landing in any environment, or a decision finalizing (`status: accepted`). Story-done is NOT a separate milestone — it's the natural consequence of the last PR for a story merging.
 2. For every proposal, emit a `Proposal` entry shaped per the output schema below:
    - `action`: `create` (new note), `update` (mutate an existing note's frontmatter or body), or `supersede` (replace an existing note with a new one and flip the predecessor's status).
-   - `type`: one of `decision`, `module`, `feature`, `glossary`, `epic`, `story`.
+   - `type`: one of `decision`, `module`, `feature`, `glossary`, `epic`, `story`, `gotcha`.
    - `permalink`: the BM-style relative path (e.g. `decisions/0099-cache-pass`). Never absolute; never a URL.
    - `title`: human-readable note title.
    - `frontmatter_json`: a JSON-encoded **string** (NOT a nested object) carrying the note's frontmatter. Use the literal string `"{}"` when no frontmatter change is intended. For partial updates emit a JSON-object string like `"{\"status\":\"superseded\"}"`. The wire shape is a string because OpenAI strict structured-outputs rejects freeform object schemas.
@@ -85,6 +85,16 @@ The caller has pre-fetched these existing notes so you can check for redundancy 
 
     Note: `missing_index_entry` is reused from the v0.6.0 prime-side finding vocabulary — no new finding category is introduced. The same finding fires from both prime and extract, on different triggers.
 3. Ground every Proposal in the supplied evidence. Do NOT propose notes whose claims are not visible in an envelope or in `plan_text`. If the envelopes contain no durable signal worth capturing, emit zero proposals and emit one `insufficient_evidence` finding (severity: critical).
+
+3a-gotcha. **Gotcha proposals (`type: gotcha`).** A `gotcha` is a project-and-module-scoped lesson learned during implementation: surprises, regressions caught in review, footguns the codebase has, environmental quirks, and similar lore that future plans on the same module(s) should know about before writing code. When you propose a `gotcha`:
+    - Set `permalink` to `<PROJECT>/gotchas/<NNNN>-<slug>/main`, where `<NNNN>` is the next zero-padded ADR-style number across existing `<PROJECT>/gotchas/` entries in `kb_index` (start at `0001` if none). Use a kebab-case `<slug>` derived from the title.
+    - Set `frontmatter_json` to include at minimum: `status: "accepted"`, `modules: ["<slug>", ...]` (one or more module slugs visible in the envelopes or `kb_index`), `severity: "low" | "medium" | "high"`, `discovered_at: "<YYYY-MM-DD>"`. Optional but recommended: `origin: "<PROJECT>/stories/<TICKET-ID>/main"` (or epic/PR permalink) pointing at the work that surfaced it; `supersedes: []` (or a predecessor permalink array if this replaces an earlier gotcha — see step 3a-gotcha-supersede below).
+    - Structure the `body` with FOUR required sections in this order: `## Symptom`, `## Root cause`, `## How to avoid`, `## Evidence`. Optionally add `## Related` with `[[wikilinks]]` to relevant module / story / epic notes. The `## How to avoid` section is the load-bearing one — it carries the actionable rule that prime will excerpt into the next plan's `project_knowledge`.
+    - `rationale`: one sentence explaining why this gotcha is worth recording (not just descriptive — capture the cost of NOT recording it).
+    - `evidence_refs`: at least one ref into the supplied envelopes pointing at the source of the lesson (a finding, a final-file diff, a summary line). Do not fabricate evidence.
+
+3a-gotcha-supersede. **Superseding an existing gotcha.** If a completion envelope describes new understanding that contradicts an existing gotcha's "Root cause" or "How to avoid" (for example, the team found the *real* root cause was a different invariant, or the recommended fix has been replaced by a better one), emit `action: "supersede"` with `supersedes: ["<predecessor permalink>"]` rather than overwriting silently. The predecessor must be a `type: gotcha` note visible in `kb_index`. When the caller is using Basic Memory, use the same supersede `bm_commands` mapping documented in step 7 (a `write_note` for the new note + an `edit_note` with `frontmatter_patch` flipping the predecessor's `status` to `superseded`); in non-BM mode the supersede is expressed solely via the `proposals[]` entry and `bm_commands` stays `[]` (the consumer is responsible for applying the supersede semantics on its own KB store).
+
 3a. **Dashboard updates require a milestone.** If a completion envelope surfaces a milestone, propose `action: update` on the relevant `epic` or `story` note with a `replace_section` (or `frontmatter_patch` / `insert_before_section`) bm_command that rewrites the affected section or frontmatter field verbatim. To produce the new section content, use the matching entry from `current_kb_excerpts` to read the current section, identify the row(s) that change, and emit the full updated section text (NOT a diff). If `current_kb_excerpts` has no entry for the target note, emit an `insufficient_evidence` finding rather than fabricating a section body.
 
     **Detecting "last PR for story":** the reviewer treats a PR merge as the story's terminal PR ONLY when the story's frontmatter `status` in `current_kb_excerpts` is already `done`. The caller — the agent or human who closes the story — sets `status: done` on the story note BEFORE invoking extract for the terminal-merge milestone. This makes story closure an explicit caller gesture rather than an LLM-inferred heuristic; the reviewer's role is to amplify the closure into all the dashboard consequences. The reviewer does NOT scan `## PRs` rows or `## Subtasks` checkboxes to infer terminality — those signals are not authoritative across reviewer models. If `status` is anything other than `done` when a PR merges (including `in_progress`, `review`, or absent), the merge falls into the "PR merged, NOT last for story" row instead.
@@ -145,7 +155,7 @@ Return ONLY a JSON object matching this shape:
   "proposals": [
     {
       "action": "create|update|supersede",
-      "type": "decision|module|feature|glossary|epic|story",
+      "type": "decision|module|feature|glossary|epic|story|gotcha",
       "permalink": "<bm-style relative path>",
       "title": "<note title>",
       "frontmatter_json": "{}",

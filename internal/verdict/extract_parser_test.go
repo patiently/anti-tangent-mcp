@@ -465,7 +465,7 @@ func TestParseExtract_AcceptsStoryType(t *testing.T) {
 	}
 }
 
-func TestParseExtract_AcceptsAllSixTypes(t *testing.T) {
+func TestParseExtract_AcceptsAllSevenTypes(t *testing.T) {
 	// Path-segment differs from the type name for `glossary` (singular) and
 	// `story` (plural is "stories"). Use an explicit map rather than
 	// `tc.typ + "s"` to avoid generating malformed permalinks like
@@ -477,8 +477,9 @@ func TestParseExtract_AcceptsAllSixTypes(t *testing.T) {
 		"glossary": "glossary",
 		"epic":     "epics",
 		"story":    "stories",
+		"gotcha":   "gotchas",
 	}
-	types := []string{"decision", "module", "feature", "glossary", "epic", "story"}
+	types := []string{"decision", "module", "feature", "glossary", "epic", "story", "gotcha"}
 	for _, typ := range types {
 		t.Run(typ, func(t *testing.T) {
 			raw := []byte(`{
@@ -507,5 +508,80 @@ func TestParseExtract_AcceptsAllSixTypes(t *testing.T) {
 				t.Fatalf("type %q: round-trip failed, got %+v", typ, r.Proposals)
 			}
 		})
+	}
+}
+
+func TestParseExtract_AcceptsGotchaType(t *testing.T) {
+	raw := []byte(`{
+		"verdict": "pass",
+		"findings": [],
+		"proposals": [{
+			"action": "create",
+			"type": "gotcha",
+			"permalink": "monorepo/gotchas/0042-graphql-n+1-on-driver-search/main",
+			"title": "GraphQL N+1 on driver-search",
+			"frontmatter_json": "{\"status\":\"accepted\",\"modules\":[\"driver-search\"],\"severity\":\"medium\",\"discovered_at\":\"2026-05-23\"}",
+			"body": "## Symptom\n\nN+1 on driver lookup.\n\n## Root cause\n\nResolver fans out per driver.\n\n## How to avoid\n\nUse a DataLoader.\n\n## Evidence\n\n- completion_envelopes[0].final_files[0]\n\n## Related\n\n- [[monorepo/modules/driver-search/main]]",
+			"body_patch": "",
+			"rationale": "Documents the N+1 surfaced during the search-perf story",
+			"evidence_refs": ["completion_envelopes[0].summary"],
+			"supersedes": []
+		}],
+		"bm_commands": [],
+		"next_action": "Apply the gotcha note before next milestone."
+	}`)
+	r, err := verdict.ParseExtract(raw)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(r.Proposals) != 1 {
+		t.Fatalf("expected 1 proposal, got %d", len(r.Proposals))
+	}
+	if r.Proposals[0].Type != verdict.ProposalTypeGotcha {
+		t.Fatalf("expected type gotcha, got %q", r.Proposals[0].Type)
+	}
+}
+
+// TestParseExtract_AcceptsGotchaSupersede pins the action="supersede" + type="gotcha"
+// combination. The 3a-gotcha-supersede instruction in extract.tmpl documents this path,
+// and the parser composes it from two pre-existing rules (action allowlist at
+// extract_parser.go:77 + type allowlist at extract_parser.go:82), but no existing test
+// exercises both at the same time. Without this test, a refactor that broke gotcha
+// supersedes specifically (vs. supersede in general) could land green.
+func TestParseExtract_AcceptsGotchaSupersede(t *testing.T) {
+	raw := []byte(`{
+		"verdict": "pass",
+		"findings": [],
+		"proposals": [{
+			"action": "supersede",
+			"type": "gotcha",
+			"permalink": "monorepo/gotchas/0043-graphql-n+1-on-driver-search/main",
+			"title": "GraphQL N+1 on driver-search (revised)",
+			"frontmatter_json": "{\"status\":\"accepted\",\"modules\":[\"driver-search\"],\"severity\":\"medium\",\"discovered_at\":\"2026-05-25\",\"supersedes\":[\"monorepo/gotchas/0042-graphql-n+1-on-driver-search/main\"]}",
+			"body": "",
+			"body_patch": "",
+			"rationale": "Predecessor's How to avoid was wrong; the DataLoader fix actually requires opting into batch=true",
+			"evidence_refs": ["completion_envelopes[0].summary"],
+			"supersedes": ["monorepo/gotchas/0042-graphql-n+1-on-driver-search/main"]
+		}],
+		"bm_commands": [],
+		"next_action": "Apply the superseding gotcha; flip predecessor status to superseded."
+	}`)
+	r, err := verdict.ParseExtract(raw)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(r.Proposals) != 1 {
+		t.Fatalf("expected 1 proposal, got %d", len(r.Proposals))
+	}
+	p := r.Proposals[0]
+	if p.Type != verdict.ProposalTypeGotcha {
+		t.Fatalf("expected type gotcha, got %q", p.Type)
+	}
+	if p.Action != verdict.ProposalActionSupersede {
+		t.Fatalf("expected action supersede, got %q", p.Action)
+	}
+	if len(p.Supersedes) != 1 || p.Supersedes[0] != "monorepo/gotchas/0042-graphql-n+1-on-driver-search/main" {
+		t.Fatalf("expected supersedes to carry one predecessor permalink, got %+v", p.Supersedes)
 	}
 }

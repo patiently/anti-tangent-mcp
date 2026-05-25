@@ -50,7 +50,7 @@
         "additionalProperties": false,
         "properties": {
           "action":           { "type": "string", "enum": ["create", "update", "supersede"] },
-          "type":             { "type": "string", "enum": ["decision", "module", "feature", "glossary", "epic", "story"] },
+          "type":             { "type": "string", "enum": ["decision", "module", "feature", "glossary", "epic", "story", "gotcha"] },
           "permalink":        { "type": "string", "minLength": 1 },
           "title":            { "type": "string", "minLength": 1 },
           "frontmatter_json": { "type": "string", "minLength": 1 },

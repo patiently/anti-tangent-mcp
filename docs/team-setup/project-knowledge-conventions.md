@@ -40,7 +40,7 @@ The templates use `<TICKET-ID>` placeholder; adopters substitute. Don't mix form
 
 ## 4. Folder convention
 
-All six note types use `<PROJECT>/<type>/<key>/main` where `<key>` is either a slug (`decisions`, `modules`, `features`, `glossary`) or a ticket ID (`epics`, `stories`). The trailing `/main.md` allows arbitrary side-docs per ticket:
+All seven note types use `<PROJECT>/<type>/<key>/main` where `<key>` is either a slug (`decisions`, `modules`, `features`, `glossary`, `gotchas`) or a ticket ID (`epics`, `stories`). Gotchas use ADR-numbered slugs (`0042-graphql-n+1-on-driver-search`) like decisions, not ticket IDs. The trailing `/main.md` allows arbitrary side-docs per ticket:
 
 - `<PROJECT>/epics/<TICKET-ID>/main.md` — the live operational dashboard.
 - `<PROJECT>/epics/<TICKET-ID>/charter.md` — extended charter (optional).
@@ -103,6 +103,33 @@ The `epic.md` and `story.md` templates have a `tracker_url` frontmatter field. S
 - YouTrack: `https://<org>.youtrack.cloud/issue/XX-NNN`
 
 The reviewer prompt doesn't validate or enforce the URL shape — it's pure human-readable context for KB readers.
+
+## Gotcha encoding in `kb_index` `tags`
+
+The `KBIndexEntryArg` wire schema (`internal/mcpsrv/prime_handler.go`) carries `permalink`, `type`, `title`, `summary`, and `tags` — no dedicated `status` or `modules` fields. Anti-tangent's design explicitly does **not** extend the schema (see [gotcha design spec §3 + §7](../superpowers/specs/2026-05-23-gotcha-note-type-design.md)). When the controller builds a `kb_index` entry for a gotcha note, it MUST encode the gotcha's `status` and per-`modules` frontmatter into the existing `tags` array using two canonical key:value formats:
+
+- `status:accepted` or `status:superseded` — one entry per gotcha.
+- `module:<slug>` — one entry per module in the gotcha's frontmatter `modules:` array (a two-module gotcha contributes two `module:` tags).
+
+Example: a gotcha at `<PROJECT>/gotchas/0042-graphql-n+1-on-driver-search/main` with frontmatter `status: accepted, modules: [driver-search, driver-network]` should produce this `KBIndexEntryArg`:
+
+```json
+{
+  "permalink": "<PROJECT>/gotchas/0042-graphql-n+1-on-driver-search/main",
+  "type": "gotcha",
+  "title": "GraphQL N+1 on driver-search",
+  "summary": "<a short one-line cue — typically the gotcha's How to avoid sentence; matches the existing KBIndexEntryArg.summary convention>",
+  "tags": ["status:accepted", "module:driver-search", "module:driver-network"]
+}
+```
+
+Prime's reviewer already considers `tags` when ranking relevance, so no prompt change is needed: a task touching `driver-search` matches the `module:driver-search` tag organically, and `status:superseded` reads as a de-prioritization signal to the reviewer's natural-language ranking. **Superseded entries remain in scope** rather than being filtered out — they still carry "we used to have this, here's the resolution" value, which prevents regressions on the next plan touching the same modules. If reviewer over-weighting becomes a problem in practice, revisit with a status-aware filter (deferred to a follow-up).
+
+This encoding is not gotcha-specific in principle — any note type the controller wants to surface `status` or `module` signals for can use the same `status:<value>` / `module:<slug>` tag format. Gotchas are the first type to require it because prime's relevance match relies on module-scoping for them.
+
+### Pre-dispatch search hints
+
+Cover all seven note types when building `kb_index` for a new plan — search across `decisions`, `modules`, `features`, `glossary`, `epics`, `stories`, and `gotchas` for entries matching the plan's `touches_modules`. In particular, include `<PROJECT>/gotchas/` matches so accepted-and-superseded gotchas surface alongside relevant decisions, modules, and features.
 
 ## 8. Maintenance ownership
 

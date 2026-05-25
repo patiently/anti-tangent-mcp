@@ -69,7 +69,7 @@ your reports — redact to `***` whenever a step would otherwise print one.
      the same import is already present.
    - If it doesn't exist, create it with that heading and one import line.
 9. Optional: install the bm-scribe companion plugin (v0.7.1+). It wraps the
-   standard `basic-memory` MCP tools with twelve skills that enforce the
+   standard `basic-memory` MCP tools with thirteen skills that enforce the
    v0.7.0 project-knowledge layout and the BM v0.21.1 three-step permalink-
    canonicalization pattern. Ask me whether to enable it. If yes:
        claude plugin marketplace add patiently/anti-tangent-mcp
@@ -356,7 +356,7 @@ On epic-scale projects with multiple agents and authors, implementers drift away
 
 ## Companion: bm-scribe plugin (v0.7.1+)
 
-`bm-scribe` is a Claude Code plugin co-located in this repo at [`plugin/bm-scribe/`](plugin/bm-scribe/). It wraps the standard `basic-memory` MCP tools with twelve narrowly-scoped skills that enforce the v0.7.0 project-knowledge layout and the BM v0.21.1 three-step permalink-canonicalization pattern automatically — so calling agents don't rediscover step 3 (`edit_note(find_replace)` against the YAML `permalink:` line) empirically.
+`bm-scribe` is a Claude Code plugin co-located in this repo at [`plugin/bm-scribe/`](plugin/bm-scribe/). It wraps the standard `basic-memory` MCP tools with thirteen narrowly-scoped skills that enforce the v0.7.0 project-knowledge layout and the BM v0.21.1 three-step permalink-canonicalization pattern automatically — so calling agents don't rediscover step 3 (`edit_note(find_replace)` against the YAML `permalink:` line) empirically.
 
 **Install (Claude Code only — opencode does not load Claude Code plugins):**
 
@@ -365,7 +365,7 @@ claude plugin marketplace add patiently/anti-tangent-mcp
 claude plugin install bm-scribe@anti-tangent-mcp
 ```
 
-Verify with `claude plugin list`. The plugin exposes twelve skills under the `bm-scribe:` namespace — six project-knowledge creators (`create-epic`, `create-story`, `create-decision`, `create-module`, `create-feature`, `create-glossary`) plus six personal-namespace verbs (`add-todo`, `list-todos`, `tick-todo`, `add-note`, `fetch-note`, `list-notes`).
+Verify with `claude plugin list`. The plugin exposes thirteen skills under the `bm-scribe:` namespace — seven project-knowledge creators (`create-epic`, `create-story`, `create-decision`, `create-module`, `create-feature`, `create-glossary`, `create-gotcha`) plus six personal-namespace verbs (`add-todo`, `list-todos`, `tick-todo`, `add-note`, `fetch-note`, `list-notes`).
 
 Two environment variables: `BM_SCRIBE_PROJECT` (BM project slug to write to) and `BM_SCRIBE_USERNAME` (handle for the personal namespace, defaults to `$USER`). The plugin asks for these at first use if unset.
 

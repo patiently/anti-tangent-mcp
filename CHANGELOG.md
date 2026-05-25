@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-05-23
+
+### Added
+- New design spec `docs/superpowers/specs/2026-05-23-gotcha-note-type-design.md` introducing a seventh project-knowledge note type, `gotcha` (implementation landed in the same v0.8.0 release — see the per-surface bullets below). The spec covers:
+  - **Storage and frontmatter.** ADR-numbered permalink at `<PROJECT>/gotchas/<NNNN>-<slug>/main`. Frontmatter carries `modules: [...]`, `origin:`, `severity`, `status: accepted | superseded`, `discovered_at`, `supersedes: []`.
+  - **Lifecycle.** Supersede-chain mechanics mirroring `decision`: new note carries `supersedes: [<predecessor>]`, and a follow-up `edit_note(find_replace)` flips the predecessor's `status` to `superseded`.
+  - **Two intake paths.** Post-plan via `extract_project_knowledge` proposing `ProposalTypeGotcha` records (anti-tangent server change); post-review via a new `bm-scribe:create-gotcha` skill that mines CodeRabbit / `/ultrareview` / `/code-review` / `/security-review` output inline (plugin-only — no anti-tangent change for this path).
+  - **Prime integration.** Read side requires no anti-tangent code change. Existing `prime_project_knowledge` loop finds gotchas via canonical-encoded `tags` entries (`status:<value>`, `module:<slug>`) in the existing `KBIndexEntryArg` wire schema. Reviewer prompt and BM schema are unchanged.
+- New `ProposalTypeGotcha` constant in `internal/verdict/extract.go`, added to the parser type-switch allowlist in `internal/verdict/extract_parser.go`, and added to the `proposals[].type` enum in `internal/verdict/extract_schema.json`. The reviewer can now propose `gotcha`-typed entries from `extract_project_knowledge` envelopes; the parser round-trips them via the new `TestParseExtract_AcceptsGotchaType` test and the renamed `TestParseExtract_AcceptsAllSevenTypes` regression. No change to `ProposalAction` — supersede support reuses the existing `action: "supersede"` + `supersedes: [...]` wire shape.
+- Extended `internal/prompts/templates/extract.tmpl` to teach the reviewer the gotcha category: ADR-style permalink shape, required frontmatter (`status`, `modules`, `severity`, `discovered_at`; optional `origin`, `supersedes`), four-section body template (`## Symptom` / `## Root cause` / `## How to avoid` / `## Evidence`), and supersede mechanics (new instructions `3a-gotcha` and `3a-gotcha-supersede`). Goldens regenerated.
+- New `plugin/bm-scribe/skills/create-gotcha/SKILL.md` creator skill with dual-mode intake: default reads structured `gotcha`-typed proposals from the most recent `extract_project_knowledge` envelope in the conversation; `--from-review <source>` mines candidates from review text (PR comments via `gh api`, filesystem path, or `paste:` heredoc). Applies the three-step BM v0.21.1 creator pattern with auto-picked ADR number; supersede leg flips the predecessor's `status` to `superseded` without rolling back the new note on failure.
+- New `examples/project-knowledge/gotcha.md` template with full frontmatter and the four-section body shape. `examples/project-knowledge/README.md` updated from "Six types in two layers" → "Seven types in three groups" with `gotcha` added under a new "Lessons-learned layer".
+- New `` ## Gotcha encoding in `kb_index` `tags` `` subsection in `docs/team-setup/project-knowledge-conventions.md` documenting the canonical `status:<value>` / `module:<slug>` tag format controllers must use to surface gotcha frontmatter through `KBIndexEntryArg.Tags`. No anti-tangent code change required — the encoding rides on the existing `tags` array.
+- `plugin/bm-scribe` bumped to `v0.2.0` across all four manifests (`package.json`, `gemini-extension.json`, `plugin/bm-scribe/.claude-plugin/plugin.json`, and the bm-scribe entry in `.claude-plugin/marketplace.json`) for the new creator skill.
+
+### Changed
+- `INTEGRATION.md`: renamed "Six note types in two layers" → "Seven note types in three groups" and added the `gotcha` row.
+- `internal/verdict/extract_parser_test.go`: renamed `TestParseExtract_AcceptsAllSixTypes` → `TestParseExtract_AcceptsAllSevenTypes`. The renamed test now covers all seven types (`decision`, `module`, `feature`, `glossary`, `epic`, `story`, `gotcha`) via a single table-driven sub-test loop.
+
+### Fixed
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.7.1] - 2026-05-22
 
 ### Added
