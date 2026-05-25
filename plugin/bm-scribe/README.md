@@ -41,6 +41,7 @@ The plugin is markdown-only — no executable runtime. All BM operations happen 
 | `create-module <slug>` | Create a project-knowledge module at `<PROJECT>/modules/<slug>/main`. |
 | `create-feature <slug>` | Create a project-knowledge feature at `<PROJECT>/features/<slug>/main`. |
 | `create-glossary <term>` | Create a project-knowledge glossary term at `<PROJECT>/glossary/<term>/main`. |
+| `create-gotcha [--from-review <source>]` | Create a project-knowledge gotcha at `<PROJECT>/gotchas/<NNNN>-<slug>/main` from extract proposals (default) or mined review text (`pr:<N>` / filesystem path / `paste:`). |
 | `add-todo "<text>"` | Append a checkbox bullet to `<USERNAME>/todo/main` (creates note on first use). |
 | `list-todos` | Print all checkbox bullets from `<USERNAME>/todo/main` with index numbers. |
 | `tick-todo <n>` | Flip the n'th unchecked bullet to checked + date stamp. |
