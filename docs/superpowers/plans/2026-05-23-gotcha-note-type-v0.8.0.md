@@ -588,7 +588,7 @@ For each failure, treat it as the next sub-task and address before moving on. Do
 **Acceptance criteria:**
 - `plugin/bm-scribe/skills/create-gotcha/SKILL.md` exists with valid YAML frontmatter (`name: bm-scribe:create-gotcha`, populated `description`).
 - The skill documents two intake modes: default (Path A — reads extract envelope) and `--from-review <source>` (Path B — accepts `pr:<N>` / filesystem path / `paste:`).
-- The skill specifies a concrete Path A retrieval contract: the skill reads the most recent `extract_project_knowledge` MCP tool-call response visible in the current conversation context (i.e. the most recent assistant turn whose tool-use envelope's tool name equals `extract_project_knowledge` or `mcp__anti-tangent__extract_project_knowledge`). If no such envelope is visible in the current conversation, the skill MUST NOT silently exit — it MUST ask the user to either (a) paste the most recent extract envelope JSON directly via heredoc (terminated by `EOF`), or (b) supply a filesystem path to a saved envelope file, or (c) switch to `--from-review <source>` mode.
+- The skill specifies a concrete Path A retrieval contract: the skill reads the most recent `extract_project_knowledge` MCP tool-call response visible in the current conversation context (i.e. the most recent assistant turn whose tool-use envelope's tool name equals `extract_project_knowledge` or `mcp__anti-tangent__extract_project_knowledge`). If no such envelope is visible in the current conversation, OR if the most recent extract call was more than ~50 conversation turns ago (a soft recency hint — the model should not spend more than a few seconds scanning for an envelope that's probably been evicted from the window), the skill MUST NOT silently exit — it MUST ask the user to either (a) paste the most recent extract envelope JSON directly via heredoc (terminated by `EOF`), or (b) supply a filesystem path to a saved envelope file, or (c) switch to `--from-review <source>` mode.
 - The skill applies the canonical BM creator pattern documented in `plugin/bm-scribe/docs/three-step-pattern.md`. The pattern is named "three-step" because it has three logical phases — **create** (`write_note`), **relocate** (`move_note`), and **rewrite-permalink** — even though the third phase is implemented as two BM calls in sequence (`read_note` to capture the auto-derived permalink line verbatim, then `edit_note(find_replace)` to rewrite it to the canonical form). The skill's Step 3 must show all four BM calls labelled as Steps 3a / 3b / 3c / 3d, matching `create-decision`'s convention.
 - The skill auto-picks the next zero-padded four-digit ADR number by querying `basic-memory:search_notes` with prefix `<PROJECT>/gotchas/` (matches `create-decision`'s logic at sub-step 2.2 of `plugin/bm-scribe/skills/create-decision/SKILL.md`).
 - The skill enforces a four-section body template: `## Symptom`, `## Root cause`, `## How to avoid`, `## Evidence` (+ optional `## Related`).
@@ -644,6 +644,8 @@ If `BM_SCRIBE_PROJECT` is unset, ask the user which BM project to write to and r
 ### Step 1 — Path A (post-plan) retrieval contract
 
 Locate the most recent `extract_project_knowledge` MCP tool-call response in the current conversation context — concretely, the most recent assistant turn whose tool-use block has a tool name equal to either `extract_project_knowledge` or `mcp__anti-tangent__extract_project_knowledge`. The envelope is the JSON returned in that tool's response (the same JSON the controller would have parsed into an `ExtractResult`).
+
+Recency hint: if the most recent extract call was more than ~50 conversation turns ago, OR if you cannot locate it within a few seconds of scanning, treat this as a "no envelope found" condition and present the fallback prompt below. Do not spend more time scanning — the envelope has probably been evicted from the context window, and the fallback paste/file path is faster than re-running extract.
 
 If no such envelope is visible in the current conversation context, do NOT silently exit. Print:
 
@@ -1194,7 +1196,9 @@ This encoding is not gotcha-specific in principle — any note type the controll
 
 ### Pre-dispatch search hints
 
-When building `kb_index` for a new plan, the controller should search for notes matching the plan's `touches_modules`. Cover all seven note types in that search; in particular, include `<PROJECT>/gotchas/` matches so accepted-and-superseded gotchas surface alongside relevant decisions, modules, and features.
+Cover all seven note types when building `kb_index` for a new plan — search across `decisions`, `modules`, `features`, `glossary`, `epics`, `stories`, and `gotchas` for entries matching the plan's `touches_modules`. In particular, include `<PROJECT>/gotchas/` matches so accepted-and-superseded gotchas surface alongside relevant decisions, modules, and features.
+
+(Sentence ordering note: the phrase "Cover all seven note types" must remain the leading content of this subsection's body so that Task 14 Step 2 Command 4's `grep -A2` window reliably catches it within the first two lines after the `### Pre-dispatch search hints` heading. If you reword this paragraph, keep that phrase in the first or second line.)
 ```
 
 - [ ] **Step 3: Verify the new section reads coherently**
