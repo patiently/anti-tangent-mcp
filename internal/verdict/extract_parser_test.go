@@ -465,7 +465,7 @@ func TestParseExtract_AcceptsStoryType(t *testing.T) {
 	}
 }
 
-func TestParseExtract_AcceptsAllSixTypes(t *testing.T) {
+func TestParseExtract_AcceptsAllSevenTypes(t *testing.T) {
 	// Path-segment differs from the type name for `glossary` (singular) and
 	// `story` (plural is "stories"). Use an explicit map rather than
 	// `tc.typ + "s"` to avoid generating malformed permalinks like
@@ -477,8 +477,9 @@ func TestParseExtract_AcceptsAllSixTypes(t *testing.T) {
 		"glossary": "glossary",
 		"epic":     "epics",
 		"story":    "stories",
+		"gotcha":   "gotchas",
 	}
-	types := []string{"decision", "module", "feature", "glossary", "epic", "story"}
+	types := []string{"decision", "module", "feature", "glossary", "epic", "story", "gotcha"}
 	for _, typ := range types {
 		t.Run(typ, func(t *testing.T) {
 			raw := []byte(`{
