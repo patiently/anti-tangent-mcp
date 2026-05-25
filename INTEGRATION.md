@@ -309,7 +309,7 @@ Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the t
 
 **Worked example.** See [`plugin/bm-scribe/docs/three-step-pattern.md`](plugin/bm-scribe/docs/three-step-pattern.md) for a literal end-to-end example showing `write_note → move_note → read_note → edit_note(find_replace)` with annotated BM responses at each step. The `plugin/bm-scribe/` plugin shipped from this repo encodes this pattern across every creator skill so calling agents don't have to rediscover step 3 empirically.
 
-### Six note types in two layers
+### Seven note types in three groups
 
 | Type | Layer | Body |
 |---|---|---|
@@ -319,6 +319,7 @@ Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the t
 | `glossary` | durable | canonical domain-term definitions |
 | `epic` | operational | live dashboard: charter, stories table, open PRs, acceptance checklist, progress ledger |
 | `story` | operational | live dashboard: brief, multi-PR table, subtasks, deployment state, decisions produced (v0.7.0+) |
+| `gotcha` | lessons-learned | module-scoped lesson learned captured post-plan (`extract_project_knowledge`) or post-review (`bm-scribe:create-gotcha --from-review`); ADR-numbered slug at `<PROJECT>/gotchas/<NNNN>-<slug>/main`; supersede chain via existing `action: "supersede"` + `supersedes: [...]`; surfaces on future plans touching the same `modules:` via canonical `tags` encoding (`status:<value>` + `module:<slug>`) in `kb_index` (v0.8.0+) |
 
 Templates: [`examples/project-knowledge/`](examples/project-knowledge/); frozen real examples: [`examples/project-knowledge/dogfood/`](examples/project-knowledge/dogfood/). Per-project tuning (issue-ID format, folder convention, milestone events, project-prefix bootstrap incl. v0.6.x→v0.7.0 migration): [`docs/team-setup/project-knowledge-conventions.md`](docs/team-setup/project-knowledge-conventions.md).
 
