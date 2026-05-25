@@ -85,7 +85,7 @@ Resolve `<source>` to raw `review_text`:
   gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner)/pulls/<N>/comments" \
     --jq '.[] | "[\(.user.login) inline @ \(.path):\(.line // 0)] \(.body)"'
   ```
-  Concatenate the three outputs in that order. Dedup comments where two endpoints return the same `id`. If any `gh` call fails (auth missing, network), fall back to asking the user:
+  Concatenate the three outputs in that order. (The three endpoints return distinct data sources — issue comments, PR review summaries, and inline review comments — so cross-endpoint dedup is unnecessary.) If any `gh` call fails (auth missing, network), fall back to asking the user:
   > Could not reach PR <N> via gh. Paste the review text directly (end with EOF on its own line):
 
 - Filesystem path — read the file as UTF-8.
@@ -244,7 +244,7 @@ basic-memory:edit_note(
 )
 ```
 
-If the second call returns "no match" or "not found" — DO NOT roll back the new note. Print to the user:
+If either the `read_note` OR the `edit_note` above returns "no match" / "not found" / "no such note" — DO NOT roll back the new note. Print to the user:
 
 > WARNING: created the new gotcha at `<new permalink>` but could not find the predecessor `<predecessor permalink>` to flip its status to `superseded`. The new note carries `supersedes: ["<predecessor>"]` in its frontmatter but the predecessor is unchanged. Please review manually.
 
