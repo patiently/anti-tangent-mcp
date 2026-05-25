@@ -11,7 +11,7 @@ claude plugin marketplace add patiently/anti-tangent-mcp
 claude plugin install bm-scribe@anti-tangent-mcp
 ```
 
-Verify with `claude plugin list`. The plugin's twelve skills become available under the `bm-scribe:` namespace immediately.
+Verify with `claude plugin list`. The plugin's thirteen skills become available under the `bm-scribe:` namespace immediately.
 
 Ephemeral (single-session test), via `--plugin-dir`:
 

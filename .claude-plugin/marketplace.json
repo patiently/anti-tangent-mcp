@@ -11,7 +11,7 @@
     {
       "name": "bm-scribe",
       "description": "Claude Code plugin that writes Basic Memory notes per v0.7.0 project-knowledge conventions and the BM v0.21.1 three-step permalink-canonicalization pattern.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "source": "./plugin/bm-scribe",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"

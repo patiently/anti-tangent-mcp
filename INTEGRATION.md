@@ -325,7 +325,7 @@ Templates: [`examples/project-knowledge/`](examples/project-knowledge/); frozen 
 
 ### v0.7.0 canonical layout
 
-Permalinks follow `<PROJECT>/<type>/<key>/main` with `main.md` as a literal filename (leaves room for `charter.md` / `retro.md` side-docs per ticket). Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered, not date-prefixed) for decisions, a `<slug>` for modules/features, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. Date-prefix forms (`2026-05-…`) are a v0.6.x artifact — migrate to ADR shape on first edit (see conventions doc § 6, Path A). The `plugin/bm-scribe/` plugin (v0.7.1+) auto-picks the next ADR number on `create-decision` and enforces this layout for every other type.
+Permalinks follow `<PROJECT>/<type>/<key>/main` with `main.md` as a literal filename (leaves room for `charter.md` / `retro.md` side-docs per ticket). Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`, `gotchas`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered, not date-prefixed) for decisions and gotchas, a `<slug>` for modules/features, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. Date-prefix forms (`2026-05-…`) are a v0.6.x artifact — migrate to ADR shape on first edit (see conventions doc § 6, Path A). The `plugin/bm-scribe/` plugin (v0.7.1+) auto-picks the next ADR number on `create-decision` and `create-gotcha` and enforces this layout for every other type.
 
 ### The `project_knowledge` field
 

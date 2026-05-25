@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.0] - 2026-05-23
 
 ### Added
-- New design spec `docs/superpowers/specs/2026-05-23-gotcha-note-type-design.md` proposing a seventh project-knowledge note type, `gotcha` (implementation planned for v0.8.0; not yet landed — `ProposalTypeGotcha` is not yet in the `internal/verdict/extract.go` enum). The spec covers:
+- New design spec `docs/superpowers/specs/2026-05-23-gotcha-note-type-design.md` introducing a seventh project-knowledge note type, `gotcha` (implementation landed in the same v0.8.0 release — see the per-surface bullets below). The spec covers:
   - **Storage and frontmatter.** ADR-numbered permalink at `<PROJECT>/gotchas/<NNNN>-<slug>/main`. Frontmatter carries `modules: [...]`, `origin:`, `severity`, `status: accepted | superseded`, `discovered_at`, `supersedes: []`.
   - **Lifecycle.** Supersede-chain mechanics mirroring `decision`: new note carries `supersedes: [<predecessor>]`, and a follow-up `edit_note(find_replace)` flips the predecessor's `status` to `superseded`.
   - **Two intake paths.** Post-plan via `extract_project_knowledge` proposing `ProposalTypeGotcha` records (anti-tangent server change); post-review via a new `bm-scribe:create-gotcha` skill that mines CodeRabbit / `/ultrareview` / `/code-review` / `/security-review` output inline (plugin-only — no anti-tangent change for this path).

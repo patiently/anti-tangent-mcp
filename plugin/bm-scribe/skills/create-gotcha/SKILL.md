@@ -170,7 +170,7 @@ basic-memory:write_note(
     modules: ["<slug>", ...],
     severity: "<low|medium|high>",
     discovered_at: "<YYYY-MM-DD>",
-    origin: "<origin permalink or null>",
+    origin: "<origin permalink>",     # OMIT this key entirely when no origin is known — do NOT pass the literal string "null"
     supersedes: <[] OR ["<predecessor permalink>"]>
   }
 )

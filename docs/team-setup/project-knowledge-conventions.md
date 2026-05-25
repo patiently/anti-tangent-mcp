@@ -118,7 +118,7 @@ Example: a gotcha at `<PROJECT>/gotchas/0042-graphql-n+1-on-driver-search/main` 
   "permalink": "<PROJECT>/gotchas/0042-graphql-n+1-on-driver-search/main",
   "type": "gotcha",
   "title": "GraphQL N+1 on driver-search",
-  "summary": "<the gotcha's How to avoid paragraph, ≤ 200 chars>",
+  "summary": "<a short one-line cue — typically the gotcha's How to avoid sentence; matches the existing KBIndexEntryArg.summary convention>",
   "tags": ["status:accepted", "module:driver-search", "module:driver-network"]
 }
 ```
