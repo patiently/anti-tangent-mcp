@@ -1150,7 +1150,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
   - The two canonical tag formats `status:<value>` and `module:<slug>` (both literals must appear in the section prose).
   - A worked `KBIndexEntryArg` JSON example for a gotcha with two modules. The example's `"tags"` array MUST contain the literal strings `"status:accepted"` AND `"module:driver-search"` (and `"module:driver-network"` as the second module). These literals are the contract Task 14 Step 2 verifies via `grep`; if they are not present verbatim, Task 14's read-side verification will fail.
   - The rationale for keeping superseded entries in scope.
-  - A subsection with the EXACT literal heading `### Pre-dispatch search hints` (Task 14 Step 2 greps for this header). The phrase `all seven note types` MUST appear in the FIRST TWO lines of the subsection body (i.e. within two lines after the `### Pre-dispatch search hints` heading) — Task 14 verifies this with a `-A2` grep. Body cites why the controller's pre-dispatch search must cover all seven note types (gotchas surface alongside decisions, modules, etc. for plans touching the same module slugs).
+  - A subsection with the EXACT literal heading `### Pre-dispatch search hints` (Task 14 Step 2 greps for this header). The phrase `all seven note types` MUST appear in the FIRST TWO lines of the subsection body (i.e. within two lines after the `### Pre-dispatch search hints` heading) — Task 14 verifies this with a `-A2` grep. Body cites why the controller's pre-dispatch search must cover all seven note types (gotchas surface alongside decisions, modules, etc. for plans touching the same module slugs). **Guardrail for future edits to this subsection (plan-level only, do NOT paste into the conventions doc):** the phrase `all seven note types` must remain in the FIRST sentence of the subsection body — if a future editor rewords this paragraph and the first sentence wraps to >80 chars without containing the phrase, Task 14 Command 4 will silently start returning 0. Keep the phrase in lead position.
 - The new section reads coherently when viewed standalone (it does not assume the reader has already read the design spec, though it links to it).
 
 **Non-goals:**
@@ -1197,8 +1197,6 @@ This encoding is not gotcha-specific in principle — any note type the controll
 ### Pre-dispatch search hints
 
 Cover all seven note types when building `kb_index` for a new plan — search across `decisions`, `modules`, `features`, `glossary`, `epics`, `stories`, and `gotchas` for entries matching the plan's `touches_modules`. In particular, include `<PROJECT>/gotchas/` matches so accepted-and-superseded gotchas surface alongside relevant decisions, modules, and features.
-
-(Sentence ordering note: the phrase "Cover all seven note types" must remain the leading content of this subsection's body so that Task 14 Step 2 Command 4's `grep -A2` window reliably catches it within the first two lines after the `### Pre-dispatch search hints` heading. If you reword this paragraph, keep that phrase in the first or second line.)
 ```
 
 - [ ] **Step 3: Verify the new section reads coherently**
