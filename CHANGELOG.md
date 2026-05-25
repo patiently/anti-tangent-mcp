@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.8.1] - 2026-05-25
 
+### Added
+
+### Changed
+
 ### Fixed
 - `INTEGRATION.md` re-trimmed back under the 40,000-byte user-instructions context budget. The v0.8.0 release inadvertently pushed it to 40,419 bytes (419 over) because the new `gotcha` table row body was unusually long compared to the existing rows. Two trims: (1) shortened the `gotcha` row body in the "Seven note types in three groups" table from 449 chars to ~120 chars by dropping content already covered by the conventions doc + design spec; (2) tightened the "v0.7.0 canonical layout" paragraph by dropping the `charter.md` / `retro.md` side-docs aside (covered in the conventions doc) and inlining the auto-pick clause. Net result: INTEGRATION.md back to 39,886 bytes (114 under).
+
+### Removed
+
+### Deprecated
+
+### Security
 
 ## [0.8.0] - 2026-05-23
 
