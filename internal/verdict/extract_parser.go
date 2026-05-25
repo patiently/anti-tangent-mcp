@@ -79,7 +79,7 @@ func ParseExtract(raw []byte) (ExtractResult, error) {
 			return ExtractResult{}, fmt.Errorf("proposal[%d]: invalid action %q", i, p.Action)
 		}
 		switch p.Type {
-		case ProposalTypeDecision, ProposalTypeModule, ProposalTypeFeature, ProposalTypeGlossary, ProposalTypeEpic, ProposalTypeStory:
+		case ProposalTypeDecision, ProposalTypeModule, ProposalTypeFeature, ProposalTypeGlossary, ProposalTypeEpic, ProposalTypeStory, ProposalTypeGotcha:
 		default:
 			return ExtractResult{}, fmt.Errorf("proposal[%d]: invalid type %q", i, p.Type)
 		}

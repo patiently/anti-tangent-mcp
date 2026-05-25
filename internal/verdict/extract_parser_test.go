@@ -509,3 +509,34 @@ func TestParseExtract_AcceptsAllSixTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestParseExtract_AcceptsGotchaType(t *testing.T) {
+	raw := []byte(`{
+		"verdict": "pass",
+		"findings": [],
+		"proposals": [{
+			"action": "create",
+			"type": "gotcha",
+			"permalink": "monorepo/gotchas/0042-graphql-n+1-on-driver-search/main",
+			"title": "GraphQL N+1 on driver-search",
+			"frontmatter_json": "{\"status\":\"accepted\",\"modules\":[\"driver-search\"],\"severity\":\"medium\",\"discovered_at\":\"2026-05-23\"}",
+			"body": "## Symptom\n\nN+1 on driver lookup.\n\n## Root cause\n\nResolver fans out per driver.\n\n## How to avoid\n\nUse a DataLoader.\n\n## Evidence\n\n- completion_envelopes[0].final_files[0]\n\n## Related\n\n- [[monorepo/modules/driver-search/main]]",
+			"body_patch": "",
+			"rationale": "Documents the N+1 surfaced during the search-perf story",
+			"evidence_refs": ["completion_envelopes[0].summary"],
+			"supersedes": []
+		}],
+		"bm_commands": [],
+		"next_action": "Apply the gotcha note before next milestone."
+	}`)
+	r, err := verdict.ParseExtract(raw)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(r.Proposals) != 1 {
+		t.Fatalf("expected 1 proposal, got %d", len(r.Proposals))
+	}
+	if r.Proposals[0].Type != verdict.ProposalTypeGotcha {
+		t.Fatalf("expected type gotcha, got %q", r.Proposals[0].Type)
+	}
+}
