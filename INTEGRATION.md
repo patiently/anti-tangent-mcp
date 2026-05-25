@@ -319,13 +319,13 @@ Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the t
 | `glossary` | durable | canonical domain-term definitions |
 | `epic` | operational | live dashboard: charter, stories table, open PRs, acceptance checklist, progress ledger |
 | `story` | operational | live dashboard: brief, multi-PR table, subtasks, deployment state, decisions produced (v0.7.0+) |
-| `gotcha` | lessons-learned | module-scoped lesson learned captured post-plan (`extract_project_knowledge`) or post-review (`bm-scribe:create-gotcha --from-review`); ADR-numbered slug at `<PROJECT>/gotchas/<NNNN>-<slug>/main`; supersede chain via existing `action: "supersede"` + `supersedes: [...]`; surfaces on future plans touching the same `modules:` via canonical `tags` encoding (`status:<value>` + `module:<slug>`) in `kb_index` (v0.8.0+) |
+| `gotcha` | lessons-learned | module-scoped lesson learned; ADR-numbered slug; supersede chain; module/status encoded into `kb_index` `tags` (v0.8.0+) |
 
 Templates: [`examples/project-knowledge/`](examples/project-knowledge/); frozen real examples: [`examples/project-knowledge/dogfood/`](examples/project-knowledge/dogfood/). Per-project tuning (issue-ID format, folder convention, milestone events, project-prefix bootstrap incl. v0.6.x→v0.7.0 migration): [`docs/team-setup/project-knowledge-conventions.md`](docs/team-setup/project-knowledge-conventions.md).
 
 ### v0.7.0 canonical layout
 
-Permalinks follow `<PROJECT>/<type>/<key>/main` with `main.md` as a literal filename (leaves room for `charter.md` / `retro.md` side-docs per ticket). Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`, `gotchas`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered, not date-prefixed) for decisions and gotchas, a `<slug>` for modules/features, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. Date-prefix forms (`2026-05-…`) are a v0.6.x artifact — migrate to ADR shape on first edit (see conventions doc § 6, Path A). The `plugin/bm-scribe/` plugin (v0.7.1+) auto-picks the next ADR number on `create-decision` and `create-gotcha` and enforces this layout for every other type.
+Permalinks follow `<PROJECT>/<type>/<key>/main`. Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`, `gotchas`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered) for decisions and gotchas, a `<slug>` for modules/features, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. The `plugin/bm-scribe/` plugin (v0.7.1+) auto-picks ADR numbers and enforces this layout. Date-prefix forms are a v0.6.x artifact — see conventions doc § 6 for migration.
 
 ### The `project_knowledge` field
 
