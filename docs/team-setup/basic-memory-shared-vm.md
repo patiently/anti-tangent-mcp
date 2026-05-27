@@ -929,7 +929,7 @@ bm.<team>.example.com {
 
 Generate per-dev tokens with `openssl rand -base64 32` and store them in your secrets manager (1Password, Vault, AWS Secrets Manager — whatever your team already uses). Rotating a single dev's access is `systemctl reload caddy` after editing the matcher (§13.8.7 covers why `caddy reload` alone is sometimes cache-stale on header-matcher updates). The matcher list is plaintext in the Caddyfile because the file is operator-only; `chmod 0640 root:caddy /etc/caddy/Caddyfile` and audit access.
 
-If you prefer nginx, the equivalent shape is `map $http_authorization $allowed { default 0; "Bearer <PER_DEV_TOKEN_1>" 1; ... }` plus `if ($allowed = 0) { return 401; }` plus `proxy_pass http://127.0.0.1:8000;` with `proxy_buffering off;` and `proxy_read_timeout 1h;`. The SSE buffering and timeout settings are the load-bearing pieces — anything else is incidental.
+If you prefer nginx, the equivalent shape is `map $http_authorization $allowed { default 0; "Bearer <PER_DEV_TOKEN_1>" 1; ... }` plus `if ($allowed = 0) { return 401; }` plus `proxy_pass http://127.0.0.1:8000;` with `proxy_buffering off;`, `proxy_read_timeout 0;` (unbounded — symmetric to Caddy's `read_timeout 0`), and `keepalive_timeout 0;` at the server scope for the client-facing connection. The SSE buffering and timeout settings are the load-bearing pieces — anything else is incidental.
 
 ### 13.5 Per-developer Claude Code MCP config (SSE shape)
 
