@@ -23,7 +23,7 @@ This doc covers two operator-supported topologies. Pick one:
 | Path | Best when | Transport | Auth | Section |
 |---|---|---|---|---|
 | **Dedicated VM** (recommended primary) | You're standing up a new BM host from scratch. | stdio over SSH | per-dev SSH keypair | §§2–12 (rest of this doc) |
-| **Docker container on an existing host** | You already operate a Docker host and don't want to provision a dedicated VM for BM. | SSE on HTTP(S) | per-dev bearer token via reverse proxy | §13 |
+| **Docker container on an existing host** | You already operate a Docker host and don't want to provision a dedicated VM for BM. | streamable-http on HTTP(S) (recommended) or SSE (legacy — see §13.8.8) | per-dev bearer token via reverse proxy | §13 |
 
 Both paths reuse the §8 git-backed sync pattern (markdown is the source of truth; SQLite index is regenerated). Both paths consume the same `anti-tangent-mcp` integration on the client side.
 
@@ -826,6 +826,12 @@ services:
     container_name: basic-memory
     restart: unless-stopped
     user: "<BM_UID>:<BM_GID>"   # MUST match the host's bm user/group so bind-mount writes don't end up root-owned. Compute with `id -u bm` / `id -g bm`.
+    # Override the image's default SSE command with streamable-http.
+    # Sidesteps the upstream MCP-SDK reconnect bug that surfaces as -32602
+    # after long idle on the SSE transport — see §13.8.8. SSE works too
+    # but is `@deprecated` in the MCP TS SDK and ships with the
+    # session-reconnect bug; prefer streamable-http for new deployments.
+    command: ["basic-memory", "mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000", "--path", "/mcp"]
     environment:
       BASIC_MEMORY_DEFAULT_PROJECT: main
       BASIC_MEMORY_SYNC_CHANGES: "true"
@@ -835,7 +841,7 @@ services:
       - /var/lib/basic-memory/kb:/app/data
       - basic-memory-config:/home/appuser/.basic-memory
     # Bind to the loopback only so the reverse proxy (§13.4) is the sole
-    # entry point; the SSE endpoint must never be reachable directly from
+    # entry point; the MCP endpoint must never be reachable directly from
     # the public internet.
     ports:
       - "127.0.0.1:8000:8000"
@@ -872,9 +878,9 @@ The container's healthcheck flips to `healthy` within ~30s of `up -d`; `docker p
 
 ### 13.4 Reverse proxy with per-dev bearer tokens
 
-The container's SSE port is bound to `127.0.0.1:8000` and unreachable from the network. Expose it through a reverse proxy that adds TLS and per-developer bearer-token auth.
+The container's MCP port is bound to `127.0.0.1:8000` and unreachable from the network. Expose it through a reverse proxy that adds TLS and per-developer bearer-token auth. The same proxy config works for both streamable-http and SSE — BM serves the chosen transport on the path passed via `--path` (`/mcp` for streamable-http by default), and the Caddy snippet below has no path-specific routing so any path is proxied through.
 
-Paste-ready Caddyfile entry (strongly recommended — Caddy handles TLS automatically and proxies SSE correctly with one flag):
+Paste-ready Caddyfile entry (strongly recommended — Caddy handles TLS automatically and proxies streaming responses correctly with one flag):
 
 ```caddy
 {
@@ -931,16 +937,16 @@ Generate per-dev tokens with `openssl rand -base64 32` and store them in your se
 
 If you prefer nginx, the equivalent shape is `map $http_authorization $allowed { default 0; "Bearer <PER_DEV_TOKEN_1>" 1; ... }` plus `if ($allowed = 0) { return 401; }` plus `proxy_pass http://127.0.0.1:8000;` with `proxy_buffering off;`, `proxy_read_timeout 0;` (unbounded — symmetric to Caddy's `read_timeout 0`), and `keepalive_timeout 0;` at the server scope for the client-facing connection. The SSE buffering and timeout settings are the load-bearing pieces — anything else is incidental.
 
-### 13.5 Per-developer Claude Code MCP config (SSE shape)
+### 13.5 Per-developer Claude Code MCP config (streamable-http shape)
 
-Each developer adds an SSE-shaped MCP entry to their Claude Code config. Adjust the `<team>` and `<PER_DEV_TOKEN>` placeholders; the rest is fixed.
+Each developer adds a streamable-http-shaped MCP entry to their Claude Code config. Adjust the `<team>` and `<PER_DEV_TOKEN>` placeholders; the rest is fixed.
 
 ```json
 {
   "mcpServers": {
     "basic-memory": {
-      "transport": "sse",
-      "url": "https://bm.<team>.example.com/sse",
+      "transport": "streamable-http",
+      "url": "https://bm.<team>.example.com/mcp",
       "headers": {
         "Authorization": "Bearer <PER_DEV_TOKEN>"
       }
@@ -949,7 +955,23 @@ Each developer adds an SSE-shaped MCP entry to their Claude Code config. Adjust 
 }
 ```
 
-Verify the SSE endpoint path against the upstream Dockerfile CMD — at v0.21.1 it's `basic-memory mcp --transport sse --host 0.0.0.0 --port 8000`. The exact URL path the SSE endpoint serves on depends on the BM version; if `/sse` 404s, try the bare host (`https://bm.<team>.example.com`) and consult `docker compose logs basic-memory` for the routes it registers at startup.
+**Why streamable-http over SSE:** the MCP TS-SDK's `SSEClientTransport` is `@deprecated` upstream and ships with a session-reconnect bug (see §13.8.8) — its `EventSource` silently reconnects without re-running the MCP `initialize` handshake, and the next tool call lands on an uninitialized server session and returns `-32602 Invalid request parameters`. Streamable-http carries the session via the `Mcp-Session-Id` response header, has real reconnect-with-resume logic in the client, and is the path the SDK is steering everyone toward.
+
+**Smoke test from a dev workstation:**
+```bash
+curl -sS -X POST "https://bm.<team>.example.com/mcp" \
+  -H "Authorization: Bearer <PER_DEV_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"0.0.0"}}}' \
+  -i | head -20
+```
+
+Expected: `HTTP/1.1 200`, `Content-Type: text/event-stream`, `Mcp-Session-Id: <uuid>` header present, response body with `event: message` + a JSON-RPC `result` containing `protocolVersion`, `capabilities`, and `serverInfo`. If the `Mcp-Session-Id` header is missing, you're talking to an SSE-only endpoint — verify the BM container's `command:` directive includes `--transport streamable-http` (§13.3).
+
+**Migration from SSE.** If you're moving from a previously-deployed SSE setup: update the BM container's `command:` directive (§13.3), `docker compose up -d --force-recreate basic-memory`, then every dev needs to update their `.mcp.json` simultaneously and restart Claude Code — clients pointing at `/sse` will 404 once the container switches transports. Rolling-window migration isn't supported because BM serves a single transport per process; running both transports requires two containers on different ports + path-specific reverse-proxy routing, which is more setup overhead than the migration itself.
+
+**SSE as legacy fallback.** If you have a constraint that prevents streamable-http (e.g., a client that doesn't support it yet), revert the §13.3 `command:` to `["basic-memory", "mcp", "--transport", "sse", "--host", "0.0.0.0", "--port", "8000"]` and change the dev-side config to `"transport": "sse"` + URL `.../sse`. You'll hit §13.8.8's `-32602` bug after long idle until the upstream MCP-SDK fix lands.
 
 ### 13.6 Git-backed sync (same as §8)
 
@@ -1041,23 +1063,31 @@ The §12.6 ownership-recovery command applies here too — it cleans up whatever
 
 **Resolution.** Use `systemctl reload caddy` as the safe form. If that still doesn't propagate, `systemctl restart caddy` — that drops in-flight SSE streams, but clients reconnect within seconds.
 
-#### 13.8.8 MCP returns `-32602 Invalid request parameters` after idle periods
+#### 13.8.8 MCP returns `-32602 Invalid request parameters` after idle periods (SSE-only)
 
 **Symptom.** After ~tens-of-minutes-to-hours of leaving Claude Code idle (BM container left running, Caddy untouched), the next `bm-scribe:*` skill invocation — or any tool call against BM — fails with JSON-RPC error code `-32602 Invalid request parameters`. Reloading the MCP entry in Claude Code (or restarting Claude Code) restores functionality immediately, until the next idle period. Caddy logs show successful 200s; the SSE pipe is alive enough to deliver the structured error.
 
-**Cause.** This is *not* a Caddy / reverse-proxy issue (it would manifest as a connection reset or 502 if it were). `-32602` is a JSON-RPC application-level error — the MCP transport is healthy; what's broken is **MCP protocol session state desync** between Claude Code's MCP client and the BM server. Likely culprits, in rough order of probability:
+**Cause.** This is *not* a Caddy / reverse-proxy issue (it would manifest as a connection reset or 502 if it were). `-32602` is a JSON-RPC application-level error — the MCP transport is healthy; what's broken is **MCP protocol session-state desync** between Claude Code's MCP client and the BM server, specifically on the **SSE transport**. The traced code path:
 
-1. **Server-side session expiry.** BM keeps per-session state (capability negotiation, possibly cursor positions, possibly tool schemas) keyed by an MCP session ID. After some idle period BM expires that state; the client keeps sending requests against the stale session → `-32602` because the params reference state the server no longer has.
-2. **SSE auto-reconnect without MCP re-initialize.** If Caddy or BM closes the SSE stream and Claude Code transparently reconnects but doesn't re-run the MCP `initialize` handshake on the new stream, the server sees JSON-RPC requests on an unestablished MCP session → `-32602`. Transport reconnected; protocol didn't.
-3. **Stale `Last-Event-ID` on SSE resumption.** SSE supports resuming from a `Last-Event-ID`; if BM aged out the event the client requests, BM may map the resulting condition to `-32602`.
+1. The browser/Node `EventSource` inside `SSEClientTransport` transparently reconnects when the SSE GET stream drops.
+2. BM's `mcp.server.sse.SseServerTransport.connect_sse()` mints a fresh session UUID on every new GET and constructs a new `ServerSession` with `_initialization_state = InitializationState.NotInitialized`.
+3. The TS client's `SSEClientTransport` overwrites `this._endpoint` to the new session URL but **never tells the `Client` to re-run `initialize`** — `Client.connect()` explicitly early-returns on subsequent calls.
+4. The next `tools/call` POST lands on the uninitialized server session. `ServerSession._received_request` raises `RuntimeError("Received request before initialization was complete")`.
+5. A blanket `except Exception` in `mcp.shared.session._receive_loop` catches that and emits a synthetic JSON-RPC error: `code=-32602, message="Invalid request parameters"`. **The error message is wrong** — per the MCP spec this should be `-32002 SERVER_NOT_INITIALIZED`. The misleading code is what initially sent operators hunting for parameter-shape bugs.
 
-**Resolution.** This is an upstream BM bug (or a Claude Code MCP-client bug); not fixable in this repo or in the Caddy config. Track upstream at `github.com/basicmachines-co/basic-memory/issues`. Workarounds while a real fix lands:
+**Resolution.** **Switch the BM container's `command:` directive to `streamable-http`** (see §13.3). Streamable-http carries the MCP session via the `Mcp-Session-Id` response header, has real reconnect-with-resume logic in the SDK's client transport, and is the path the MCP TS SDK is steering everyone toward (the SSE client transport is `@deprecated` upstream). This sidesteps the bug entirely — the §13.3 / §13.5 instructions are written around streamable-http for this reason.
+
+**Workarounds if you must stay on SSE** (e.g., a client doesn't yet support streamable-http):
 
 - **Manual:** reload the MCP entry in Claude Code (or restart Claude Code) when the error appears. Annoying but reliable.
-- **Client-side keepalive:** if your MCP client config supports an idle-ping interval, set it to ~5-10 minutes so the session never goes long enough to desync. (Claude Code as of 2026-05 does not expose this knob in the standard MCP config; check current docs.)
 - **External keepalive:** a tiny cron/systemd-timer on the dev workstation that issues a no-op MCP request every few minutes via `curl` against the SSE endpoint. Brittle, but unblocks immediately.
 
-**Diagnostic data worth capturing if you're filing the upstream bug:**
+**Upstream fix tracking.** The bug lives in the MCP SDKs, not in BM itself (BM is a thin wrapper around `modelcontextprotocol/python-sdk` + the TS-SDK on the client side). The right fixes are:
+
+- `modelcontextprotocol/typescript-sdk`: make `SSEClientTransport` propagate reconnect events to `Client` via an `onreconnect` callback so the protocol can re-`initialize` when the transport reconnects.
+- `modelcontextprotocol/python-sdk`: narrow the `except Exception` in `mcp/shared/session.py` to distinguish initialization-state errors and emit `-32002` with non-empty `data` instead of the misleading `-32602`.
+
+**Diagnostic data worth capturing if you're filing or following the upstream bug:**
 
 ```bash
 # 1. BM container logs around the failure

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.3] - 2026-05-27
+
+### Added
+
+### Changed
+- `docs/team-setup/basic-memory-shared-vm.md` Docker container path now documents **streamable-http** as the recommended transport, with SSE relegated to a legacy fallback. Field-verified against a live BM v0.21.1 deployment with the new `command:` directive in §13.3. Specific section updates:
+  - §1 topology table: Docker path transport label changed from "SSE on HTTP(S)" to "streamable-http on HTTP(S) (recommended) or SSE (legacy)".
+  - §13.3 compose file: added a `command: ["basic-memory", "mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8000", "--path", "/mcp"]` directive overriding the image's default SSE CMD. Comments cite §13.8.8 for the rationale.
+  - §13.4 reverse-proxy intro: clarified that the same Caddy / nginx snippets work for both transports (no path-specific routing); BM serves the chosen transport on the `--path` value (`/mcp` for streamable-http by default).
+  - §13.5 per-dev Claude Code MCP config: switched the JSON example from `"transport": "sse"` / `.../sse` to `"transport": "streamable-http"` / `.../mcp`. Added a paste-ready smoke-test `curl` command (verifies HTTP 200 + `Mcp-Session-Id` header + valid JSON-RPC result) and a migration paragraph for teams moving from SSE.
+
+### Fixed
+- `docs/team-setup/basic-memory-shared-vm.md` §13.8.8 refactored: previously framed the `-32602` symptom as a live bug with reload / keepalive workarounds. Now leads with the actual fix (switch the BM container to streamable-http per §13.3 / §13.5), reserves the workarounds for teams pinned to SSE for external reasons, and traces the upstream MCP-SDK code path that produces the bug (`modelcontextprotocol/typescript-sdk` `SSEClientTransport` does not re-initialize on reconnect; `modelcontextprotocol/python-sdk` `_receive_loop` mis-categorizes the initialization-state RuntimeError as `INVALID_PARAMS` instead of the spec-defined `SERVER_NOT_INITIALIZED` / `-32002`).
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.8.2] - 2026-05-27
 
 ### Added
