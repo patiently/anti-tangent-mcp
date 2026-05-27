@@ -883,7 +883,7 @@ Paste-ready Caddyfile entry (strongly recommended — Caddy handles TLS automati
     # is the load-bearing one for the client-facing connection.
     servers {
         timeouts {
-            read         0
+            read_body    0
             read_header  30s
             write        0
             idle         0
