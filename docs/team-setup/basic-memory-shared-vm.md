@@ -877,6 +877,20 @@ The container's SSE port is bound to `127.0.0.1:8000` and unreachable from the n
 Paste-ready Caddyfile entry (strongly recommended — Caddy handles TLS automatically and proxies SSE correctly with one flag):
 
 ```caddy
+{
+    # Global server timeouts. SSE sessions can stay idle for many hours
+    # between tool calls; the proxy must not force-close them. `idle 0`
+    # is the load-bearing one for the client-facing connection.
+    servers {
+        timeouts {
+            read_body    0
+            read_header  30s
+            write        0
+            idle         0
+        }
+    }
+}
+
 bm.<team>.example.com {
     @authorized {
         header Authorization "Bearer <PER_DEV_TOKEN_1>"
@@ -887,10 +901,15 @@ bm.<team>.example.com {
     handle @authorized {
         reverse_proxy 127.0.0.1:8000 {
             # SSE-specific tuning: long-lived streams, no response buffering,
-            # generous read timeout so an idle session doesn't get killed.
+            # unbounded read timeout so an idle session doesn't get killed.
+            # `read_timeout 0` is safe because BM is on loopback and HTTP/2
+            # connection-level keepalive will detect a real upstream death.
+            # The v0.7.x doc shipped `read_timeout 1h` here; users with
+            # long-idle sessions (BM left running while the dev works for
+            # hours) consistently hit the 60-min cliff. See §13.8.4.
             flush_interval -1
             transport http {
-                read_timeout 1h
+                read_timeout 0
             }
         }
     }
@@ -910,7 +929,7 @@ bm.<team>.example.com {
 
 Generate per-dev tokens with `openssl rand -base64 32` and store them in your secrets manager (1Password, Vault, AWS Secrets Manager — whatever your team already uses). Rotating a single dev's access is `systemctl reload caddy` after editing the matcher (§13.8.7 covers why `caddy reload` alone is sometimes cache-stale on header-matcher updates). The matcher list is plaintext in the Caddyfile because the file is operator-only; `chmod 0640 root:caddy /etc/caddy/Caddyfile` and audit access.
 
-If you prefer nginx, the equivalent shape is `map $http_authorization $allowed { default 0; "Bearer <PER_DEV_TOKEN_1>" 1; ... }` plus `if ($allowed = 0) { return 401; }` plus `proxy_pass http://127.0.0.1:8000;` with `proxy_buffering off;` and `proxy_read_timeout 1h;`. The SSE buffering and timeout settings are the load-bearing pieces — anything else is incidental.
+If you prefer nginx, the equivalent shape is `map $http_authorization $allowed { default 0; "Bearer <PER_DEV_TOKEN_1>" 1; ... }` plus `if ($allowed = 0) { return 401; }` plus `proxy_pass http://127.0.0.1:8000;` with `proxy_buffering off;`, `proxy_read_timeout 0;` (unbounded — symmetric to Caddy's `read_timeout 0`), and `keepalive_timeout 0;` at the server scope for the client-facing connection. The SSE buffering and timeout settings are the load-bearing pieces — anything else is incidental.
 
 ### 13.5 Per-developer Claude Code MCP config (SSE shape)
 
@@ -985,7 +1004,9 @@ Confirm the `user:` directive in compose matches `id -u bm`:`id -g bm`.
 
 **Cause.** Reverse proxy is buffering the SSE response stream or applying a default read timeout.
 
-**Resolution.** Confirm `flush_interval -1` is set on the `reverse_proxy` directive in the Caddyfile (§13.4). nginx equivalent: `proxy_buffering off;` plus `proxy_read_timeout 1h;`. Reload the proxy and reconnect from a dev workstation.
+**Resolution.** Confirm `flush_interval -1` is set on the `reverse_proxy` directive in the Caddyfile (§13.4). nginx equivalent: `proxy_buffering off;` plus `proxy_read_timeout 0;`. Reload the proxy and reconnect from a dev workstation.
+
+If the connection drops at *exactly* the `read_timeout` interval (the v0.7.x doc shipped `1h`, since changed to `0` in §13.4), that's a literal timeout hit — Caddy force-closes the upstream connection at the configured value regardless of client activity, and the next tool call lands on a dead socket. Set `read_timeout 0` (unbounded) on the upstream transport AND add a global-block `servers { timeouts { idle 0 } }` for the client-facing connection symmetry. BM is on loopback and HTTP/2 connection-level keepalive will detect a real upstream death, so unbounded upstream timeout is safe.
 
 #### 13.8.5 `commit-and-push.sh` fails after Docker writes
 
@@ -1019,6 +1040,37 @@ The §12.6 ownership-recovery command applies here too — it cleans up whatever
 **Cause.** Caddy aggressively caches the matcher list in process memory; `caddy reload` occasionally misses a header-matcher update.
 
 **Resolution.** Use `systemctl reload caddy` as the safe form. If that still doesn't propagate, `systemctl restart caddy` — that drops in-flight SSE streams, but clients reconnect within seconds.
+
+#### 13.8.8 MCP returns `-32602 Invalid request parameters` after idle periods
+
+**Symptom.** After ~tens-of-minutes-to-hours of leaving Claude Code idle (BM container left running, Caddy untouched), the next `bm-scribe:*` skill invocation — or any tool call against BM — fails with JSON-RPC error code `-32602 Invalid request parameters`. Reloading the MCP entry in Claude Code (or restarting Claude Code) restores functionality immediately, until the next idle period. Caddy logs show successful 200s; the SSE pipe is alive enough to deliver the structured error.
+
+**Cause.** This is *not* a Caddy / reverse-proxy issue (it would manifest as a connection reset or 502 if it were). `-32602` is a JSON-RPC application-level error — the MCP transport is healthy; what's broken is **MCP protocol session state desync** between Claude Code's MCP client and the BM server. Likely culprits, in rough order of probability:
+
+1. **Server-side session expiry.** BM keeps per-session state (capability negotiation, possibly cursor positions, possibly tool schemas) keyed by an MCP session ID. After some idle period BM expires that state; the client keeps sending requests against the stale session → `-32602` because the params reference state the server no longer has.
+2. **SSE auto-reconnect without MCP re-initialize.** If Caddy or BM closes the SSE stream and Claude Code transparently reconnects but doesn't re-run the MCP `initialize` handshake on the new stream, the server sees JSON-RPC requests on an unestablished MCP session → `-32602`. Transport reconnected; protocol didn't.
+3. **Stale `Last-Event-ID` on SSE resumption.** SSE supports resuming from a `Last-Event-ID`; if BM aged out the event the client requests, BM may map the resulting condition to `-32602`.
+
+**Resolution.** This is an upstream BM bug (or a Claude Code MCP-client bug); not fixable in this repo or in the Caddy config. Track upstream at `github.com/basicmachines-co/basic-memory/issues`. Workarounds while a real fix lands:
+
+- **Manual:** reload the MCP entry in Claude Code (or restart Claude Code) when the error appears. Annoying but reliable.
+- **Client-side keepalive:** if your MCP client config supports an idle-ping interval, set it to ~5-10 minutes so the session never goes long enough to desync. (Claude Code as of 2026-05 does not expose this knob in the standard MCP config; check current docs.)
+- **External keepalive:** a tiny cron/systemd-timer on the dev workstation that issues a no-op MCP request every few minutes via `curl` against the SSE endpoint. Brittle, but unblocks immediately.
+
+**Diagnostic data worth capturing if you're filing the upstream bug:**
+
+```bash
+# 1. BM container logs around the failure
+docker logs basic-memory --since 2h 2>&1 | grep -E "32602|session|invalid" | tail -30
+
+# 2. Note the exact JSON-RPC method that fails (tools/call, tools/list,
+#    initialize, resources/read, etc.) — correlates the symptom to a
+#    specific BM code path.
+
+# 3. Reproduce: leave BM idle for the time-to-failure interval observed
+#    above, then issue a tool call WITHOUT reloading the MCP first. Capture
+#    the BM log entry at that moment; that's the upstream ticket evidence.
+```
 
 ---
 

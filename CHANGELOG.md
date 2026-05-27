@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] - 2026-05-27
+
+### Added
+
+### Changed
+- `docs/team-setup/basic-memory-shared-vm.md` §13.4 Caddyfile snippet now ships `read_timeout 0` (unbounded) instead of `read_timeout 1h` on the upstream transport. The v0.7.x recommendation of `1h` consistently force-closed BM upstream connections at the 60-minute mark for users with long-idle sessions; `0` is safe because BM is on loopback and HTTP/2 connection-level keepalive will detect a real upstream death. Added a global-block `servers { timeouts { idle 0 ... } }` recommendation for symmetric client-facing connection durability.
+
+### Fixed
+- `docs/team-setup/basic-memory-shared-vm.md` §13.8.4 (SSE endpoint hangs or cuts off mid-stream): added a sub-paragraph explicitly calling out the `read_timeout` hit as a distinct failure mode from buffering, and pointing at the §13.4 update for the fix.
+- Added new §13.8.8 troubleshooting entry for the `-32602 Invalid request parameters` symptom that surfaces after long-idle MCP sessions. Documents the symptom (only-fixable-by-MCP-reload), correctly identifies it as upstream MCP protocol session-state desync (NOT a Caddy issue), and lists three working hypotheses plus diagnostic data the user should capture before filing the upstream bug at `github.com/basicmachines-co/basic-memory/issues`. Includes manual / client-side-keepalive / external-keepalive workarounds.
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.8.1] - 2026-05-25
 
 ### Added
