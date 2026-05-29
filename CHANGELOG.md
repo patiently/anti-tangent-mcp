@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-05-29
+
+### Added
+- CI `INTEGRATION.md size budget` job (`ci.yml`) that fails any change pushing `INTEGRATION.md` to ≥ 40,000 bytes, preventing silent regressions of the user-instructions context budget. `build-test` now depends on it, so a violation blocks the merge.
+
+### Changed
+
+### Fixed
+- `INTEGRATION.md` trimmed back under the 40,000-byte user-instructions budget (40,137 → 39,786) by condensing content already covered in the conventions doc / design specs; the v0.9.0 howto additions had pushed it 137 bytes over.
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.9.0] - 2026-05-29
 
 ### Added

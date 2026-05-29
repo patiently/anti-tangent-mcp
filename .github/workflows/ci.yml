@@ -47,9 +47,26 @@ jobs:
 
           echo "✓ Found changelog entry for $VERSION"
 
+  integration-size:
+    name: INTEGRATION.md size budget
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Verify INTEGRATION.md is under the 40,000-byte budget
+        run: |
+          BYTES=$(wc -c < INTEGRATION.md)
+          echo "INTEGRATION.md = $BYTES bytes (budget: strictly < 40000)"
+          if [ "$BYTES" -ge 40000 ]; then
+            echo "::error file=INTEGRATION.md::INTEGRATION.md is $BYTES bytes; must be < 40000 (user-instructions context budget). Trim redundant content — details live in the conventions doc / design specs."
+            exit 1
+          fi
+          echo "✓ within budget ($((40000 - BYTES)) bytes to spare)"
+
   build-test:
     name: Build & Test (Go)
-    needs: changelog
+    needs: [changelog, integration-size]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
