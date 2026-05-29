@@ -40,7 +40,7 @@ The templates use `<TICKET-ID>` placeholder; adopters substitute. Don't mix form
 
 ## 4. Folder convention
 
-All seven note types use `<PROJECT>/<type>/<key>/main` where `<key>` is either a slug (`decisions`, `modules`, `features`, `glossary`, `gotchas`) or a ticket ID (`epics`, `stories`). Gotchas use ADR-numbered slugs (`0042-graphql-n+1-on-driver-search`) like decisions, not ticket IDs. The trailing `/main.md` allows arbitrary side-docs per ticket:
+All eight note types use `<PROJECT>/<type>/<key>/main` where `<key>` is either a slug (`decisions`, `modules`, `features`, `glossary`, `gotchas`, `howtos`) or a ticket ID (`epics`, `stories`). Gotchas use ADR-numbered slugs (`0042-graphql-n+1-on-driver-search`) like decisions, not ticket IDs; howtos use plain slugs like modules/features. The trailing `/main.md` allows arbitrary side-docs per ticket:
 
 - `<PROJECT>/epics/<TICKET-ID>/main.md` — the live operational dashboard.
 - `<PROJECT>/epics/<TICKET-ID>/charter.md` — extended charter (optional).
@@ -129,7 +129,7 @@ This encoding is not gotcha-specific in principle — any note type the controll
 
 ### Pre-dispatch search hints
 
-Cover all seven note types when building `kb_index` for a new plan — search across `decisions`, `modules`, `features`, `glossary`, `epics`, `stories`, and `gotchas` for entries matching the plan's `touches_modules`. In particular, include `<PROJECT>/gotchas/` matches so accepted-and-superseded gotchas surface alongside relevant decisions, modules, and features.
+Cover all eight note types when building `kb_index` for a new plan — search across `decisions`, `modules`, `features`, `glossary`, `epics`, `stories`, `gotchas`, and `howtos` for entries matching the plan's `touches_modules`. In particular, include `<PROJECT>/gotchas/` and `<PROJECT>/howtos/` matches so accepted-and-superseded gotchas and active howtos surface alongside relevant decisions, modules, and features.
 
 ## 8. Maintenance ownership
 
