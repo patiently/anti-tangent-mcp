@@ -465,7 +465,7 @@ func TestParseExtract_AcceptsStoryType(t *testing.T) {
 	}
 }
 
-func TestParseExtract_AcceptsAllSevenTypes(t *testing.T) {
+func TestParseExtract_AcceptsAllEightTypes(t *testing.T) {
 	// Path-segment differs from the type name for `glossary` (singular) and
 	// `story` (plural is "stories"). Use an explicit map rather than
 	// `tc.typ + "s"` to avoid generating malformed permalinks like
