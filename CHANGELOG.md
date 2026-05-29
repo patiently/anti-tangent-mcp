@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `plugin/bm-scribe` bumped to 0.3.0 (new `create-howto` skill; 14 skills total).
 
+### Fixed
+- `validate_plan` now parses task headings at any of h2–h4 (`##`/`###`/`####`), not just `###`. A plan whose task headings drifted one level (e.g. `## Task N:`) previously parsed to zero tasks and failed the first `validate_plan` call, wasting a full review round-trip; `###` remains canonical.
+
 ## [0.8.3] - 2026-05-27
 
 ### Added

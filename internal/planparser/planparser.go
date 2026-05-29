@@ -11,9 +11,9 @@ import (
 
 // RawTask is one task carved out of a plan markdown document.
 type RawTask struct {
-	// Title is the heading text after "### " — for example, "Task 4: Add /healthz endpoint".
+	// Title is the heading text after the leading "#"s — for example, "Task 4: Add /healthz endpoint".
 	Title string
-	// Body is the full task content including the "### Task N: …" heading line.
+	// Body is the full task content including the task heading line at its source level (e.g. "### Task N: …").
 	Body string
 	// HasStructuredHeader is true iff the body contains both **Goal:** and
 	// **Acceptance criteria:** markers. Used for telemetry only; not sent to
@@ -21,8 +21,12 @@ type RawTask struct {
 	HasStructuredHeader bool
 }
 
-// taskHeadingRe matches lines like "### Task 4: Add /healthz endpoint".
-var taskHeadingRe = regexp.MustCompile(`(?m)^### Task \d+:.*$`)
+// taskHeadingRe matches task heading lines at heading levels h2–h4, e.g.
+// "### Task 4: Add /healthz endpoint" (canonical, per the writing-plans
+// template) as well as "## Task 4: …" / "#### Task 4: …". Tolerating the
+// level keeps a one-character heading drift from parsing to zero tasks and
+// failing the first validate_plan call.
+var taskHeadingRe = regexp.MustCompile(`(?m)^#{2,4} Task \d+:.*$`)
 
 // SplitTasks carves planText into a preamble and an ordered list of RawTask.
 // The preamble is everything before the first task heading (empty if the plan
@@ -51,9 +55,9 @@ func SplitTasks(planText string) ([]RawTask, string) {
 			end = matches[i+1][0]
 		}
 		body := planText[m[0]:end]
-		// Title: heading line minus the "### " prefix, trimmed.
+		// Title: heading line minus the leading "#"s, trimmed (level-agnostic).
 		headingLine := planText[m[0]:m[1]]
-		title := strings.TrimSpace(strings.TrimPrefix(headingLine, "### "))
+		title := strings.TrimSpace(strings.TrimLeft(headingLine, "#"))
 		tasks = append(tasks, RawTask{
 			Title:               title,
 			Body:                body,
