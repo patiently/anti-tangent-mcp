@@ -79,9 +79,16 @@ func ParseExtract(raw []byte) (ExtractResult, error) {
 			return ExtractResult{}, fmt.Errorf("proposal[%d]: invalid action %q", i, p.Action)
 		}
 		switch p.Type {
-		case ProposalTypeDecision, ProposalTypeModule, ProposalTypeFeature, ProposalTypeGlossary, ProposalTypeEpic, ProposalTypeStory, ProposalTypeGotcha:
+		case ProposalTypeDecision, ProposalTypeModule, ProposalTypeFeature, ProposalTypeGlossary, ProposalTypeEpic, ProposalTypeStory, ProposalTypeGotcha, ProposalTypeHowto:
 		default:
 			return ExtractResult{}, fmt.Errorf("proposal[%d]: invalid type %q", i, p.Type)
+		}
+		// howto is a slug-keyed living document, updated in place — it is
+		// never superseded (design spec §6.4). Reject any howto proposal
+		// carrying a supersede action; create/update with empty supersedes
+		// are already enforced by the action-conditional checks below.
+		if p.Type == ProposalTypeHowto && p.Action == ProposalActionSupersede {
+			return ExtractResult{}, fmt.Errorf("proposal[%d]: howto notes are update-in-place and cannot be superseded", i)
 		}
 		// PRESENCE CHECKS first — schema-required fields must be present
 		// (the reviewer emits placeholders when empty). Run these before
