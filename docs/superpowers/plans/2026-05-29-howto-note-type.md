@@ -267,19 +267,19 @@ The golden test fails first (rendered prompt changed), confirming the template e
 
 Replace the trailing clause of line 67 (`… or a **gotcha** (… cache invalidation). Always proposable; not gated on milestones.`) so it reads:
 
-```
+```text
    - **Durable knowledge** worth capturing as a new note: an architectural decision, a module's invariants, a new feature's behavior, a glossary term, a **gotcha** (a project-and-module-scoped lesson learned — an N+1 query that bit us, a CSV parser that strips trailing newlines, a deploy step that races a cache invalidation), or a **howto** (a project-and-module-scoped operational procedure — a runbook for deploying, migrating, or setting up that future work should follow rather than rediscover). Always proposable; not gated on milestones.
 ```
 
 - [ ] **Step 2: Add `howto` to the `type` list (line 71)**
 
-```
+```text
    - `type`: one of `decision`, `module`, `feature`, `glossary`, `epic`, `story`, `gotcha`, `howto`.
 ```
 
 - [ ] **Step 3: Add `howto` to the schema-shape `type` enum (line 157)**
 
-```
+```text
       "type": "decision|module|feature|glossary|epic|story|gotcha|howto",
 ```
 
@@ -287,7 +287,7 @@ Replace the trailing clause of line 67 (`… or a **gotcha** (… cache invalida
 
 Insert this block immediately AFTER the `3a-gotcha-supersede.` paragraph (line 93) and BEFORE the `3a. **Dashboard updates require a milestone.**` line (line 95), separated by blank lines:
 
-```
+```text
 3a-howto. **Howto proposals (`type: howto`).** A `howto` is a project-and-module-scoped operational procedure — a runbook the team should follow rather than rediscover (deploy steps, a migration runbook, local-env setup, a release cut). Choose `howto` over neighbors carefully: a `gotcha` is a *pitfall / lesson* (what NOT to do) where a `howto` is the *procedure* (what TO do); a `feature` is a user-facing capability; a `module` is a capability surface + invariants; a `decision` is a choice + rationale. When you propose a `howto`:
     - Set `permalink` to `<PROJECT>/howtos/<slug>/main`, using a kebab-case `<slug>` derived from the title. NO ADR number — howtos are slug-keyed living documents, not a supersede chain.
     - Use `action: "create"` for a new procedure. Use `action: "update"` (with a `body_patch` carrying the changed section) when an envelope shows an existing howto's steps changed. NEVER emit `action: "supersede"` for a `howto`.
@@ -384,7 +384,7 @@ Change the heading on line 14 from `## Seven types in three groups` to `## Eight
 
 Change line 16's durable layer list to add `howto`:
 
-```
+```text
 - **Durable reference layer** (timeless / slow-evolving): `decision`, `module`, `feature`, `glossary`, `howto`. Survives epics.
 ```
 
@@ -392,13 +392,13 @@ Change line 16's durable layer list to add `howto`:
 
 Line 24 — add `howtos` to the `<type>` folder list:
 
-```
+```text
 - `<type>` is one of `decisions`, `modules`, `features`, `glossary`, `epics`, `stories`, `gotchas`, `howtos`.
 ```
 
 Line 25 — add `howtos` to the slug-keyed list:
 
-```
+```text
 - `<key>` is either a slug (decisions, modules, features, glossary, gotchas, howtos — gotchas use ADR-numbered slugs like decisions, howtos use plain slugs like modules/features) or a ticket ID (epics, stories).
 ```
 
@@ -406,7 +406,7 @@ Line 25 — add `howtos` to the slug-keyed list:
 
 After the `gotcha` row (line 42), append:
 
-```
+```text
 | `howto` | Drafted by `extract_project_knowledge` (post-plan) → reviewed by human → applied via the three-step BM creator pattern | Updated in place via `action: "update"` (edit `## Steps`, bump `last_verified`); retired by flipping `status: active` → `status: deprecated`; module-scoped via the `modules:` frontmatter array; prime surfaces active howtos on future plans touching the same modules |
 ```
 
@@ -437,7 +437,7 @@ Change the heading on line 312 from `### Seven note types in three groups` to `#
 
 Add a `howto` row to the table immediately after the `glossary` row (line 319, keeping it in the durable group):
 
-```
+```text
 | `howto` | durable | operational runbook; slug key; update-in-place; `status: active`/`deprecated`; module/status encoded into `kb_index` `tags` (v0.9.0+) |
 ```
 
@@ -445,7 +445,7 @@ Add a `howto` row to the table immediately after the `glossary` row (line 319, k
 
 Edit the sentence so the plural-folder list and `<key>` clause include `howtos`:
 
-```
+```text
 Permalinks follow `<PROJECT>/<type>/<key>/main`. Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`, `gotchas`, `howtos`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered) for decisions and gotchas, a `<slug>` for modules/features/howtos, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. The `plugin/bm-scribe/` plugin (v0.7.1+) auto-picks ADR numbers and enforces this layout. Date-prefix forms are a v0.6.x artifact — see conventions doc § 6 for migration.
 ```
 
@@ -453,7 +453,7 @@ Permalinks follow `<PROJECT>/<type>/<key>/main`. Type folders are **plural** (`e
 
 Add two rows immediately after the `glossary` create row (line 348), before the `contradicts_existing` row:
 
-```
+```text
 | `howto` create | **Human review** |
 | `howto` update | **Human review** |
 ```
@@ -462,7 +462,7 @@ Add two rows immediately after the `glossary` create row (line 348), before the 
 
 Add `howtos` to the slug-keyed list:
 
-```
+```text
 All seven note types use `<PROJECT>/<type>/<key>/main` where `<key>` is either a slug (`decisions`, `modules`, `features`, `glossary`, `gotchas`, `howtos`) or a ticket ID (`epics`, `stories`). Gotchas use ADR-numbered slugs (`0042-graphql-n+1-on-driver-search`) like decisions, not ticket IDs; howtos use plain slugs like modules/features. The trailing `/main.md` allows arbitrary side-docs per ticket:
 ```
 
@@ -472,7 +472,7 @@ Then change the leading `All seven note types` to `All eight note types`.
 
 Change `Cover all seven note types when building kb_index … search across decisions, modules, features, glossary, epics, stories, and gotchas` to `all eight note types` and add `howtos`:
 
-```
+```text
 Cover all eight note types when building `kb_index` for a new plan — search across `decisions`, `modules`, `features`, `glossary`, `epics`, `stories`, `gotchas`, and `howtos` for entries matching the plan's `touches_modules`. In particular, include `<PROJECT>/gotchas/` and `<PROJECT>/howtos/` matches so accepted-and-superseded gotchas and active howtos surface alongside relevant decisions, modules, and features.
 ```
 
@@ -486,7 +486,7 @@ Line 359 (Companion section intro): change `It wraps the standard `basic-memory`
 
 Line 368 (skill enumeration): replace with:
 
-```
+```text
 Verify with `claude plugin list`. The plugin exposes fourteen skills under the `bm-scribe:` namespace — eight project-knowledge creators (`create-epic`, `create-story`, `create-decision`, `create-module`, `create-feature`, `create-glossary`, `create-gotcha`, `create-howto`) plus six personal-namespace verbs (`add-todo`, `list-todos`, `tick-todo`, `add-note`, `fetch-note`, `list-notes`).
 ```
 
@@ -521,7 +521,7 @@ git commit -m "docs: document howto as the eighth note type (integration, conven
 
 - [ ] **Step 1: Create `plugin/bm-scribe/skills/create-howto/SKILL.md`**
 
-```markdown
+````markdown
 ---
 name: bm-scribe:create-howto
 description: Use when creating or updating a project-knowledge howto note (an operational runbook). Walks through the three-step BM v0.21.1 pattern and lands the note at the canonical v0.7.0 permalink `<PROJECT>/howtos/<slug>/main`.
@@ -631,7 +631,7 @@ To retire a dead procedure, `edit_note(find_replace)` flipping the frontmatter l
 - The YAML `permalink:` equals `<PROJECT>/howtos/<slug>/main` exactly.
 - For an update, `## Steps` reflects the new procedure and `last_verified` is today's date.
 - Report success with the canonical permalink in paste-ready form: `[[<PROJECT>/howtos/<slug>/main]]`.
-```
+````
 
 - [ ] **Step 2: Update `plugin/bm-scribe/README.md` skill count (lines 14, 26)**
 
@@ -643,7 +643,7 @@ Line 26: change `with thirteen narrowly-scoped skills that enforce:` to `with fo
 
 Immediately after the `create-gotcha` row (line 44), insert:
 
-```
+```text
 | `create-howto <slug>` | Create or update a project-knowledge howto (operational runbook) at `<PROJECT>/howtos/<slug>/main`. |
 ```
 
