@@ -17,9 +17,12 @@ If the most recent `extract_project_knowledge` envelope in this conversation car
 - `when_to_use` — one or two sentences on the trigger (the `## When to use` section).
 - `steps` — the ordered procedure (the load-bearing `## Steps` section).
 - `verification` — how to confirm it worked (recommended).
+- `origin` — optional; the story / epic / PR permalink that produced or validated this procedure.
 - `prerequisites`, `rollback`, `related` — optional sections.
 
 If `BM_SCRIBE_PROJECT` is unset, ask the user which BM project to write to and remember the answer for the rest of this session.
+
+For an UPDATE invocation (the note already exists), gather only the section(s) that changed — typically the new `## Steps` and a refreshed `last_verified`; you do not need to re-collect unchanged sections.
 
 ## Step 2 — Resolve project + permalink
 
@@ -35,6 +38,7 @@ basic-memory:read_note(identifier="<PROJECT>/howtos/<slug>/main")
 
 - If it returns a note → this is an UPDATE; go to **Step 3-update**.
 - If it errors with "not found" → this is a CREATE; go to **Step 3-create**.
+- If `extract_project_knowledge` proposed `action: "update"` but the read returned "not found", tell the user you are creating instead of updating (e.g. "No existing howto at `<PROJECT>/howtos/<slug>/main` — creating a new note rather than updating."), then proceed with **Step 3-create**.
 
 ## Step 3-create — Issue the three-step BM call sequence
 
@@ -52,6 +56,7 @@ basic-memory:write_note(
     status: "active",
     modules: <list>,
     last_verified: "<YYYY-MM-DD>",
+    origin: "<PROJECT>/stories/<TICKET-ID>/main",   # OMIT this key entirely when no origin is known — do NOT pass the literal string "null"
   }
 )
 # Capture the returned permalink — call it AUTO_PERMALINK.
