@@ -309,7 +309,7 @@ Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the t
 
 **Worked example.** See [`plugin/bm-scribe/docs/three-step-pattern.md`](plugin/bm-scribe/docs/three-step-pattern.md) for a literal end-to-end example showing `write_note → move_note → read_note → edit_note(find_replace)` with annotated BM responses at each step. The `plugin/bm-scribe/` plugin shipped from this repo encodes this pattern across every creator skill so calling agents don't have to rediscover step 3 empirically.
 
-### Seven note types in three groups
+### Eight note types in three groups
 
 | Type | Layer | Body |
 |---|---|---|
@@ -317,6 +317,7 @@ Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the t
 | `module` | durable | coherent capabilities (user-facing surface), not 1:1 Go packages |
 | `feature` | durable | user-facing capability catalog with release-tagged change pointers |
 | `glossary` | durable | canonical domain-term definitions |
+| `howto` | durable | operational runbook; slug key; update-in-place; `status: active`/`deprecated`; module/status encoded into `kb_index` `tags` (v0.9.0+) |
 | `epic` | operational | live dashboard: charter, stories table, open PRs, acceptance checklist, progress ledger |
 | `story` | operational | live dashboard: brief, multi-PR table, subtasks, deployment state, decisions produced (v0.7.0+) |
 | `gotcha` | lessons-learned | module-scoped lesson learned; ADR-numbered slug; supersede chain; module/status encoded into `kb_index` `tags` (v0.8.0+) |
@@ -325,7 +326,7 @@ Templates: [`examples/project-knowledge/`](examples/project-knowledge/); frozen 
 
 ### v0.7.0 canonical layout
 
-Permalinks follow `<PROJECT>/<type>/<key>/main`. Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`, `gotchas`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered) for decisions and gotchas, a `<slug>` for modules/features, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. The `plugin/bm-scribe/` plugin (v0.7.1+) auto-picks ADR numbers and enforces this layout. Date-prefix forms are a v0.6.x artifact — see conventions doc § 6 for migration.
+Permalinks follow `<PROJECT>/<type>/<key>/main`. Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`, `gotchas`, `howtos`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered) for decisions and gotchas, a `<slug>` for modules/features/howtos, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. The `plugin/bm-scribe/` plugin (v0.7.1+) auto-picks ADR numbers and enforces this layout. Date-prefix forms are a v0.6.x artifact — see conventions doc § 6 for migration.
 
 ### The `project_knowledge` field
 
@@ -346,6 +347,8 @@ Recommended default disposition (the server doesn't enforce; teams can override)
 | `decision` supersede | **Human review** |
 | `module` invariant/convention edit | **Human review** |
 | `glossary` create | Auto-apply |
+| `howto` create | **Human review** |
+| `howto` update | **Human review** |
 | Anything with `contradicts_existing` finding | **Human review, blocking** |
 
 ### Anchored Basic Memory tool names

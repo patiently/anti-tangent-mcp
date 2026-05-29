@@ -11,7 +11,7 @@ claude plugin marketplace add patiently/anti-tangent-mcp
 claude plugin install bm-scribe@anti-tangent-mcp
 ```
 
-Verify with `claude plugin list`. The plugin's thirteen skills become available under the `bm-scribe:` namespace immediately.
+Verify with `claude plugin list`. The plugin's fourteen skills become available under the `bm-scribe:` namespace immediately.
 
 Ephemeral (single-session test), via `--plugin-dir`:
 
@@ -23,7 +23,7 @@ Both forms require the `basic-memory` MCP server to be separately configured in 
 
 ## What it does
 
-Wraps the standard `basic-memory` MCP tools (`write_note`, `move_note`, `edit_note`, `read_note`, `search_notes`) with thirteen narrowly-scoped skills that enforce:
+Wraps the standard `basic-memory` MCP tools (`write_note`, `move_note`, `edit_note`, `read_note`, `search_notes`) with fourteen narrowly-scoped skills that enforce:
 
 - v0.7.0 canonical permalink layout: `<PROJECT>/<type>/<key>/main`, plural type folders, ADR-numbered decisions.
 - The three-step pattern: `write_note` (BM auto-derives the wrong slug) → `move_note` (path moves, permalink stays auto-derived) → `edit_note` find_replace on the YAML `permalink:` line (canonical permalink finally sticks).
@@ -42,6 +42,7 @@ The plugin is markdown-only — no executable runtime. All BM operations happen 
 | `create-feature <slug>` | Create a project-knowledge feature at `<PROJECT>/features/<slug>/main`. |
 | `create-glossary <term>` | Create a project-knowledge glossary term at `<PROJECT>/glossary/<term>/main`. |
 | `create-gotcha [--from-review <source>]` | Create a project-knowledge gotcha at `<PROJECT>/gotchas/<NNNN>-<slug>/main` from extract proposals (default) or mined review text (`pr:<N>` / filesystem path / `paste:`). |
+| `create-howto <slug>` | Create or update a project-knowledge howto (operational runbook) at `<PROJECT>/howtos/<slug>/main`. |
 | `add-todo "<text>"` | Append a checkbox bullet to `<USERNAME>/todo/main` (creates note on first use). |
 | `list-todos` | Print all checkbox bullets from `<USERNAME>/todo/main` with index numbers. |
 | `tick-todo <n>` | Flip the n'th unchecked bullet to checked + date stamp. |

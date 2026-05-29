@@ -465,7 +465,7 @@ func TestParseExtract_AcceptsStoryType(t *testing.T) {
 	}
 }
 
-func TestParseExtract_AcceptsAllSevenTypes(t *testing.T) {
+func TestParseExtract_AcceptsAllEightTypes(t *testing.T) {
 	// Path-segment differs from the type name for `glossary` (singular) and
 	// `story` (plural is "stories"). Use an explicit map rather than
 	// `tc.typ + "s"` to avoid generating malformed permalinks like
@@ -478,8 +478,9 @@ func TestParseExtract_AcceptsAllSevenTypes(t *testing.T) {
 		"epic":     "epics",
 		"story":    "stories",
 		"gotcha":   "gotchas",
+		"howto":    "howtos",
 	}
-	types := []string{"decision", "module", "feature", "glossary", "epic", "story", "gotcha"}
+	types := []string{"decision", "module", "feature", "glossary", "epic", "story", "gotcha", "howto"}
 	for _, typ := range types {
 		t.Run(typ, func(t *testing.T) {
 			raw := []byte(`{
@@ -583,5 +584,91 @@ func TestParseExtract_AcceptsGotchaSupersede(t *testing.T) {
 	}
 	if len(p.Supersedes) != 1 || p.Supersedes[0] != "monorepo/gotchas/0042-graphql-n+1-on-driver-search/main" {
 		t.Fatalf("expected supersedes to carry one predecessor permalink, got %+v", p.Supersedes)
+	}
+}
+
+func TestParseExtract_AcceptsHowtoType(t *testing.T) {
+	raw := []byte(`{
+		"verdict": "pass",
+		"findings": [],
+		"proposals": [{
+			"action": "create",
+			"type": "howto",
+			"permalink": "monorepo/howtos/deploy-release/main",
+			"title": "Deploy a release",
+			"frontmatter_json": "{\"status\":\"active\",\"modules\":[\"release\",\"ci\"],\"last_verified\":\"2026-05-29\"}",
+			"body": "## When to use\n\nCutting a tagged release.\n\n## Steps\n\n1. Bump VERSION.\n2. Merge to main.\n\n## Verification\n\nCI publishes the artifact.",
+			"body_patch": "",
+			"rationale": "Saves the next releaser from re-deriving the deploy sequence",
+			"evidence_refs": ["completion_envelopes[0].summary"],
+			"supersedes": []
+		}],
+		"bm_commands": [],
+		"next_action": "Apply the howto note."
+	}`)
+	r, err := verdict.ParseExtract(raw)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(r.Proposals) != 1 {
+		t.Fatalf("expected 1 proposal, got %d", len(r.Proposals))
+	}
+	if r.Proposals[0].Type != verdict.ProposalTypeHowto {
+		t.Fatalf("expected type howto, got %q", r.Proposals[0].Type)
+	}
+}
+
+func TestParseExtract_AcceptsHowtoUpdate(t *testing.T) {
+	raw := []byte(`{
+		"verdict": "pass",
+		"findings": [],
+		"proposals": [{
+			"action": "update",
+			"type": "howto",
+			"permalink": "monorepo/howtos/deploy-release/main",
+			"title": "Deploy a release",
+			"frontmatter_json": "{\"last_verified\":\"2026-05-29\"}",
+			"body": "",
+			"body_patch": "## Steps\n\n1. Bump VERSION.\n2. Open a version/X.Y.Z PR.\n3. Merge with the bump tag.",
+			"rationale": "The deploy sequence gained a PR-gating step",
+			"evidence_refs": ["completion_envelopes[0].final_diff"],
+			"supersedes": []
+		}],
+		"bm_commands": [],
+		"next_action": "Apply the howto update."
+	}`)
+	r, err := verdict.ParseExtract(raw)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if len(r.Proposals) != 1 || r.Proposals[0].Action != verdict.ProposalActionUpdate {
+		t.Fatalf("expected 1 update proposal, got %+v", r.Proposals)
+	}
+	if r.Proposals[0].Type != verdict.ProposalTypeHowto {
+		t.Fatalf("expected type howto, got %q", r.Proposals[0].Type)
+	}
+}
+
+func TestParseExtract_RejectsHowtoSupersede(t *testing.T) {
+	raw := []byte(`{
+		"verdict": "pass",
+		"findings": [],
+		"proposals": [{
+			"action": "supersede",
+			"type": "howto",
+			"permalink": "monorepo/howtos/deploy-release/main",
+			"title": "Deploy a release",
+			"frontmatter_json": "{\"status\":\"deprecated\"}",
+			"body": "",
+			"body_patch": "",
+			"rationale": "attempt to supersede a howto (must be rejected)",
+			"evidence_refs": ["completion_envelopes[0].summary"],
+			"supersedes": ["monorepo/howtos/old-deploy/main"]
+		}],
+		"bm_commands": [],
+		"next_action": "noop"
+	}`)
+	if _, err := verdict.ParseExtract(raw); err == nil {
+		t.Fatal("expected error: howto notes cannot be superseded")
 	}
 }

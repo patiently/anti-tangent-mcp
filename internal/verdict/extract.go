@@ -20,6 +20,7 @@ const (
 	ProposalTypeEpic     ProposalType = "epic"
 	ProposalTypeStory    ProposalType = "story"
 	ProposalTypeGotcha   ProposalType = "gotcha"
+	ProposalTypeHowto    ProposalType = "howto"
 )
 
 // Proposal is the canonical shape of one extract proposal. All fields use

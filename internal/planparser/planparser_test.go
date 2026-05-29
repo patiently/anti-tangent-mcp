@@ -103,6 +103,33 @@ Body.
 	assert.Contains(t, preamble, "Task: Not Numbered")
 }
 
+func TestSplitTasks_AcceptsH2ToH4Headings(t *testing.T) {
+	// Regression: the parser must not be brittle to heading level. A plan
+	// authored with `## Task N:` (h2) or `#### Task N:` (h4) previously parsed
+	// to zero tasks, failing the first validate_plan call. h3 is canonical
+	// (writing-plans template), but h2 and h4 must also be recognized.
+	in := `# Plan
+
+Intro.
+
+## Task 1: H2 heading
+
+Body one.
+
+#### Task 2: H4 heading
+
+Body two.
+`
+	tasks, preamble := SplitTasks(in)
+	assert.Contains(t, preamble, "Intro.")
+	require.Len(t, tasks, 2)
+	assert.Equal(t, "Task 1: H2 heading", tasks[0].Title)
+	assert.Equal(t, "Task 2: H4 heading", tasks[1].Title)
+	// Body must include the original heading line verbatim, at its source level.
+	assert.Contains(t, tasks[0].Body, "## Task 1: H2 heading")
+	assert.Contains(t, tasks[1].Body, "#### Task 2: H4 heading")
+}
+
 func TestSplitTasks_FencedTaskWordNotMatched(t *testing.T) {
 	in := "" +
 		"### Task 1: Real\n\n" +

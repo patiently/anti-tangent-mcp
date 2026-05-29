@@ -64,11 +64,11 @@ The caller has pre-fetched these existing notes so you can check for redundancy 
 ## What to do
 
 1. Read each completion envelope above as the authoritative record of what just shipped. Identify two distinct kinds of signal:
-   - **Durable knowledge** worth capturing as a new note: an architectural decision, a module's invariants, a new feature's behavior, a glossary term, or a **gotcha** (a project-and-module-scoped lesson learned — an N+1 query that bit us, a CSV parser that strips trailing newlines, a deploy step that races a cache invalidation). Always proposable; not gated on milestones.
+   - **Durable knowledge** worth capturing as a new note: an architectural decision, a module's invariants, a new feature's behavior, a glossary term, a **gotcha** (a project-and-module-scoped lesson learned — an N+1 query that bit us, a CSV parser that strips trailing newlines, a deploy step that races a cache invalidation), or a **howto** (a project-and-module-scoped operational procedure — a runbook for deploying, migrating, or setting up that future work should follow rather than rediscover). Always proposable; not gated on milestones.
    - **Milestone events** that warrant a dashboard update on an existing `epic` or `story` note. A milestone is ONE of: a PR opened (draft or ready), a PR transitioning state (`draft → review`, `review → merged`, `review → closed-without-merge`), a deployment landing in any environment, or a decision finalizing (`status: accepted`). Story-done is NOT a separate milestone — it's the natural consequence of the last PR for a story merging.
 2. For every proposal, emit a `Proposal` entry shaped per the output schema below:
    - `action`: `create` (new note), `update` (mutate an existing note's frontmatter or body), or `supersede` (replace an existing note with a new one and flip the predecessor's status).
-   - `type`: one of `decision`, `module`, `feature`, `glossary`, `epic`, `story`, `gotcha`.
+   - `type`: one of `decision`, `module`, `feature`, `glossary`, `epic`, `story`, `gotcha`, `howto`.
    - `permalink`: the BM-style relative path (e.g. `decisions/0099-cache-pass`). Never absolute; never a URL.
    - `title`: human-readable note title.
    - `frontmatter_json`: a JSON-encoded **string** (NOT a nested object) carrying the note's frontmatter. Use the literal string `"{}"` when no frontmatter change is intended. For partial updates emit a JSON-object string like `"{\"status\":\"superseded\"}"`. The wire shape is a string because OpenAI strict structured-outputs rejects freeform object schemas.
@@ -91,6 +91,14 @@ The caller has pre-fetched these existing notes so you can check for redundancy 
     - `evidence_refs`: at least one ref into the supplied envelopes pointing at the source of the lesson (a finding, a final-file diff, a summary line). Do not fabricate evidence.
 
 3a-gotcha-supersede. **Superseding an existing gotcha.** If a completion envelope describes new understanding that contradicts an existing gotcha's "Root cause" or "How to avoid" (for example, the team found the *real* root cause was a different invariant, or the recommended fix has been replaced by a better one), emit `action: "supersede"` with `supersedes: ["<predecessor permalink>"]` rather than overwriting silently. The predecessor must be a `type: gotcha` note visible in `kb_index`. When the caller is using Basic Memory, use the same supersede `bm_commands` mapping documented in step 7 (a `write_note` for the new note + an `edit_note` with `frontmatter_patch` flipping the predecessor's `status` to `superseded`); in non-BM mode the supersede is expressed solely via the `proposals[]` entry and `bm_commands` stays `[]` (the consumer is responsible for applying the supersede semantics on its own KB store).
+
+3a-howto. **Howto proposals (`type: howto`).** A `howto` is a project-and-module-scoped operational procedure — a runbook the team should follow rather than rediscover (deploy steps, a migration runbook, local-env setup, a release cut). Choose `howto` over neighbors carefully: a `gotcha` is a *pitfall / lesson* (what NOT to do) where a `howto` is the *procedure* (what TO do); a `feature` is a user-facing capability; a `module` is a capability surface + invariants; a `decision` is a choice + rationale. When you propose a `howto`:
+    - Set `permalink` to `<PROJECT>/howtos/<slug>/main`, using a kebab-case `<slug>` derived from the title. NO ADR number — howtos are slug-keyed living documents, not a supersede chain.
+    - Use `action: "create"` for a new procedure. Use `action: "update"` (with a `body_patch` carrying the changed section) when an envelope shows an existing howto's steps changed. NEVER emit `action: "supersede"` for a `howto`.
+    - Set `frontmatter_json` to include at minimum: `status: "active"`, `modules: ["<slug>", ...]` (one or more module slugs visible in the envelopes or `kb_index`), `last_verified: "<YYYY-MM-DD>"`. Optional but recommended: `origin: "<PROJECT>/stories/<TICKET-ID>/main"` (or epic/PR permalink) pointing at the work that produced or validated the procedure.
+    - Structure the `body` (for `create`) with required sections `## When to use` and `## Steps`, in that order, optionally followed by `## Prerequisites`, `## Verification`, `## Rollback / if it goes wrong`, and `## Related` with `[[wikilinks]]`. The `## Steps` section is the load-bearing one — it carries the procedure that prime will excerpt into the next plan's `project_knowledge`.
+    - `rationale`: one sentence explaining why this procedure is worth recording (capture the cost of NOT recording it — the re-discovery tax on the next person).
+    - `evidence_refs`: at least one ref into the supplied envelopes pointing at the source of the procedure. Do not fabricate evidence.
 
 3a. **Dashboard updates require a milestone.** If a completion envelope surfaces a milestone, propose `action: update` on the relevant `epic` or `story` note with a `replace_section` (or `frontmatter_patch` / `insert_before_section`) bm_command that rewrites the affected section or frontmatter field verbatim. To produce the new section content, use the matching entry from `current_kb_excerpts` to read the current section, identify the row(s) that change, and emit the full updated section text (NOT a diff). If `current_kb_excerpts` has no entry for the target note, emit an `insufficient_evidence` finding rather than fabricating a section body.
 
@@ -154,7 +162,7 @@ Return ONLY a JSON object matching this shape:
   "proposals": [
     {
       "action": "create|update|supersede",
-      "type": "decision|module|feature|glossary|epic|story|gotcha",
+      "type": "decision|module|feature|glossary|epic|story|gotcha|howto",
       "permalink": "<bm-style relative path>",
       "title": "<note title>",
       "frontmatter_json": "{}",
