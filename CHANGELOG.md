@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-05-29
+
+### Added
+- `howto` project-knowledge note type (eighth type) — a slug-keyed, update-in-place operational runbook; the durable-reference counterpart to `gotcha`. Proposed by `extract_project_knowledge` with `action: create` / `action: update` (never `supersede`).
+- `bm-scribe:create-howto` skill — captures a `howto` at `<PROJECT>/howtos/<slug>/main` via the three-step BM v0.21.1 pattern, with in-place update of an existing runbook's `## Steps`.
+
+### Changed
+- `plugin/bm-scribe` bumped to 0.3.0 (new `create-howto` skill; 14 skills total).
+
 ## [0.8.3] - 2026-05-27
 
 ### Added
