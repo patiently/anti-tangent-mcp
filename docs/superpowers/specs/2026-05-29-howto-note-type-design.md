@@ -42,6 +42,7 @@ Two repos, three components, one new wire — identical topology to the v0.8.0 g
 │    + ProposalTypeHowto                        (new enum value)   │
 │  internal/verdict/extract_parser.go                              │
 │    + ProposalTypeHowto in the validation switch (l.82)           │
+│    + reject type:howto + action:supersede (hard no-supersede)    │
 │  internal/verdict/extract_schema.json                            │
 │    + "howto" in the proposals[].type enum                        │
 │  internal/prompts/templates/extract.tmpl                         │
@@ -168,6 +169,8 @@ A revised procedure is an **in-place edit**, not a new note:
 
 extract expresses an in-place edit as `Proposal{action: "update", ...}` carrying a `body_patch` (the changed section) rather than a full `body`. In Basic Memory mode this maps to one or more `edit_note` `bm_commands`; in non-BM mode `bm_commands` stays `[]` and the `proposals[]` entry carries the semantic payload.
 
+`ParseExtract` enforces the no-supersede contract in code: any `type: howto` proposal carrying `action: supersede` is rejected with an error, so "create/update, never supersede" is a hard parser invariant rather than merely reviewer-prompt guidance.
+
 ## 7. Prime integration (the read side)
 
 No code change in anti-tangent. The existing prime loop works once notes exist.
@@ -250,6 +253,7 @@ This is documented in `INTEGRATION.md`'s auto-apply ladder table alongside the e
 | What | Where | How |
 |---|---|---|
 | `ProposalTypeHowto` enum + parser switch | `internal/verdict/extract_parser_test.go` | Extend the type→folder map and the `types` slice; add `TestParseExtract_AcceptsHowtoType` asserting the parser accepts `{type: "howto"}` for both `action: create` and `action: update` |
+| `howto` never-supersede invariant | `internal/verdict/extract_parser_test.go` | `TestParseExtract_RejectsHowtoSupersede` asserts `ParseExtract` errors on a `type: howto` proposal with `action: supersede` |
 | JSON schema `type` enum | (covered by parser test) | `extract_schema.json` gains `"howto"`; `schema_invariants_test.go` is unaffected (it asserts category-enum lockstep, not the type enum) |
 | Extract reviewer prompt | `internal/prompts/testdata/extract_basic.golden`, `extract_milestone.golden` | Regenerate with `go test ./internal/prompts/... -update` after editing the template; review the diff to confirm only the new `3a-howto` block + type-list additions changed |
 | Round-trip via extract handler | `internal/mcpsrv/integration_test.go` | Optional: stub reviewer returning a howto proposal; assert the handler decodes and forwards it unchanged |

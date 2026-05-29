@@ -10,6 +10,8 @@
 
 **Spec:** [`docs/superpowers/specs/2026-05-29-howto-note-type-design.md`](../specs/2026-05-29-howto-note-type-design.md)
 
+**Preflight (dispatch context):** This plan is executed on the **already-created** `version/0.9.0` branch — do NOT create or switch branches, and do NOT bump `VERSION` (the release workflow owns it; pre-bumping fails CI). Each task that changes files ends with a `git commit` on this branch (repo frequent-commit convention); **Task 7 is verification-only — it commits only if its checks surface a fix, otherwise nothing.** Markdown-only tasks (1, 4, 5, and the skill/template files in 6) have no Go unit tests by design — skills and templates are markdown contracts validated by manual dogfooding out of band, exactly as the existing `create-*` skills shipped; their per-task verification is the literal `grep` checks shown.
+
 ---
 
 ## File Structure
@@ -39,7 +41,7 @@
 
 ---
 
-## Task 1: Create the 0.9.0 CHANGELOG entry
+### Task 1: Create the 0.9.0 CHANGELOG entry
 
 Front-loaded so CI's branch-name-matches-CHANGELOG check is green from the first push.
 
@@ -76,7 +78,7 @@ git commit -m "docs(changelog): open 0.9.0 — howto note type"
 
 ---
 
-## Task 2: Wire `howto` through the Go type system (TDD)
+### Task 2: Wire `howto` through the Go type system (TDD)
 
 Makes `howto` a fully valid proposal type end-to-end on the Go side: enum constant, parser switch, structured-output schema enum. There is **no** automated lockstep test between `extract_schema.json`'s `type` enum and the Go constants, so the schema edit is manual; the extended round-trip test covers parser acceptance.
 
@@ -104,7 +106,7 @@ In `internal/verdict/extract_parser_test.go`, add `howto` to the round-trip type
 		types := []string{"decision", "module", "feature", "glossary", "epic", "story", "gotcha", "howto"}
 ```
 
-Then append two new test functions at the end of the file (after `TestParseExtract_AcceptsGotchaSupersede`):
+Then append three new test functions at the end of the file (after `TestParseExtract_AcceptsGotchaSupersede`) — two acceptance tests (create, update) and one negative test pinning the no-supersede invariant:
 
 ```go
 func TestParseExtract_AcceptsHowtoType(t *testing.T) {
@@ -168,12 +170,38 @@ func TestParseExtract_AcceptsHowtoUpdate(t *testing.T) {
 		t.Fatalf("expected type howto, got %q", r.Proposals[0].Type)
 	}
 }
+
+func TestParseExtract_RejectsHowtoSupersede(t *testing.T) {
+	raw := []byte(`{
+		"verdict": "pass",
+		"findings": [],
+		"proposals": [{
+			"action": "supersede",
+			"type": "howto",
+			"permalink": "monorepo/howtos/deploy-release/main",
+			"title": "Deploy a release",
+			"frontmatter_json": "{\"status\":\"deprecated\"}",
+			"body": "",
+			"body_patch": "",
+			"rationale": "attempt to supersede a howto (must be rejected)",
+			"evidence_refs": ["completion_envelopes[0].summary"],
+			"supersedes": ["monorepo/howtos/old-deploy/main"]
+		}],
+		"bm_commands": [],
+		"next_action": "noop"
+	}`)
+	if _, err := verdict.ParseExtract(raw); err == nil {
+		t.Fatal("expected error: howto notes cannot be superseded")
+	}
+}
 ```
+
+(The negative test asserts only that `ParseExtract` returns a non-nil error — it deliberately does NOT assert the exact message, so the test is not coupled to the guard's wording.)
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `go test ./internal/verdict/ -run 'TestParseExtract_(RoundTrip|AcceptsHowto)' -v`
-Expected: FAIL — the round-trip `howto` subtest and both new tests error with `proposal[0]: invalid type "howto"` (the parser switch rejects the unknown type), and `verdict.ProposalTypeHowto` is undefined (compile error until Step 3 adds the constant).
+Run: `go test ./internal/verdict/ -run 'TestParseExtract_(RoundTrip|AcceptsHowto|RejectsHowto)' -v`
+Expected: FAIL — does not compile because `verdict.ProposalTypeHowto` is undefined until Step 3 adds the constant. (Once the constant exists but before the guard, the round-trip `howto` subtest and the two accept tests would error with `proposal[0]: invalid type "howto"`, and `RejectsHowtoSupersede` would still fail because the parser accepts howto+supersede until the Step 3 guard lands.)
 
 - [ ] **Step 3: Add the enum constant, the parser switch case, and the schema enum value**
 
@@ -190,6 +218,18 @@ In `internal/verdict/extract_parser.go`, add `ProposalTypeHowto` to the type-val
 		case ProposalTypeDecision, ProposalTypeModule, ProposalTypeFeature, ProposalTypeGlossary, ProposalTypeEpic, ProposalTypeStory, ProposalTypeGotcha, ProposalTypeHowto:
 ```
 
+Then, immediately after that `switch p.Type { … }` block (after its closing `}` on line 85, before the `if p.Permalink == ""` presence check on line 95), add the no-supersede guard so the "create/update, never supersede" contract is a hard parser invariant rather than just reviewer-prompt guidance:
+
+```go
+		// howto is a slug-keyed living document, updated in place — it is
+		// never superseded (design spec §6.4). Reject any howto proposal
+		// carrying a supersede action; create/update with empty supersedes
+		// are already enforced by the action-conditional checks below.
+		if p.Type == ProposalTypeHowto && p.Action == ProposalActionSupersede {
+			return ExtractResult{}, fmt.Errorf("proposal[%d]: howto notes are update-in-place and cannot be superseded", i)
+		}
+```
+
 In `internal/verdict/extract_schema.json`, add `"howto"` to the `proposals[].type` enum (line 53):
 
 ```json
@@ -198,8 +238,8 @@ In `internal/verdict/extract_schema.json`, add `"howto"` to the `proposals[].typ
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `go test ./internal/verdict/ -run 'TestParseExtract_(RoundTrip|AcceptsHowto)' -v`
-Expected: PASS (all subtests, including `howto`, and both new test functions).
+Run: `go test ./internal/verdict/ -run 'TestParseExtract_(RoundTrip|AcceptsHowto|RejectsHowto)' -v`
+Expected: PASS (the round-trip `howto` subtest, both accept tests, and `RejectsHowtoSupersede` — the guard now makes the parser return an error for howto+supersede).
 
 - [ ] **Step 5: Run the full verdict package with the race detector**
 
@@ -215,7 +255,7 @@ git commit -m "feat(verdict): add howto ProposalType to extract enum + schema"
 
 ---
 
-## Task 3: Add the `3a-howto` reviewer guidance to `extract.tmpl` and regenerate goldens
+### Task 3: Add the `3a-howto` reviewer guidance to `extract.tmpl` and regenerate goldens
 
 The golden test fails first (rendered prompt changed), confirming the template edit takes effect; then regenerate.
 
@@ -283,7 +323,9 @@ git commit -m "feat(prompts): teach extract reviewer the howto note type"
 
 ---
 
-## Task 4: Add the `howto` template and update the examples README
+### Task 4: Add the `howto` template and update the examples README
+
+**Non-goals (covered by other tasks):** wiring `howto` into the parser/schema (Task 2); editing the extract reviewer prompt or goldens (Task 3); adding the `bm-scribe:create-howto` skill (Task 6). This task is the example template + examples README only.
 
 **Files:**
 - Create: `examples/project-knowledge/howto.md`
@@ -382,7 +424,7 @@ git commit -m "docs(examples): add howto template + list it as the eighth type"
 
 ---
 
-## Task 5: Update INTEGRATION.md, conventions doc, and top-level README
+### Task 5: Update INTEGRATION.md, conventions doc, and top-level README
 
 **Files:**
 - Modify: `INTEGRATION.md:312`, `:322` (add row), `:328`, `:348` (add ladder rows)
@@ -434,16 +476,32 @@ Change `Cover all seven note types when building kb_index … search across deci
 Cover all eight note types when building `kb_index` for a new plan — search across `decisions`, `modules`, `features`, `glossary`, `epics`, `stories`, `gotchas`, and `howtos` for entries matching the plan's `touches_modules`. In particular, include `<PROJECT>/gotchas/` and `<PROJECT>/howtos/` matches so accepted-and-superseded gotchas and active howtos surface alongside relevant decisions, modules, and features.
 ```
 
-- [ ] **Step 6: top-level README — plugin skill count (line 368)**
+- [ ] **Step 6: top-level README — plugin skill count (THREE mentions: lines 72, 359, 368)**
+
+`README.md` says "thirteen skills" in three places — update all three:
+
+Line 72 (install step 9): change `standard `basic-memory` MCP tools with thirteen skills that enforce the` to `standard `basic-memory` MCP tools with fourteen skills that enforce the`.
+
+Line 359 (Companion section intro): change `It wraps the standard `basic-memory` MCP tools with thirteen narrowly-scoped skills that enforce` to `It wraps the standard `basic-memory` MCP tools with fourteen narrowly-scoped skills that enforce`.
+
+Line 368 (skill enumeration): replace with:
 
 ```
 Verify with `claude plugin list`. The plugin exposes fourteen skills under the `bm-scribe:` namespace — eight project-knowledge creators (`create-epic`, `create-story`, `create-decision`, `create-module`, `create-feature`, `create-glossary`, `create-gotcha`, `create-howto`) plus six personal-namespace verbs (`add-todo`, `list-todos`, `tick-todo`, `add-note`, `fetch-note`, `list-notes`).
 ```
 
-- [ ] **Step 7: Verify no stray counts remain**
+- [ ] **Step 7: Verify no stray counts remain in the living docs**
 
-Run: `grep -rni 'seven note types\|seven project-knowledge\|thirteen skills' INTEGRATION.md README.md docs/team-setup/project-knowledge-conventions.md examples/project-knowledge/README.md`
-Expected: no output (all updated to eight / fourteen). If any line prints, fix it to match.
+Sweep only the living surfaces that carry type/skill counts — NOT `CHANGELOG.md` (append-only history) or `docs/superpowers/plans/` + `specs/` (frozen design artifacts that legitimately say "seven"/"thirteen"):
+
+```bash
+grep -rni --include='*.md' \
+  -e 'seven note types' -e 'seven project-knowledge' -e 'seven types in three' \
+  -e 'thirteen skills' -e 'thirteen narrowly' \
+  INTEGRATION.md README.md plugin/bm-scribe/README.md examples/project-knowledge/README.md docs/team-setup/
+```
+
+Expected: no output (all updated to eight / fourteen). If any line prints, fix it to match. (Run AFTER Task 6 too, since `plugin/bm-scribe/README.md` is updated there.)
 
 - [ ] **Step 8: Commit**
 
@@ -454,7 +512,7 @@ git commit -m "docs: document howto as the eighth note type (integration, conven
 
 ---
 
-## Task 6: Add the `create-howto` skill and bump the plugin version
+### Task 6: Add the `create-howto` skill and bump the plugin version
 
 **Files:**
 - Create: `plugin/bm-scribe/skills/create-howto/SKILL.md`
@@ -607,7 +665,7 @@ git commit -m "feat(bm-scribe): add create-howto skill; bump plugin to 0.3.0"
 
 ---
 
-## Task 7: Full-suite verification
+### Task 7: Full-suite verification
 
 **Files:** none (verification only).
 
@@ -621,10 +679,21 @@ Expected: PASS across all packages, no build errors.
 Run: `go test ./internal/prompts/...`
 Expected: PASS (no golden drift — confirms Task 3's regenerated goldens match the committed template).
 
-- [ ] **Step 3: Confirm no stray type-count or skill-count strings remain repo-wide**
+- [ ] **Step 3: Confirm no stray type-count or skill-count strings remain in the living docs**
 
-Run: `grep -rni 'seven note types\|seven project-knowledge\|seven types in three\|thirteen skills\|thirteen narrowly' --include='*.md' . | grep -v docs/superpowers/specs/2026-05-23-gotcha`
-Expected: no output (the v0.8.0 gotcha spec is a frozen historical doc and legitimately says "seventh"/"seven"; everything current should read eight/fourteen). If any current doc prints, fix it.
+Sweep only the living surfaces that carry counts. Deliberately EXCLUDE `CHANGELOG.md` (append-only history — its v0.8.0 entries legitimately say "Seven note types") and `docs/superpowers/plans/` + `specs/` (frozen design artifacts; the v0.8.0 gotcha plan legitimately says "seven note types" dozens of times):
+
+```bash
+grep -rni --include='*.md' \
+  -e 'seven note types' \
+  -e 'seven project-knowledge' \
+  -e 'seven types in three' \
+  -e 'thirteen skills' \
+  -e 'thirteen narrowly' \
+  INTEGRATION.md README.md plugin/bm-scribe/README.md examples/project-knowledge/README.md docs/team-setup/
+```
+
+Expected: no output. Any hit is a living doc this plan missed updating — fix it to read eight/fourteen. (Do NOT edit `CHANGELOG.md` history or the frozen gotcha plan/spec; those counts are correct as historical record.)
 
 - [ ] **Step 4: Confirm the branch name matches the CHANGELOG**
 
