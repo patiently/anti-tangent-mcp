@@ -4,7 +4,7 @@
 
 **Goal:** Add an opt-in (`ANTI_TANGENT_STATS_DIR`) statistics subsystem that records one counts-only record per hook call, periodically asks a reviewer LLM for a prose performance summary, and additionally aggregates agent-appended CodeScene Code Health metrics — all written as plain files, with zero behavior change when disabled.
 
-**Architecture:** A new `internal/stats` package with four small, independently testable units — `Event`/`CountFindings`, `State`/`due` (cadence + salt), `Rollup` (deterministic aggregation), and `Compactor` (rollup.json + LLM `summary.md`) — fronted by a nil-safe `Recorder` (append + single-flight async compaction). `internal/mcpsrv` gains one nil dependency (`Deps.Stats *stats.Recorder`); each handler maps its own result into an `Event` at its finalize point. `stats` imports only `internal/verdict`, `internal/providers`, and `internal/config` (never `internal/mcpsrv`), so there is no import cycle. The CodeScene companion is the agent appending raw records to `codescene-events.jsonl` (the server never sees those calls) which the Compactor reads into a nested `codescene` block in `rollup.json`.
+**Architecture:** A new `internal/stats` package with four small, independently testable units — `Event`/`CountFindings`, `State`/`due` (cadence + salt), `Rollup` (deterministic aggregation), and `Compactor` (rollup.json + LLM `summary.md`) — fronted by a nil-safe `Recorder` (append + single-flight async compaction). `internal/mcpsrv` gains one nil dependency (`Deps.Stats *stats.Recorder`); each handler maps its own result into an `Event` at its finalize point. `stats` imports only `internal/verdict` and `internal/providers` (never `internal/mcpsrv` or `internal/config` — the `Recorder` takes primitives via `Options`, so config stays in `cmd/`), so there is no import cycle. The CodeScene companion is the agent appending raw records to `codescene-events.jsonl` (the server never sees those calls) which the Compactor reads into a nested `codescene` block in `rollup.json`.
 
 **Tech Stack:** Go (stdlib only — `encoding/json`, `crypto/sha256`, `crypto/rand`, `os`, `sync`, `sync/atomic`, `log/slog`); `go test -race`; existing `providers.Reviewer` for the summary LLM call.
 
@@ -772,12 +772,14 @@ import (
 )
 
 type fakeReviewer struct {
-	resp providers.Response
-	err  error
+	resp    providers.Response
+	err     error
+	lastReq providers.Request // captured so tests can assert MaxTokens/JSONSchema
 }
 
-func (f fakeReviewer) Name() string { return "fake" }
-func (f fakeReviewer) Review(ctx context.Context, req providers.Request) (providers.Response, error) {
+func (f *fakeReviewer) Name() string { return "fake" }
+func (f *fakeReviewer) Review(ctx context.Context, req providers.Request) (providers.Response, error) {
+	f.lastReq = req
 	return f.resp, f.err
 }
 
@@ -792,15 +794,25 @@ func sampleEvents(base time.Time) []Event {
 func TestCompactWritesRollupAndSummary(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Unix(1700000000, 0).UTC()
+	fr := &fakeReviewer{resp: providers.Response{RawJSON: []byte(`{"summary":"All green. 2 calls."}`)}}
 	c := &Compactor{
 		dir:       dir,
-		reviewer:  fakeReviewer{resp: providers.Response{RawJSON: []byte(`{"summary":"All green. 2 calls."}`)}},
+		reviewer:  fr,
 		model:     "anthropic:m",
 		maxTokens: 2048,
 		timeout:   5 * time.Second,
 		logger:    slog.Default(),
 	}
 	c.Compact(now, sampleEvents(now))
+
+	// The summary call must use the configured StatsMaxTokens and a JSONSchema
+	// (all providers force JSON output, so the schema is mandatory).
+	if fr.lastReq.MaxTokens != 2048 {
+		t.Errorf("reviewer MaxTokens = %d, want 2048 (StatsMaxTokens)", fr.lastReq.MaxTokens)
+	}
+	if len(fr.lastReq.JSONSchema) == 0 {
+		t.Error("reviewer request must carry a JSONSchema")
+	}
 
 	// rollup.json present + parseable + correct count.
 	rb, err := os.ReadFile(filepath.Join(dir, rollupFile))
@@ -836,7 +848,7 @@ func TestCompactReviewerErrorSkipsSummary(t *testing.T) {
 	now := time.Unix(1700000000, 0).UTC()
 	c := &Compactor{
 		dir:      dir,
-		reviewer: fakeReviewer{err: context.DeadlineExceeded},
+		reviewer: &fakeReviewer{err: context.DeadlineExceeded},
 		model:    "anthropic:m", maxTokens: 2048, timeout: time.Second, logger: slog.Default(),
 	}
 	c.Compact(now, sampleEvents(now))
