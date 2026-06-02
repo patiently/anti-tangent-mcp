@@ -22,6 +22,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/mcphttp"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/server"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/state"
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/tray"
 )
 
 func main() {
@@ -70,16 +71,23 @@ func main() {
 	addr := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", cfg.ListenPort))
 	srv := &http.Server{Addr: addr, Handler: server.New(p, cfg.APIToken)}
 	go func() {
-		<-ctx.Done()
-		sc, c := context.WithTimeout(context.Background(), 3*time.Second)
-		defer c()
-		_ = srv.Shutdown(sc)
+		log.Info("debug http listening", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error("serve", "err", err)
+		}
 	}()
-	log.Info("listening", "addr", addr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Error("serve", "err", err)
-		os.Exit(1)
-	}
+
+	tr := tray.New(p, func(url string) {
+		if err := tray.OpenURIOnHost(url); err != nil {
+			log.Error("open url", "url", url, "err", err)
+		}
+	}, func(ids []string) { p.Ack(ids) })
+
+	tr.Run(ctx) // blocks until Quit / ctx cancel
+	cancel()
+	sc, c := context.WithTimeout(context.Background(), 3*time.Second)
+	defer c()
+	_ = srv.Shutdown(sc)
 }
 
 type Poller struct {
@@ -189,6 +197,13 @@ func (p *Poller) Snapshot() state.Snapshot {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.snap
+}
+
+// RefreshNow satisfies tray.Provider: force an immediate poll of all sources.
+func (p *Poller) RefreshNow(ctx context.Context) {
+	p.refreshGitHub(ctx)
+	p.refreshBM(ctx)
+	p.refreshAntiTangent(ctx)
 }
 
 func (p *Poller) Search(ctx context.Context, q string) ([]bm.SearchResult, error) {
