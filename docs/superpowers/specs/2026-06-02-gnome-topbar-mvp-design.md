@@ -15,7 +15,8 @@
 ## 1. Summary
 
 A GNOME Shell extension that adds a button to the top bar. Opening it shows a dropdown
-with three things at a glance and raises native desktop notifications for two of them:
+with three things at a glance. The panel also raises native desktop notifications (events
+computed and deduplicated by the daemon; the panel renders them and acks) for two of them:
 
 - **Currently working on** — a short summary the operator's AI coding assistant keeps
   fresh in a Basic Memory note.

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a GNOME Shell top-bar extension (thin gjs panel) backed by a Go daemon that aggregates GitHub PRs + Basic Memory todos/search/currently-working-on and raises native notifications for new review requests and due todos.
+**Goal:** Ship a GNOME Shell top-bar extension (thin gjs panel) backed by a Go daemon. The daemon aggregates GitHub PRs + Basic Memory todos/search/currently-working-on and computes/deduplicates notification events; the gjs panel renders them and is the component that raises native GNOME notifications (for new review requests and due todos) and POSTs `/ack`.
 
 **Architecture:** A `systemd --user` Go daemon does all I/O (GitHub via `go-gh`, Basic Memory via a minimal MCP streamable-HTTP client, currently-working-on note read) and exposes a loopback JSON API (`127.0.0.1:<port>` + bearer token). The gjs extension polls that API on a GLib timer, renders a dropdown, and raises GNOME notifications. The daemon owns notification dedup (a persisted seen/ack store); the panel acks events it has shown.
 
