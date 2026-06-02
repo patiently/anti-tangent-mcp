@@ -338,6 +338,19 @@ func Load(cfgPath, stateDir string) (Config, error) {
 	if c.MorningSweepHour == 0 {
 		c.MorningSweepHour = 8
 	}
+	// Reuse a previously-bootstrapped token: if the TOML carries no api_token,
+	// read the one written to client.json on a prior load so the token stays
+	// stable across daemon restarts (the extension caches it).
+	if c.APIToken == "" {
+		if b, err := os.ReadFile(filepath.Join(stateDir, "client.json")); err == nil {
+			var existing struct {
+				Token string `json:"token"`
+			}
+			if json.Unmarshal(b, &existing) == nil {
+				c.APIToken = existing.Token
+			}
+		}
+	}
 	if c.APIToken == "" {
 		t, err := randomToken()
 		if err != nil {
