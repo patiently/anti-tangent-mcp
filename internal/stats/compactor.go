@@ -47,8 +47,11 @@ type Compactor struct {
 // asks for a narrative and writes summary.md + appends summaries.jsonl.
 // Best-effort: every error is logged and swallowed; rollup.json is always
 // attempted before the LLM step so machine stats stay fresh when it fails.
-func (c *Compactor) Compact(now time.Time, events []Event) {
+func (c *Compactor) Compact(now time.Time, events []Event, csEvents []CodesceneEvent) {
 	rollup := computeRollup(events, now)
+	if cs := computeCodescene(csEvents, now); cs != nil {
+		rollup.Codescene = cs
+	}
 	if err := writeJSON(c.dir, rollupFile, rollup); err != nil {
 		c.logger.Warn("stats rollup write failed", "err", err)
 	}

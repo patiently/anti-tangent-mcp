@@ -12,22 +12,24 @@ import (
 // marshals PascalCase by default, which would silently break that consumer, so
 // every field is tagged. Changing/dropping a key is a breaking change.
 //
-// A `codescene` field is added in a later task (the CodeScene companion).
+// The Codescene field (added in Task 9) is populated when the agent appends
+// CodeScene per-run records to codescene-events.jsonl.
 type Rollup struct {
-	WindowStart       time.Time      `json:"window_start"`
-	WindowEnd         time.Time      `json:"window_end"`
-	TotalCalls        int            `json:"total_calls"`
-	PerTool           map[string]int `json:"per_tool"`
-	VerdictCounts     map[string]int `json:"verdict_counts"`
-	FindingsPerCall   float64        `json:"findings_per_call"`
-	SeverityHistogram map[string]int `json:"severity_histogram"`
-	CategoryHistogram map[string]int `json:"category_histogram"`
-	ReviewMSP50       int64          `json:"review_ms_p50"`
-	ReviewMSP95       int64          `json:"review_ms_p95"`
-	CacheHitRate      float64        `json:"cache_hit_rate"`
-	PartialRate       float64        `json:"partial_rate"`
-	ModelUsage        map[string]int `json:"model_usage"`
-	GeneratedAt       time.Time      `json:"generated_at"`
+	WindowStart       time.Time        `json:"window_start"`
+	WindowEnd         time.Time        `json:"window_end"`
+	TotalCalls        int              `json:"total_calls"`
+	PerTool           map[string]int   `json:"per_tool"`
+	VerdictCounts     map[string]int   `json:"verdict_counts"`
+	FindingsPerCall   float64          `json:"findings_per_call"`
+	SeverityHistogram map[string]int   `json:"severity_histogram"`
+	CategoryHistogram map[string]int   `json:"category_histogram"`
+	ReviewMSP50       int64            `json:"review_ms_p50"`
+	ReviewMSP95       int64            `json:"review_ms_p95"`
+	CacheHitRate      float64          `json:"cache_hit_rate"`
+	PartialRate       float64          `json:"partial_rate"`
+	ModelUsage        map[string]int   `json:"model_usage"`
+	GeneratedAt       time.Time        `json:"generated_at"`
+	Codescene         *CodesceneRollup `json:"codescene,omitempty"`
 }
 
 // computeRollup aggregates events into a Rollup. now stamps GeneratedAt (and the

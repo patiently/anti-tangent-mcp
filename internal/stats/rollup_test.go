@@ -74,6 +74,7 @@ func TestRollupJSONContract(t *testing.T) {
 		SeverityHistogram: map[string]int{},
 		CategoryHistogram: map[string]int{},
 		ModelUsage:        map[string]int{"anthropic:m": 1},
+		Codescene:         &CodesceneRollup{Runs: 1, CategoryHistogram: map[string]int{}},
 	}
 	b, err := json.Marshal(r)
 	if err != nil {
@@ -85,6 +86,7 @@ func TestRollupJSONContract(t *testing.T) {
 		"verdict_counts", "findings_per_call", "severity_histogram",
 		"category_histogram", "review_ms_p50", "review_ms_p95",
 		"cache_hit_rate", "partial_rate", "model_usage", "generated_at",
+		"codescene",
 	} {
 		if !strings.Contains(s, `"`+key+`"`) {
 			t.Errorf("missing json key %q in marshaled Rollup", key)

@@ -134,18 +134,26 @@ func (r *Recorder) Record(ev Event) {
 func (r *Recorder) compact(now time.Time) {
 	r.mu.Lock()
 	events, err := readEvents(r.dir)
+	csEvents, csErr := readCodescene(r.dir)
 	r.mu.Unlock()
 	if err != nil {
 		r.logger.Warn("stats read events failed", "err", err)
 		return
 	}
+	if csErr != nil {
+		r.logger.Warn("stats read codescene events failed", "err", csErr)
+		csEvents = nil
+	}
 
-	r.compactor.Compact(now, events)
+	r.compactor.Compact(now, events, csEvents)
 
 	cutoff := now.AddDate(0, 0, -r.retentionDays)
 	r.mu.Lock()
 	if err := pruneEvents(r.dir, cutoff); err != nil {
 		r.logger.Warn("stats prune failed", "err", err)
+	}
+	if err := pruneCodescene(r.dir, cutoff); err != nil {
+		r.logger.Warn("stats codescene prune failed", "err", err)
 	}
 	r.state.LastSummaryAt = now
 	r.state.EventsSinceSummary = 0

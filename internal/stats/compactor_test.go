@@ -44,7 +44,7 @@ func TestCompactWritesRollupAndSummary(t *testing.T) {
 		timeout:   5 * time.Second,
 		logger:    slog.Default(),
 	}
-	c.Compact(now, sampleEvents(now))
+	c.Compact(now, sampleEvents(now), nil)
 
 	// The summary call must use the configured StatsMaxTokens and a JSONSchema
 	// (all providers force JSON output, so the schema is mandatory).
@@ -82,6 +82,20 @@ func TestCompactWritesRollupAndSummary(t *testing.T) {
 	if err != nil || len(recs) != 1 {
 		t.Fatalf("summaries.jsonl: recs=%d err=%v", len(recs), err)
 	}
+
+	// CodeScene block: present only when codescene events are passed.
+	csNow := now
+	c.Compact(csNow, sampleEvents(csNow), []CodesceneEvent{
+		{Ts: csNow, Tool: "analyze_change_set", ScoreAfter: 8.2, Delta: -0.3, Trend: "regression"},
+	})
+	rb2, _ := os.ReadFile(filepath.Join(dir, rollupFile))
+	var r2 Rollup
+	if err := json.Unmarshal(rb2, &r2); err != nil {
+		t.Fatalf("rollup2 unmarshal: %v", err)
+	}
+	if r2.Codescene == nil || r2.Codescene.Runs != 1 || r2.Codescene.LatestTrend != "regression" {
+		t.Errorf("codescene block = %+v", r2.Codescene)
+	}
 }
 
 func TestCompactReviewerErrorSkipsSummary(t *testing.T) {
@@ -92,7 +106,7 @@ func TestCompactReviewerErrorSkipsSummary(t *testing.T) {
 		reviewer: &fakeReviewer{err: context.DeadlineExceeded},
 		model:    "anthropic:m", maxTokens: 2048, timeout: time.Second, logger: slog.Default(),
 	}
-	c.Compact(now, sampleEvents(now))
+	c.Compact(now, sampleEvents(now), nil)
 
 	if _, err := os.Stat(filepath.Join(dir, rollupFile)); err != nil {
 		t.Errorf("rollup.json should exist even on reviewer error: %v", err)
@@ -106,7 +120,7 @@ func TestCompactNilReviewerWritesRollupOnly(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Unix(1700000000, 0).UTC()
 	c := &Compactor{dir: dir, reviewer: nil, logger: slog.Default()}
-	c.Compact(now, sampleEvents(now))
+	c.Compact(now, sampleEvents(now), nil)
 	if _, err := os.Stat(filepath.Join(dir, rollupFile)); err != nil {
 		t.Errorf("rollup.json should exist: %v", err)
 	}
