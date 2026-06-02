@@ -12,7 +12,7 @@
 
 **Environment facts (spike-verified):** the sandbox shares the host session bus (`$DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/dbus-…`); `org.kde.StatusNotifierWatcher` (owner present), `org.freedesktop.Notifications`, and `org.freedesktop.portal.Desktop` are all reachable; `notify-send` reaches the host; `fyne.io/systray` builds without GTK. `DISPLAY=:10`.
 
-**Privacy (PUBLIC repo):** committed files use placeholders only; no real BM namespace, tickets, repos, URLs, or tokens. The probe in Task L uses the real `pgilmore` namespace via env, never committed.
+**Privacy (PUBLIC repo):** committed files use placeholders only; no real BM namespace, tickets, repos, URLs, or tokens. The probe in Task L uses your real BM namespace (`<username>`) supplied via local config, never committed.
 
 ---
 
@@ -1017,7 +1017,7 @@ Expected: all PASS (config, mcphttp, bm, github, state, server, atstats, tray me
 
 - [ ] **Step 2: Run the binary against real services + the host bus**
 
-Ensure `~/.config/gnome-topbar/config.toml` has `bm_username = "pgilmore"` (local only, never committed) and `BM_URL`/`BM_BEARER_TOKEN` are in env. Then:
+Ensure `~/.config/gnome-topbar/config.toml` has `bm_username = "<your-bm-username>"` (your real BM namespace — local only, never committed) and `BM_URL`/`BM_BEARER_TOKEN` are in env. Then:
 ```bash
 cd gnome-topbar/daemon && go run ./cmd/gnome-topbar-daemon &
 ```
@@ -1029,7 +1029,7 @@ cd gnome-topbar/daemon && go run ./cmd/gnome-topbar-daemon &
 - [ ] Clicking a PR opens it in the **host** browser.
 - [ ] Deleting `~/.local/state/gnome-topbar/seen.json` while running re-surfaces current review-requests/due-todos as **one** host notification each (no repeat on later refreshes; no repeat after restart).
 - [ ] "↻ Refresh" forces a poll; "Quit" exits cleanly.
-- [ ] No personal data in committed files: `git grep -nE "pgilmore|YN-[0-9]|patiently/(powow|yobify)|youcruit" -- gnome-topbar/` returns nothing.
+- [ ] No personal data in committed files: substituting your real identifiers, `git grep -nE "<your-username>|<TICKET-PREFIX>-[0-9]|<org>/<private-repo>" -- gnome-topbar/` returns nothing.
 
 - [ ] **Step 4: Stop + commit any fixes**
 

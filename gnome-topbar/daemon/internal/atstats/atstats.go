@@ -71,10 +71,13 @@ func Read(dir string) Stats {
 		s.FailPct = pct(r.VerdictCounts["fail"], r.TotalCalls)
 	}
 	if sb, err := os.ReadFile(filepath.Join(dir, "summary.md")); err == nil {
-		s.Summary = truncate(string(sb), 600)
+		s.Summary = truncate(string(sb), summaryMaxChars)
 	}
 	return s
 }
+
+// summaryMaxChars bounds how much of summary.md we keep (a headline excerpt).
+const summaryMaxChars = 600
 
 func pct(n, total int) float64 {
 	if total == 0 {
@@ -93,10 +96,12 @@ func topKey(m map[string]int) string {
 	return best
 }
 
+// truncate trims and caps to max runes (not bytes, so it never splits a
+// multi-byte rune into invalid UTF-8).
 func truncate(s string, max int) string {
 	s = strings.TrimSpace(s)
-	if len(s) > max {
-		return s[:max]
+	if r := []rune(s); len(r) > max {
+		return string(r[:max])
 	}
 	return s
 }

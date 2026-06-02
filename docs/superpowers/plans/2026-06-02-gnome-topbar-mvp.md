@@ -3093,7 +3093,7 @@ Confirm each spec acceptance item:
 - [ ] When `rollup.json` contains a `codescene` object, a "📊 CodeScene" sub-block shows score/delta/trend/reg-imp/top; removing only that key drops just the sub-block (anti-tangent numbers remain).
 - [ ] Killing the daemon (`systemctl --user stop gnome-topbar-daemon`) degrades the panel to the "daemon offline" hint with no shell instability.
 - [ ] A single source failing (e.g. break `bm_username`) dims/marks only that section; GitHub still renders.
-- [ ] No real personal data in the committed tool tree: `git grep -nE "pgilmore|YN-[0-9]|patiently/(powow|yobify)" -- gnome-topbar/` returns nothing. (Scope is `gnome-topbar/` only — the spec/plan under `docs/` are authored anonymized and reviewed separately; do not grep them with this pattern or it self-matches its own example strings. `BM_BEARER_TOKEN` is a public env-var *name* and is expected to appear as a placeholder in `README.md`.)
+- [ ] No real personal data in the committed tool tree: substituting your real identifiers, `git grep -nE "<your-username>|<TICKET-PREFIX>-[0-9]|<org>/<private-repo>" -- gnome-topbar/` returns nothing. (Scope is `gnome-topbar/` only — the spec/plan under `docs/` are authored anonymized. `BM_BEARER_TOKEN` is a public env-var *name* and is expected to appear as a placeholder in `README.md`.)
 - [ ] `~/.config/gnome-topbar/` (real `bm_username`, env file, token, client.json) is outside the repo and untracked: `git status --porcelain | grep -i gnome-topbar` shows only intended `gnome-topbar/` tree files, never anything under `~/.config`.
 
 - [ ] **Step 3: Final commit (if any verification fixes were needed)**

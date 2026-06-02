@@ -7,6 +7,8 @@ import (
 // Notify raises a host desktop notification via org.freedesktop.Notifications.
 // Returns the notification id (or error). Best-effort.
 func Notify(summary, body string) (uint32, error) {
+	// SessionBus returns a shared, lazily-initialized connection (cached by
+	// godbus), not a per-call socket open.
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		return 0, err

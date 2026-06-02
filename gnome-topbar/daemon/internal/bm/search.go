@@ -55,10 +55,14 @@ func parseSearch(raw string) ([]SearchResult, error) {
 		if snip == "" {
 			snip = r.Content
 		}
-		if len(snip) > 200 {
-			snip = snip[:200]
+		// cap to a rune count (not bytes, so multi-byte runes aren't split)
+		if rs := []rune(snip); len(rs) > snippetMaxChars {
+			snip = string(rs[:snippetMaxChars])
 		}
 		out = append(out, SearchResult{Title: r.Title, Type: typ, Permalink: r.Permalink, Snippet: snip})
 	}
 	return out, nil
 }
+
+// snippetMaxChars bounds the search-result snippet length.
+const snippetMaxChars = 200

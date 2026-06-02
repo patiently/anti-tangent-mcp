@@ -85,9 +85,9 @@ func main() {
 
 	tr.Run(ctx) // blocks until Quit / ctx cancel
 	cancel()
-	sc, c := context.WithTimeout(context.Background(), 3*time.Second)
-	defer c()
-	_ = srv.Shutdown(sc)
+	shutdownCtx, stopShutdown := context.WithTimeout(context.Background(), 3*time.Second)
+	defer stopShutdown()
+	_ = srv.Shutdown(shutdownCtx)
 }
 
 type Poller struct {
@@ -132,6 +132,8 @@ func (p *Poller) morningSweep(ctx context.Context) {
 	}
 }
 
+// refreshGitHub polls GitHub. ctx is part of the loop's func signature but is
+// not threaded through: go-gh's REST client does not accept a context.
 func (p *Poller) refreshGitHub(ctx context.Context) {
 	authored, err1 := p.gh.FetchAuthored()
 	reviews, err2 := p.gh.FetchReviewRequested()
@@ -140,6 +142,7 @@ func (p *Poller) refreshGitHub(ctx context.Context) {
 	st := state.SourceStatus{OK: true}
 	if err1 != nil || err2 != nil {
 		st = staleStatus(err1, err2)
+		p.log.Warn("github refresh failed", "authored_err", err1, "review_err", err2)
 	} else {
 		p.snap.PRs.Authored = authored
 		p.snap.PRs.ReviewRequested = reviews
@@ -156,6 +159,7 @@ func (p *Poller) refreshBM(ctx context.Context) {
 	st := state.SourceStatus{OK: true}
 	if errT != nil {
 		st = staleStatus(errT, nil)
+		p.log.Warn("basic-memory todo read failed", "err", errT)
 	} else {
 		active, due := bm.ParseTodos(todoMD, time.Now())
 		p.snap.Todos.Active = active
@@ -163,11 +167,15 @@ func (p *Poller) refreshBM(ctx context.Context) {
 	}
 	if errN == nil {
 		p.snap.NowWorking = bm.ParseNowWorking(nowMD)
+	} else {
+		p.log.Warn("basic-memory currently-working-on read failed", "err", errN)
 	}
 	p.snap.Sources["basic-memory"] = st
 	p.recompute()
 }
 
+// refreshAntiTangent reads the on-disk stats. ctx is part of the loop's func
+// signature but unused: atstats.Read is a local file read.
 func (p *Poller) refreshAntiTangent(ctx context.Context) {
 	s := atstats.Read(p.cfg.StatsDir)
 	p.mu.Lock()
@@ -196,7 +204,16 @@ func staleStatus(errs ...error) state.SourceStatus {
 func (p *Poller) Snapshot() state.Snapshot {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.snap
+	snap := p.snap
+	// Sources is mutated in place by the refresh goroutines, so returning the
+	// snapshot by value would share the live map and race with a concurrent
+	// reader (e.g. the debug HTTP JSON encoder). Copy it. All other fields are
+	// reassigned whole on each refresh, so sharing them by value is safe.
+	snap.Sources = make(map[string]state.SourceStatus, len(p.snap.Sources))
+	for k, v := range p.snap.Sources {
+		snap.Sources[k] = v
+	}
+	return snap
 }
 
 // RefreshNow satisfies tray.Provider: force an immediate poll of all sources.
@@ -211,7 +228,9 @@ func (p *Poller) Search(ctx context.Context, q string) ([]bm.SearchResult, error
 }
 
 func (p *Poller) Ack(ids []string) {
-	_ = p.store.MarkSeen(ids)
+	if err := p.store.MarkSeen(ids); err != nil {
+		p.log.Warn("ack persist failed (events may re-notify after restart)", "err", err)
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.recompute()

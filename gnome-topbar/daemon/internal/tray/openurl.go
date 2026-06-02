@@ -8,6 +8,8 @@ import (
 // (org.freedesktop.portal.Desktop), which is reachable on the shared session
 // bus. Best-effort: errors are returned for logging, never fatal.
 func OpenURIOnHost(url string) error {
+	// SessionBus returns a shared, lazily-initialized connection (cached by
+	// godbus), not a per-call socket open.
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		return err

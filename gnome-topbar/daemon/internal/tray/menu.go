@@ -13,6 +13,11 @@ import (
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
 )
 
+const (
+	labelWidth   = 80 // default max label width (now-working, todos, error reasons)
+	labelWidthPR = 60 // PR titles: the "owner/repo #N  " prefix takes the rest
+)
+
 // nowWorkingLabel renders the currently-working-on header. `now` drives the age
 // (injected for testability).
 func nowWorkingLabel(nw bm.NowWorking, now time.Time) string {
@@ -23,7 +28,7 @@ func nowWorkingLabel(nw bm.NowWorking, now time.Time) string {
 	if nw.HasUpdated {
 		age = " (⟳ " + humanAge(now.Sub(nw.Updated)) + ")"
 	}
-	return "🛠 " + oneLine(nw.Body, 80) + age
+	return "🛠 " + oneLine(nw.Body, labelWidth) + age
 }
 
 func antiTangentLabel(at atstats.Stats) string {
@@ -37,13 +42,15 @@ func codeSceneLabel(cs *atstats.CodeSceneStats) string {
 }
 
 func prLabel(repo string, num int, title string) string {
-	return fmt.Sprintf("%s #%d  %s", repo, num, oneLine(title, 60))
+	return fmt.Sprintf("%s #%d  %s", repo, num, oneLine(title, labelWidthPR))
 }
 
+// oneLine flattens to a single line and truncates to max runes (not bytes, so
+// it never splits a multi-byte rune and produces invalid UTF-8).
 func oneLine(s string, max int) string {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
-	if len(s) > max {
-		return s[:max-1] + "…"
+	if r := []rune(s); len(r) > max {
+		return string(r[:max-1]) + "…"
 	}
 	return s
 }

@@ -3,6 +3,7 @@ package tray
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -28,6 +29,9 @@ const (
 	capDue       = 15
 	capActive    = 40
 	capStat      = 3
+	capErr       = 4 // per-source error rows
+
+	renderInterval = 30 * time.Second
 )
 
 type Tray struct {
@@ -39,6 +43,7 @@ type Tray struct {
 	mu     sync.Mutex
 
 	nowItem *systray.MenuItem
+	errPool []*systray.MenuItem // per-source error rows (shown only on failure)
 
 	rrHeader *systray.MenuItem
 	rrPool   []*systray.MenuItem
@@ -81,6 +86,10 @@ func (t *Tray) onReady(ctx context.Context) {
 	// currently-working-on (inline header)
 	t.nowItem = systray.AddMenuItem("", "")
 	t.nowItem.Disable()
+
+	// per-source error rows, shown only when a source is failing
+	t.errPool = t.makeDisabledPool(capErr, nil)
+
 	// Review requested — inline (high priority, short)
 	t.rrHeader = systray.AddMenuItem("", "")
 	t.rrHeader.Disable()
@@ -118,7 +127,7 @@ func (t *Tray) onReady(ctx context.Context) {
 
 	t.render()
 	go func() {
-		tk := time.NewTicker(30 * time.Second)
+		tk := time.NewTicker(renderInterval)
 		defer tk.Stop()
 		for {
 			select {
@@ -181,6 +190,7 @@ func (t *Tray) render() {
 
 	t.mu.Lock()
 	t.nowItem.SetTitle(nowWorkingLabel(snap.NowWorking, now))
+	fillSourceErrors(t.errPool, snap.Sources)
 
 	t.rrHeader.SetTitle(fmt.Sprintf("🔵 Review requested (%d)", len(snap.PRs.ReviewRequested)))
 	fillPRPool(t.rrPool, t.rrURLs, snap.PRs.ReviewRequested)
@@ -209,6 +219,11 @@ func (t *Tray) render() {
 			mi.Hide()
 		}
 	}
+	// Dedup notifications under the lock (render runs from the ticker, the
+	// Refresh click, and startup concurrently — t.raised must not be touched
+	// without t.mu). Raise the actual notifications after unlocking, since
+	// Notify does DBus I/O.
+	toRaise := selectUnraised(t.raised, snap.UnackedEvents)
 	t.mu.Unlock()
 
 	if n := len(snap.PRs.ReviewRequested) + len(snap.Todos.Due); n > 0 {
@@ -217,11 +232,7 @@ func (t *Tray) render() {
 		systray.SetTooltip("gnome-topbar")
 	}
 
-	for _, ev := range snap.UnackedEvents {
-		if t.raised[ev.ID] {
-			continue
-		}
-		t.raised[ev.ID] = true
+	for _, ev := range toRaise {
 		title := "Todo due"
 		if ev.Kind == "review_request" {
 			title = "Review requested: " + ev.Title
@@ -230,6 +241,41 @@ func (t *Tray) render() {
 	}
 	if ids := unackedIDs(snap); len(ids) > 0 && t.ack != nil {
 		t.ack(ids)
+	}
+}
+
+// selectUnraised marks each not-yet-raised event's ID in raised and returns
+// those events. The caller must hold the mutex guarding raised. Extracted so
+// the notification dedup is unit-testable without the systray tree.
+func selectUnraised(raised map[string]bool, events []state.Event) []state.Event {
+	var out []state.Event
+	for _, ev := range events {
+		if !raised[ev.ID] {
+			raised[ev.ID] = true
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// fillSourceErrors shows one "⚠ <source>: <reason>" row per failing source
+// (caller holds t.mu); slots for healthy/absent sources are hidden. Sources are
+// listed in a stable order so rows don't reshuffle between refreshes.
+func fillSourceErrors(pool []*systray.MenuItem, sources map[string]state.SourceStatus) {
+	var failing []string
+	for name, st := range sources {
+		if !st.OK {
+			failing = append(failing, name)
+		}
+	}
+	sort.Strings(failing)
+	for i, mi := range pool {
+		if i < len(failing) {
+			mi.SetTitle("⚠ " + failing[i] + ": " + oneLine(sources[failing[i]].Error, labelWidth))
+			mi.Show()
+		} else {
+			mi.Hide()
+		}
 	}
 }
 
@@ -251,7 +297,7 @@ func fillPRPool(pool []*systray.MenuItem, urls []string, prs []github.PR) {
 func fillTodoPool(pool []*systray.MenuItem, todos []bm.TodoItem, prefix string) {
 	for i, mi := range pool {
 		if i < len(todos) {
-			mi.SetTitle(prefix + oneLine(todos[i].Text, 80))
+			mi.SetTitle(prefix + oneLine(todos[i].Text, labelWidth))
 			mi.Show()
 		} else {
 			mi.Hide()
