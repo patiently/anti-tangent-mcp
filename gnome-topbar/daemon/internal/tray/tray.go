@@ -22,7 +22,9 @@ const slots = 30 // max rendered rows per dynamic section pool
 type Tray struct {
 	prov   Provider
 	cancel context.CancelFunc
-	opener func(url string) // injected: open a URL on the host (Task T4)
+	opener func(url string)    // injected: open a URL on the host (Task T4)
+	ack    func(ids []string)  // injected: ack event IDs after notification raised
+	raised map[string]bool     // IDs for which a notification has been raised this session
 
 	pool []*systray.MenuItem // flat pool of pre-allocated items, reused each refresh
 	urls []string            // url backing each pool slot (for click handling)
@@ -30,7 +32,10 @@ type Tray struct {
 }
 
 // New returns a Tray. opener is the host open-URL function (tray/openurl.go).
-func New(p Provider, opener func(string)) *Tray { return &Tray{prov: p, opener: opener} }
+// ack is called after notifications are raised, to mark event IDs as seen; may be nil.
+func New(p Provider, opener func(string), ack func([]string)) *Tray {
+	return &Tray{prov: p, opener: opener, ack: ack, raised: map[string]bool{}}
+}
 
 // Run blocks, running the systray event loop until Quit. Call on the main
 // goroutine. ctx cancellation also stops it.
@@ -106,7 +111,28 @@ func (t *Tray) render() {
 	} else {
 		systray.SetTooltip("gnome-topbar")
 	}
-	// (Task T4 appends notification-raising here, using `snap`.)
+	for _, ev := range snap.UnackedEvents {
+		if t.raised[ev.ID] {
+			continue
+		}
+		t.raised[ev.ID] = true
+		title := "Todo due"
+		if ev.Kind == "review_request" {
+			title = "Review requested: " + ev.Title
+		}
+		_, _ = Notify(title, ev.Body)
+	}
+	if ids := unackedIDs(snap); len(ids) > 0 && t.ack != nil {
+		t.ack(ids)
+	}
+}
+
+func unackedIDs(s state.Snapshot) []string {
+	ids := make([]string, 0, len(s.UnackedEvents))
+	for _, e := range s.UnackedEvents {
+		ids = append(ids, e.ID)
+	}
+	return ids
 }
 
 func (t *Tray) onClick(ctx context.Context, idx int) {
