@@ -36,3 +36,22 @@ func TestParseNowWorkingNoFrontmatter(t *testing.T) {
 		t.Fatalf("body=%q", nw.Body)
 	}
 }
+
+func TestParseNowWorkingDetectsNoteNotFound(t *testing.T) {
+	md := "\n# Note Not Found in main: \"alice/notes/currently-working-on/main\"\n\nI couldn't find an exact match...\n"
+	nw := ParseNowWorking(md)
+	if !nw.NotFound {
+		t.Fatalf("expected NotFound=true, got %+v", nw)
+	}
+}
+
+func TestParseNowWorkingRealNoteIsNotFlagged(t *testing.T) {
+	md := "---\ntitle: x\nupdated: 2026-06-02T08:00:00Z\n---\n\nWiring the tray.\n"
+	nw := ParseNowWorking(md)
+	if nw.NotFound {
+		t.Fatalf("real note wrongly flagged NotFound: %+v", nw)
+	}
+	if nw.Body != "Wiring the tray." {
+		t.Fatalf("body=%q", nw.Body)
+	}
+}

@@ -9,6 +9,7 @@ type NowWorking struct {
 	Body       string    `json:"body"`
 	Updated    time.Time `json:"updated"`
 	HasUpdated bool      `json:"has_updated"`
+	NotFound   bool      `json:"not_found"`
 }
 
 // ParseNowWorking splits optional YAML frontmatter from the body and reads an
@@ -34,5 +35,9 @@ func ParseNowWorking(md string) NowWorking {
 		}
 	}
 	nw.Body = strings.TrimSpace(body)
+	if strings.HasPrefix(strings.TrimSpace(md), "# Note Not Found in") {
+		nw.NotFound = true
+		nw.Body = ""
+	}
 	return nw
 }
