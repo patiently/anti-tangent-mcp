@@ -20,7 +20,7 @@ The server is **advisory**: it returns verdicts and findings, never blocks. Enfo
 ## Non-goals
 
 - No automated correction or code generation by the reviewer.
-- No persistent storage, no DB, no migrations.
+- No persistent storage, no DB, no migrations. **Exception (v0.10.0+):** the opt-in stats subsystem (`ANTI_TANGENT_STATS_DIR`, off by default) relaxes this by writing plain files; there is still no metrics endpoint (output is files, not a served endpoint). See `docs/superpowers/specs/2026-06-02-anti-tangent-stats-design.md`.
 - No metrics endpoint, no OTel exporter (v1).
 - No plugin system for custom reviewers (v1).
 - No language-specific code analysis — the reviewer is an LLM, not a static analyzer.

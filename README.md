@@ -188,11 +188,15 @@ ANTI_TANGENT_PRIME_MAX_TOKENS=4096       # output cap for prime_project_knowledg
 ANTI_TANGENT_EXTRACT_MAX_TOKENS=8192     # output cap for extract_project_knowledge; raise if an extract call returns a truncation finding
 
 # --- Opt-in statistics (off unless ANTI_TANGENT_STATS_DIR is set) ---
-# Output directory; enables the subsystem. Files written: events.jsonl
-# (per-call counts), rollup.json (aggregate; machine-readable), summary.md
-# (latest LLM narrative), summaries.jsonl (history), state.json (cadence+salt),
-# and codescene-events.jsonl (agent-appended CodeScene Code Health records,
-# aggregated into rollup.json's `codescene` block).
+# Output directory; enables the subsystem. Files in ANTI_TANGENT_STATS_DIR:
+#   events.jsonl          — per-call counts (server-written)
+#   rollup.json           — aggregate stats (server-written; machine-readable)
+#   summary.md            — latest LLM narrative (server-written)
+#   summaries.jsonl       — narrative history (server-written)
+#   state.json            — cadence + salt (server-written)
+#   codescene-events.jsonl — agent-appended CodeScene Code Health records;
+#                            read + aggregated by the server into rollup.json's
+#                            `codescene` block (NOT written by the server)
 ANTI_TANGENT_STATS_DIR=
 ANTI_TANGENT_STATS_MODEL=            # summarizer model; defaults to ANTI_TANGENT_MID_MODEL
 ANTI_TANGENT_STATS_SUMMARY_INTERVAL=24h
