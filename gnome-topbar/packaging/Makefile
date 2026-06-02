@@ -3,10 +3,13 @@ EXT_UUID := gnome-topbar@localhost
 EXT_DIR := $(HOME)/.local/share/gnome-shell/extensions/$(EXT_UUID)
 UNIT := gnome-topbar-daemon.service
 
-.PHONY: build install-daemon install-extension install enable logs
+.PHONY: build run install-daemon install-extension install enable logs
 
 build:
 	cd ../daemon && go build -o $(DAEMON_BIN) ./cmd/gnome-topbar-daemon
+
+run: build
+	$(DAEMON_BIN)
 
 install-daemon: build
 	mkdir -p $(HOME)/.config/systemd/user
