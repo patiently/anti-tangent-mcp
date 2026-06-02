@@ -1,0 +1,75 @@
+name: gnome-topbar release
+
+# Independent of the anti-tangent binary's release flow. Triggered by a
+# gnome-topbar-vX.Y.Z tag (or manually with that tag), it builds the daemon as
+# static Linux binaries and publishes a GitHub Release whose assets a consumer
+# (e.g. the sandbox image) fetches by URL.
+on:
+  push:
+    tags: ['gnome-topbar-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Existing release tag to build, e.g. gnome-topbar-v0.1.0'
+        required: true
+
+permissions:
+  contents: write # create the release + upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # Resolve + validate the tag BEFORE checkout, so we build the exact tag
+      # (not whatever ref the workflow was dispatched from).
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            tag='${{ inputs.version }}'
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          case "$tag" in
+            gnome-topbar-v*) ;;
+            *) echo "::error::invalid release tag '$tag' (expected gnome-topbar-v*)"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ steps.ver.outputs.tag }} # build the tag itself; fails closed if it doesn't exist
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: false # release integrity: build from a clean module cache, not a shared one
+
+      - name: Build static binaries (linux amd64 + arm64)
+        working-directory: gnome-topbar/daemon
+        run: |
+          ver='${{ steps.ver.outputs.tag }}'
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags="-s -w -X main.version=$ver" \
+              -o "$GITHUB_WORKSPACE/gnome-topbar-daemon-linux-$arch" \
+              ./cmd/gnome-topbar-daemon
+          done
+
+      - name: Checksums + publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag='${{ steps.ver.outputs.tag }}'
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::release $tag already exists — refusing to overwrite"; exit 1
+          fi
+          sha256sum gnome-topbar-daemon-linux-* > gnome-topbar-checksums.txt
+          gh release create "$tag" --verify-tag \
+            --title "$tag" \
+            --notes 'gnome-topbar tray daemon — static Linux binaries (amd64, arm64). Pure-Go (no GTK/cgo); registers a StatusNotifierItem on the session bus.' \
+            gnome-topbar-daemon-linux-amd64 \
+            gnome-topbar-daemon-linux-arm64 \
+            gnome-topbar-checksums.txt
