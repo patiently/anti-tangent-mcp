@@ -129,6 +129,17 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
 		Clamp:      cc.Clamp,
 	}); handled {
+		if retErr == nil {
+			h.recordStat(statParams{
+				tool:      "validate_task_spec",
+				verdict:   env.Verdict,
+				findings:  env.Findings,
+				modelUsed: env.ModelUsed,
+				reviewMS:  env.ReviewMS,
+				partial:   env.Partial,
+				sessionID: env.SessionID,
+			})
+		}
 		return r, env, retErr
 	}
 	result.Findings = suppressTestabilityExtractionScopeDrift(result.Findings, inputs.TestabilityExtractions)
@@ -155,6 +166,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		NextAction: result.NextAction,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
+		Partial:    result.Partial,
 	}
 	env = h.withSessionTTL(env, sess)
 	h.recordStat(statParams{
@@ -386,6 +398,18 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		Clamp:      clamp,
 		Sess:       sess,
 	}); handled {
+		if retErr == nil {
+			h.recordStat(statParams{
+				tool:         "check_progress",
+				verdict:      env.Verdict,
+				findings:     env.Findings,
+				modelUsed:    env.ModelUsed,
+				reviewMS:     env.ReviewMS,
+				partial:      env.Partial,
+				sessionID:    env.SessionID,
+				payloadBytes: totalBytes(args.ChangedFiles),
+			})
+		}
 		return r, env, retErr
 	}
 
@@ -413,6 +437,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		NextAction: result.NextAction,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
+		Partial:    result.Partial,
 	}
 	env = h.withSessionTTL(env, sess)
 	h.recordStat(statParams{
@@ -1057,6 +1082,18 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		Clamp:      clamp,
 		Sess:       sess,
 	}); handled {
+		if retErr == nil {
+			h.recordStat(statParams{
+				tool:         "validate_completion",
+				verdict:      env.Verdict,
+				findings:     env.Findings,
+				modelUsed:    env.ModelUsed,
+				reviewMS:     env.ReviewMS,
+				partial:      env.Partial,
+				sessionID:    env.SessionID,
+				payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+			})
+		}
 		return r, env, retErr
 	}
 
@@ -1081,6 +1118,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		NextAction: result.NextAction,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
+		Partial:    result.Partial,
 	}
 	if !lightweight {
 		env = h.withSessionTTL(env, sess)
@@ -1184,6 +1222,17 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		Clamp:      clamp,
 		Prior:      pr,
 	}); handled {
+		if retErr == nil {
+			h.recordStat(statParams{
+				tool:         "validate_plan",
+				verdict:      string(p.PlanVerdict),
+				findings:     planFindings(p),
+				modelUsed:    model.String(),
+				reviewMS:     ms,
+				partial:      p.Partial,
+				payloadBytes: planBytes + pkBytes,
+			})
+		}
 		return r, p, retErr
 	}
 	populateNormativeTestBodies(&pr, tasks)

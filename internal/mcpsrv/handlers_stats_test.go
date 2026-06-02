@@ -135,6 +135,79 @@ func TestValidatePlanRecordsStats(t *testing.T) {
 	}
 }
 
+// TestValidateTaskSpec_PartialRecoveryRecordsStat verifies that a
+// truncation-recovered ValidateTaskSpec review records exactly one stat event
+// with Partial=true, so partial_rate in the rollup is accurate.
+func TestValidateTaskSpec_PartialRecoveryRecordsStat(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := stats.New(stats.Options{
+		Dir: dir, Reviewer: nil,
+		SummaryInterval: 24 * time.Hour, SummaryThreshold: 1000, RetentionDays: 30,
+		Logger: slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("stats.New: %v", err)
+	}
+
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "x"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	// Reviewer returns partial JSON (one complete finding + truncation mid-second).
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{
+			RawJSON: []byte(`{"verdict":"warn","findings":[` +
+				`{"severity":"major","category":"other","criterion":"ac1","evidence":"e1","suggestion":"s1"},` +
+				`{"severity":"minor","category":"other","crit`),
+			Model: "claude-sonnet-4-6",
+		},
+		err: providers.ErrResponseTruncated,
+	}
+	h := &handlers{deps: Deps{
+		Cfg:      cfg,
+		Sessions: session.NewStore(cfg.SessionTTL),
+		Reviews:  providers.Registry{"anthropic": rv},
+		Stats:    rec,
+	}}
+
+	_, env, callErr := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if callErr != nil {
+		t.Fatalf("ValidateTaskSpec: %v", callErr)
+	}
+	if !env.Partial {
+		t.Fatal("expected envelope.Partial=true on truncation recovery")
+	}
+
+	b, readErr := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if readErr != nil {
+		t.Fatalf("events.jsonl: %v", readErr)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly 1 stat event, got %d: %q", len(lines), string(b))
+	}
+
+	var ev stats.Event
+	if jsonErr := json.Unmarshal([]byte(lines[0]), &ev); jsonErr != nil {
+		t.Fatalf("unmarshal event: %v", jsonErr)
+	}
+	if ev.Tool != "validate_task_spec" {
+		t.Errorf("event.Tool = %q, want %q", ev.Tool, "validate_task_spec")
+	}
+	if !ev.Partial {
+		t.Errorf("event.Partial = false, want true; partial_rate would remain silently 0")
+	}
+}
+
 func TestNilStatsDisabledNoFiles(t *testing.T) {
 	// Nil Stats must not panic or error; there is no stats dir to check.
 	cfg, _ := config.Load(func(k string) string {
