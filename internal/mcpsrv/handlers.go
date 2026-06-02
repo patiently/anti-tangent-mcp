@@ -273,6 +273,53 @@ func (h *handlers) recordStats(tool string, env Envelope, payloadBytes int, cach
 	})
 }
 
+// recordPlanStats maps a PlanResult into a stats.Event: plan_verdict -> verdict,
+// plan-level + per-task findings aggregated into the histograms.
+func (h *handlers) recordPlanStats(pr verdict.PlanResult, modelUsed string, ms int64, payloadBytes int, cached bool) {
+	if h.deps.Stats == nil {
+		return
+	}
+	findings := append([]verdict.Finding(nil), pr.PlanFindings...)
+	for _, t := range pr.Tasks {
+		findings = append(findings, t.Findings...)
+	}
+	sev, cat, total := stats.CountFindings(findings)
+	h.deps.Stats.Record(stats.Event{
+		Ts:             time.Now().UTC().Truncate(time.Second),
+		Tool:           "validate_plan",
+		Verdict:        string(pr.PlanVerdict),
+		FindingsTotal:  total,
+		SeverityCounts: sev,
+		CategoryCounts: cat,
+		ReviewMS:       ms,
+		Model:          modelUsed,
+		Cached:         cached,
+		Partial:        pr.Partial,
+		PayloadBytes:   payloadBytes,
+	})
+}
+
+// recordResultStats records prime/extract calls: no pass/warn/fail verdict, just
+// their findings (e.g. kb_gap, insufficient_evidence) into the category histogram.
+func (h *handlers) recordResultStats(tool string, findings []verdict.Finding, modelUsed string, ms int64, payloadBytes int, cached bool) {
+	if h.deps.Stats == nil {
+		return
+	}
+	sev, cat, total := stats.CountFindings(findings)
+	h.deps.Stats.Record(stats.Event{
+		Ts:             time.Now().UTC().Truncate(time.Second),
+		Tool:           tool,
+		Verdict:        "",
+		FindingsTotal:  total,
+		SeverityCounts: sev,
+		CategoryCounts: cat,
+		ReviewMS:       ms,
+		Model:          modelUsed,
+		Cached:         cached,
+		PayloadBytes:   payloadBytes,
+	})
+}
+
 func envelopeResult(env Envelope) (*mcp.CallToolResult, Envelope, error) {
 	env.SummaryBlock = formatEnvelopeSummary(env)
 	body, err := json.MarshalIndent(env, "", "  ")
@@ -1099,6 +1146,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey); ok {
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
+		h.recordPlanStats(cached, cachedModelUsed, 0, planBytes+pkBytes, true)
 		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
 	}
 
@@ -1131,6 +1179,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	pr = prependPlanClamp(pr, clamp)
 	pr = finalizePlanResult(pr, modelUsed, ms)
 	h.planCache().store(cacheKey, pr, modelUsed)
+	h.recordPlanStats(pr, modelUsed, ms, planBytes+pkBytes, false)
 	return planEnvelopeResultFinalized(pr, modelUsed, ms)
 }
 

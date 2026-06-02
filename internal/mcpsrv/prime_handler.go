@@ -213,6 +213,7 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 	// the default "success" set at function entry.
 	logModelUsed, logVerdict, logMS, logPicks, logFindings = modelUsed, result.Verdict, ms, len(result.Picks), len(result.Findings)
 
+	h.recordResultStats("prime_project_knowledge", result.Findings, modelUsed, ms, 0, false)
 	return primeEnvelopeResult(result, modelUsed, ms)
 }
 

@@ -219,6 +219,7 @@ func (h *handlers) ExtractProjectKnowledge(ctx context.Context, _ *mcp.CallToolR
 	// the default "success" set at function entry.
 	logModelUsed, logVerdict, logMS, logProposals, logFindings = modelUsed, result.Verdict, ms, len(result.Proposals), len(result.Findings)
 
+	h.recordResultStats("extract_project_knowledge", result.Findings, modelUsed, ms, 0, false)
 	return extractEnvelopeResult(result, modelUsed, ms)
 }
 
