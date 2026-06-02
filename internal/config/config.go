@@ -30,6 +30,14 @@ type Config struct {
 	ExtractMaxTokens  int
 	PlanTasksPerChunk int
 	MaxTokensCeiling  int
+	// Stats subsystem (opt-in; see spec 2026-06-02). StatsDir == "" disables
+	// it entirely.
+	StatsDir              string
+	StatsModel            ModelRef
+	StatsSummaryInterval  time.Duration
+	StatsSummaryThreshold int
+	StatsRetentionDays    int
+	StatsMaxTokens        int
 	// KBStore selects the optional knowledge-store integration used for
 	// output adaptation by the prime/extract tools. Empty string (the
 	// default) disables KB-specific output (e.g. paste-ready commands);
@@ -68,8 +76,12 @@ func Load(env func(string) string) (Config, error) {
 		PlanMaxTokens:     4096,
 		PrimeMaxTokens:    4096,
 		ExtractMaxTokens:  8192,
-		PlanTasksPerChunk: 8,
-		MaxTokensCeiling:  16384,
+		PlanTasksPerChunk:     8,
+		MaxTokensCeiling:      16384,
+		StatsSummaryInterval:  24 * time.Hour,
+		StatsSummaryThreshold: 50,
+		StatsRetentionDays:    30,
+		StatsMaxTokens:        2048,
 	}
 
 	if cfg.AnthropicKey == "" && cfg.OpenAIKey == "" && cfg.GoogleKey == "" {
@@ -230,6 +242,64 @@ func Load(env func(string) string) (Config, error) {
 		}
 		cfg.MaxTokensCeiling = n
 	}
+
+	cfg.StatsDir = env("ANTI_TANGENT_STATS_DIR")
+
+	// StatsModel: explicit override -> MidModel.
+	if v := env("ANTI_TANGENT_STATS_MODEL"); v != "" {
+		mr, err := ParseModelRef(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_STATS_MODEL: %w", err)
+		}
+		cfg.StatsModel = mr
+	} else {
+		cfg.StatsModel = cfg.MidModel
+	}
+
+	if v := env("ANTI_TANGENT_STATS_SUMMARY_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_STATS_SUMMARY_INTERVAL: %w", err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_STATS_SUMMARY_INTERVAL: must be positive, got %s", d)
+		}
+		cfg.StatsSummaryInterval = d
+	}
+	if v := env("ANTI_TANGENT_STATS_SUMMARY_THRESHOLD"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_STATS_SUMMARY_THRESHOLD: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_STATS_SUMMARY_THRESHOLD: must be positive, got %d", n)
+		}
+		cfg.StatsSummaryThreshold = n
+	}
+	if v := env("ANTI_TANGENT_STATS_RETENTION_DAYS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_STATS_RETENTION_DAYS: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_STATS_RETENTION_DAYS: must be positive, got %d", n)
+		}
+		cfg.StatsRetentionDays = n
+	}
+	if v := env("ANTI_TANGENT_STATS_MAX_TOKENS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_STATS_MAX_TOKENS: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_STATS_MAX_TOKENS: must be positive, got %d", n)
+		}
+		cfg.StatsMaxTokens = n
+	}
+	if cfg.StatsMaxTokens > cfg.MaxTokensCeiling {
+		cfg.StatsMaxTokens = cfg.MaxTokensCeiling
+	}
+
 	if v := env("ANTI_TANGENT_LOG_LEVEL"); v != "" {
 		switch strings.ToLower(v) {
 		case "debug":
