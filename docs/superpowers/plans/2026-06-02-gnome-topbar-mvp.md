@@ -49,6 +49,7 @@ gnome-topbar/
       bm/nowworking.go                  # currently-working-on note parser (body + updated)
       bm/search.go                      # epic/story search parsing
       github/github.go                  # go-gh PR fetch + repository_url -> owner/repo
+      atstats/atstats.go                # read anti-tangent rollup.json + summary.md (if present)
       state/store.go                    # persisted seen/ack store
       state/state.go                    # Snapshot, Event, SourceStatus, event computation
       server/server.go                  # loopback HTTP/JSON + bearer auth
@@ -66,7 +67,8 @@ gnome-topbar/
 - `bm.SearchResult { Title, Type, Permalink, Snippet string }`
 - `state.SourceStatus { OK bool; Error string; StaleSince *time.Time }`
 - `state.Event { ID, Kind, Title, URL, Body string }`
-- `state.Snapshot { NowWorking bm.NowWorking; PRs {Authored,ReviewRequested []github.PR}; Todos {Active,Due []bm.TodoItem}; Sources map[string]SourceStatus; UnackedEvents []Event; GeneratedAt time.Time }`
+- `atstats.Stats { Present bool; GeneratedAt time.Time; TotalCalls int; PassPct/WarnPct/FailPct float64; TopCategory string; ReviewMSP95 int64; Summary string }`
+- `state.Snapshot { NowWorking bm.NowWorking; PRs {Authored,ReviewRequested []github.PR}; Todos {Active,Due []bm.TodoItem}; Sources map[string]SourceStatus; UnackedEvents []Event; AntiTangent atstats.Stats; GeneratedAt time.Time }`
 
 The JSON the extension consumes is `state.Snapshot` marshaled with the json tags defined in Task 9 / Task 10.
 
@@ -2654,7 +2656,329 @@ git commit -m "docs(gnome-topbar): currently-working-on wiring notes"
 
 ---
 
-## Task 17: end-to-end verification + acceptance
+## Task 17: anti-tangent stats — daemon source
+
+**Files:**
+- Create: `gnome-topbar/daemon/internal/atstats/atstats.go`
+- Test: `gnome-topbar/daemon/internal/atstats/atstats_test.go`
+- Modify: `internal/config/config.go` (add `StatsDir`), `internal/state/state.go` (add `AntiTangent` to `Snapshot`), `cmd/gnome-topbar-daemon/main.go` (wire a refresh)
+
+Reads the anti-tangent v0.10.0 stats files (`rollup.json` + `summary.md`) from a configured
+dir, if present. Pure local file reads.
+
+> **Cross-component contract:** `rollup.json`'s keys must match what the anti-tangent stats
+> writer emits (`docs/superpowers/specs/2026-06-02-anti-tangent-stats-design.md` §3.3). This
+> reader pins the **snake_case** keys below; when implementing the v0.10.0 stats feature, give
+> its `Rollup` struct matching json tags (Go marshals PascalCase by default, which would NOT
+> match). Missing/extra keys degrade gracefully (zero values), but the headline numbers depend
+> on these names.
+
+- [ ] **Step 1: Write the failing test**
+
+`gnome-topbar/daemon/internal/atstats/atstats_test.go`:
+```go
+package atstats
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestReadAbsentDirIsNotPresent(t *testing.T) {
+	if got := Read(filepath.Join(t.TempDir(), "nope")); got.Present {
+		t.Fatalf("expected not present, got %+v", got)
+	}
+	if got := Read(""); got.Present {
+		t.Fatal("empty dir must be not present")
+	}
+}
+
+func TestReadParsesRollupAndSummary(t *testing.T) {
+	dir := t.TempDir()
+	rollup := `{"total_calls":10,"verdict_counts":{"pass":7,"warn":2,"fail":1},
+	  "category_histogram":{"ambiguous_spec":5,"scope_drift":2},
+	  "review_ms_p95":1800,"generated_at":"2026-06-02T08:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(dir, "rollup.json"), []byte(rollup), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "summary.md"), []byte("All healthy this week."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := Read(dir)
+	if !s.Present {
+		t.Fatal("expected present")
+	}
+	if s.TotalCalls != 10 || s.ReviewMSP95 != 1800 {
+		t.Fatalf("bad numbers: %+v", s)
+	}
+	if s.PassPct != 70 || s.WarnPct != 20 || s.FailPct != 10 {
+		t.Fatalf("bad pcts: %+v", s)
+	}
+	if s.TopCategory != "ambiguous_spec" {
+		t.Fatalf("top category=%q", s.TopCategory)
+	}
+	if s.Summary != "All healthy this week." {
+		t.Fatalf("summary=%q", s.Summary)
+	}
+}
+
+func TestReadRollupPresentSummaryMissing(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "rollup.json"), []byte(`{"total_calls":1,"verdict_counts":{"pass":1},"generated_at":"2026-06-02T08:00:00Z"}`), 0o600)
+	s := Read(dir)
+	if !s.Present || s.Summary != "" {
+		t.Fatalf("expected present with empty summary: %+v", s)
+	}
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd gnome-topbar/daemon && go test ./internal/atstats/... && cd -`
+Expected: FAIL — `undefined: Read`.
+
+- [ ] **Step 3: Implement the reader**
+
+`gnome-topbar/daemon/internal/atstats/atstats.go`:
+```go
+// Package atstats reads the anti-tangent v0.10.0 stats subsystem's output
+// (rollup.json + summary.md) if present. Pure local file reads; absence is
+// reported as Present=false with no error.
+package atstats
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+type Stats struct {
+	Present     bool      `json:"present"`
+	GeneratedAt time.Time `json:"generated_at"`
+	TotalCalls  int       `json:"total_calls"`
+	PassPct     float64   `json:"pass_pct"`
+	WarnPct     float64   `json:"warn_pct"`
+	FailPct     float64   `json:"fail_pct"`
+	TopCategory string    `json:"top_category"`
+	ReviewMSP95 int64     `json:"review_ms_p95"`
+	Summary     string    `json:"summary"`
+}
+
+// rollup is the subset of anti-tangent's rollup.json this panel reads.
+// Contract: keys match 2026-06-02-anti-tangent-stats-design.md §3.3 (snake_case).
+type rollup struct {
+	TotalCalls        int            `json:"total_calls"`
+	VerdictCounts     map[string]int `json:"verdict_counts"`
+	CategoryHistogram map[string]int `json:"category_histogram"`
+	ReviewMSP95       int64          `json:"review_ms_p95"`
+	GeneratedAt       time.Time      `json:"generated_at"`
+}
+
+// Read returns Present=false (no error) when dir is empty or rollup.json is
+// absent/unreadable/unparseable — the panel then omits the section.
+func Read(dir string) Stats {
+	if dir == "" {
+		return Stats{}
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "rollup.json"))
+	if err != nil {
+		return Stats{}
+	}
+	var r rollup
+	if err := json.Unmarshal(b, &r); err != nil {
+		return Stats{}
+	}
+	s := Stats{
+		Present:     true,
+		GeneratedAt: r.GeneratedAt,
+		TotalCalls:  r.TotalCalls,
+		ReviewMSP95: r.ReviewMSP95,
+		TopCategory: topKey(r.CategoryHistogram),
+	}
+	if r.TotalCalls > 0 {
+		s.PassPct = pct(r.VerdictCounts["pass"], r.TotalCalls)
+		s.WarnPct = pct(r.VerdictCounts["warn"], r.TotalCalls)
+		s.FailPct = pct(r.VerdictCounts["fail"], r.TotalCalls)
+	}
+	if sb, err := os.ReadFile(filepath.Join(dir, "summary.md")); err == nil {
+		s.Summary = truncate(string(sb), 600)
+	}
+	return s
+}
+
+func pct(n, total int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(n) / float64(total) * 100
+}
+
+func topKey(m map[string]int) string {
+	best, bestN := "", -1
+	for k, v := range m {
+		if v > bestN {
+			best, bestN = k, v
+		}
+	}
+	return best
+}
+
+func truncate(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > max {
+		return s[:max]
+	}
+	return s
+}
+```
+
+> **Note:** `truncate` may split a multibyte UTF-8 rune at `max` bytes. For a 600-byte
+> headline snippet this is acceptable (worst case one trailing replacement glyph); if you
+> prefer rune-safe truncation, convert to `[]rune` first. Keeping it byte-based here avoids a
+> dependency and matches the "headline only" intent.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `cd gnome-topbar/daemon && go test ./internal/atstats/... && cd -`
+Expected: PASS (all three).
+
+- [ ] **Step 5: Add `StatsDir` to config (modify `internal/config/config.go`)**
+
+Add a field to the `Config` struct (from Task 1):
+```go
+	StatsDir string `toml:"stats_dir"`
+```
+And at the end of `Load`, before writing client.json, default it when empty:
+```go
+	if c.StatsDir == "" {
+		base := os.Getenv("XDG_STATE_HOME")
+		if base == "" {
+			home, _ := os.UserHomeDir()
+			base = filepath.Join(home, ".local", "state")
+		}
+		c.StatsDir = filepath.Join(base, "anti-tangent-mcp")
+	}
+```
+(`path/filepath` is already imported in config.go; add `os` if not present — it is, from the token bootstrap.)
+
+- [ ] **Step 6: Add `AntiTangent` to `Snapshot` (modify `internal/state/state.go`)**
+
+Add an import and a field to `Snapshot` (from Task 9):
+```go
+	// add to imports:
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atstats"
+
+	// add to the Snapshot struct, after Sources:
+	AntiTangent atstats.Stats `json:"anti_tangent"`
+```
+
+- [ ] **Step 7: Wire a refresh in main (modify `cmd/gnome-topbar-daemon/main.go`)**
+
+Add an import for `atstats`, then add a refresh method on `Poller` and start it on the BM cadence (the files change rarely):
+```go
+	// import:
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atstats"
+
+	// new method:
+func (p *Poller) refreshAntiTangent(ctx context.Context) {
+	s := atstats.Read(p.cfg.StatsDir)
+	p.mu.Lock()
+	p.snap.AntiTangent = s
+	p.snap.GeneratedAt = time.Now()
+	p.mu.Unlock()
+}
+```
+In `main`, after the initial `p.refreshBM(ctx)` and its `go p.loop(...)`:
+```go
+	p.refreshAntiTangent(ctx)
+	go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshAntiTangent)
+```
+
+- [ ] **Step 8: Build + full test**
+
+Run: `cd gnome-topbar/daemon && go build ./... && go vet ./... && go test -race ./... && cd -`
+Expected: clean build, all PASS.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add gnome-topbar/daemon
+git commit -m "feat(gnome-topbar): read anti-tangent stats (rollup.json + summary.md) if present"
+```
+
+---
+
+## Task 18: anti-tangent stats — panel section
+
+**Files:**
+- Modify: `gnome-topbar/extension/extension.js`
+
+Render an "anti-tangent" section when `state.anti_tangent.present`; omit it entirely when not.
+
+- [ ] **Step 1: Add the section to `_buildMenu`**
+
+Insert before the search separator added in Task 14 (so stats sits above search):
+```javascript
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._atSection = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._atSection);
+```
+
+- [ ] **Step 2: Render it in `_render`**
+
+Add at the end of `_render(state)`:
+```javascript
+        this._renderAntiTangent(state.anti_tangent);
+```
+
+- [ ] **Step 3: Add `_renderAntiTangent`**
+
+Add method to the Indicator class:
+```javascript
+    _renderAntiTangent(at) {
+        this._atSection.removeAll();
+        if (!at || !at.present) return; // "if they exist" — omit the whole section
+        const when = at.generated_at ? new Date(at.generated_at).toLocaleString() : '?';
+        this._addTitle(this._atSection, `🛡 anti-tangent · as of ${when}`);
+        const line = `${at.total_calls} calls · ${Math.round(at.pass_pct)}% pass / ` +
+            `${Math.round(at.warn_pct)}% warn / ${Math.round(at.fail_pct)}% fail · ` +
+            `top: ${at.top_category || '—'} · p95 ${at.review_ms_p95}ms`;
+        this._atSection.addMenuItem(new PopupMenu.PopupMenuItem(line, {reactive: false}));
+        if (at.summary) {
+            const item = new PopupMenu.PopupMenuItem(at.summary, {reactive: false});
+            item.label.clutter_text.set_line_wrap(true);
+            this._atSection.addMenuItem(item);
+        }
+    }
+```
+
+- [ ] **Step 4: Reinstall + verify in nested shell**
+
+Create a fake stats dir to exercise the path without waiting on a real anti-tangent run:
+```bash
+mkdir -p ~/.local/state/anti-tangent-mcp
+cat > ~/.local/state/anti-tangent-mcp/rollup.json <<'EOF'
+{"total_calls":12,"verdict_counts":{"pass":9,"warn":2,"fail":1},"category_histogram":{"ambiguous_spec":4},"review_ms_p95":1500,"generated_at":"2026-06-02T08:00:00Z"}
+EOF
+echo "Reviews look healthy; ambiguous ACs are the most common finding." > ~/.local/state/anti-tangent-mcp/summary.md
+cd gnome-topbar/packaging && make install-extension && cd -
+```
+Restart the nested shell; open the menu.
+Expected: a "🛡 anti-tangent · as of …" section shows the numbers line + summary. Then `rm ~/.local/state/anti-tangent-mcp/rollup.json`, wait one poll (or reopen): the section disappears with no error.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add gnome-topbar/extension
+git commit -m "feat(gnome-topbar): anti-tangent stats panel section"
+```
+
+---
+
+## Task 19: end-to-end verification + acceptance
 
 **Files:** none (verification only)
 
@@ -2670,6 +2994,7 @@ Confirm each spec acceptance item:
 - [ ] Dropdown renders currently-working-on, review-requested PRs, my open PRs, due/overdue + active todos, and a working epic/story search.
 - [ ] Clicking a PR opens it in the browser.
 - [ ] A new review request raises one notification; a due todo raises one; neither re-fires after daemon or panel restart.
+- [ ] With a `rollup.json` (+ optional `summary.md`) in `stats_dir`, the "anti-tangent" section shows numbers + summary with an "as of" stamp; removing `rollup.json` makes the section vanish (no error).
 - [ ] Killing the daemon (`systemctl --user stop gnome-topbar-daemon`) degrades the panel to the "daemon offline" hint with no shell instability.
 - [ ] A single source failing (e.g. break `bm_username`) dims/marks only that section; GitHub still renders.
 - [ ] No real personal data in the committed tool tree: `git grep -nE "pgilmore|YN-[0-9]|patiently/(powow|yobify)" -- gnome-topbar/` returns nothing. (Scope is `gnome-topbar/` only — the spec/plan under `docs/` are authored anonymized and reviewed separately; do not grep them with this pattern or it self-matches its own example strings. `BM_BEARER_TOKEN` is a public env-var *name* and is expected to appear as a placeholder in `README.md`.)
@@ -2689,4 +3014,5 @@ git commit -m "test(gnome-topbar): end-to-end verification fixes"
 - **Soup 3 / GNOME ESM API drift** is the most likely source of friction; Tasks 13–15 each end with a nested-shell observation step so drift surfaces immediately. The method names used (`get_request_headers`, `set_request_body_from_bytes`, `send_and_read_async`/`send_and_read_finish`) are the libsoup-3 forms shipped with GNOME 45+.
 - **BM search JSON shape** is verified live in Task 6 Step 5; adjust `parseSearch` tags if the real server differs.
 - **Fine-grained PAT scope**: authored PRs are confirmed visible; if review-requested PRs from some org never appear, widen the token's repo/org scope (GitHub settings) — a config/permissions fix, not code.
-- **Deferred slices** (Claude usage, CodeScene/anti-tangent stats) are intentionally out; `state.Snapshot.Sources` + the section-per-source render pattern keep them additive.
+- **anti-tangent stats** (Tasks 17–18) read `rollup.json`/`summary.md` from `stats_dir` if present. The `rollup.json` key names are a **cross-component contract** with the anti-tangent v0.10.0 stats writer (snake_case; see Task 17's contract note) — keep them in sync.
+- **Deferred slices** (Claude usage, CodeScene stats) are intentionally out; `state.Snapshot.Sources` + the section-per-source render pattern keep them additive.

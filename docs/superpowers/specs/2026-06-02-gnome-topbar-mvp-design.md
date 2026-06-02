@@ -39,8 +39,12 @@ polls the daemon and renders. This keeps heavy, fallible I/O out of the composit
 
 - **Claude account usage / quota panel** — deferred. No official API exposes subscription
   quota/reset; needs its own research slice.
-- **CodeScene / anti-tangent statistics panel** — deferred. Neither tool persists historical
-  metrics today; requires a net-new logging sink.
+- **CodeScene statistics panel** — deferred. CodeScene persists no historical metrics today;
+  requires a net-new logging sink.
+- **anti-tangent statistics panel** — *in scope* (read-only, optional). The anti-tangent
+  v0.10.0 stats subsystem writes `rollup.json` + `summary.md` to `ANTI_TANGENT_STATS_DIR`;
+  this extension reads those files when present (see §3.5a). The panel never *produces*
+  anti-tangent stats — it only surfaces what that subsystem wrote.
 - **Editing from the panel** — todos and notes are read-only in MVP (no tick-from-panel,
   no note editing). Cleanly addable later.
 - **Multi-user / multi-machine sync.** Single desktop, single user.
@@ -140,6 +144,27 @@ Secrets never appear in logs. The `systemd --user` unit references the config vi
   time so the panel can show staleness ("⟳ 2m ago").
 - If the note does not exist yet, returns an empty body + a one-line hint; the panel shows a
   "not set up yet" affordance rather than an error.
+
+### 3.5a Source — anti-tangent stats (optional, read-only, if present)
+
+Surfaces the anti-tangent v0.10.0 stats subsystem's output. Pure local file reads — no MCP,
+no LLM, no network.
+
+- **Locating it:** a `stats_dir` key in gnome-topbar's `config.toml`, default
+  `${XDG_STATE_HOME:-~/.local/state}/anti-tangent-mcp` (the same default the anti-tangent stats
+  spec suggests). The daemon is a separate process from anti-tangent, so it does **not** inherit
+  `ANTI_TANGENT_STATS_DIR`; the operator points `stats_dir` at the same directory.
+- **Reads two files** on a modest cadence (~300 s; the files only change on anti-tangent
+  compaction, ~24 h / 50 events):
+  - `rollup.json` — deterministic aggregates → a few headline figures: total calls, pass/warn/fail
+    %, top finding category, p95 `review_ms`, and `generated_at`.
+  - `summary.md` — the latest LLM performance narrative (rendered truncated, expandable).
+- **Graceful absence ("if they exist"):** if `rollup.json` is missing, the source reports
+  `present: false` and the panel **omits the section entirely** — no error, no empty box.
+- **rollup.json schema contract:** the field names this reader expects must match what the
+  anti-tangent stats writer emits (`docs/superpowers/specs/2026-06-02-anti-tangent-stats-design.md`
+  §3.3). The exact JSON keys are pinned in the implementation plan's reader task; this is a
+  cross-component contract between the two repos/branches.
 
 ### 3.6 State aggregation + event/ack model
 
@@ -387,11 +412,12 @@ daemon + one new menu section in the extension, with no change to existing sourc
 - **Claude usage panel** — a source reading `~/.claude` and `~/.claude-alt` token-accounting
   logs (the second account's config home is confirmed present). Subscription quota/reset
   remains an open research item.
-- **CodeScene / anti-tangent stats panel** — requires first adding a logging sink that
-  persists "issues caught" over time (neither tool persists this today), then a source that
-  reads it.
+- **CodeScene stats panel** — requires first adding a logging sink that persists "issues
+  caught" over time (CodeScene persists none today), then a source that reads it.
 
-Both stay out of MVP by decision.
+The **anti-tangent stats panel** is no longer deferred: its data source (the v0.10.0 stats
+subsystem) is being built in parallel, so this extension reads its `rollup.json`/`summary.md`
+directly (§3.5a). Claude usage and CodeScene stay out of MVP by decision.
 
 ---
 
@@ -401,6 +427,9 @@ Both stay out of MVP by decision.
 - Dropdown renders: currently-working-on (with staleness), review-requested PRs, my open
   PRs, due/overdue + active todos, and a working epic/story search box.
 - Clicking a PR opens it in the browser.
+- When `stats_dir` contains `rollup.json`, an "anti-tangent" section shows headline numbers +
+  the latest summary with an `as of <generated_at>` stamp; when those files are **absent**, the
+  section is omitted entirely (no error).
 - A **new** review request raises one clickable notification (opens the PR); a todo coming
   due raises one notification; neither re-fires after daemon or panel restart.
 - Killing the daemon degrades the panel to an "offline" hint with no shell instability; a
