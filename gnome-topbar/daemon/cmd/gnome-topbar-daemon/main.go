@@ -68,12 +68,23 @@ func main() {
 	defer cancel()
 
 	p.refreshGitHub(ctx)
-	p.refreshBM(ctx)
-	p.refreshAntiTangent(ctx)
 	go p.loop(ctx, time.Duration(cfg.GitHubIntervalSec)*time.Second, p.refreshGitHub)
-	go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshBM)
+
+	// Skip Basic Memory polling entirely when bm_username is unset — the reads
+	// can't resolve, so polling would just produce guaranteed failures. Mark the
+	// source so the tray shows why instead of looking healthy-but-empty.
+	if cfg.BMUsername != "" {
+		p.refreshBM(ctx)
+		go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshBM)
+		go p.morningSweep(ctx)
+	} else {
+		p.mu.Lock()
+		p.snap.Sources["basic-memory"] = state.SourceStatus{OK: false, Error: "bm_username not set"}
+		p.mu.Unlock()
+	}
+
+	p.refreshAntiTangent(ctx)
 	go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshAntiTangent)
-	go p.morningSweep(ctx)
 
 	addr := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", cfg.ListenPort))
 	srv := &http.Server{Addr: addr, Handler: server.New(p, cfg.APIToken)}
