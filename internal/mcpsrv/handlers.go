@@ -157,7 +157,15 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		ReviewMS:   ms,
 	}
 	env = h.withSessionTTL(env, sess)
-	h.recordStats("validate_task_spec", env, 0, false)
+	h.recordStat(statParams{
+		tool:      "validate_task_spec",
+		verdict:   env.Verdict,
+		findings:  env.Findings,
+		modelUsed: env.ModelUsed,
+		reviewMS:  env.ReviewMS,
+		partial:   env.Partial,
+		sessionID: env.SessionID,
+	})
 	return envelopeResult(env)
 }
 
@@ -248,76 +256,52 @@ func (h *handlers) withSessionTTL(env Envelope, sess *session.Session) Envelope 
 	return env
 }
 
-// recordStats maps a finalized Envelope into a stats.Event and records it.
+// statParams carries the fields needed to record one hook call. Grouping them
+// avoids a long primitive argument list across the per-handler record sites.
+type statParams struct {
+	tool         string
+	verdict      string
+	findings     []verdict.Finding
+	modelUsed    string
+	reviewMS     int64
+	partial      bool
+	cached       bool
+	payloadBytes int
+	sessionID    string // raw id; hashed (salted) inside, never stored raw
+}
+
+// recordStat maps a statParams into a stats.Event and records it.
 // Nil-safe: when stats are disabled this is a single nil check with no
-// allocation. tool is the MCP tool name; payloadBytes/cached are values the
-// caller already has on hand.
-func (h *handlers) recordStats(tool string, env Envelope, payloadBytes int, cached bool) {
+// allocation.
+func (h *handlers) recordStat(p statParams) {
 	if h.deps.Stats == nil {
 		return
 	}
-	sev, cat, total := stats.CountFindings(env.Findings)
+	sev, cat, total := stats.CountFindings(p.findings)
 	h.deps.Stats.Record(stats.Event{
 		Ts:             time.Now().UTC().Truncate(time.Second),
-		Tool:           tool,
-		Verdict:        env.Verdict,
+		Tool:           p.tool,
+		Verdict:        p.verdict,
 		FindingsTotal:  total,
 		SeverityCounts: sev,
 		CategoryCounts: cat,
-		ReviewMS:       env.ReviewMS,
-		Model:          env.ModelUsed,
-		Cached:         cached,
-		Partial:        env.Partial,
-		PayloadBytes:   payloadBytes,
-		SessionHash:    h.deps.Stats.HashSession(env.SessionID),
+		ReviewMS:       p.reviewMS,
+		Model:          p.modelUsed,
+		Cached:         p.cached,
+		Partial:        p.partial,
+		PayloadBytes:   p.payloadBytes,
+		SessionHash:    h.deps.Stats.HashSession(p.sessionID),
 	})
 }
 
-// recordPlanStats maps a PlanResult into a stats.Event: plan_verdict -> verdict,
-// plan-level + per-task findings aggregated into the histograms.
-func (h *handlers) recordPlanStats(pr verdict.PlanResult, modelUsed string, ms int64, payloadBytes int, cached bool) {
-	if h.deps.Stats == nil {
-		return
-	}
+// planFindings aggregates plan-level and per-task findings from a PlanResult
+// into a single slice for stats recording.
+func planFindings(pr verdict.PlanResult) []verdict.Finding {
 	findings := append([]verdict.Finding(nil), pr.PlanFindings...)
 	for _, t := range pr.Tasks {
 		findings = append(findings, t.Findings...)
 	}
-	sev, cat, total := stats.CountFindings(findings)
-	h.deps.Stats.Record(stats.Event{
-		Ts:             time.Now().UTC().Truncate(time.Second),
-		Tool:           "validate_plan",
-		Verdict:        string(pr.PlanVerdict),
-		FindingsTotal:  total,
-		SeverityCounts: sev,
-		CategoryCounts: cat,
-		ReviewMS:       ms,
-		Model:          modelUsed,
-		Cached:         cached,
-		Partial:        pr.Partial,
-		PayloadBytes:   payloadBytes,
-	})
-}
-
-// recordResultStats records prime/extract calls: no pass/warn/fail verdict, just
-// their findings (e.g. kb_gap, insufficient_evidence) into the category histogram.
-func (h *handlers) recordResultStats(tool string, findings []verdict.Finding, modelUsed string, ms int64, payloadBytes int, cached bool) {
-	if h.deps.Stats == nil {
-		return
-	}
-	sev, cat, total := stats.CountFindings(findings)
-	h.deps.Stats.Record(stats.Event{
-		Ts:             time.Now().UTC().Truncate(time.Second),
-		Tool:           tool,
-		Verdict:        "",
-		FindingsTotal:  total,
-		SeverityCounts: sev,
-		CategoryCounts: cat,
-		ReviewMS:       ms,
-		Model:          modelUsed,
-		Cached:         cached,
-		PayloadBytes:   payloadBytes,
-	})
+	return findings
 }
 
 func envelopeResult(env Envelope) (*mcp.CallToolResult, Envelope, error) {
@@ -431,7 +415,16 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		ReviewMS:   ms,
 	}
 	env = h.withSessionTTL(env, sess)
-	h.recordStats("check_progress", env, totalBytes(args.ChangedFiles), false)
+	h.recordStat(statParams{
+		tool:         "check_progress",
+		verdict:      env.Verdict,
+		findings:     env.Findings,
+		modelUsed:    env.ModelUsed,
+		reviewMS:     env.ReviewMS,
+		partial:      env.Partial,
+		sessionID:    env.SessionID,
+		payloadBytes: totalBytes(args.ChangedFiles),
+	})
 	return envelopeResult(env)
 }
 
@@ -1092,7 +1085,16 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if !lightweight {
 		env = h.withSessionTTL(env, sess)
 	}
-	h.recordStats("validate_completion", env, totalCompletionBytes(args.FinalFiles, args.FinalDiff), false)
+	h.recordStat(statParams{
+		tool:         "validate_completion",
+		verdict:      env.Verdict,
+		findings:     env.Findings,
+		modelUsed:    env.ModelUsed,
+		reviewMS:     env.ReviewMS,
+		partial:      env.Partial,
+		sessionID:    env.SessionID,
+		payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+	})
 	return envelopeResult(env)
 }
 
@@ -1146,7 +1148,16 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey); ok {
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
-		h.recordPlanStats(cached, cachedModelUsed, 0, planBytes+pkBytes, true)
+		h.recordStat(statParams{
+			tool:         "validate_plan",
+			verdict:      string(cached.PlanVerdict),
+			findings:     planFindings(cached),
+			modelUsed:    cachedModelUsed,
+			reviewMS:     0,
+			partial:      cached.Partial,
+			cached:       true,
+			payloadBytes: planBytes + pkBytes,
+		})
 		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
 	}
 
@@ -1179,7 +1190,15 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	pr = prependPlanClamp(pr, clamp)
 	pr = finalizePlanResult(pr, modelUsed, ms)
 	h.planCache().store(cacheKey, pr, modelUsed)
-	h.recordPlanStats(pr, modelUsed, ms, planBytes+pkBytes, false)
+	h.recordStat(statParams{
+		tool:         "validate_plan",
+		verdict:      string(pr.PlanVerdict),
+		findings:     planFindings(pr),
+		modelUsed:    modelUsed,
+		reviewMS:     ms,
+		partial:      pr.Partial,
+		payloadBytes: planBytes + pkBytes,
+	})
 	return planEnvelopeResultFinalized(pr, modelUsed, ms)
 }
 
