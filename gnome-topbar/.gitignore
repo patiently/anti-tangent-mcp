@@ -1,3 +1,6 @@
 /daemon/bin/
+# stray `go build` output when run from the daemon module root
+/daemon/gnome-topbar-daemon
+/daemon/cmd/gnome-topbar-daemon/gnome-topbar-daemon
 *.local.toml
 /config.local.toml
