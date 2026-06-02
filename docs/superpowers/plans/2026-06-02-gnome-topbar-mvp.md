@@ -1,5 +1,14 @@
 # gnome-topbar MVP Implementation Plan
 
+> **STATUS (2026-06-02):** Tasks **0–12 are COMPLETE** (the Go daemon / data layer — built,
+> reviewed, race-green, verified live against real services). Tasks **13–19 are SUPERSEDED**:
+> the runtime is a Docker sandbox sharing the host's GNOME session bus, so Component B is now
+> an **in-sandbox Go tray (StatusNotifierItem)**, not a host gjs gnome-shell extension. The
+> revised design is `docs/superpowers/specs/2026-06-02-gnome-topbar-mvp-design.md` (v2) and the
+> remaining work is planned in `docs/superpowers/plans/2026-06-02-gnome-topbar-tray.md`. Tasks
+> 13–19 below (gjs extension, panel rendering, search box, nested-shell verification) are kept
+> only as historical record — **do not implement them**.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a GNOME Shell top-bar extension (thin gjs panel) backed by a Go daemon. The daemon aggregates GitHub PRs + Basic Memory todos/search/currently-working-on and computes/deduplicates notification events; the gjs panel renders them and is the component that raises native GNOME notifications (for new review requests and due todos) and POSTs `/ack`.
