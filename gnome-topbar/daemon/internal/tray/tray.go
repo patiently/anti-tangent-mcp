@@ -232,15 +232,21 @@ func (t *Tray) render() {
 		systray.SetTooltip("gnome-topbar")
 	}
 
+	// Ack only events whose notification was actually delivered, so a failed
+	// Notify isn't marked seen (it re-notifies after a restart instead of being
+	// silently lost).
+	var delivered []string
 	for _, ev := range toRaise {
 		title := "Todo due"
 		if ev.Kind == "review_request" {
 			title = "Review requested: " + ev.Title
 		}
-		_, _ = Notify(title, ev.Body)
+		if _, err := Notify(title, ev.Body); err == nil {
+			delivered = append(delivered, ev.ID)
+		}
 	}
-	if ids := unackedIDs(snap); len(ids) > 0 && t.ack != nil {
-		t.ack(ids)
+	if len(delivered) > 0 && t.ack != nil {
+		t.ack(delivered)
 	}
 }
 
@@ -303,12 +309,4 @@ func fillTodoPool(pool []*systray.MenuItem, todos []bm.TodoItem, prefix string) 
 			mi.Hide()
 		}
 	}
-}
-
-func unackedIDs(s state.Snapshot) []string {
-	ids := make([]string, 0, len(s.UnackedEvents))
-	for _, e := range s.UnackedEvents {
-		ids = append(ids, e.ID)
-	}
-	return ids
 }

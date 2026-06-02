@@ -21,6 +21,8 @@ type Client struct {
 	token string
 	hc    *http.Client
 
+	handshakeMu sync.Mutex // serializes the initialize handshake (one at a time)
+
 	mu        sync.Mutex
 	sessionID string
 	ready     bool
@@ -84,12 +86,18 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 }
 
 func (c *Client) ensureReady(ctx context.Context) error {
+	// Serialize the handshake: concurrent CallTool calls (e.g. a scheduled BM
+	// poll overlapping a manual Refresh) must not both run initialize, which
+	// would open duplicate sessions and race the session-id/ready state.
+	c.handshakeMu.Lock()
+	defer c.handshakeMu.Unlock()
+
 	c.mu.Lock()
-	if c.ready {
-		c.mu.Unlock()
+	ready := c.ready
+	c.mu.Unlock()
+	if ready {
 		return nil
 	}
-	c.mu.Unlock()
 
 	if _, err := c.post(ctx, map[string]any{
 		"jsonrpc": "2.0", "id": 0, "method": "initialize",
@@ -179,8 +187,9 @@ func (c *Client) postNotify(ctx context.Context, payload any) error {
 	return nil
 }
 
-// firstSSEData reads an SSE stream and returns the JSON payload of the first
-// `data:` frame.
+// firstSSEData reads an SSE stream and returns the payload of the first event,
+// concatenating multiple `data:` lines with newlines per the SSE spec (so a
+// JSON message split across data lines is reassembled correctly).
 func firstSSEData(r io.Reader) ([]byte, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -188,7 +197,11 @@ func firstSSEData(r io.Reader) ([]byte, error) {
 	for sc.Scan() {
 		line := sc.Text()
 		if strings.HasPrefix(line, "data:") {
-			buf.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+			if buf.Len() > 0 {
+				buf.WriteByte('\n')
+			}
+			// SSE strips a single leading space after "data:".
+			buf.WriteString(strings.TrimPrefix(line[len("data:"):], " "))
 			continue
 		}
 		if line == "" && buf.Len() > 0 {

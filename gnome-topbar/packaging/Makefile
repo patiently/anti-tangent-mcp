@@ -4,6 +4,7 @@ UNIT := gnome-topbar-daemon.service
 .PHONY: build run install-daemon install enable logs
 
 build:
+	mkdir -p $(dir $(DAEMON_BIN))
 	cd ../daemon && go build -o $(DAEMON_BIN) ./cmd/gnome-topbar-daemon
 
 run: build

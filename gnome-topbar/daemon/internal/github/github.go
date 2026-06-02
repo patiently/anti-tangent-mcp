@@ -45,7 +45,9 @@ type searchItem struct {
 }
 
 func (s *Source) search(q string) ([]PR, error) {
-	path := "search/issues?q=" + url.QueryEscape(q)
+	// per_page=100 (the API max) so a single page covers realistic PR counts;
+	// the default page size is only 30, which would silently drop results.
+	path := "search/issues?q=" + url.QueryEscape(q) + "&per_page=100"
 	var resp struct {
 		Items []searchItem `json:"items"`
 	}

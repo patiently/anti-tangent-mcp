@@ -1,8 +1,8 @@
 # gnome-topbar
 
-A GNOME top-bar tray showing your GitHub PRs, Basic Memory todos,
-epic/story search, and a "currently working on" summary, backed by a small Go
-daemon. See `../docs/superpowers/specs/2026-06-02-gnome-topbar-mvp-design.md`.
+A GNOME top-bar tray showing your GitHub PRs, Basic Memory todos, a "currently
+working on" summary, and (optionally) anti-tangent/CodeScene stats — backed by a
+small Go daemon. See `../docs/superpowers/specs/2026-06-02-gnome-topbar-mvp-design.md`.
 
 ## Prerequisites
 - GNOME Shell 45/46/47 (Wayland or X11)
@@ -19,17 +19,17 @@ display (`$DISPLAY`), so the tray appears on the host top bar without any
 special setup:
 
 1. Copy and fill in the config:
-   ```
+   ```bash
    cp config.example.toml ~/.config/gnome-topbar/config.toml
    # set bm_username in the file
    ```
 2. Export the Basic Memory env vars (or add to your shell profile):
-   ```
+   ```bash
    export BM_URL=...
    export BM_BEARER_TOKEN=...
    ```
 3. Start the tray:
-   ```
+   ```bash
    cd packaging && make run
    ```
    A tray icon appears on the host top bar. The process inherits
@@ -42,11 +42,11 @@ No GNOME Shell extension to install or enable.
 
 1. Copy and fill in the config (same as above).
 2. Install and enable the service:
-   ```
+   ```bash
    cd packaging && make install-daemon enable
    ```
 3. Watch logs:
-   ```
+   ```bash
    make logs
    ```
 

@@ -17,7 +17,7 @@ func (f *fakeRest) Get(path string, resp any) error {
 }
 
 func TestFetchAuthoredMapsFields(t *testing.T) {
-	const path = "search/issues?q=is%3Aopen+is%3Apr+author%3A%40me"
+	const path = "search/issues?q=is%3Aopen+is%3Apr+author%3A%40me&per_page=100"
 	fr := &fakeRest{byPath: map[string]string{
 		path: `{"items":[{"number":40,"title":"Fix thing","html_url":"https://github.com/o/r/pull/40","repository_url":"https://api.github.com/repos/o/r","updated_at":"2026-02-26T16:22:36Z","user":{"login":"me"}}]}`,
 	}}
@@ -39,7 +39,7 @@ func TestFetchAuthoredMapsFields(t *testing.T) {
 }
 
 func TestFetchReviewRequestedUsesRightQuery(t *testing.T) {
-	const path = "search/issues?q=is%3Aopen+is%3Apr+review-requested%3A%40me"
+	const path = "search/issues?q=is%3Aopen+is%3Apr+review-requested%3A%40me&per_page=100"
 	fr := &fakeRest{byPath: map[string]string{path: `{"items":[]}`}}
 	s := New(fr)
 	if _, err := s.FetchReviewRequested(); err != nil {

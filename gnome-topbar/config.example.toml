@@ -1,5 +1,6 @@
 # Copy to ~/.config/gnome-topbar/config.toml and fill in.
-# BM_URL and BM_BEARER_TOKEN are read from the environment (see env file below);
+# BM_URL and BM_BEARER_TOKEN are read from the environment (e.g. exported in your
+# shell or in ~/.config/gnome-topbar/env when run as a systemd --user service);
 # you usually only need to set bm_username here.
 
 bm_username = "<your-basic-memory-username>"

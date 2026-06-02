@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 )
 
@@ -41,23 +42,56 @@ func (s *Store) IsNew(id string) bool {
 func (s *Store) MarkSeen(ids []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, id := range ids {
-		s.seen[id] = true
+	// Persist the would-be set atomically and only commit it to the in-memory
+	// map after the write succeeds — so a failed write never leaves memory and
+	// disk inconsistent (which would suppress events that were never durably
+	// acked).
+	next := make(map[string]bool, len(s.seen)+len(ids))
+	for id := range s.seen {
+		next[id] = true
 	}
-	return s.persist()
+	for _, id := range ids {
+		next[id] = true
+	}
+	if err := s.persistSet(next); err != nil {
+		return err
+	}
+	s.seen = next
+	return nil
 }
 
-func (s *Store) persist() error {
-	ids := make([]string, 0, len(s.seen))
-	for id := range s.seen {
+// persistSet writes the given set to disk atomically (temp file + rename) so a
+// crash mid-write can't leave a truncated seen.json.
+func (s *Store) persistSet(set map[string]bool) error {
+	ids := make([]string, 0, len(set))
+	for id := range set {
 		ids = append(ids, id)
 	}
+	sort.Strings(ids) // stable on-disk order
 	b, err := json.Marshal(ids)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, b, 0o600)
+	tmp, err := os.CreateTemp(dir, ".seen-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, s.path)
 }

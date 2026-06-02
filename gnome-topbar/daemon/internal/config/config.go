@@ -31,7 +31,9 @@ type Config struct {
 // Load reads cfgPath (TOML), applies env + defaults, ensures an API token
 // exists, and writes client.json into stateDir for the extension.
 func Load(cfgPath, stateDir string) (Config, error) {
-	var c Config
+	// MorningSweepHour starts at a sentinel so we can tell "unset" from a
+	// deliberate 0 (midnight); toml.Unmarshal leaves absent keys untouched.
+	c := Config{MorningSweepHour: -1}
 	if b, err := os.ReadFile(cfgPath); err == nil {
 		if err := toml.Unmarshal(b, &c); err != nil {
 			return c, err
@@ -58,8 +60,8 @@ func Load(cfgPath, stateDir string) (Config, error) {
 	if c.BMIntervalSec == 0 {
 		c.BMIntervalSec = 300
 	}
-	if c.MorningSweepHour == 0 {
-		c.MorningSweepHour = 8
+	if c.MorningSweepHour < 0 || c.MorningSweepHour > 23 {
+		c.MorningSweepHour = 8 // unset (sentinel) or out of range → default
 	}
 	// Reuse a previously-bootstrapped token: if the TOML carries no api_token,
 	// read the one written to client.json on a prior load so the token stays

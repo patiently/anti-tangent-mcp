@@ -86,10 +86,12 @@ func pct(n, total int) float64 {
 	return float64(n) / float64(total) * 100
 }
 
+// topKey returns the highest-count key, breaking ties lexicographically so the
+// result is stable across refreshes (Go map iteration order is randomized).
 func topKey(m map[string]int) string {
 	best, bestN := "", -1
 	for k, v := range m {
-		if v > bestN {
+		if v > bestN || (v == bestN && k < best) {
 			best, bestN = k, v
 		}
 	}

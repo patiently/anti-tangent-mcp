@@ -28,13 +28,20 @@ import (
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Error("resolve home directory", "err", err)
+		os.Exit(1)
+	}
 	cfgDir := filepath.Join(home, ".config", "gnome-topbar")
 	stateDir := filepath.Join(home, ".local", "state", "gnome-topbar")
 	cfg, err := config.Load(filepath.Join(cfgDir, "config.toml"), cfgDir)
 	if err != nil {
 		log.Error("config", "err", err)
 		os.Exit(1)
+	}
+	if cfg.BMUsername == "" {
+		log.Warn("bm_username is empty; Basic Memory todos and currently-working-on will not resolve — set it in ~/.config/gnome-topbar/config.toml")
 	}
 
 	store, err := state.LoadStore(filepath.Join(stateDir, "seen.json"))
@@ -168,6 +175,8 @@ func (p *Poller) refreshBM(ctx context.Context) {
 	if errN == nil {
 		p.snap.NowWorking = bm.ParseNowWorking(nowMD)
 	} else {
+		// a failed read of either note degrades the source — don't report OK
+		st = staleStatus(errT, errN)
 		p.log.Warn("basic-memory currently-working-on read failed", "err", errN)
 	}
 	p.snap.Sources["basic-memory"] = st
