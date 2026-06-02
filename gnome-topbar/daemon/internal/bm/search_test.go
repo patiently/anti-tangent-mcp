@@ -7,8 +7,8 @@ import (
 
 func TestSearchEpicsStoriesParsesResults(t *testing.T) {
 	payload := `{"results":[
-	  {"title":"YN epic","type":"epic","permalink":"monorepo/epics/X/main","content":"do the thing"},
-	  {"title":"YN story","type":"story","permalink":"monorepo/stories/Y/main","content":"a story body"}
+	  {"title":"YN epic","type":"entity","permalink":"monorepo/epics/X/main","content":"do the thing","metadata":{"note_type":"epic"}},
+	  {"title":"YN story","type":"entity","permalink":"monorepo/stories/Y/main","content":"a story body","metadata":{"note_type":"story"}}
 	]}`
 	fc := &fakeCaller{ret: payload}
 	c := New(fc, "main")
