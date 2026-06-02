@@ -258,6 +258,8 @@ The recommended pairing for anti-tangent's text-only blind spot (see `## Scope a
 
 Anti-tangent never enforces CodeScene findings server-side; the integration lives at the dispatch-clause layer. If CodeScene MCP isn't configured, the companion calls are skipped. Lightweight-protocol tasks (doc-only / mechanical) skip all CodeScene calls too.
 
+**CodeScene stats:** CodeScene keeps no history — see [docs/team-setup/codescene-stats.md](docs/team-setup/codescene-stats.md) to log Code Health to `codescene-events.jsonl`.
+
 ### 4.3 How to address findings
 
 **Address vs. push back.** Reviewer LLMs can be wrong. If a finding misreads the code, document the disagreement in the next call's `working_on` field — e.g. `working_on: "addressed all findings except F#3 which is incorrect because the helper does perform the length check, see handlers.go line 42"` — and re-validate. Don't silently ignore: the next reviewer call won't see your reasoning unless you write it.

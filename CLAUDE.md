@@ -105,7 +105,7 @@ Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). O
 
 (Lifted from the spec's non-goals; do not propose features it has already ruled out.)
 
-- No persistent storage. Sessions live in memory and are lost on restart by design.
+- No persistent storage by default. Sessions live in memory and are lost on restart. The one exception is the **opt-in** stats subsystem (`ANTI_TANGENT_STATS_DIR`, off by default), which writes plain files — there is still no metrics endpoint; stats output is files, not a served endpoint.
 - No plugin system for custom reviewers.
 - No language-specific code analysis. The reviewer is an LLM, not a linter.
 - No metrics endpoint, no OTel exporter.
