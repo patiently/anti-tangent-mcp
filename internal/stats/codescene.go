@@ -1,6 +1,9 @@
 package stats
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 const codesceneFile = "codescene-events.jsonl"
 
@@ -86,7 +89,7 @@ func computeCodescene(events []CodesceneEvent) *CodesceneRollup {
 		for k, v := range e.CategoryCounts {
 			cr.CategoryHistogram[k] += v
 		}
-		scores = append(scores, int64(e.ScoreAfter*100))
+		scores = append(scores, int64(math.Round(e.ScoreAfter*100)))
 	}
 	cr.LatestScore = latest.ScoreAfter
 	cr.LatestDelta = latest.Delta

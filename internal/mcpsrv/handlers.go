@@ -362,12 +362,29 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 
 	sess, ok := h.deps.Sessions.Get(args.SessionID)
 	if !ok {
-		return envelopeResult(prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.MidModel), clamp))
+		env := prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.MidModel), clamp)
+		h.recordStat(statParams{
+			tool:      "check_progress",
+			verdict:   env.Verdict,
+			findings:  env.Findings,
+			modelUsed: env.ModelUsed,
+			sessionID: env.SessionID,
+		})
+		return envelopeResult(env)
 	}
 
 	if size := totalBytes(args.ChangedFiles); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(prependClamp(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes,
-			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."), clamp))
+		env := prependClamp(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."), clamp)
+		h.recordStat(statParams{
+			tool:         "check_progress",
+			verdict:      env.Verdict,
+			findings:     env.Findings,
+			modelUsed:    env.ModelUsed,
+			sessionID:    env.SessionID,
+			payloadBytes: size,
+		})
+		return envelopeResult(env)
 	}
 
 	model, rendered, err := h.resolveModelAndRender(
@@ -1001,8 +1018,17 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// 5. payload-cap check. In lightweight mode the surfaced session_id stays
 	// empty; otherwise we don't have the session yet, so use args.SessionID.
 	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
-			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp))
+		env := prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp)
+		h.recordStat(statParams{
+			tool:         "validate_completion",
+			verdict:      env.Verdict,
+			findings:     env.Findings,
+			modelUsed:    env.ModelUsed,
+			sessionID:    env.SessionID,
+			payloadBytes: size,
+		})
+		return envelopeResult(env)
 	}
 
 	// 5b. exit_contracts normalization. Runs after the payload-cap check
@@ -1018,12 +1044,31 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// envelope without re-running the guard or hitting the reviewer.
 	cacheKey := evidenceCacheKey(args)
 	if cached, ok := lookupCachedRejection(cacheKey); ok {
-		return envelopeResult(prependClamp(cached, clamp))
+		c := prependClamp(cached, clamp)
+		h.recordStat(statParams{
+			tool:         "validate_completion",
+			verdict:      c.Verdict,
+			findings:     c.Findings,
+			modelUsed:    c.ModelUsed,
+			sessionID:    c.SessionID,
+			cached:       true,
+			payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+		})
+		return envelopeResult(c)
 	}
 	if reason := checkEvidenceShape(args); reason != "" {
 		env := malformedEvidenceEnvelope(args.SessionID, reason, h.deps.Cfg.PostModel.String())
 		storeRejection(cacheKey, env)
-		return envelopeResult(prependClamp(env, clamp))
+		clamped := prependClamp(env, clamp)
+		h.recordStat(statParams{
+			tool:         "validate_completion",
+			verdict:      clamped.Verdict,
+			findings:     clamped.Findings,
+			modelUsed:    clamped.ModelUsed,
+			sessionID:    clamped.SessionID,
+			payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+		})
+		return envelopeResult(clamped)
 	}
 
 	// 7/8. session lookup + spec selection.
@@ -1041,7 +1086,16 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		var ok bool
 		sess, ok = h.deps.Sessions.Get(args.SessionID)
 		if !ok {
-			return envelopeResult(prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel), clamp))
+			env := prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel), clamp)
+			h.recordStat(statParams{
+				tool:         "validate_completion",
+				verdict:      env.Verdict,
+				findings:     env.Findings,
+				modelUsed:    env.ModelUsed,
+				sessionID:    env.SessionID,
+				payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+			})
+			return envelopeResult(env)
 		}
 		spec = sess.Spec
 		sessID = sess.ID
@@ -1153,11 +1207,27 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	planBytes := len(args.PlanText)
 	pkBytes := len(projectKnowledge)
 	if total := planBytes + pkBytes; total > h.deps.Cfg.MaxPayloadBytes {
-		return planEnvelopeResult(prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, h.deps.Cfg.MaxPayloadBytes), clamp), h.deps.Cfg.PlanModel.String(), 0)
+		pr := prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, h.deps.Cfg.MaxPayloadBytes), clamp)
+		h.recordStat(statParams{
+			tool:         "validate_plan",
+			verdict:      string(pr.PlanVerdict),
+			findings:     planFindings(pr),
+			modelUsed:    h.deps.Cfg.PlanModel.String(),
+			payloadBytes: total,
+		})
+		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
 	}
 	tasks, _ := planparser.SplitTasks(args.PlanText)
 	if len(tasks) == 0 {
-		return planEnvelopeResult(prependPlanClamp(noHeadingsPlanResult(), clamp), h.deps.Cfg.PlanModel.String(), 0)
+		pr := prependPlanClamp(noHeadingsPlanResult(), clamp)
+		h.recordStat(statParams{
+			tool:         "validate_plan",
+			verdict:      string(pr.PlanVerdict),
+			findings:     planFindings(pr),
+			modelUsed:    h.deps.Cfg.PlanModel.String(),
+			payloadBytes: planBytes + pkBytes,
+		})
+		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
 	}
 
 	// Adaptive plan budget: apply only when no override was supplied. The

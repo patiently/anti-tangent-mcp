@@ -65,19 +65,22 @@ func primeProjectKnowledgeTool() *mcp.Tool {
 // — validation, payload-cap, model resolution, adaptive token budget, render,
 // review, parse, post-process — appear in the same canonical order. See
 // design §3.1 / §5.3 for the spec.
-func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolRequest, args PrimeProjectKnowledgeArgs) (*mcp.CallToolResult, verdict.PrimeResult, error) {
+func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolRequest, args PrimeProjectKnowledgeArgs) (_ *mcp.CallToolResult, _ verdict.PrimeResult, retErr error) {
 	// Capture per-call outcome so every exit path — happy, validation error,
 	// oversized payload, truncation, reviewer error — emits exactly one
 	// structured JSON log line on stderr per spec §5.6. The deferred logger
 	// reads from these closure vars at return time; each branch updates the
-	// vars before returning so the log reflects the actual outcome. Mirrors
-	// the pattern in ExtractProjectKnowledge.
+	// vars before returning so the log reflects the actual outcome. The same
+	// vars drive the deferred stats record so every structured envelope return
+	// lands one events.jsonl record (transport errors — retErr != nil — are
+	// skipped, since they produce no structured result). Mirrors the pattern in
+	// ExtractProjectKnowledge.
 	var (
 		logModelUsed string
 		logVerdict   verdict.Verdict
 		logMS        int64
 		logPicks     int
-		logFindings  int
+		logFindings  []verdict.Finding
 		logOutcome   = "success"
 	)
 	defer func() {
@@ -88,10 +91,19 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 			slog.String("verdict", string(logVerdict)),
 			slog.String("outcome", logOutcome),
 			slog.Int("picks", logPicks),
-			slog.Int("findings", logFindings),
+			slog.Int("findings", len(logFindings)),
 			slog.Int("kb_index_size", len(args.KBIndex)),
 			slog.String("epic", args.EpicPermalink),
 		)
+		if retErr == nil {
+			h.recordStat(statParams{
+				tool:      "prime_project_knowledge",
+				verdict:   string(logVerdict),
+				findings:  logFindings,
+				modelUsed: logModelUsed,
+				reviewMS:  logMS,
+			})
+		}
 	}()
 
 	// 1. Required-field validation. Trim whitespace so a caller can't smuggle
@@ -142,7 +154,7 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 	// configured-default model id — same posture as tooLargeEnvelope.
 	if size > h.deps.Cfg.MaxPayloadBytes {
 		r := prependPrimeClamp(primeTooLargeResult(size, h.deps.Cfg.MaxPayloadBytes), clamp)
-		logOutcome, logModelUsed, logVerdict, logFindings = "payload_too_large", h.deps.Cfg.PrimeModel.String(), r.Verdict, len(r.Findings)
+		logOutcome, logModelUsed, logVerdict, logFindings = "payload_too_large", h.deps.Cfg.PrimeModel.String(), r.Verdict, r.Findings
 		return primeEnvelopeResult(r, h.deps.Cfg.PrimeModel.String(), 0)
 	}
 
@@ -187,7 +199,7 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 		// Mirrors the per-task truncatedResult path. modelUsed is empty when the
 		// provider call truncated, so cite the resolved model ref.
 		r := prependPrimeClamp(primeTruncationResult(), clamp)
-		logOutcome, logModelUsed, logVerdict, logFindings = "truncated", model.String(), r.Verdict, len(r.Findings)
+		logOutcome, logModelUsed, logVerdict, logFindings = "truncated", model.String(), r.Verdict, r.Findings
 		return primeEnvelopeResult(r, model.String(), 0)
 	}
 	if err != nil {
@@ -208,17 +220,12 @@ func (h *handlers) PrimeProjectKnowledge(ctx context.Context, _ *mcp.CallToolReq
 	// 11. Prepend the clamp finding (no-op when clamp is zero).
 	result = prependPrimeClamp(result, clamp)
 
-	// 12. Populate the deferred logger's view (which writes the one structured
-	// JSON line on stderr for this call). The success-path outcome label is
-	// the default "success" set at function entry.
-	logModelUsed, logVerdict, logMS, logPicks, logFindings = modelUsed, result.Verdict, ms, len(result.Picks), len(result.Findings)
+	// 12. Populate the deferred logger's + stats recorder's view (which write
+	// the one structured JSON line on stderr and the one events.jsonl record
+	// for this call). The success-path outcome label is the default "success"
+	// set at function entry.
+	logModelUsed, logVerdict, logMS, logPicks, logFindings = modelUsed, result.Verdict, ms, len(result.Picks), result.Findings
 
-	h.recordStat(statParams{
-		tool:      "prime_project_knowledge",
-		findings:  result.Findings,
-		modelUsed: modelUsed,
-		reviewMS:  ms,
-	})
 	return primeEnvelopeResult(result, modelUsed, ms)
 }
 

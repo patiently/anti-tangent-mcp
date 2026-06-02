@@ -77,7 +77,7 @@ func (c *Compactor) Compact(now time.Time, events []Event, csEvents []CodesceneE
 		c.logger.Warn("stats summary unparseable", "err", err)
 		return
 	}
-	if err := os.WriteFile(filepath.Join(c.dir, summaryMDFile), []byte(sr.Summary), 0o644); err != nil {
+	if err := writeFileAtomic(filepath.Join(c.dir, summaryMDFile), []byte(sr.Summary), 0o644); err != nil {
 		c.logger.Warn("stats summary.md write failed", "err", err)
 		return
 	}

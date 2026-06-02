@@ -25,9 +25,11 @@ func appendJSONL(dir, name string, v any) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = f.Write(append(b, '\n'))
-	return err
+	if _, err = f.Write(append(b, '\n')); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // readJSONL reads a JSONL file into a slice, skipping blank and corrupt lines

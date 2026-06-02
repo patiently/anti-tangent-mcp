@@ -208,6 +208,171 @@ func TestValidateTaskSpec_PartialRecoveryRecordsStat(t *testing.T) {
 	}
 }
 
+// newStatsRecorder builds a no-reviewer recorder writing into dir. Shared by the
+// early-return recording tests below.
+func newStatsRecorder(t *testing.T, dir string) *stats.Recorder {
+	t.Helper()
+	rec, err := stats.New(stats.Options{
+		Dir: dir, Reviewer: nil,
+		SummaryInterval: 24 * time.Hour, SummaryThreshold: 100000, RetentionDays: 30,
+		Logger: slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("stats.New: %v", err)
+	}
+	return rec
+}
+
+// readSingleEvent asserts events.jsonl holds exactly one record and returns it.
+func readSingleEvent(t *testing.T, dir string) stats.Event {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("events.jsonl: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected exactly 1 event line, got %d: %q", len(lines), string(b))
+	}
+	var ev stats.Event
+	if err := json.Unmarshal([]byte(lines[0]), &ev); err != nil {
+		t.Fatalf("unmarshal event: %v", err)
+	}
+	return ev
+}
+
+func statsTestConfig(t *testing.T) config.Config {
+	t.Helper()
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "x"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	return cfg
+}
+
+// TestCheckProgressSessionMissingRecordsStat pins that a structured early-return
+// (session not found) still lands exactly one events.jsonl record. Before the
+// fix, recordStat only fired on the reviewer-result / truncation paths, so
+// session-missing exits silently undercounted hook calls.
+func TestCheckProgressSessionMissingRecordsStat(t *testing.T) {
+	dir := t.TempDir()
+	cfg := statsTestConfig(t)
+	h := &handlers{deps: Deps{
+		Cfg:      cfg,
+		Sessions: session.NewStore(cfg.SessionTTL),
+		Reviews:  providers.Registry{"anthropic": &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}},
+		Stats:    newStatsRecorder(t, dir),
+	}}
+
+	_, _, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID: "does-not-exist", WorkingOn: "stuff",
+	})
+	if err != nil {
+		t.Fatalf("CheckProgress: %v", err)
+	}
+
+	ev := readSingleEvent(t, dir)
+	if ev.Tool != "check_progress" {
+		t.Errorf("event.Tool = %q, want %q", ev.Tool, "check_progress")
+	}
+	if ev.Verdict != "fail" {
+		t.Errorf("event.Verdict = %q, want %q", ev.Verdict, "fail")
+	}
+}
+
+// TestValidatePlanNoHeadingsRecordsStat pins that the no-headings early return
+// (zero `### Task N:` headings) records one validate_plan event.
+func TestValidatePlanNoHeadingsRecordsStat(t *testing.T) {
+	dir := t.TempDir()
+	cfg := statsTestConfig(t)
+	h := &handlers{deps: Deps{
+		Cfg:       cfg,
+		Sessions:  session.NewStore(cfg.SessionTTL),
+		Reviews:   providers.Registry{"anthropic": &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}},
+		Stats:     newStatsRecorder(t, dir),
+		planCache: newPlanPassCache(),
+	}}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: "no task headings here, just prose"})
+	if err != nil {
+		t.Fatalf("ValidatePlan: %v", err)
+	}
+
+	ev := readSingleEvent(t, dir)
+	if ev.Tool != "validate_plan" {
+		t.Errorf("event.Tool = %q, want %q", ev.Tool, "validate_plan")
+	}
+	if ev.Verdict != "fail" {
+		t.Errorf("event.Verdict = %q, want %q", ev.Verdict, "fail")
+	}
+}
+
+// TestExtractEmptyEnvelopesRecordsStat pins that the empty-completion_envelopes
+// refusal records one extract event carrying the verdict (previously the
+// success-only recordStat skipped this path AND omitted the verdict).
+func TestExtractEmptyEnvelopesRecordsStat(t *testing.T) {
+	dir := t.TempDir()
+	cfg := statsTestConfig(t)
+	h := &handlers{deps: Deps{
+		Cfg:      cfg,
+		Sessions: session.NewStore(cfg.SessionTTL),
+		Reviews:  providers.Registry{"anthropic": &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}},
+		Stats:    newStatsRecorder(t, dir),
+	}}
+
+	_, _, err := h.ExtractProjectKnowledge(context.Background(), nil, ExtractProjectKnowledgeArgs{})
+	if err != nil {
+		t.Fatalf("ExtractProjectKnowledge: %v", err)
+	}
+
+	ev := readSingleEvent(t, dir)
+	if ev.Tool != "extract_project_knowledge" {
+		t.Errorf("event.Tool = %q, want %q", ev.Tool, "extract_project_knowledge")
+	}
+	if ev.Verdict != "fail" {
+		t.Errorf("event.Verdict = %q, want %q (verdict must be populated)", ev.Verdict, "fail")
+	}
+}
+
+// TestPrimeTruncationRecordsStat pins that a truncated prime review records one
+// event carrying the warn verdict — the non-success structured path that the
+// old success-only recordStat skipped.
+func TestPrimeTruncationRecordsStat(t *testing.T) {
+	dir := t.TempDir()
+	cfg := statsTestConfig(t)
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: []byte(`{"picks":[`), Model: "claude-sonnet-4-6"},
+		err:  providers.ErrResponseTruncated,
+	}
+	h := &handlers{deps: Deps{
+		Cfg:      cfg,
+		Sessions: session.NewStore(cfg.SessionTTL),
+		Reviews:  providers.Registry{"anthropic": rv},
+		Stats:    newStatsRecorder(t, dir),
+	}}
+
+	_, _, err := h.PrimeProjectKnowledge(context.Background(), nil, PrimeProjectKnowledgeArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("PrimeProjectKnowledge: %v", err)
+	}
+
+	ev := readSingleEvent(t, dir)
+	if ev.Tool != "prime_project_knowledge" {
+		t.Errorf("event.Tool = %q, want %q", ev.Tool, "prime_project_knowledge")
+	}
+	if ev.Verdict != "warn" {
+		t.Errorf("event.Verdict = %q, want %q", ev.Verdict, "warn")
+	}
+}
+
 func TestNilStatsDisabledNoFiles(t *testing.T) {
 	// Nil Stats must not panic or error; there is no stats dir to check.
 	cfg, _ := config.Load(func(k string) string {
