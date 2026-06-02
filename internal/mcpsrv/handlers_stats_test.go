@@ -230,6 +230,9 @@ func readSingleEvent(t *testing.T, dir string) stats.Event {
 	if err != nil {
 		t.Fatalf("events.jsonl: %v", err)
 	}
+	if len(b) == 0 {
+		t.Fatal("events.jsonl is empty, expected exactly 1 event")
+	}
 	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 	if len(lines) != 1 {
 		t.Fatalf("expected exactly 1 event line, got %d: %q", len(lines), string(b))

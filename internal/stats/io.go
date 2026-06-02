@@ -94,7 +94,10 @@ func writeFileAtomic(path string, b []byte, perm os.FileMode) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename; cleans up on error
+	// no-op after a successful rename; cleans up on error. Error is
+	// intentionally ignored (errcheck): a failed cleanup of an orphan temp is
+	// not worth surfacing over the real write/rename outcome.
+	defer func() { _ = os.Remove(tmpName) }()
 	if err := tmp.Chmod(perm); err != nil {
 		_ = tmp.Close()
 		return err
