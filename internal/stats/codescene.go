@@ -55,7 +55,7 @@ func pruneCodescene(dir string, cutoff time.Time) error {
 
 // computeCodescene aggregates per-run records. Returns nil when there are none,
 // so the rollup's `codescene` key is omitted entirely (absence == no data).
-func computeCodescene(events []CodesceneEvent, now time.Time) *CodesceneRollup {
+func computeCodescene(events []CodesceneEvent) *CodesceneRollup {
 	if len(events) == 0 {
 		return nil
 	}

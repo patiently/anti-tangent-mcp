@@ -54,7 +54,8 @@ func readJSONL[T any](dir, name string) ([]T, error) {
 	return out, nil
 }
 
-// rewriteJSONL atomically replaces dir/name with the given items.
+// rewriteJSONL atomically replaces dir/name with the given items, so readers
+// never see a partial write (temp file + rename on the same filesystem).
 func rewriteJSONL[T any](dir, name string, items []T) error {
 	var buf bytes.Buffer
 	for _, it := range items {
@@ -65,7 +66,7 @@ func rewriteJSONL[T any](dir, name string, items []T) error {
 		buf.Write(b)
 		buf.WriteByte('\n')
 	}
-	return os.WriteFile(filepath.Join(dir, name), buf.Bytes(), 0o644)
+	return writeFileAtomic(filepath.Join(dir, name), buf.Bytes(), 0o644)
 }
 
 func writeJSON(dir, name string, v any) error {
@@ -73,5 +74,15 @@ func writeJSON(dir, name string, v any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, name), b, 0o644)
+	return writeFileAtomic(filepath.Join(dir, name), b, 0o644)
+}
+
+// writeFileAtomic writes b to a sibling temp file then renames it over path
+// (atomic on the same filesystem), so readers never see a partial write.
+func writeFileAtomic(path string, b []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }

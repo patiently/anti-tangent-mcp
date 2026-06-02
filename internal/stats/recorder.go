@@ -101,7 +101,7 @@ func (r *Recorder) HashSession(id string) string {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(r.state.Salt + ":" + id))
-	return hex.EncodeToString(sum[:8])
+	return hex.EncodeToString(sum[:16])
 }
 
 // Record appends one event (best-effort) and, if a compaction is now due and
@@ -124,6 +124,11 @@ func (r *Recorder) Record(ev Event) {
 	if due(now, st, r.interval, r.threshold) && r.running.CompareAndSwap(false, true) {
 		go func() {
 			defer r.running.Store(false)
+			defer func() {
+				if v := recover(); v != nil {
+					r.logger.Warn("stats compaction panicked", "panic", v)
+				}
+			}()
 			r.runCompaction(now)
 		}()
 	}
@@ -131,10 +136,15 @@ func (r *Recorder) Record(ev Event) {
 
 // compact snapshots events under the lock, runs the Compactor (LLM call happens
 // without the lock held), then prunes by retention and stamps state.
+// now is the trigger time (passed for the single-flight test harness signature);
+// the actual stamp and cutoff use a fresh clock reading taken after the LLM call
+// so events appended during the compaction window stay counted toward the next
+// threshold rather than being silently dropped.
 func (r *Recorder) compact(now time.Time) {
 	r.mu.Lock()
 	events, err := readEvents(r.dir)
 	csEvents, csErr := readCodescene(r.dir)
+	processed := r.state.EventsSinceSummary
 	r.mu.Unlock()
 	if err != nil {
 		r.logger.Warn("stats read events failed", "err", err)
@@ -145,9 +155,10 @@ func (r *Recorder) compact(now time.Time) {
 		csEvents = nil
 	}
 
-	r.compactor.Compact(now, events, csEvents)
+	completedAt := r.clock()
+	r.compactor.Compact(completedAt, events, csEvents)
 
-	cutoff := now.AddDate(0, 0, -r.retentionDays)
+	cutoff := completedAt.AddDate(0, 0, -r.retentionDays)
 	r.mu.Lock()
 	if err := pruneEvents(r.dir, cutoff); err != nil {
 		r.logger.Warn("stats prune failed", "err", err)
@@ -155,8 +166,11 @@ func (r *Recorder) compact(now time.Time) {
 	if err := pruneCodescene(r.dir, cutoff); err != nil {
 		r.logger.Warn("stats codescene prune failed", "err", err)
 	}
-	r.state.LastSummaryAt = now
-	r.state.EventsSinceSummary = 0
+	r.state.LastSummaryAt = completedAt
+	r.state.EventsSinceSummary -= processed
+	if r.state.EventsSinceSummary < 0 {
+		r.state.EventsSinceSummary = 0
+	}
 	_ = saveState(r.dir, r.state)
 	r.mu.Unlock()
 }

@@ -49,7 +49,7 @@ type Compactor struct {
 // attempted before the LLM step so machine stats stay fresh when it fails.
 func (c *Compactor) Compact(now time.Time, events []Event, csEvents []CodesceneEvent) {
 	rollup := computeRollup(events, now)
-	if cs := computeCodescene(csEvents, now); cs != nil {
+	if cs := computeCodescene(csEvents); cs != nil {
 		rollup.Codescene = cs
 	}
 	if err := writeJSON(c.dir, rollupFile, rollup); err != nil {

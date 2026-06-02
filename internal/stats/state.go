@@ -39,7 +39,7 @@ func saveState(dir string, st State) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, stateFile), b, 0o644)
+	return writeFileAtomic(filepath.Join(dir, stateFile), b, 0o644)
 }
 
 func newSalt() string {

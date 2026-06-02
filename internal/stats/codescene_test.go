@@ -15,7 +15,7 @@ func TestComputeCodescene(t *testing.T) {
 		{Ts: base.Add(time.Hour), Tool: "analyze_change_set", ScoreBefore: 8.5, ScoreAfter: 8.2, Delta: -0.3, Trend: "regression",
 			FilesAnalyzed: 5, CategoryCounts: map[string]int{"complex-method": 2, "bumpy-road": 1}},
 	}
-	cr := computeCodescene(events, base.Add(2*time.Hour))
+	cr := computeCodescene(events)
 	if cr == nil {
 		t.Fatal("expected non-nil rollup")
 	}
@@ -37,7 +37,7 @@ func TestComputeCodescene(t *testing.T) {
 }
 
 func TestComputeCodesceneEmptyIsNil(t *testing.T) {
-	if cr := computeCodescene(nil, time.Now()); cr != nil {
+	if cr := computeCodescene(nil); cr != nil {
 		t.Errorf("empty input must yield nil (omitted key), got %+v", cr)
 	}
 }
