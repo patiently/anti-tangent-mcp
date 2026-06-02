@@ -1,0 +1,12 @@
+# Copy to ~/.config/gnome-topbar/config.toml and fill in.
+# BM_URL and BM_BEARER_TOKEN are read from the environment (see env file below);
+# you usually only need to set bm_username here.
+
+bm_username = "<your-basic-memory-username>"
+bm_project  = "main"
+
+# Optional overrides (defaults shown):
+# listen_port        = 47615
+# github_interval_sec = 120
+# bm_interval_sec     = 300
+# morning_sweep_hour  = 8

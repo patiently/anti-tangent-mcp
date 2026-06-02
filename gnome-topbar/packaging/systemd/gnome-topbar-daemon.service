@@ -1,0 +1,13 @@
+[Unit]
+Description=gnome-topbar daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/gnome-topbar-daemon
+EnvironmentFile=%h/.config/gnome-topbar/env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
