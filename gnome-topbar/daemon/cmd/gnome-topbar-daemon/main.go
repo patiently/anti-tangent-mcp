@@ -25,7 +25,15 @@ import (
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/tray"
 )
 
+// version is set at release build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Println("gnome-topbar-daemon", version)
+		return
+	}
+
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
 	home, err := os.UserHomeDir()
