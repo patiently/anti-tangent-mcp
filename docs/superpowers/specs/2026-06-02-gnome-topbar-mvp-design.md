@@ -39,12 +39,13 @@ polls the daemon and renders. This keeps heavy, fallible I/O out of the composit
 
 - **Claude account usage / quota panel** — deferred. No official API exposes subscription
   quota/reset; needs its own research slice.
-- **CodeScene statistics panel** — deferred. CodeScene persists no historical metrics today;
-  requires a net-new logging sink.
-- **anti-tangent statistics panel** — *in scope* (read-only, optional). The anti-tangent
-  v0.10.0 stats subsystem writes `rollup.json` + `summary.md` to `ANTI_TANGENT_STATS_DIR`;
-  this extension reads those files when present (see §3.5a). The panel never *produces*
-  anti-tangent stats — it only surfaces what that subsystem wrote.
+- **anti-tangent + CodeScene statistics panel** — *in scope* (read-only, optional). The
+  anti-tangent v0.10.0 stats subsystem writes `rollup.json` + `summary.md` to
+  `ANTI_TANGENT_STATS_DIR`, and it **aggregates CodeScene runs into the same `rollup.json`**
+  under an optional top-level `codescene` object. This extension reads those files when
+  present (see §3.5a) and renders an anti-tangent section plus a CodeScene sub-block. The
+  panel never *produces* either dataset — it only surfaces what that subsystem wrote, and
+  reads exactly one file (`rollup.json`), never anti-tangent's raw `*-events.jsonl`.
 - **Editing from the panel** — todos and notes are read-only in MVP (no tick-from-panel,
   no note editing). Cleanly addable later.
 - **Multi-user / multi-machine sync.** Single desktop, single user.
@@ -157,7 +158,10 @@ no LLM, no network.
 - **Reads two files** on a modest cadence (~300 s; the files only change on anti-tangent
   compaction, ~24 h / 50 events):
   - `rollup.json` — deterministic aggregates → a few headline figures: total calls, pass/warn/fail
-    %, top finding category, p95 `review_ms`, and `generated_at`.
+    %, top finding category, p95 `review_ms`, and `generated_at`. It may also carry an optional
+    top-level `codescene` object (anti-tangent aggregates CodeScene runs into it): runs,
+    latest score/delta/trend, p50 score, regression/improvement counts, category histogram.
+    Absence of the `codescene` key = "no CodeScene data this window," not an error.
   - `summary.md` — the latest LLM performance narrative (rendered truncated, expandable).
 - **Graceful absence ("if they exist"):** if `rollup.json` is missing, the source reports
   `present: false` and the panel **omits the section entirely** — no error, no empty box.
@@ -412,12 +416,10 @@ daemon + one new menu section in the extension, with no change to existing sourc
 - **Claude usage panel** — a source reading `~/.claude` and `~/.claude-alt` token-accounting
   logs (the second account's config home is confirmed present). Subscription quota/reset
   remains an open research item.
-- **CodeScene stats panel** — requires first adding a logging sink that persists "issues
-  caught" over time (CodeScene persists none today), then a source that reads it.
-
-The **anti-tangent stats panel** is no longer deferred: its data source (the v0.10.0 stats
-subsystem) is being built in parallel, so this extension reads its `rollup.json`/`summary.md`
-directly (§3.5a). Claude usage and CodeScene stay out of MVP by decision.
+The **anti-tangent + CodeScene stats panel** is no longer deferred: the data source (the
+v0.10.0 stats subsystem) is being built in parallel and aggregates CodeScene into the same
+`rollup.json`, so this extension reads `rollup.json`/`summary.md` directly (§3.5a). Only the
+**Claude usage panel** stays out of MVP by decision.
 
 ---
 
@@ -429,7 +431,9 @@ directly (§3.5a). Claude usage and CodeScene stay out of MVP by decision.
 - Clicking a PR opens it in the browser.
 - When `stats_dir` contains `rollup.json`, an "anti-tangent" section shows headline numbers +
   the latest summary with an `as of <generated_at>` stamp; when those files are **absent**, the
-  section is omitted entirely (no error).
+  section is omitted entirely (no error). When `rollup.json` carries a `codescene` object, a
+  CodeScene sub-block (score/delta/trend/regression-improvement counts) appears; its absence
+  drops only the sub-block.
 - A **new** review request raises one clickable notification (opens the PR); a todo coming
   due raises one notification; neither re-fires after daemon or panel restart.
 - Killing the daemon degrades the panel to an "offline" hint with no shell instability; a
