@@ -8,6 +8,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
+	"github.com/patiently/anti-tangent-mcp/internal/stats"
 )
 
 // Deps holds the dependencies required by the MCP server.
@@ -16,6 +17,9 @@ type Deps struct {
 	Sessions  *session.Store
 	Reviews   providers.Registry
 	planCache *planPassCache
+	// Stats is nil when ANTI_TANGENT_STATS_DIR is unset; all call sites are
+	// nil-safe no-ops in that case.
+	Stats *stats.Recorder
 }
 
 // Version is the server version reported via the MCP Implementation block.

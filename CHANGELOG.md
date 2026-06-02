@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-06-02
+
+### Added
+- Opt-in statistics subsystem (`ANTI_TANGENT_STATS_DIR`): records one counts-only record per hook call to `events.jsonl`, periodically aggregates a deterministic `rollup.json` and an LLM-written `summary.md`, and prunes by `ANTI_TANGENT_STATS_RETENTION_DAYS`. Entirely inert when the var is unset (no files, no overhead, no behavior change). Records hold counts + metadata only — no finding text, no plan/spec content, no raw session id (salted hash only). New vars: `ANTI_TANGENT_STATS_MODEL`, `ANTI_TANGENT_STATS_SUMMARY_INTERVAL`, `ANTI_TANGENT_STATS_SUMMARY_THRESHOLD`, `ANTI_TANGENT_STATS_RETENTION_DAYS`, `ANTI_TANGENT_STATS_MAX_TOKENS`.
+- CodeScene companion (spec §12): the agent appends one counts-only record per `analyze_change_set` run to `codescene-events.jsonl`; the Compactor aggregates them into a nested `codescene` block in `rollup.json` and retention-prunes the file. See `docs/team-setup/codescene-stats.md`.
+
+### Changed
+
+### Fixed
+
+### Removed
+
+### Deprecated
+
+### Security
+
 ## [0.9.1] - 2026-05-29
 
 ### Added

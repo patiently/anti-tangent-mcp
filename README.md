@@ -186,6 +186,23 @@ ANTI_TANGENT_PRIME_MODEL=                # prime_project_knowledge; falls back t
 ANTI_TANGENT_EXTRACT_MODEL=              # extract_project_knowledge; falls back to ANTI_TANGENT_PLAN_MODEL → ANTI_TANGENT_PRE_MODEL when unset
 ANTI_TANGENT_PRIME_MAX_TOKENS=4096       # output cap for prime_project_knowledge; raise if a prime call returns a truncation finding
 ANTI_TANGENT_EXTRACT_MAX_TOKENS=8192     # output cap for extract_project_knowledge; raise if an extract call returns a truncation finding
+
+# --- Opt-in statistics (off unless ANTI_TANGENT_STATS_DIR is set) ---
+# Output directory; enables the subsystem. Files in ANTI_TANGENT_STATS_DIR:
+#   events.jsonl          — per-call counts (server-written)
+#   rollup.json           — aggregate stats (server-written; machine-readable)
+#   summary.md            — latest LLM narrative (server-written)
+#   summaries.jsonl       — narrative history (server-written)
+#   state.json            — cadence + salt (server-written)
+#   codescene-events.jsonl — agent-appended CodeScene Code Health records;
+#                            read + aggregated by the server into rollup.json's
+#                            `codescene` block (NOT written by the server)
+ANTI_TANGENT_STATS_DIR=
+ANTI_TANGENT_STATS_MODEL=            # summarizer model; defaults to ANTI_TANGENT_MID_MODEL
+ANTI_TANGENT_STATS_SUMMARY_INTERVAL=24h
+ANTI_TANGENT_STATS_SUMMARY_THRESHOLD=50
+ANTI_TANGENT_STATS_RETENTION_DAYS=30
+ANTI_TANGENT_STATS_MAX_TOKENS=2048   # clamped by ANTI_TANGENT_MAX_TOKENS_CEILING
 ```
 
 ### Picking a reviewer model

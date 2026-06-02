@@ -16,6 +16,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/mcpsrv"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
+	"github.com/patiently/anti-tangent-mcp/internal/stats"
 )
 
 // version is set at build time via -ldflags "-X main.version=$(cat VERSION)".
@@ -77,11 +78,39 @@ func main() {
 	defer cancel()
 	go evictLoop(ctx, store, 5*time.Minute, logger)
 
+	var statsRec *stats.Recorder
+	if cfg.StatsDir != "" {
+		if err := providers.ValidateModel(cfg.StatsModel); err != nil {
+			fail(logger, "stats model invalid", err)
+		}
+		// A missing API key for the stats provider disables only the summary
+		// step (reviewer == nil); recording + rollup still work.
+		statsReviewer := registry[cfg.StatsModel.Provider]
+		rec, err := stats.New(stats.Options{
+			Dir:              cfg.StatsDir,
+			Reviewer:         statsReviewer,
+			Model:            cfg.StatsModel.Model,
+			MaxTokens:        cfg.StatsMaxTokens,
+			RequestTimeout:   cfg.RequestTimeout,
+			SummaryInterval:  cfg.StatsSummaryInterval,
+			SummaryThreshold: cfg.StatsSummaryThreshold,
+			RetentionDays:    cfg.StatsRetentionDays,
+			Logger:           logger,
+		})
+		if err != nil {
+			logger.Warn("stats disabled", "err", err)
+		} else {
+			statsRec = rec
+			logger.Info("stats enabled", "dir", cfg.StatsDir, "model", cfg.StatsModel.String(), "summary_enabled", statsReviewer != nil)
+		}
+	}
+
 	mcpsrv.Version = version
 	srv := mcpsrv.New(mcpsrv.Deps{
 		Cfg:      cfg,
 		Sessions: store,
 		Reviews:  registry,
+		Stats:    statsRec,
 	})
 
 	sigCh := make(chan os.Signal, 1)

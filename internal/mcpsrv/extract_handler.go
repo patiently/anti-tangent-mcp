@@ -59,18 +59,21 @@ func extractProjectKnowledgeTool() *mcp.Tool {
 // all-evidence-bare refusal run BEFORE model resolution so a caller combining
 // a misspelled model_override with an all-evidence-bare envelope list still
 // gets the actionable insufficient_evidence response.
-func (h *handlers) ExtractProjectKnowledge(ctx context.Context, _ *mcp.CallToolRequest, args ExtractProjectKnowledgeArgs) (*mcp.CallToolResult, verdict.ExtractResult, error) {
+func (h *handlers) ExtractProjectKnowledge(ctx context.Context, _ *mcp.CallToolRequest, args ExtractProjectKnowledgeArgs) (_ *mcp.CallToolResult, _ verdict.ExtractResult, retErr error) {
 	// Capture per-call outcome so every exit path — happy, synthetic refusal,
 	// oversized payload, truncation, parse-retry exhausted — emits exactly one
 	// structured JSON log line on stderr per spec §5.6. The deferred logger
 	// reads from these closure vars at return time; each branch updates the
-	// vars before returning so the log reflects the actual outcome.
+	// vars before returning so the log reflects the actual outcome. The same
+	// vars drive the deferred stats record so every structured envelope return
+	// lands one events.jsonl record (transport errors — retErr != nil — are
+	// skipped, since they produce no structured result).
 	var (
 		logModelUsed string
 		logVerdict   verdict.Verdict
 		logMS        int64
 		logProposals int
-		logFindings  int
+		logFindings  []verdict.Finding
 		logOutcome   = "success"
 	)
 	defer func() {
@@ -81,11 +84,20 @@ func (h *handlers) ExtractProjectKnowledge(ctx context.Context, _ *mcp.CallToolR
 			slog.String("verdict", string(logVerdict)),
 			slog.String("outcome", logOutcome),
 			slog.Int("proposals", logProposals),
-			slog.Int("findings", logFindings),
+			slog.Int("findings", len(logFindings)),
 			slog.Int("envelopes", len(args.CompletionEnvelopes)),
 			slog.Int("kb_index_size", len(args.KBIndex)),
 			slog.String("epic", args.EpicPermalink),
 		)
+		if retErr == nil {
+			h.recordStat(statParams{
+				tool:      "extract_project_knowledge",
+				verdict:   string(logVerdict),
+				findings:  logFindings,
+				modelUsed: logModelUsed,
+				reviewMS:  logMS,
+			})
+		}
 	}()
 
 	// 1. Required-field validation. Empty completion_envelopes is a refusal
@@ -93,7 +105,7 @@ func (h *handlers) ExtractProjectKnowledge(ctx context.Context, _ *mcp.CallToolR
 	// transport-level error.
 	if len(args.CompletionEnvelopes) == 0 {
 		r := extractEmptyEnvelopesResult()
-		logOutcome, logModelUsed, logVerdict, logFindings = "empty_envelopes", h.deps.Cfg.ExtractModel.String(), r.Verdict, len(r.Findings)
+		logOutcome, logModelUsed, logVerdict, logFindings = "empty_envelopes", h.deps.Cfg.ExtractModel.String(), r.Verdict, r.Findings
 		return extractEnvelopeResult(r, h.deps.Cfg.ExtractModel.String(), 0)
 	}
 
@@ -112,7 +124,7 @@ func (h *handlers) ExtractProjectKnowledge(ctx context.Context, _ *mcp.CallToolR
 	argsBytes, _ := json.Marshal(args)
 	if size := len(argsBytes); size > h.deps.Cfg.MaxPayloadBytes {
 		r := prependExtractClamp(extractTooLargeResult(size, h.deps.Cfg.MaxPayloadBytes), clamp)
-		logOutcome, logModelUsed, logVerdict, logFindings = "payload_too_large", h.deps.Cfg.ExtractModel.String(), r.Verdict, len(r.Findings)
+		logOutcome, logModelUsed, logVerdict, logFindings = "payload_too_large", h.deps.Cfg.ExtractModel.String(), r.Verdict, r.Findings
 		return extractEnvelopeResult(r, h.deps.Cfg.ExtractModel.String(), 0)
 	}
 
@@ -135,7 +147,7 @@ func (h *handlers) ExtractProjectKnowledge(ctx context.Context, _ *mcp.CallToolR
 	preFindings, allBare := classifyEnvelopes(args.CompletionEnvelopes)
 	if allBare {
 		r := prependExtractClamp(extractAllBareResult(preFindings), clamp)
-		logOutcome, logModelUsed, logVerdict, logFindings = "all_envelopes_bare", h.deps.Cfg.ExtractModel.String(), r.Verdict, len(r.Findings)
+		logOutcome, logModelUsed, logVerdict, logFindings = "all_envelopes_bare", h.deps.Cfg.ExtractModel.String(), r.Verdict, r.Findings
 		return extractEnvelopeResult(r, h.deps.Cfg.ExtractModel.String(), 0)
 	}
 
@@ -175,7 +187,7 @@ func (h *handlers) ExtractProjectKnowledge(ctx context.Context, _ *mcp.CallToolR
 		// Mirrors the per-task truncatedResult / primeTruncationResult path. modelUsed
 		// is empty when the provider call truncated, so cite the resolved model ref.
 		r := prependExtractClamp(extractTruncationResult(), clamp)
-		logOutcome, logModelUsed, logVerdict, logFindings = "truncated", model.String(), r.Verdict, len(r.Findings)
+		logOutcome, logModelUsed, logVerdict, logFindings = "truncated", model.String(), r.Verdict, r.Findings
 		return extractEnvelopeResult(r, model.String(), 0)
 	}
 	if err != nil {
@@ -214,10 +226,11 @@ func (h *handlers) ExtractProjectKnowledge(ctx context.Context, _ *mcp.CallToolR
 	// 10. Prepend the clamp finding (no-op when clamp is zero).
 	result = prependExtractClamp(result, clamp)
 
-	// 11. Populate the deferred logger's view (which writes the one structured
-	// JSON line on stderr for this call). The success-path outcome label is
-	// the default "success" set at function entry.
-	logModelUsed, logVerdict, logMS, logProposals, logFindings = modelUsed, result.Verdict, ms, len(result.Proposals), len(result.Findings)
+	// 11. Populate the deferred logger's + stats recorder's view (which write
+	// the one structured JSON line on stderr and the one events.jsonl record
+	// for this call). The success-path outcome label is the default "success"
+	// set at function entry.
+	logModelUsed, logVerdict, logMS, logProposals, logFindings = modelUsed, result.Verdict, ms, len(result.Proposals), result.Findings
 
 	return extractEnvelopeResult(result, modelUsed, ms)
 }

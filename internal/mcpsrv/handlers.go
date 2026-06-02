@@ -19,6 +19,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
+	"github.com/patiently/anti-tangent-mcp/internal/stats"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -128,6 +129,17 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
 		Clamp:      cc.Clamp,
 	}); handled {
+		if retErr == nil {
+			h.recordStat(statParams{
+				tool:      "validate_task_spec",
+				verdict:   env.Verdict,
+				findings:  env.Findings,
+				modelUsed: env.ModelUsed,
+				reviewMS:  env.ReviewMS,
+				partial:   env.Partial,
+				sessionID: env.SessionID,
+			})
+		}
 		return r, env, retErr
 	}
 	result.Findings = suppressTestabilityExtractionScopeDrift(result.Findings, inputs.TestabilityExtractions)
@@ -154,8 +166,18 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		NextAction: result.NextAction,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
+		Partial:    result.Partial,
 	}
 	env = h.withSessionTTL(env, sess)
+	h.recordStat(statParams{
+		tool:      "validate_task_spec",
+		verdict:   env.Verdict,
+		findings:  env.Findings,
+		modelUsed: env.ModelUsed,
+		reviewMS:  env.ReviewMS,
+		partial:   env.Partial,
+		sessionID: env.SessionID,
+	})
 	return envelopeResult(env)
 }
 
@@ -246,6 +268,54 @@ func (h *handlers) withSessionTTL(env Envelope, sess *session.Session) Envelope 
 	return env
 }
 
+// statParams carries the fields needed to record one hook call. Grouping them
+// avoids a long primitive argument list across the per-handler record sites.
+type statParams struct {
+	tool         string
+	verdict      string
+	findings     []verdict.Finding
+	modelUsed    string
+	reviewMS     int64
+	partial      bool
+	cached       bool
+	payloadBytes int
+	sessionID    string // raw id; hashed (salted) inside, never stored raw
+}
+
+// recordStat maps a statParams into a stats.Event and records it.
+// Nil-safe: when stats are disabled this is a single nil check with no
+// allocation.
+func (h *handlers) recordStat(p statParams) {
+	if h.deps.Stats == nil {
+		return
+	}
+	sev, cat, total := stats.CountFindings(p.findings)
+	h.deps.Stats.Record(stats.Event{
+		Ts:             time.Now().UTC().Truncate(time.Second),
+		Tool:           p.tool,
+		Verdict:        p.verdict,
+		FindingsTotal:  total,
+		SeverityCounts: sev,
+		CategoryCounts: cat,
+		ReviewMS:       p.reviewMS,
+		Model:          p.modelUsed,
+		Cached:         p.cached,
+		Partial:        p.partial,
+		PayloadBytes:   p.payloadBytes,
+		SessionHash:    h.deps.Stats.HashSession(p.sessionID),
+	})
+}
+
+// planFindings aggregates plan-level and per-task findings from a PlanResult
+// into a single slice for stats recording.
+func planFindings(pr verdict.PlanResult) []verdict.Finding {
+	findings := append([]verdict.Finding(nil), pr.PlanFindings...)
+	for _, t := range pr.Tasks {
+		findings = append(findings, t.Findings...)
+	}
+	return findings
+}
+
 func envelopeResult(env Envelope) (*mcp.CallToolResult, Envelope, error) {
 	env.SummaryBlock = formatEnvelopeSummary(env)
 	body, err := json.MarshalIndent(env, "", "  ")
@@ -292,12 +362,29 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 
 	sess, ok := h.deps.Sessions.Get(args.SessionID)
 	if !ok {
-		return envelopeResult(prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.MidModel), clamp))
+		env := prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.MidModel), clamp)
+		h.recordStat(statParams{
+			tool:      "check_progress",
+			verdict:   env.Verdict,
+			findings:  env.Findings,
+			modelUsed: env.ModelUsed,
+			sessionID: env.SessionID,
+		})
+		return envelopeResult(env)
 	}
 
 	if size := totalBytes(args.ChangedFiles); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(prependClamp(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes,
-			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."), clamp))
+		env := prependClamp(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."), clamp)
+		h.recordStat(statParams{
+			tool:         "check_progress",
+			verdict:      env.Verdict,
+			findings:     env.Findings,
+			modelUsed:    env.ModelUsed,
+			sessionID:    env.SessionID,
+			payloadBytes: size,
+		})
+		return envelopeResult(env)
 	}
 
 	model, rendered, err := h.resolveModelAndRender(
@@ -328,6 +415,18 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		Clamp:      clamp,
 		Sess:       sess,
 	}); handled {
+		if retErr == nil {
+			h.recordStat(statParams{
+				tool:         "check_progress",
+				verdict:      env.Verdict,
+				findings:     env.Findings,
+				modelUsed:    env.ModelUsed,
+				reviewMS:     env.ReviewMS,
+				partial:      env.Partial,
+				sessionID:    env.SessionID,
+				payloadBytes: totalBytes(args.ChangedFiles),
+			})
+		}
 		return r, env, retErr
 	}
 
@@ -355,8 +454,19 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		NextAction: result.NextAction,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
+		Partial:    result.Partial,
 	}
 	env = h.withSessionTTL(env, sess)
+	h.recordStat(statParams{
+		tool:         "check_progress",
+		verdict:      env.Verdict,
+		findings:     env.Findings,
+		modelUsed:    env.ModelUsed,
+		reviewMS:     env.ReviewMS,
+		partial:      env.Partial,
+		sessionID:    env.SessionID,
+		payloadBytes: totalBytes(args.ChangedFiles),
+	})
 	return envelopeResult(env)
 }
 
@@ -908,8 +1018,17 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// 5. payload-cap check. In lightweight mode the surfaced session_id stays
 	// empty; otherwise we don't have the session yet, so use args.SessionID.
 	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
-		return envelopeResult(prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
-			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp))
+		env := prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
+			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp)
+		h.recordStat(statParams{
+			tool:         "validate_completion",
+			verdict:      env.Verdict,
+			findings:     env.Findings,
+			modelUsed:    env.ModelUsed,
+			sessionID:    env.SessionID,
+			payloadBytes: size,
+		})
+		return envelopeResult(env)
 	}
 
 	// 5b. exit_contracts normalization. Runs after the payload-cap check
@@ -925,12 +1044,31 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// envelope without re-running the guard or hitting the reviewer.
 	cacheKey := evidenceCacheKey(args)
 	if cached, ok := lookupCachedRejection(cacheKey); ok {
-		return envelopeResult(prependClamp(cached, clamp))
+		c := prependClamp(cached, clamp)
+		h.recordStat(statParams{
+			tool:         "validate_completion",
+			verdict:      c.Verdict,
+			findings:     c.Findings,
+			modelUsed:    c.ModelUsed,
+			sessionID:    c.SessionID,
+			cached:       true,
+			payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+		})
+		return envelopeResult(c)
 	}
 	if reason := checkEvidenceShape(args); reason != "" {
 		env := malformedEvidenceEnvelope(args.SessionID, reason, h.deps.Cfg.PostModel.String())
 		storeRejection(cacheKey, env)
-		return envelopeResult(prependClamp(env, clamp))
+		clamped := prependClamp(env, clamp)
+		h.recordStat(statParams{
+			tool:         "validate_completion",
+			verdict:      clamped.Verdict,
+			findings:     clamped.Findings,
+			modelUsed:    clamped.ModelUsed,
+			sessionID:    clamped.SessionID,
+			payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+		})
+		return envelopeResult(clamped)
 	}
 
 	// 7/8. session lookup + spec selection.
@@ -948,7 +1086,16 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		var ok bool
 		sess, ok = h.deps.Sessions.Get(args.SessionID)
 		if !ok {
-			return envelopeResult(prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel), clamp))
+			env := prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel), clamp)
+			h.recordStat(statParams{
+				tool:         "validate_completion",
+				verdict:      env.Verdict,
+				findings:     env.Findings,
+				modelUsed:    env.ModelUsed,
+				sessionID:    env.SessionID,
+				payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+			})
+			return envelopeResult(env)
 		}
 		spec = sess.Spec
 		sessID = sess.ID
@@ -989,6 +1136,18 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		Clamp:      clamp,
 		Sess:       sess,
 	}); handled {
+		if retErr == nil {
+			h.recordStat(statParams{
+				tool:         "validate_completion",
+				verdict:      env.Verdict,
+				findings:     env.Findings,
+				modelUsed:    env.ModelUsed,
+				reviewMS:     env.ReviewMS,
+				partial:      env.Partial,
+				sessionID:    env.SessionID,
+				payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+			})
+		}
 		return r, env, retErr
 	}
 
@@ -1013,10 +1172,21 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		NextAction: result.NextAction,
 		ModelUsed:  modelUsed,
 		ReviewMS:   ms,
+		Partial:    result.Partial,
 	}
 	if !lightweight {
 		env = h.withSessionTTL(env, sess)
 	}
+	h.recordStat(statParams{
+		tool:         "validate_completion",
+		verdict:      env.Verdict,
+		findings:     env.Findings,
+		modelUsed:    env.ModelUsed,
+		reviewMS:     env.ReviewMS,
+		partial:      env.Partial,
+		sessionID:    env.SessionID,
+		payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+	})
 	return envelopeResult(env)
 }
 
@@ -1037,11 +1207,27 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	planBytes := len(args.PlanText)
 	pkBytes := len(projectKnowledge)
 	if total := planBytes + pkBytes; total > h.deps.Cfg.MaxPayloadBytes {
-		return planEnvelopeResult(prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, h.deps.Cfg.MaxPayloadBytes), clamp), h.deps.Cfg.PlanModel.String(), 0)
+		pr := prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, h.deps.Cfg.MaxPayloadBytes), clamp)
+		h.recordStat(statParams{
+			tool:         "validate_plan",
+			verdict:      string(pr.PlanVerdict),
+			findings:     planFindings(pr),
+			modelUsed:    h.deps.Cfg.PlanModel.String(),
+			payloadBytes: total,
+		})
+		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
 	}
 	tasks, _ := planparser.SplitTasks(args.PlanText)
 	if len(tasks) == 0 {
-		return planEnvelopeResult(prependPlanClamp(noHeadingsPlanResult(), clamp), h.deps.Cfg.PlanModel.String(), 0)
+		pr := prependPlanClamp(noHeadingsPlanResult(), clamp)
+		h.recordStat(statParams{
+			tool:         "validate_plan",
+			verdict:      string(pr.PlanVerdict),
+			findings:     planFindings(pr),
+			modelUsed:    h.deps.Cfg.PlanModel.String(),
+			payloadBytes: planBytes + pkBytes,
+		})
+		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
 	}
 
 	// Adaptive plan budget: apply only when no override was supplied. The
@@ -1070,6 +1256,16 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey); ok {
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
+		h.recordStat(statParams{
+			tool:         "validate_plan",
+			verdict:      string(cached.PlanVerdict),
+			findings:     planFindings(cached),
+			modelUsed:    cachedModelUsed,
+			reviewMS:     0,
+			partial:      cached.Partial,
+			cached:       true,
+			payloadBytes: planBytes + pkBytes,
+		})
 		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
 	}
 
@@ -1096,12 +1292,32 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		Clamp:      clamp,
 		Prior:      pr,
 	}); handled {
+		if retErr == nil {
+			h.recordStat(statParams{
+				tool:         "validate_plan",
+				verdict:      string(p.PlanVerdict),
+				findings:     planFindings(p),
+				modelUsed:    model.String(),
+				reviewMS:     ms,
+				partial:      p.Partial,
+				payloadBytes: planBytes + pkBytes,
+			})
+		}
 		return r, p, retErr
 	}
 	populateNormativeTestBodies(&pr, tasks)
 	pr = prependPlanClamp(pr, clamp)
 	pr = finalizePlanResult(pr, modelUsed, ms)
 	h.planCache().store(cacheKey, pr, modelUsed)
+	h.recordStat(statParams{
+		tool:         "validate_plan",
+		verdict:      string(pr.PlanVerdict),
+		findings:     planFindings(pr),
+		modelUsed:    modelUsed,
+		reviewMS:     ms,
+		partial:      pr.Partial,
+		payloadBytes: planBytes + pkBytes,
+	})
 	return planEnvelopeResultFinalized(pr, modelUsed, ms)
 }
 
