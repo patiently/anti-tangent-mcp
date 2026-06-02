@@ -15,6 +15,7 @@ import (
 
 	"github.com/cli/go-gh/v2/pkg/api"
 
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atstats"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/config"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/github"
@@ -60,8 +61,10 @@ func main() {
 
 	p.refreshGitHub(ctx)
 	p.refreshBM(ctx)
+	p.refreshAntiTangent(ctx)
 	go p.loop(ctx, time.Duration(cfg.GitHubIntervalSec)*time.Second, p.refreshGitHub)
 	go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshBM)
+	go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshAntiTangent)
 	go p.morningSweep(ctx)
 
 	addr := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", cfg.ListenPort))
@@ -155,6 +158,14 @@ func (p *Poller) refreshBM(ctx context.Context) {
 	}
 	p.snap.Sources["basic-memory"] = st
 	p.recompute()
+}
+
+func (p *Poller) refreshAntiTangent(ctx context.Context) {
+	s := atstats.Read(p.cfg.StatsDir)
+	p.mu.Lock()
+	p.snap.AntiTangent = s
+	p.snap.GeneratedAt = time.Now()
+	p.mu.Unlock()
 }
 
 // recompute refreshes events + timestamp; caller holds p.mu.

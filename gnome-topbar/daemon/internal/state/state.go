@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atstats"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/github"
 )
@@ -35,6 +36,7 @@ type Snapshot struct {
 		Due    []bm.TodoItem `json:"due"`
 	} `json:"todos"`
 	Sources       map[string]SourceStatus `json:"sources"`
+	AntiTangent   atstats.Stats           `json:"anti_tangent"`
 	UnackedEvents []Event                 `json:"unacked_events"`
 	GeneratedAt   time.Time               `json:"generated_at"`
 }

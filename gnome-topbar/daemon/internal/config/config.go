@@ -24,6 +24,8 @@ type Config struct {
 	GitHubIntervalSec int `toml:"github_interval_sec"`
 	BMIntervalSec     int `toml:"bm_interval_sec"`
 	MorningSweepHour  int `toml:"morning_sweep_hour"`
+
+	StatsDir string `toml:"stats_dir"`
 }
 
 // Load reads cfgPath (TOML), applies env + defaults, ensures an API token
@@ -78,6 +80,15 @@ func Load(cfgPath, stateDir string) (Config, error) {
 			return c, err
 		}
 		c.APIToken = t
+	}
+
+	if c.StatsDir == "" {
+		base := os.Getenv("XDG_STATE_HOME")
+		if base == "" {
+			home, _ := os.UserHomeDir()
+			base = filepath.Join(home, ".local", "state")
+		}
+		c.StatsDir = filepath.Join(base, "anti-tangent-mcp")
 	}
 
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
