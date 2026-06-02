@@ -19,6 +19,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
+	"github.com/patiently/anti-tangent-mcp/internal/stats"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -156,6 +157,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		ReviewMS:   ms,
 	}
 	env = h.withSessionTTL(env, sess)
+	h.recordStats("validate_task_spec", env, 0, false)
 	return envelopeResult(env)
 }
 
@@ -244,6 +246,31 @@ func (h *handlers) withSessionTTL(env Envelope, sess *session.Session) Envelope 
 	env.SessionExpiresAt = &expiresAt
 	env.SessionTTLRemainingSeconds = &remaining
 	return env
+}
+
+// recordStats maps a finalized Envelope into a stats.Event and records it.
+// Nil-safe: when stats are disabled this is a single nil check with no
+// allocation. tool is the MCP tool name; payloadBytes/cached are values the
+// caller already has on hand.
+func (h *handlers) recordStats(tool string, env Envelope, payloadBytes int, cached bool) {
+	if h.deps.Stats == nil {
+		return
+	}
+	sev, cat, total := stats.CountFindings(env.Findings)
+	h.deps.Stats.Record(stats.Event{
+		Ts:             time.Now().UTC().Truncate(time.Second),
+		Tool:           tool,
+		Verdict:        env.Verdict,
+		FindingsTotal:  total,
+		SeverityCounts: sev,
+		CategoryCounts: cat,
+		ReviewMS:       env.ReviewMS,
+		Model:          env.ModelUsed,
+		Cached:         cached,
+		Partial:        env.Partial,
+		PayloadBytes:   payloadBytes,
+		SessionHash:    h.deps.Stats.HashSession(env.SessionID),
+	})
 }
 
 func envelopeResult(env Envelope) (*mcp.CallToolResult, Envelope, error) {
@@ -357,6 +384,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		ReviewMS:   ms,
 	}
 	env = h.withSessionTTL(env, sess)
+	h.recordStats("check_progress", env, totalBytes(args.ChangedFiles), false)
 	return envelopeResult(env)
 }
 
@@ -1017,6 +1045,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if !lightweight {
 		env = h.withSessionTTL(env, sess)
 	}
+	h.recordStats("validate_completion", env, totalCompletionBytes(args.FinalFiles, args.FinalDiff), false)
 	return envelopeResult(env)
 }
 
