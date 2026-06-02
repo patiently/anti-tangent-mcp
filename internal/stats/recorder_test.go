@@ -81,7 +81,7 @@ func TestRecordSingleFlightCompaction(t *testing.T) {
 	}
 
 	r.Record(Event{Ts: time.Now().UTC(), Tool: "validate_task_spec"})
-	<-started // first compaction is now running and holding the slot
+	<-started                                                         // first compaction is now running and holding the slot
 	r.Record(Event{Ts: time.Now().UTC(), Tool: "validate_task_spec"}) // should NOT launch a second
 	close(release)
 	time.Sleep(20 * time.Millisecond) // let any erroneous second launch run

@@ -98,10 +98,10 @@ func TestValidatePlanRecordsStats(t *testing.T) {
 	}
 
 	h := &handlers{deps: Deps{
-		Cfg:      cfg,
-		Sessions: session.NewStore(cfg.SessionTTL),
-		Reviews:  providers.Registry{"anthropic": rv},
-		Stats:    rec,
+		Cfg:       cfg,
+		Sessions:  session.NewStore(cfg.SessionTTL),
+		Reviews:   providers.Registry{"anthropic": rv},
+		Stats:     rec,
 		planCache: newPlanPassCache(),
 	}}
 
