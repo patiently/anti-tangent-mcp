@@ -75,7 +75,7 @@ The JSON the extension consumes is `state.Snapshot` marshaled with the json tags
 
 ---
 
-## Task 0: CI exemption + module/branch scaffolding
+### Task 0: CI exemption + module/branch scaffolding
 
 **Files:**
 - Create: `gnome-topbar/daemon/go.mod`
@@ -180,7 +180,7 @@ git commit -m "build(gnome-topbar): scaffold nested module + CI lane, exempt fro
 
 ---
 
-## Task 1: daemon config + token bootstrap
+### Task 1: daemon config + token bootstrap
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/config/config.go`
@@ -386,7 +386,7 @@ git commit -m "feat(gnome-topbar): daemon config load + api token bootstrap"
 
 ---
 
-## Task 2: minimal MCP streamable-HTTP client
+### Task 2: minimal MCP streamable-HTTP client
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/mcphttp/client.go`
@@ -737,7 +737,7 @@ git commit -m "feat(gnome-topbar): minimal MCP streamable-HTTP client"
 
 ---
 
-## Task 3: BM client wrapper (Caller seam)
+### Task 3: BM client wrapper (Caller seam)
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/bm/bm.go`
@@ -839,7 +839,7 @@ git commit -m "feat(gnome-topbar): bm.Client Caller seam + ReadNote"
 
 ---
 
-## Task 4: todo parser + due-today logic
+### Task 4: todo parser + due-today logic
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/bm/todo.go`
@@ -992,7 +992,7 @@ git commit -m "feat(gnome-topbar): todo parser + due-today logic"
 
 ---
 
-## Task 5: currently-working-on note parser
+### Task 5: currently-working-on note parser
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/bm/nowworking.go`
@@ -1107,7 +1107,7 @@ git commit -m "feat(gnome-topbar): currently-working-on note parser"
 
 ---
 
-## Task 6: epic/story search
+### Task 6: epic/story search
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/bm/search.go`
@@ -1236,7 +1236,7 @@ git commit -m "feat(gnome-topbar): epic/story search"
 
 ---
 
-## Task 7: GitHub PR source
+### Task 7: GitHub PR source
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/github/github.go`
@@ -1417,7 +1417,7 @@ git commit -m "feat(gnome-topbar): github PR source via go-gh"
 
 ---
 
-## Task 8: persisted seen/ack store
+### Task 8: persisted seen/ack store
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/state/store.go`
@@ -1548,7 +1548,7 @@ git commit -m "feat(gnome-topbar): persisted seen/ack store"
 
 ---
 
-## Task 9: snapshot + event computation
+### Task 9: snapshot + event computation
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/state/state.go`
@@ -1692,7 +1692,7 @@ git commit -m "feat(gnome-topbar): snapshot + event computation"
 
 ---
 
-## Task 10: loopback HTTP server
+### Task 10: loopback HTTP server
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/server/server.go`
@@ -1865,7 +1865,7 @@ git commit -m "feat(gnome-topbar): loopback bearer-protected HTTP API"
 
 ---
 
-## Task 11: main wiring + poll loops
+### Task 11: main wiring + poll loops
 
 **Files:**
 - Modify: `gnome-topbar/daemon/cmd/gnome-topbar-daemon/main.go`
@@ -2102,7 +2102,7 @@ git commit -m "feat(gnome-topbar): daemon main wiring + poll loops"
 
 ---
 
-## Task 12: packaging — systemd unit, Makefile, config example, README
+### Task 12: packaging — systemd unit, Makefile, config example, README
 
 **Files:**
 - Create: `gnome-topbar/packaging/systemd/gnome-topbar-daemon.service`
@@ -2233,7 +2233,7 @@ git commit -m "feat(gnome-topbar): packaging (systemd unit, Makefile, README)"
 
 ---
 
-## Task 13: extension skeleton + /state rendering
+### Task 13: extension skeleton + /state rendering
 
 **Files:**
 - Create: `gnome-topbar/extension/metadata.json`
@@ -2491,7 +2491,7 @@ git commit -m "feat(gnome-topbar): extension skeleton + /state rendering"
 
 ---
 
-## Task 14: extension — epic/story search box
+### Task 14: extension — epic/story search box
 
 **Files:**
 - Modify: `gnome-topbar/extension/extension.js`
@@ -2567,7 +2567,7 @@ git commit -m "feat(gnome-topbar): epic/story search box"
 
 ---
 
-## Task 15: extension — notifications + ack
+### Task 15: extension — notifications + ack
 
 **Files:**
 - Modify: `gnome-topbar/extension/extension.js`
@@ -2620,7 +2620,7 @@ git commit -m "feat(gnome-topbar): native notifications + ack"
 
 ---
 
-## Task 16: currently-working-on note + assistant wiring
+### Task 16: currently-working-on note + assistant wiring
 
 **Files:**
 - Modify: `gnome-topbar/README.md` (already has the snippet; refine if needed)
@@ -2657,7 +2657,7 @@ git commit -m "docs(gnome-topbar): currently-working-on wiring notes"
 
 ---
 
-## Task 17: anti-tangent stats — daemon source
+### Task 17: anti-tangent stats — daemon source
 
 **Files:**
 - Create: `gnome-topbar/daemon/internal/atstats/atstats.go`
@@ -2958,7 +2958,7 @@ git commit -m "feat(gnome-topbar): read anti-tangent stats (rollup.json + summar
 
 ---
 
-## Task 18: anti-tangent stats — panel section
+### Task 18: anti-tangent stats — panel section
 
 **Files:**
 - Modify: `gnome-topbar/extension/extension.js`
@@ -3041,7 +3041,7 @@ git commit -m "feat(gnome-topbar): anti-tangent stats panel section"
 
 ---
 
-## Task 19: end-to-end verification + acceptance
+### Task 19: end-to-end verification + acceptance
 
 **Files:** none (verification only)
 
