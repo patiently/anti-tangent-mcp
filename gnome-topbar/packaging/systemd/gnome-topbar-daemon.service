@@ -1,0 +1,15 @@
+[Unit]
+Description=gnome-topbar daemon
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/gnome-topbar-daemon
+# leading "-" → optional: the unit still starts if the env file is absent
+# (e.g. first run before it's created, or when BM_* come from elsewhere)
+EnvironmentFile=-%h/.config/gnome-topbar/env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
