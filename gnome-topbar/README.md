@@ -1,8 +1,19 @@
 # gnome-topbar
 
 A GNOME top-bar tray showing your GitHub PRs, Basic Memory todos, a "currently
-working on" summary, and (optionally) anti-tangent/CodeScene stats — backed by a
-small Go daemon. See `../docs/superpowers/specs/2026-06-02-gnome-topbar-mvp-design.md`.
+working on" summary, and (optionally) anti-tangent/CodeScene stats plus a Claude
+usage panel — backed by a small Go daemon.
+See `../docs/superpowers/specs/2026-06-02-gnome-topbar-mvp-design.md`.
+
+### Claude usage panel
+
+When `$ANTI_TANGENT_STATS_DIR/claude-stats.json` is present (written by the
+claude-sandbox usage poller), the tray shows per-account Claude Code usage and
+the real 5h / weekly rate-limit utilization + reset times. The file is the
+contract's consumer side; the schema and producer behaviour live in the
+`claude-sandbox` repo at `docs/claude-stats/`. The panel is inert when the file
+is absent, and degrades gracefully when a limit fetch failed
+(`limits.error` → "limits unavailable", cost fields still render).
 
 ## Prerequisites
 - GNOME Shell 45/46/47 (Wayland or X11)

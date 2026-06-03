@@ -8,6 +8,7 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atstats"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/claudestats"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/github"
 )
 
@@ -37,6 +38,7 @@ type Snapshot struct {
 	} `json:"todos"`
 	Sources       map[string]SourceStatus `json:"sources"`
 	AntiTangent   atstats.Stats           `json:"anti_tangent"`
+	ClaudeStats   claudestats.Stats       `json:"claude_stats"`
 	UnackedEvents []Event                 `json:"unacked_events"`
 	GeneratedAt   time.Time               `json:"generated_at"`
 }

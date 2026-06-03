@@ -17,6 +17,7 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atstats"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/claudestats"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/config"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/github"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/mcphttp"
@@ -93,6 +94,9 @@ func main() {
 
 	p.refreshAntiTangent(ctx)
 	go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshAntiTangent)
+
+	p.refreshClaudeStats(ctx)
+	go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshClaudeStats)
 
 	addr := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", cfg.ListenPort))
 	srv := &http.Server{Addr: addr, Handler: server.New(p, cfg.APIToken)}
@@ -212,6 +216,17 @@ func (p *Poller) refreshAntiTangent(ctx context.Context) {
 	p.mu.Unlock()
 }
 
+// refreshClaudeStats reads claude-stats.json from the same StatsDir. ctx is
+// unused (local file read), matching refreshAntiTangent. Independent of
+// anti-tangent's own rollup.json per the contract.
+func (p *Poller) refreshClaudeStats(ctx context.Context) {
+	s := claudestats.Read(p.cfg.StatsDir)
+	p.mu.Lock()
+	p.snap.ClaudeStats = s
+	p.snap.GeneratedAt = time.Now()
+	p.mu.Unlock()
+}
+
 // recompute refreshes events + timestamp; caller holds p.mu.
 func (p *Poller) recompute() {
 	p.snap.GeneratedAt = time.Now()
@@ -249,6 +264,7 @@ func (p *Poller) RefreshNow(ctx context.Context) {
 	p.refreshGitHub(ctx)
 	p.refreshBM(ctx)
 	p.refreshAntiTangent(ctx)
+	p.refreshClaudeStats(ctx)
 }
 
 func (p *Poller) Search(ctx context.Context, q string) ([]bm.SearchResult, error) {
