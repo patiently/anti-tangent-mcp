@@ -29,7 +29,9 @@ const (
 	capDue       = 15
 	capActive    = 40
 	capStat      = 3
-	capErr       = 4 // per-source error rows
+	capErr       = 4  // per-source error rows
+	capClaude    = 8  // inline Claude 5h/7d rows (+ stale marker) across accounts
+	capClaudeUse = 30 // Claude usage submenu detail rows across accounts
 
 	renderInterval = 30 * time.Second
 )
@@ -60,6 +62,10 @@ type Tray struct {
 	activePool   []*systray.MenuItem
 
 	statPool []*systray.MenuItem
+
+	claudePool      []*systray.MenuItem // inline Claude 5h/7d summary
+	claudeParent    *systray.MenuItem   // collapsible "Claude usage" submenu
+	claudeUsagePool []*systray.MenuItem
 
 	refreshItem *systray.MenuItem
 	quitItem    *systray.MenuItem
@@ -110,6 +116,13 @@ func (t *Tray) onReady(ctx context.Context) {
 
 	// anti-tangent / CodeScene stats — inline, shown only when present
 	t.statPool = t.makeDisabledPool(capStat, nil)
+
+	// Claude usage — inline 5h/weekly summary (shown only when present), with a
+	// collapsed submenu carrying per-account detail.
+	t.claudePool = t.makeDisabledPool(capClaude, nil)
+	t.claudeParent = systray.AddMenuItem("🤖 Claude usage", "Claude Code usage + rate limits")
+	t.claudeParent.Hide()
+	t.claudeUsagePool = t.makeDisabledPool(capClaudeUse, t.claudeParent)
 
 	t.refreshItem = systray.AddMenuItem("↻ Refresh", "")
 	t.quitItem = systray.AddMenuItem("Quit", "")
@@ -211,13 +224,16 @@ func (t *Tray) render() {
 			stats = append(stats, codeSceneLabel(at.CodeScene))
 		}
 	}
-	for i, mi := range t.statPool {
-		if i < len(stats) {
-			mi.SetTitle(stats[i])
-			mi.Show()
-		} else {
-			mi.Hide()
-		}
+	fillLabelPool(t.statPool, stats)
+
+	// Claude usage: inline 5h/weekly summary + per-account detail submenu.
+	fillLabelPool(t.claudePool, claudeInlineLabels(snap.ClaudeStats, now))
+	fillLabelPool(t.claudeUsagePool, claudeUsageRows(snap.ClaudeStats, now))
+	if cs := snap.ClaudeStats; cs.Present && len(cs.Accounts) > 0 {
+		t.claudeParent.SetTitle(fmt.Sprintf("🤖 Claude usage (%d)", len(cs.Accounts)))
+		t.claudeParent.Show()
+	} else {
+		t.claudeParent.Hide()
 	}
 	// Dedup notifications under the lock (render runs from the ticker, the
 	// Refresh click, and startup concurrently — t.raised must not be touched
@@ -304,6 +320,19 @@ func fillTodoPool(pool []*systray.MenuItem, todos []bm.TodoItem, prefix string) 
 	for i, mi := range pool {
 		if i < len(todos) {
 			mi.SetTitle(prefix + oneLine(todos[i].Text, labelWidth))
+			mi.Show()
+		} else {
+			mi.Hide()
+		}
+	}
+}
+
+// fillLabelPool shows one display-only row per label (caller holds t.mu),
+// hiding the unused slots. Labels beyond the pool's capacity are dropped.
+func fillLabelPool(pool []*systray.MenuItem, labels []string) {
+	for i, mi := range pool {
+		if i < len(labels) {
+			mi.SetTitle(oneLine(labels[i], labelWidth))
 			mi.Show()
 		} else {
 			mi.Hide()

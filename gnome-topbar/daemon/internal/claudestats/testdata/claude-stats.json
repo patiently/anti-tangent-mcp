@@ -1,0 +1,77 @@
+{
+  "schema_version": "1.1",
+  "generated_at": "2026-06-03T09:05:00Z",
+  "ccusage_version": "20.0.6",
+  "accounts": {
+    "default": {
+      "display_name": "default (~/.claude)",
+      "config_dir": "/home/pgilmore/.claude",
+      "today": {
+        "total_tokens": 4821093,
+        "cost_usd": 12.47,
+        "input_tokens": 38211,
+        "output_tokens": 91044,
+        "cache_creation_tokens": 410233,
+        "cache_read_tokens": 4281605
+      },
+      "week": {
+        "total_tokens": 33106912,
+        "cost_usd": 84.10
+      },
+      "month": {
+        "total_tokens": 88412765,
+        "cost_usd": 214.88
+      },
+      "active_block": {
+        "is_active": true,
+        "started_at": "2026-06-03T07:00:00Z",
+        "total_tokens": 1933441,
+        "cost_usd": 5.12,
+        "projected_cost_usd": 8.40,
+        "remaining_minutes": 78
+      },
+      "limits": {
+        "fetched_at": "2026-06-03T09:05:00Z",
+        "error": null,
+        "five_hour": { "utilization": 4.0, "resets_at": "2026-06-03T11:40:00.516530+00:00" },
+        "seven_day": { "utilization": 26.0, "resets_at": "2026-06-08T20:00:00.516553+00:00" },
+        "seven_day_opus": null,
+        "seven_day_sonnet": { "utilization": 7.0, "resets_at": "2026-06-08T20:00:00.516561+00:00" },
+        "extra_usage": {
+          "is_enabled": true,
+          "monthly_limit": 20000,
+          "used_credits": 0.0,
+          "utilization": null,
+          "currency": "EUR"
+        }
+      },
+      "error": null
+    },
+    "alt": {
+      "display_name": "alt (~/.claude-alt)",
+      "config_dir": "/home/pgilmore/.claude-alt",
+      "today": { "total_tokens": 0, "cost_usd": 0.0 },
+      "week": { "total_tokens": 512004, "cost_usd": 1.92 },
+      "month": { "total_tokens": 2044120, "cost_usd": 6.31 },
+      "active_block": null,
+      "limits": {
+        "fetched_at": "2026-06-03T09:05:00Z",
+        "error": "usage endpoint HTTP 401",
+        "five_hour": null,
+        "seven_day": null,
+        "seven_day_opus": null,
+        "seven_day_sonnet": null,
+        "extra_usage": null
+      },
+      "error": null
+    }
+  },
+  "totals": {
+    "today_cost_usd": 12.47,
+    "week_cost_usd": 86.02,
+    "month_cost_usd": 221.19,
+    "today_total_tokens": 4821093,
+    "week_total_tokens": 33618916,
+    "month_total_tokens": 90456885
+  }
+}
