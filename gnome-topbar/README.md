@@ -5,7 +5,7 @@ working on" summary, and (optionally) anti-tangent/CodeScene stats plus a Claude
 usage panel — backed by a small Go daemon.
 See `../docs/superpowers/specs/2026-06-02-gnome-topbar-mvp-design.md`.
 
-### Claude usage panel
+## Claude usage panel
 
 When `$ANTI_TANGENT_STATS_DIR/claude-stats.json` is present (written by the
 claude-sandbox usage poller), the tray shows per-account Claude Code usage and
