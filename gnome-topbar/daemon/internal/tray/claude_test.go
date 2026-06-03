@@ -137,7 +137,7 @@ func TestClaudeUsageRows_Detail(t *testing.T) {
 				DisplayName: "default (~/.claude)",
 				Today:       &claudestats.Usage{CostUSD: 12.47, TotalTokens: 4821093},
 				Week:        &claudestats.Usage{CostUSD: 84.10, TotalTokens: 33106912},
-				ActiveBlock: &claudestats.ActiveBlock{CostUSD: 5.12, ProjectedCostUSD: 8.40, RemainingMinutes: 78},
+				ActiveBlock: &claudestats.ActiveBlock{IsActive: true, CostUSD: 5.12, ProjectedCostUSD: 8.40, RemainingMinutes: 78},
 				Limits: &claudestats.Limits{
 					FiveHour: &claudestats.Window{Utilization: ptrF(4), ResetsAt: &r5},
 					SevenDay: &claudestats.Window{Utilization: ptrF(26), ResetsAt: &r7},
@@ -181,5 +181,52 @@ func TestClaudeInlineLabels_StaleMarker(t *testing.T) {
 	got := claudeInlineLabels(cs, now)
 	if len(got) == 0 || !strings.Contains(got[0], "stale") {
 		t.Errorf("stale snapshot should lead with a stale marker row: %q", got)
+	}
+}
+
+func TestActiveBlockGatedOnIsActive(t *testing.T) {
+	now := time.Now()
+	mk := func(active bool) string {
+		cs := claudestats.Stats{Present: true, GeneratedAt: now, Accounts: map[string]claudestats.Account{
+			"default": {ActiveBlock: &claudestats.ActiveBlock{IsActive: active, CostUSD: 5.12, RemainingMinutes: 78}},
+		}}
+		return strings.Join(claudeUsageRows(cs, now), "\n")
+	}
+	if strings.Contains(mk(false), "block") {
+		t.Error("an inactive block (is_active=false) must not render as a live block row")
+	}
+	if !strings.Contains(mk(true), "block") {
+		t.Error("an active block should render a block row")
+	}
+}
+
+func TestEmptyWindowNotRendered(t *testing.T) {
+	now := time.Now()
+	cs := claudestats.Stats{Present: true, GeneratedAt: now, Accounts: map[string]claudestats.Account{
+		"default": {Limits: &claudestats.Limits{FiveHour: &claudestats.Window{}}}, // all-null window
+	}}
+	if got := claudeInlineLabels(cs, now); len(got) != 0 {
+		t.Errorf("all-null window should produce no inline row, got %q", got)
+	}
+	rows := strings.Join(claudeUsageRows(cs, now), "\n")
+	if strings.Contains(rows, "5h") {
+		t.Errorf("all-null window should not render a bare 5h detail row:\n%s", rows)
+	}
+}
+
+func TestPastResetRendersNow(t *testing.T) {
+	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
+	past := now.Add(-2 * time.Hour) // window already reset
+	cs := claudestats.Stats{Present: true, GeneratedAt: now, Accounts: map[string]claudestats.Account{
+		"default": {Limits: &claudestats.Limits{
+			FiveHour: &claudestats.Window{Utilization: ptrF(4), ResetsAt: &past},
+		}},
+	}}
+	rows := strings.Join(claudeUsageRows(cs, now), "\n")
+	if !strings.Contains(rows, "resets now") {
+		t.Errorf("past reset should render 'resets now':\n%s", rows)
+	}
+	if strings.Contains(rows, past.Local().Format("15:04")) {
+		t.Errorf("past reset must not show a misleading past clock %q:\n%s", past.Local().Format("15:04"), rows)
 	}
 }

@@ -65,7 +65,7 @@ func trimDotZero(s string) string { return strings.TrimSuffix(s, ".0") }
 func accountsWithWindows(cs claudestats.Stats) []string {
 	var keys []string
 	for k, a := range cs.Accounts {
-		if a.Limits != nil && (a.Limits.FiveHour != nil || a.Limits.SevenDay != nil) {
+		if a.Limits != nil && (a.Limits.FiveHour.HasData() || a.Limits.SevenDay.HasData()) {
 			keys = append(keys, k)
 		}
 	}
@@ -73,16 +73,27 @@ func accountsWithWindows(cs claudestats.Stats) []string {
 	return keys
 }
 
+// utilPct renders a window's utilization as "26%" (or "91% ⚠" past the warn
+// threshold), or "" when utilization is unknown. Shared by the inline and
+// detail builders so the threshold/glyph/format live in one place; callers
+// supply their own leading separator.
+func utilPct(w *claudestats.Window) string {
+	if w.Utilization == nil {
+		return ""
+	}
+	s := fmt.Sprintf("%.0f%%", *w.Utilization)
+	if *w.Utilization >= utilWarnPct {
+		s += " ⚠"
+	}
+	return s
+}
+
 // windowInlineSuffix renders " <util>% [⚠] [· extra] · resets in …" for a
 // window, omitting whichever fields are nil.
 func windowInlineSuffix(w *claudestats.Window, now time.Time, extra string) string {
 	var b strings.Builder
-	if w.Utilization != nil {
-		warn := ""
-		if *w.Utilization >= utilWarnPct {
-			warn = " ⚠"
-		}
-		fmt.Fprintf(&b, " %.0f%%%s", *w.Utilization, warn)
+	if p := utilPct(w); p != "" {
+		b.WriteString(" " + p)
 	}
 	if extra != "" {
 		fmt.Fprintf(&b, " · %s", extra)
@@ -110,10 +121,10 @@ func claudeInlineLabels(cs claudestats.Stats, now time.Time) []string {
 		if multi {
 			prefix = "🤖 " + k + " "
 		}
-		if w := a.Limits.FiveHour; w != nil {
+		if w := a.Limits.FiveHour; w.HasData() {
 			rows = append(rows, prefix+"5h"+windowInlineSuffix(w, now, ""))
 		}
-		if w := a.Limits.SevenDay; w != nil {
+		if w := a.Limits.SevenDay; w.HasData() {
 			extra := ""
 			if a.Week != nil {
 				extra = usd(a.Week.CostUSD)
@@ -148,10 +159,10 @@ func claudeUsageRows(cs claudestats.Stats, now time.Time) []string {
 			if a.Limits.Error != nil {
 				rows = append(rows, "· ⚠ limits unavailable ("+*a.Limits.Error+")")
 			} else {
-				if w := a.Limits.FiveHour; w != nil {
+				if w := a.Limits.FiveHour; w.HasData() {
 					rows = append(rows, "· "+windowDetail("5h", w, now))
 				}
-				if w := a.Limits.SevenDay; w != nil {
+				if w := a.Limits.SevenDay; w.HasData() {
 					rows = append(rows, "· "+windowDetail("7d", w, now))
 				}
 			}
@@ -165,7 +176,7 @@ func claudeUsageRows(cs claudestats.Stats, now time.Time) []string {
 		if a.Month != nil {
 			rows = append(rows, "· month "+usageDetail(a.Month))
 		}
-		if b := a.ActiveBlock; b != nil {
+		if b := a.ActiveBlock; b != nil && b.IsActive {
 			rows = append(rows, "· "+activeBlockDetail(b))
 		}
 		if a.Error != nil {
@@ -186,15 +197,17 @@ func accountHeader(key string, a claudestats.Account) string {
 func windowDetail(name string, w *claudestats.Window, now time.Time) string {
 	var b strings.Builder
 	b.WriteString(name)
-	if w.Utilization != nil {
-		warn := ""
-		if *w.Utilization >= utilWarnPct {
-			warn = " ⚠"
-		}
-		fmt.Fprintf(&b, "  %.0f%%%s", *w.Utilization, warn)
+	if p := utilPct(w); p != "" {
+		b.WriteString("  " + p)
 	}
 	if w.ResetsAt != nil {
-		fmt.Fprintf(&b, " · resets %s (%s)", claudeClock(*w.ResetsAt, now), humanUntil(w.ResetsAt.Sub(now)))
+		// A reset already in the past (stale snapshot / just-rolled window) would
+		// print a misleading past wall-clock; collapse it to "resets now".
+		if d := w.ResetsAt.Sub(now); d <= 0 {
+			b.WriteString(" · resets now")
+		} else {
+			fmt.Fprintf(&b, " · resets %s (%s)", claudeClock(*w.ResetsAt, now), humanUntil(d))
+		}
 	}
 	return b.String()
 }

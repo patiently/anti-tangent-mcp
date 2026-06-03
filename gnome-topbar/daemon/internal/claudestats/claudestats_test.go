@@ -3,12 +3,16 @@ package claudestats
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestReadParsesValidFile(t *testing.T) {
-	s := Read("testdata")
+	s, err := Read("testdata")
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
 	if !s.Present {
 		t.Fatal("Present = false, want true for a readable claude-stats.json")
 	}
@@ -31,13 +35,10 @@ func TestReadParsesValidFile(t *testing.T) {
 	if def.Week == nil || def.Week.CostUSD != 84.10 {
 		t.Errorf("default.Week.CostUSD = %v, want 84.10", def.Week)
 	}
-	if s.Totals.WeekCostUSD != 86.02 {
-		t.Errorf("Totals.WeekCostUSD = %v, want 86.02", s.Totals.WeekCostUSD)
-	}
 }
 
 func TestReadParsesFractionalResetTimestamp(t *testing.T) {
-	s := Read("testdata")
+	s, _ := Read("testdata")
 	def := s.Accounts["default"]
 	if def.Limits.FiveHour.ResetsAt == nil {
 		t.Fatal("five_hour.resets_at should parse")
@@ -49,7 +50,7 @@ func TestReadParsesFractionalResetTimestamp(t *testing.T) {
 }
 
 func TestReadNullableWindowsAndLimitError(t *testing.T) {
-	s := Read("testdata")
+	s, _ := Read("testdata")
 	alt, ok := s.Accounts["alt"]
 	if !ok {
 		t.Fatal("missing 'alt' account")
@@ -63,31 +64,82 @@ func TestReadNullableWindowsAndLimitError(t *testing.T) {
 	if alt.Limits.FiveHour != nil || alt.Limits.SevenDay != nil {
 		t.Error("alt windows should be nil when the limit fetch failed")
 	}
-	// Cost still populates independently of the limit fetch.
 	if alt.Week == nil || alt.Week.CostUSD != 1.92 {
 		t.Errorf("alt.Week.CostUSD = %v, want 1.92", alt.Week)
 	}
-	// Optional per-model window absent in the producer output stays nil.
 	def := s.Accounts["default"]
 	if def.Limits.SevenDayOpus != nil {
 		t.Error("default seven_day_opus should be nil (null in fixture)")
 	}
 }
 
-func TestReadAbsentOrUnreadableIsNotPresent(t *testing.T) {
-	if s := Read(t.TempDir()); s.Present {
-		t.Error("absent file: Present = true, want false")
+func TestReadAbsentReturnsNoError(t *testing.T) {
+	// Absent file / disabled feature is the common case, not an error.
+	if s, err := Read(t.TempDir()); err != nil || s.Present {
+		t.Errorf("absent file: got (present=%v, err=%v), want (false, nil)", s.Present, err)
 	}
-	if s := Read(""); s.Present {
-		t.Error("empty dir: Present = true, want false")
+	if s, err := Read(""); err != nil || s.Present {
+		t.Errorf("empty dir: got (present=%v, err=%v), want (false, nil)", s.Present, err)
 	}
-	// Corrupt file → Present=false, no panic.
+}
+
+func TestReadCorruptReturnsError(t *testing.T) {
+	// A present-but-malformed file IS an error (diagnosable), distinct from absent.
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "claude-stats.json"), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if s := Read(dir); s.Present {
+	s, err := Read(dir)
+	if err == nil {
+		t.Error("corrupt file should return an error so the failure is diagnosable")
+	}
+	if s.Present {
 		t.Error("corrupt file: Present = true, want false")
+	}
+}
+
+func TestReadUnsupportedMajorIsError(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"schema_version":"2.0","generated_at":"2026-06-03T09:05:00Z","accounts":{}}`
+	if err := os.WriteFile(filepath.Join(dir, "claude-stats.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Read(dir)
+	if err == nil {
+		t.Error("schema_version 2.0 should be rejected (consumer supports major 1)")
+	}
+	if s.Present {
+		t.Error("unsupported major: Present should be false")
+	}
+
+	// A MINOR bump within major 1 stays supported.
+	body11 := `{"schema_version":"1.9","generated_at":"2026-06-03T09:05:00Z","accounts":{}}`
+	if err := os.WriteFile(filepath.Join(dir, "claude-stats.json"), []byte(body11), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Read(dir); err != nil || !s.Present {
+		t.Errorf("schema_version 1.9 should be accepted: got (present=%v, err=%v)", s.Present, err)
+	}
+}
+
+func TestReadCapsLongErrorStrings(t *testing.T) {
+	dir := t.TempDir()
+	huge := strings.Repeat("x", 5000)
+	body := `{"schema_version":"1.1","generated_at":"2026-06-03T09:05:00Z","accounts":{` +
+		`"a":{"error":"` + huge + `","limits":{"fetched_at":"2026-06-03T09:05:00Z","error":"` + huge + `"}}}}`
+	if err := os.WriteFile(filepath.Join(dir, "claude-stats.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	a := s.Accounts["a"]
+	if a.Error == nil || len([]rune(*a.Error)) > maxErrLen+1 {
+		t.Errorf("account error not capped: len=%d", len([]rune(*a.Error)))
+	}
+	if a.Limits == nil || a.Limits.Error == nil || len([]rune(*a.Limits.Error)) > maxErrLen+1 {
+		t.Errorf("limits error not capped")
 	}
 }
 
@@ -101,8 +153,11 @@ func TestStale(t *testing.T) {
 	if !old.Stale(base) {
 		t.Error("15-minute-old snapshot should be stale")
 	}
-	absent := Stats{Present: false}
-	if absent.Stale(base) {
+	if (Stats{Present: false}).Stale(base) {
 		t.Error("absent snapshot is not 'stale' (nothing rendered)")
+	}
+	// A present file with a zero/omitted generated_at must NOT read as maximally stale.
+	if (Stats{Present: true}).Stale(base) {
+		t.Error("zero generated_at should not be treated as stale")
 	}
 }

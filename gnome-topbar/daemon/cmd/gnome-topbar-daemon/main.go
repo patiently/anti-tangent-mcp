@@ -217,12 +217,24 @@ func (p *Poller) refreshAntiTangent(ctx context.Context) {
 }
 
 // refreshClaudeStats reads claude-stats.json from the same StatsDir. ctx is
-// unused (local file read), matching refreshAntiTangent. Independent of
-// anti-tangent's own rollup.json per the contract.
+// unused (local file read). Independent of anti-tangent's own rollup.json per
+// the contract. A present-but-broken file (corrupt / unsupported major /
+// oversized) registers a failing "claude-stats" source so the tray's "⚠ source"
+// row and a stderr Warn make it diagnosable; a legitimately absent file leaves
+// no row (the feature is simply off).
 func (p *Poller) refreshClaudeStats(ctx context.Context) {
-	s := claudestats.Read(p.cfg.StatsDir)
+	s, err := claudestats.Read(p.cfg.StatsDir)
 	p.mu.Lock()
 	p.snap.ClaudeStats = s
+	switch {
+	case err != nil:
+		p.snap.Sources["claude-stats"] = state.SourceStatus{OK: false, Error: err.Error()}
+		p.log.Warn("claude-stats read failed", "err", err)
+	case s.Present:
+		p.snap.Sources["claude-stats"] = state.SourceStatus{OK: true}
+	default:
+		delete(p.snap.Sources, "claude-stats")
+	}
 	p.snap.GeneratedAt = time.Now()
 	p.mu.Unlock()
 }
