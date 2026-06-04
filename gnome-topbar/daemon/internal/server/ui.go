@@ -146,6 +146,17 @@ func uiAuth(token string, next http.HandlerFunc) http.HandlerFunc {
 				Name: sessionCookie, Value: token, Path: "/ui",
 				HttpOnly: true, SameSite: http.SameSiteStrictMode,
 			})
+			// Strip the token from the URL so it doesn't linger in browser
+			// history — redirect once to the same path without ?t= (the cookie
+			// now carries auth). GET-only; POSTs authenticate via the cookie.
+			if r.Method == http.MethodGet {
+				q := r.URL.Query()
+				q.Del("t")
+				clean := *r.URL
+				clean.RawQuery = q.Encode()
+				http.Redirect(w, r, clean.String(), http.StatusSeeOther)
+				return
+			}
 		}
 		next(w, r)
 	}

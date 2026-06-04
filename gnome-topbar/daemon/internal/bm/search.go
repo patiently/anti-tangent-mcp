@@ -31,49 +31,21 @@ func (c *Client) SearchKnowledge(ctx context.Context, query string) ([]SearchRes
 	return parseSearch(raw)
 }
 
-// ListHowtos returns all howto notes (project-knowledge runbooks), in the order
-// Basic Memory returns them.
+// ListHowtos returns all howto notes (project-knowledge runbooks).
 func (c *Client) ListHowtos(ctx context.Context) ([]SearchResult, error) {
-	raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
-		"note_types":    []string{"howto"},
-		"project":       c.project,
-		"output_format": "json",
-		"page_size":     100,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return parseSearch(raw)
+	return c.listAllByTypes(ctx, []string{"howto"})
 }
 
 // ListGotchas returns all gotcha notes (module-scoped lessons learned).
 func (c *Client) ListGotchas(ctx context.Context) ([]SearchResult, error) {
-	raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
-		"note_types":    []string{"gotcha"},
-		"project":       c.project,
-		"output_format": "json",
-		"page_size":     100,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return parseSearch(raw)
+	return c.listAllByTypes(ctx, []string{"gotcha"})
 }
 
 // ListMyNotes returns the caller's personal notes — those under
 // "<username>/notes/". It filters by permalink prefix so a shared Basic Memory
 // project only ever surfaces the caller's own notes, never another user's.
 func (c *Client) ListMyNotes(ctx context.Context, username string) ([]SearchResult, error) {
-	raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
-		"note_types":    []string{"personal_note"},
-		"project":       c.project,
-		"output_format": "json",
-		"page_size":     100,
-	})
-	if err != nil {
-		return nil, err
-	}
-	all, err := parseSearch(raw)
+	all, err := c.listAllByTypes(ctx, []string{"personal_note"})
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +59,44 @@ func (c *Client) ListMyNotes(ctx context.Context, username string) ([]SearchResu
 	return out, nil
 }
 
+// listAllByTypes returns every note of the given types, following Basic Memory's
+// pagination (page + has_more) so results past the first page aren't silently
+// dropped. Capped at maxListPages as a runaway guard. Used by the browse pages;
+// SearchKnowledge stays single-page on purpose (ranked top results).
+func (c *Client) listAllByTypes(ctx context.Context, noteTypes []string) ([]SearchResult, error) {
+	const pageSize, maxListPages = 100, 20
+	var all []SearchResult
+	for page := 1; page <= maxListPages; page++ {
+		raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
+			"note_types":    noteTypes,
+			"project":       c.project,
+			"output_format": "json",
+			"page_size":     pageSize,
+			"page":          page,
+		})
+		if err != nil {
+			return nil, err
+		}
+		res, hasMore, err := parseSearchPage(raw)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, res...)
+		if !hasMore {
+			break
+		}
+	}
+	return all, nil
+}
+
 func parseSearch(raw string) ([]SearchResult, error) {
+	res, _, err := parseSearchPage(raw)
+	return res, err
+}
+
+// parseSearchPage parses one search_notes page, returning its results and the
+// envelope's has_more flag so callers can paginate.
+func parseSearchPage(raw string) ([]SearchResult, bool, error) {
 	var env struct {
 		Results []struct {
 			Title     string `json:"title"`
@@ -99,9 +108,10 @@ func parseSearch(raw string) ([]SearchResult, error) {
 				NoteType string `json:"note_type"`
 			} `json:"metadata"`
 		} `json:"results"`
+		HasMore bool `json:"has_more"`
 	}
 	if err := json.Unmarshal([]byte(raw), &env); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	out := make([]SearchResult, 0, len(env.Results))
 	for _, r := range env.Results {
@@ -122,7 +132,7 @@ func parseSearch(raw string) ([]SearchResult, error) {
 		}
 		out = append(out, SearchResult{Title: r.Title, Type: typ, Permalink: r.Permalink, Snippet: snip})
 	}
-	return out, nil
+	return out, env.HasMore, nil
 }
 
 // snippetMaxChars bounds the search-result snippet length.

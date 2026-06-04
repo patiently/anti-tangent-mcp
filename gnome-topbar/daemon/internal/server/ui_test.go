@@ -36,19 +36,23 @@ const tok = "secret-token"
 
 func srv(p Provider) http.Handler { return New(p, tok) }
 
-func TestUINoteRendersAndSetsCookie(t *testing.T) {
+func TestUITokenHitSetsCookieAndStripsToken(t *testing.T) {
 	p := &fakeProv{note: "# Title\n\nhi\n"}
 	r := httptest.NewRequest("GET", "/ui/note?id=a/b/main&t="+tok, nil)
 	w := httptest.NewRecorder()
 	srv(p).ServeHTTP(w, r)
-	if w.Code != 200 {
-		t.Fatalf("code %d", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "<h1>Title</h1>") {
-		t.Error("note markdown not rendered")
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("want 303 redirect on token hit, got %d", w.Code)
 	}
 	if !strings.Contains(w.Header().Get("Set-Cookie"), "gtb_session=") {
 		t.Error("session cookie not set on token hit")
+	}
+	lu, _ := url.Parse(w.Header().Get("Location"))
+	if lu.Query().Has("t") {
+		t.Errorf("token not stripped from redirect target: %s", w.Header().Get("Location"))
+	}
+	if lu.Query().Get("id") != "a/b/main" {
+		t.Errorf("redirect dropped/changed id: %s", w.Header().Get("Location"))
 	}
 }
 
@@ -70,11 +74,15 @@ func TestUINavigationViaCookie(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("cookie auth failed: %d", w.Code)
 	}
+	if !strings.Contains(w.Body.String(), "<h1>Next</h1>") {
+		t.Error("note not rendered via cookie auth")
+	}
 }
 
 func TestUISearchResultsLinkToNoteNoToken(t *testing.T) {
 	p := &fakeProv{results: []bm.SearchResult{{Title: "Epic One", Type: "epic", Permalink: "proj/epics/E-1/main", Snippet: "s"}}}
-	r := httptest.NewRequest("GET", "/ui/search/results?q=one&t="+tok, nil)
+	r := httptest.NewRequest("GET", "/ui/search/results?q=one", nil)
+	r.AddCookie(&http.Cookie{Name: "gtb_session", Value: tok})
 	w := httptest.NewRecorder()
 	srv(p).ServeHTTP(w, r)
 	body := w.Body.String()
@@ -167,7 +175,8 @@ func TestUIGotchasLists(t *testing.T) {
 }
 
 func TestUIPagesAreDarkWithTopbar(t *testing.T) {
-	r := httptest.NewRequest("GET", "/ui/search?t="+tok, nil)
+	r := httptest.NewRequest("GET", "/ui/search", nil)
+	r.AddCookie(&http.Cookie{Name: "gtb_session", Value: tok})
 	w := httptest.NewRecorder()
 	srv(&fakeProv{}).ServeHTTP(w, r)
 	body := w.Body.String()

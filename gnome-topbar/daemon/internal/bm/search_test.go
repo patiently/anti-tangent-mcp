@@ -62,3 +62,35 @@ func TestListMyNotesFiltersByNamespace(t *testing.T) {
 		t.Fatalf("want only alice's note, got %+v", res)
 	}
 }
+
+// pagingCaller returns a different payload per call, simulating BM pagination.
+type pagingCaller struct {
+	pages []string
+	calls int
+}
+
+func (p *pagingCaller) CallTool(_ context.Context, _ string, _ map[string]any) (string, error) {
+	i := p.calls
+	if i >= len(p.pages) {
+		i = len(p.pages) - 1
+	}
+	p.calls++
+	return p.pages[i], nil
+}
+
+func TestListHowtosPaginatesAcrossPages(t *testing.T) {
+	page1 := `{"results":[{"title":"A","permalink":"p/howtos/a/main","metadata":{"note_type":"howto"}}],"has_more":true}`
+	page2 := `{"results":[{"title":"B","permalink":"p/howtos/b/main","metadata":{"note_type":"howto"}}],"has_more":false}`
+	pc := &pagingCaller{pages: []string{page1, page2}}
+	c := New(pc, "main")
+	res, err := c.ListHowtos(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 2 {
+		t.Fatalf("want 2 results across pages, got %d (%+v)", len(res), res)
+	}
+	if pc.calls != 2 {
+		t.Fatalf("want 2 page fetches (stop on has_more=false), got %d", pc.calls)
+	}
+}
