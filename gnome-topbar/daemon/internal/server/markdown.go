@@ -66,7 +66,7 @@ func renderNoteHTML(title, md string) (string, error) {
 const baseCSS = `:root{color-scheme:dark}
 *{box-sizing:border-box}
 body{font:16px/1.6 system-ui,Segoe UI,Roboto,sans-serif;margin:0;background:#16181d;color:#e6e7eb}
-.topbar{position:sticky;top:0;z-index:10;display:flex;gap:1rem;align-items:center;padding:.55rem 1rem;background:#1f232b;border-bottom:1px solid #2c313c}
+.topbar{position:sticky;top:0;z-index:10;display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;padding:.55rem 1rem;background:#1f232b;border-bottom:1px solid #2c313c}
 .topbar .brand{font-weight:700;color:#e6e7eb;text-decoration:none;white-space:nowrap}
 .topbar form.search{flex:1}
 .topbar input{width:100%;font-size:1rem;padding:.45rem .6rem;border-radius:6px;border:1px solid #3a4150;background:#0f1115;color:#e6e7eb}
@@ -96,8 +96,8 @@ ul.cards li a{font-weight:600}
 const topbar = `<header class="topbar">` +
 	`<a class="brand" href="/ui/search">🛠 gnome-topbar</a>` +
 	`<form class="search" method="GET" action="/ui/search/results">` +
-	`<input name="q" placeholder="Search epics, stories &amp; gotchas…" aria-label="Search epics, stories and gotchas"></form>` +
-	`<nav><a href="/ui/howtos">Howtos</a><a href="/ui/gotchas">Gotchas</a><a href="/ui/notes">Notes</a><a href="/ui/new-todo">New todo</a></nav>` +
+	`<input name="q" placeholder="Search the knowledge base…" aria-label="Search the knowledge base"></form>` +
+	`<nav><a href="/ui/howtos">Howtos</a><a href="/ui/gotchas">Gotchas</a><a href="/ui/modules">Modules</a><a href="/ui/features">Features</a><a href="/ui/decisions">Decisions</a><a href="/ui/notes">Notes</a><a href="/ui/new-todo">New todo</a></nav>` +
 	`</header>`
 
 // pageShell wraps body HTML in a dark-themed document with the sticky topbar and

@@ -26,7 +26,7 @@ func TestSearchKnowledgeParsesResults(t *testing.T) {
 		t.Fatalf("called %q", fc.last.name)
 	}
 	types, _ := fc.last.args["note_types"].([]string)
-	if len(types) != 3 || types[0] != "epic" || types[1] != "story" || types[2] != "gotcha" {
+	if len(types) != 6 || types[0] != "epic" || types[2] != "gotcha" || types[3] != "module" || types[5] != "decision" {
 		t.Fatalf("note_types=%v", fc.last.args["note_types"])
 	}
 }

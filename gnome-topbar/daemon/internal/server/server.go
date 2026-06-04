@@ -20,6 +20,9 @@ type Provider interface {
 	AppendTodo(ctx context.Context, text string) error
 	ListHowtos(ctx context.Context) ([]bm.SearchResult, error)
 	ListGotchas(ctx context.Context) ([]bm.SearchResult, error)
+	ListModules(ctx context.Context) ([]bm.SearchResult, error)
+	ListFeatures(ctx context.Context) ([]bm.SearchResult, error)
+	ListDecisions(ctx context.Context) ([]bm.SearchResult, error)
 	ListMyNotes(ctx context.Context) ([]bm.SearchResult, error)
 }
 

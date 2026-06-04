@@ -13,12 +13,15 @@ import (
 )
 
 type fakeProv struct {
-	results  []bm.SearchResult
-	note     string
-	appended string
-	howtos   []bm.SearchResult
-	gotchas  []bm.SearchResult
-	notes    []bm.SearchResult
+	results   []bm.SearchResult
+	note      string
+	appended  string
+	howtos    []bm.SearchResult
+	gotchas   []bm.SearchResult
+	modules   []bm.SearchResult
+	features  []bm.SearchResult
+	decisions []bm.SearchResult
+	notes     []bm.SearchResult
 }
 
 func (f *fakeProv) Snapshot() state.Snapshot { return state.Snapshot{} }
@@ -26,11 +29,14 @@ func (f *fakeProv) Ack([]string)             {}
 func (f *fakeProv) Search(context.Context, string) ([]bm.SearchResult, error) {
 	return f.results, nil
 }
-func (f *fakeProv) ReadNote(context.Context, string) (string, error)       { return f.note, nil }
-func (f *fakeProv) AppendTodo(_ context.Context, text string) error        { f.appended = text; return nil }
-func (f *fakeProv) ListHowtos(context.Context) ([]bm.SearchResult, error)  { return f.howtos, nil }
-func (f *fakeProv) ListMyNotes(context.Context) ([]bm.SearchResult, error) { return f.notes, nil }
-func (f *fakeProv) ListGotchas(context.Context) ([]bm.SearchResult, error) { return f.gotchas, nil }
+func (f *fakeProv) ReadNote(context.Context, string) (string, error)         { return f.note, nil }
+func (f *fakeProv) AppendTodo(_ context.Context, text string) error          { f.appended = text; return nil }
+func (f *fakeProv) ListHowtos(context.Context) ([]bm.SearchResult, error)    { return f.howtos, nil }
+func (f *fakeProv) ListMyNotes(context.Context) ([]bm.SearchResult, error)   { return f.notes, nil }
+func (f *fakeProv) ListGotchas(context.Context) ([]bm.SearchResult, error)   { return f.gotchas, nil }
+func (f *fakeProv) ListModules(context.Context) ([]bm.SearchResult, error)   { return f.modules, nil }
+func (f *fakeProv) ListFeatures(context.Context) ([]bm.SearchResult, error)  { return f.features, nil }
+func (f *fakeProv) ListDecisions(context.Context) ([]bm.SearchResult, error) { return f.decisions, nil }
 
 const tok = "secret-token"
 
@@ -185,5 +191,31 @@ func TestUIPagesAreDarkWithTopbar(t *testing.T) {
 	}
 	if !strings.Contains(body, "background:#16181d") {
 		t.Error("dark theme missing")
+	}
+}
+
+func TestUIBrowsePagesForKnowledgeTypes(t *testing.T) {
+	p := &fakeProv{
+		modules:   []bm.SearchResult{{Title: "Platform Architecture", Type: "module", Permalink: "monorepo/modules/platform-architecture/main"}},
+		features:  []bm.SearchResult{{Title: "Snapshitter override", Type: "feature", Permalink: "monorepo/features/snap/main"}},
+		decisions: []bm.SearchResult{{Title: "Text-only reviewer", Type: "decision", Permalink: "monorepo/decisions/0001-x/main"}},
+	}
+	cases := []struct{ path, want, href string }{
+		{"/ui/modules", "Platform Architecture", "/ui/note?id=monorepo%2Fmodules%2Fplatform-architecture%2Fmain"},
+		{"/ui/features", "Snapshitter override", "/ui/note?id=monorepo%2Ffeatures%2Fsnap%2Fmain"},
+		{"/ui/decisions", "Text-only reviewer", "/ui/note?id=monorepo%2Fdecisions%2F0001-x%2Fmain"},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest("GET", c.path, nil)
+		r.AddCookie(&http.Cookie{Name: "gtb_session", Value: tok})
+		w := httptest.NewRecorder()
+		srv(p).ServeHTTP(w, r)
+		body := w.Body.String()
+		if w.Code != 200 || !strings.Contains(body, c.want) {
+			t.Fatalf("%s: code %d, missing %q", c.path, w.Code, c.want)
+		}
+		if !strings.Contains(body, `href="`+c.href+`"`) {
+			t.Errorf("%s: missing note link %s", c.path, c.href)
+		}
 	}
 }

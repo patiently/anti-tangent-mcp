@@ -22,11 +22,14 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 	mux.HandleFunc("/ui/search", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
 		writeHTML(w, pageShell("gnome-topbar", `<h1>gnome-topbar</h1>`+
 			`<form method="GET" action="/ui/search/results">`+
-			`<input type="text" name="q" autofocus placeholder="Search epics, stories &amp; gotchas…"> <button>Search</button></form>`+
+			`<input type="text" name="q" autofocus placeholder="Search the knowledge base…"> <button>Search</button></form>`+
 			`<p class="muted">Or browse:</p>`+
 			`<ul class="cards">`+
 			`<li><a href="/ui/howtos">📓 Howtos</a></li>`+
 			`<li><a href="/ui/gotchas">⚠️ Gotchas</a></li>`+
+			`<li><a href="/ui/modules">🧩 Modules</a></li>`+
+			`<li><a href="/ui/features">✨ Features</a></li>`+
+			`<li><a href="/ui/decisions">📐 Decisions</a></li>`+
 			`<li><a href="/ui/notes">🗒 My notes</a></li>`+
 			`<li><a href="/ui/new-todo">➕ New todo</a></li>`+
 			`</ul>`))
@@ -39,7 +42,7 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		writeHTML(w, listPage("Results for "+q, res, "No epics, stories, or gotchas matched."))
+		writeHTML(w, listPage("Results for "+q, res, "No matching notes."))
 	}))
 
 	mux.HandleFunc("/ui/howtos", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +61,33 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 			return
 		}
 		writeHTML(w, listPage("Gotchas", res, "No gotchas found."))
+	}))
+
+	mux.HandleFunc("/ui/modules", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
+		res, err := p.ListModules(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		writeHTML(w, listPage("Modules", res, "No modules found."))
+	}))
+
+	mux.HandleFunc("/ui/features", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
+		res, err := p.ListFeatures(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		writeHTML(w, listPage("Features", res, "No features found."))
+	}))
+
+	mux.HandleFunc("/ui/decisions", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
+		res, err := p.ListDecisions(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		writeHTML(w, listPage("Decisions", res, "No decisions found."))
 	}))
 
 	mux.HandleFunc("/ui/notes", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {

@@ -13,14 +13,15 @@ type SearchResult struct {
 	Snippet   string `json:"snippet"`
 }
 
-// SearchKnowledge runs a Basic Memory full-text search across the work/lesson
-// note types surfaced by the tray search box: epics, stories, and gotchas.
-// page_size is raised above Basic Memory's default of 10 so an exact ticket-ID
-// match isn't buried beneath the many notes that merely mention it in passing.
+// SearchKnowledge runs a Basic Memory full-text search across the project-
+// knowledge note types surfaced by the tray search box: epics, stories, gotchas,
+// modules, features, and decisions. page_size is raised above Basic Memory's
+// default of 10 so an exact ticket-ID match isn't buried beneath the many notes
+// that merely mention it in passing.
 func (c *Client) SearchKnowledge(ctx context.Context, query string) ([]SearchResult, error) {
 	raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
 		"query":         query,
-		"note_types":    []string{"epic", "story", "gotcha"},
+		"note_types":    []string{"epic", "story", "gotcha", "module", "feature", "decision"},
 		"project":       c.project,
 		"output_format": "json",
 		"page_size":     50,
@@ -39,6 +40,22 @@ func (c *Client) ListHowtos(ctx context.Context) ([]SearchResult, error) {
 // ListGotchas returns all gotcha notes (module-scoped lessons learned).
 func (c *Client) ListGotchas(ctx context.Context) ([]SearchResult, error) {
 	return c.listAllByTypes(ctx, []string{"gotcha"})
+}
+
+// ListModules returns all module notes (coherent capabilities / technical
+// surface — e.g. the platform-architecture overview).
+func (c *Client) ListModules(ctx context.Context) ([]SearchResult, error) {
+	return c.listAllByTypes(ctx, []string{"module"})
+}
+
+// ListFeatures returns all feature notes (user-facing capability catalog).
+func (c *Client) ListFeatures(ctx context.Context) ([]SearchResult, error) {
+	return c.listAllByTypes(ctx, []string{"feature"})
+}
+
+// ListDecisions returns all decision notes (ADR-style records).
+func (c *Client) ListDecisions(ctx context.Context) ([]SearchResult, error) {
+	return c.listAllByTypes(ctx, []string{"decision"})
 }
 
 // ListMyNotes returns the caller's personal notes — those under

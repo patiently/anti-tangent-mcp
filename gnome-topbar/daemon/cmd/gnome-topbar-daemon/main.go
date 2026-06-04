@@ -312,6 +312,21 @@ func (p *Poller) ListGotchas(ctx context.Context) ([]bm.SearchResult, error) {
 	return p.bm.ListGotchas(ctx)
 }
 
+// ListModules returns all module notes (used by the /ui/modules browse page).
+func (p *Poller) ListModules(ctx context.Context) ([]bm.SearchResult, error) {
+	return p.bm.ListModules(ctx)
+}
+
+// ListFeatures returns all feature notes (used by the /ui/features browse page).
+func (p *Poller) ListFeatures(ctx context.Context) ([]bm.SearchResult, error) {
+	return p.bm.ListFeatures(ctx)
+}
+
+// ListDecisions returns all decision notes (used by the /ui/decisions browse page).
+func (p *Poller) ListDecisions(ctx context.Context) ([]bm.SearchResult, error) {
+	return p.bm.ListDecisions(ctx)
+}
+
 // ListMyNotes returns the operator's personal notes (used by the /ui/notes page).
 func (p *Poller) ListMyNotes(ctx context.Context) ([]bm.SearchResult, error) {
 	if p.cfg.BMUsername == "" {

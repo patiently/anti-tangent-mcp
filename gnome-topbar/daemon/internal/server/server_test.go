@@ -31,6 +31,15 @@ func (f *fakeProvider) ListHowtos(context.Context) ([]bm.SearchResult, error) {
 func (f *fakeProvider) ListGotchas(context.Context) ([]bm.SearchResult, error) {
 	return []bm.SearchResult{{Title: "G", Type: "gotcha", Permalink: "p/gotchas/0001-g/main"}}, nil
 }
+func (f *fakeProvider) ListModules(context.Context) ([]bm.SearchResult, error) {
+	return []bm.SearchResult{{Title: "M", Type: "module", Permalink: "p/modules/m/main"}}, nil
+}
+func (f *fakeProvider) ListFeatures(context.Context) ([]bm.SearchResult, error) {
+	return []bm.SearchResult{{Title: "F", Type: "feature", Permalink: "p/features/f/main"}}, nil
+}
+func (f *fakeProvider) ListDecisions(context.Context) ([]bm.SearchResult, error) {
+	return []bm.SearchResult{{Title: "D", Type: "decision", Permalink: "p/decisions/0001-d/main"}}, nil
+}
 func (f *fakeProvider) ListMyNotes(context.Context) ([]bm.SearchResult, error) {
 	return []bm.SearchResult{{Title: "N", Type: "personal_note", Permalink: "u/notes/n/main"}}, nil
 }

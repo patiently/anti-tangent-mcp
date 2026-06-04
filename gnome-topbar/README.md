@@ -73,9 +73,9 @@ tray renders the body with a staleness indicator.
 ## Changelog
 
 ### v0.2.0
-- Basic Memory search (epics, stories & gotchas), rendered note view (mermaid + clickable inter-note links), and todo create — opened in the in-container browser.
-- Browse pages: **Howtos** (`/ui/howtos`), **Gotchas** (`/ui/gotchas`), and **My notes** (`/ui/notes`).
-- Dark-themed UI with a sticky topbar (search + Howtos / Gotchas / Notes / New todo navigation) on every page.
+- Basic Memory search across the knowledge base (epics, stories, gotchas, modules, features & decisions), rendered note view (mermaid + clickable inter-note links), and todo create — opened in the in-container browser.
+- Browse pages: **Howtos**, **Gotchas**, **Modules**, **Features**, **Decisions**, and **My notes** (`/ui/howtos`, `/ui/gotchas`, `/ui/modules`, `/ui/features`, `/ui/decisions`, `/ui/notes`).
+- Dark-themed UI with a sticky topbar (search + browse navigation) on every page.
 - Mark a todo done by clicking its tray row.
 - Refresh / Quit / Search / New-todo pinned to the top of the menu.
 
