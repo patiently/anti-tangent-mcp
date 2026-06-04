@@ -111,7 +111,7 @@ func main() {
 		if err := tray.OpenURIOnHost(url); err != nil {
 			log.Error("open url", "url", url, "err", err)
 		}
-	}, func(ids []string) { p.Ack(ids) })
+	}, func(ids []string) { p.Ack(ids) }, tray.Actions{})
 
 	tr.Run(ctx) // blocks until Quit / ctx cancel
 	cancel()
