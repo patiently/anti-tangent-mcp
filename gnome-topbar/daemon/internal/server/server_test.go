@@ -22,7 +22,27 @@ func (f *fakeProvider) Snapshot() state.Snapshot {
 func (f *fakeProvider) Search(ctx context.Context, q string) ([]bm.SearchResult, error) {
 	return []bm.SearchResult{{Title: "T", Type: "epic"}}, nil
 }
-func (f *fakeProvider) Ack(ids []string) { f.acked = append(f.acked, ids...) }
+func (f *fakeProvider) Ack(ids []string)                                 { f.acked = append(f.acked, ids...) }
+func (f *fakeProvider) ReadNote(context.Context, string) (string, error) { return "", nil }
+func (f *fakeProvider) AppendTodo(context.Context, string) error         { return nil }
+func (f *fakeProvider) ListHowtos(context.Context) ([]bm.SearchResult, error) {
+	return []bm.SearchResult{{Title: "H", Type: "howto", Permalink: "p/howtos/h/main"}}, nil
+}
+func (f *fakeProvider) ListGotchas(context.Context) ([]bm.SearchResult, error) {
+	return []bm.SearchResult{{Title: "G", Type: "gotcha", Permalink: "p/gotchas/0001-g/main"}}, nil
+}
+func (f *fakeProvider) ListModules(context.Context) ([]bm.SearchResult, error) {
+	return []bm.SearchResult{{Title: "M", Type: "module", Permalink: "p/modules/m/main"}}, nil
+}
+func (f *fakeProvider) ListFeatures(context.Context) ([]bm.SearchResult, error) {
+	return []bm.SearchResult{{Title: "F", Type: "feature", Permalink: "p/features/f/main"}}, nil
+}
+func (f *fakeProvider) ListDecisions(context.Context) ([]bm.SearchResult, error) {
+	return []bm.SearchResult{{Title: "D", Type: "decision", Permalink: "p/decisions/0001-d/main"}}, nil
+}
+func (f *fakeProvider) ListMyNotes(context.Context) ([]bm.SearchResult, error) {
+	return []bm.SearchResult{{Title: "N", Type: "personal_note", Permalink: "u/notes/n/main"}}, nil
+}
 
 func newTestServer() (*httptest.Server, *fakeProvider) {
 	fp := &fakeProvider{}

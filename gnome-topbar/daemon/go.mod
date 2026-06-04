@@ -3,16 +3,17 @@ module github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon
 go 1.25.0
 
 require (
+	fyne.io/systray v1.12.1
 	github.com/BurntSushi/toml v1.6.0
 	github.com/cli/go-gh/v2 v2.13.0
+	github.com/godbus/dbus/v5 v5.2.2
+	github.com/yuin/goldmark v1.8.2
 )
 
 require (
-	fyne.io/systray v1.12.1 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/cli/safeexec v1.0.0 // indirect
 	github.com/cli/shurcooL-graphql v0.0.4 // indirect
-	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/henvic/httpretty v0.0.6 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect

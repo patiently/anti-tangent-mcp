@@ -8,6 +8,7 @@ import (
 
 type TodoItem struct {
 	Text    string     `json:"text"`
+	Raw     string     `json:"raw"` // exact source bullet line, for find_replace edits
 	Due     *time.Time `json:"due,omitempty"`
 	Overdue bool       `json:"overdue"`
 }
@@ -39,7 +40,7 @@ func ParseTodos(md string, today time.Time) (active, due []TodoItem) {
 		if m == nil {
 			continue
 		}
-		item := TodoItem{Text: strings.TrimSpace(m[1])}
+		item := TodoItem{Text: strings.TrimSpace(m[1]), Raw: line}
 		if dm := dateRe.FindStringSubmatch(item.Text); dm != nil {
 			if d, err := time.ParseInLocation("2006-01-02", dm[1], today.Location()); err == nil {
 				item.Due = &d

@@ -3,6 +3,8 @@ package bm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 type SearchResult struct {
@@ -12,13 +14,18 @@ type SearchResult struct {
 	Snippet   string `json:"snippet"`
 }
 
-// SearchEpicsStories runs a Basic Memory search limited to epic/story notes.
-func (c *Client) SearchEpicsStories(ctx context.Context, query string) ([]SearchResult, error) {
+// SearchKnowledge runs a Basic Memory full-text search across the project-
+// knowledge note types surfaced by the tray search box: epics, stories, gotchas,
+// modules, features, and decisions. page_size is raised above Basic Memory's
+// default of 10 so an exact ticket-ID match isn't buried beneath the many notes
+// that merely mention it in passing.
+func (c *Client) SearchKnowledge(ctx context.Context, query string) ([]SearchResult, error) {
 	raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
 		"query":         query,
-		"note_types":    []string{"epic", "story"},
+		"note_types":    []string{"epic", "story", "gotcha", "module", "feature", "decision"},
 		"project":       c.project,
 		"output_format": "json",
+		"page_size":     50,
 	})
 	if err != nil {
 		return nil, err
@@ -26,7 +33,94 @@ func (c *Client) SearchEpicsStories(ctx context.Context, query string) ([]Search
 	return parseSearch(raw)
 }
 
+// ListHowtos returns all howto notes (project-knowledge runbooks).
+func (c *Client) ListHowtos(ctx context.Context) ([]SearchResult, error) {
+	return c.listAllByTypes(ctx, []string{"howto"})
+}
+
+// ListGotchas returns all gotcha notes (module-scoped lessons learned).
+func (c *Client) ListGotchas(ctx context.Context) ([]SearchResult, error) {
+	return c.listAllByTypes(ctx, []string{"gotcha"})
+}
+
+// ListModules returns all module notes (coherent capabilities / technical
+// surface — e.g. the platform-architecture overview).
+func (c *Client) ListModules(ctx context.Context) ([]SearchResult, error) {
+	return c.listAllByTypes(ctx, []string{"module"})
+}
+
+// ListFeatures returns all feature notes (user-facing capability catalog).
+func (c *Client) ListFeatures(ctx context.Context) ([]SearchResult, error) {
+	return c.listAllByTypes(ctx, []string{"feature"})
+}
+
+// ListDecisions returns all decision notes (ADR-style records).
+func (c *Client) ListDecisions(ctx context.Context) ([]SearchResult, error) {
+	return c.listAllByTypes(ctx, []string{"decision"})
+}
+
+// ListMyNotes returns the caller's personal notes — those under
+// "<username>/notes/". It filters by permalink prefix so a shared Basic Memory
+// project only ever surfaces the caller's own notes, never another user's.
+func (c *Client) ListMyNotes(ctx context.Context, username string) ([]SearchResult, error) {
+	all, err := c.listAllByTypes(ctx, []string{"personal_note"})
+	if err != nil {
+		return nil, err
+	}
+	prefix := username + "/notes/"
+	out := make([]SearchResult, 0, len(all))
+	for _, r := range all {
+		if strings.HasPrefix(r.Permalink, prefix) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// listAllByTypes returns every note of the given types, following Basic Memory's
+// pagination (page + has_more) so results past the first page aren't silently
+// dropped. Capped at maxListPages as a runaway guard. Used by the browse pages;
+// SearchKnowledge stays single-page on purpose (ranked top results).
+func (c *Client) listAllByTypes(ctx context.Context, noteTypes []string) ([]SearchResult, error) {
+	const pageSize, maxListPages = 100, 20
+	var all []SearchResult
+	var hasMore bool
+	for page := 1; page <= maxListPages; page++ {
+		raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
+			"note_types":    noteTypes,
+			"project":       c.project,
+			"output_format": "json",
+			"page_size":     pageSize,
+			"page":          page,
+		})
+		if err != nil {
+			return nil, err
+		}
+		res, pageHasMore, err := parseSearchPage(raw)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, res...)
+		hasMore = pageHasMore
+		if !pageHasMore {
+			break
+		}
+	}
+	// Fail loudly rather than silently hide notes past the cap.
+	if hasMore {
+		return nil, fmt.Errorf("search_notes exceeded the %d-page cap for note_types=%v; refusing to return partial results", maxListPages, noteTypes)
+	}
+	return all, nil
+}
+
 func parseSearch(raw string) ([]SearchResult, error) {
+	res, _, err := parseSearchPage(raw)
+	return res, err
+}
+
+// parseSearchPage parses one search_notes page, returning its results and the
+// envelope's has_more flag so callers can paginate.
+func parseSearchPage(raw string) ([]SearchResult, bool, error) {
 	var env struct {
 		Results []struct {
 			Title     string `json:"title"`
@@ -38,9 +132,10 @@ func parseSearch(raw string) ([]SearchResult, error) {
 				NoteType string `json:"note_type"`
 			} `json:"metadata"`
 		} `json:"results"`
+		HasMore bool `json:"has_more"`
 	}
 	if err := json.Unmarshal([]byte(raw), &env); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	out := make([]SearchResult, 0, len(env.Results))
 	for _, r := range env.Results {
@@ -61,7 +156,7 @@ func parseSearch(raw string) ([]SearchResult, error) {
 		}
 		out = append(out, SearchResult{Title: r.Title, Type: typ, Permalink: r.Permalink, Snippet: snip})
 	}
-	return out, nil
+	return out, env.HasMore, nil
 }
 
 // snippetMaxChars bounds the search-result snippet length.

@@ -21,6 +21,14 @@ type Provider interface {
 	RefreshNow(ctx context.Context) // force an immediate poll of all sources
 }
 
+// Actions are the side-effecting callbacks the tray triggers on clicks. Any
+// field may be nil (treated as a no-op) so tests can construct a bare Tray.
+type Actions struct {
+	OpenSearch  func()               // open the search page in the in-container browser
+	OpenNewTodo func()               // open the new-todo page
+	MarkDone    func(rawLine string) // tick a todo bullet in Basic Memory
+}
+
 // Per-section item-pool caps. The systray menu is append-only, so we
 // pre-allocate slots once and Show/Hide them each refresh.
 const (
@@ -41,6 +49,7 @@ type Tray struct {
 	cancel context.CancelFunc
 	opener func(url string)
 	ack    func(ids []string)
+	act    Actions
 	raised map[string]bool
 	mu     sync.Mutex
 
@@ -57,9 +66,11 @@ type Tray struct {
 
 	dueParent *systray.MenuItem // collapsible submenu (hidden when empty)
 	duePool   []*systray.MenuItem
+	dueRaw    []string
 
 	activeParent *systray.MenuItem // collapsible submenu (hidden when empty)
 	activePool   []*systray.MenuItem
+	activeRaw    []string
 
 	statsParent *systray.MenuItem // collapsible submenu (hidden when absent)
 	statPool    []*systray.MenuItem
@@ -74,8 +85,8 @@ type Tray struct {
 
 // New returns a Tray. opener opens a URL on the host; ack marks event IDs seen
 // after notifications are raised (may be nil).
-func New(p Provider, opener func(string), ack func([]string)) *Tray {
-	return &Tray{prov: p, opener: opener, ack: ack, raised: map[string]bool{}}
+func New(p Provider, opener func(string), ack func([]string), act Actions) *Tray {
+	return &Tray{prov: p, opener: opener, ack: ack, act: act, raised: map[string]bool{}}
 }
 
 // Run blocks, running the systray event loop until Quit. Call on the main
@@ -89,6 +100,29 @@ func (t *Tray) onReady(ctx context.Context) {
 	systray.SetIcon(trayIcon)
 	systray.SetTitle("")
 	systray.SetTooltip("gnome-topbar")
+
+	// Quick actions pinned to the top of the menu (closest the dbusmenu model
+	// gets to "top-right corner buttons"; true top-bar buttons need a host
+	// GNOME Shell extension — out of scope).
+	t.refreshItem = systray.AddMenuItem("↻ Refresh", "force an immediate poll")
+	t.quitItem = systray.AddMenuItem("✕ Quit", "")
+	searchItem := systray.AddMenuItem("🔎 Search epics/stories…", "open BM search in the browser")
+	newTodoItem := systray.AddMenuItem("➕ New todo…", "create a todo in Basic Memory")
+	systray.AddSeparator()
+	go func() {
+		for range searchItem.ClickedCh {
+			if t.act.OpenSearch != nil {
+				t.act.OpenSearch()
+			}
+		}
+	}()
+	go func() {
+		for range newTodoItem.ClickedCh {
+			if t.act.OpenNewTodo != nil {
+				t.act.OpenNewTodo()
+			}
+		}
+	}()
 
 	// currently-working-on (inline header)
 	t.nowItem = systray.AddMenuItem("", "")
@@ -110,12 +144,12 @@ func (t *Tray) onReady(ctx context.Context) {
 	// Due / overdue todos — collapsed submenu (hidden when count is 0)
 	t.dueParent = systray.AddMenuItem("✅ Due / overdue", "todos due or overdue")
 	t.dueParent.Hide()
-	t.duePool = t.makeDisabledPool(capDue, t.dueParent)
+	t.duePool, t.dueRaw = t.makeDonePool(capDue, t.dueParent)
 
 	// Active todos — collapsed submenu (hidden when count is 0)
 	t.activeParent = systray.AddMenuItem("📋 Active todos", "your active todos")
 	t.activeParent.Hide()
-	t.activePool = t.makeDisabledPool(capActive, t.activeParent)
+	t.activePool, t.activeRaw = t.makeDonePool(capActive, t.activeParent)
 
 	// anti-tangent / CodeScene stats — collapsed submenu, shown only when present
 	t.statsParent = systray.AddMenuItem("📊 Stats", "anti-tangent / CodeScene stats")
@@ -129,9 +163,6 @@ func (t *Tray) onReady(ctx context.Context) {
 	t.claudeParent.Hide()
 	t.claudeUsagePool = t.makeDisabledPool(capClaudeUse, t.claudeParent)
 
-	systray.AddSeparator()
-	t.refreshItem = systray.AddMenuItem("↻ Refresh", "")
-	t.quitItem = systray.AddMenuItem("✕ Quit", "")
 	go func() {
 		for range t.refreshItem.ClickedCh {
 			t.prov.RefreshNow(ctx)
@@ -184,6 +215,31 @@ func (t *Tray) makeClickPool(n int, parent *systray.MenuItem) ([]*systray.MenuIt
 	return pool, urls
 }
 
+// makeDonePool creates n hidden clickable items under parent; clicking one calls
+// Actions.MarkDone with the raw todo line backing that slot, then re-renders.
+func (t *Tray) makeDonePool(n int, parent *systray.MenuItem) ([]*systray.MenuItem, []string) {
+	pool := make([]*systray.MenuItem, n)
+	raw := make([]string, n)
+	for i := 0; i < n; i++ {
+		mi := t.addItem(parent)
+		mi.Hide()
+		pool[i] = mi
+		idx := i
+		go func() {
+			for range mi.ClickedCh {
+				t.mu.Lock()
+				line := raw[idx]
+				t.mu.Unlock()
+				if line != "" && t.act.MarkDone != nil {
+					t.act.MarkDone(line)
+					t.render()
+				}
+			}
+		}()
+	}
+	return pool, raw
+}
+
 // makeDisabledPool creates n hidden, non-clickable display-only items.
 func (t *Tray) makeDisabledPool(n int, parent *systray.MenuItem) []*systray.MenuItem {
 	pool := make([]*systray.MenuItem, n)
@@ -220,11 +276,11 @@ func (t *Tray) render() {
 	showIf(t.myPRsParent, len(snap.PRs.Authored) > 0)
 
 	t.dueParent.SetTitle(fmt.Sprintf("✅ Due / overdue (%d)", len(snap.Todos.Due)))
-	fillTodoPool(t.duePool, snap.Todos.Due, "⚠ ")
+	fillTodoPool(t.duePool, t.dueRaw, snap.Todos.Due, "⚠ ")
 	showIf(t.dueParent, len(snap.Todos.Due) > 0)
 
 	t.activeParent.SetTitle(fmt.Sprintf("📋 Active todos (%d)", len(snap.Todos.Active)))
-	fillTodoPool(t.activePool, snap.Todos.Active, "")
+	fillTodoPool(t.activePool, t.activeRaw, snap.Todos.Active, "")
 	showIf(t.activeParent, len(snap.Todos.Active) > 0)
 
 	var stats []string
@@ -337,12 +393,14 @@ func fillPRPool(pool []*systray.MenuItem, urls []string, prs []github.PR) {
 	}
 }
 
-func fillTodoPool(pool []*systray.MenuItem, todos []bm.TodoItem, prefix string) {
+func fillTodoPool(pool []*systray.MenuItem, raw []string, todos []bm.TodoItem, prefix string) {
 	for i, mi := range pool {
 		if i < len(todos) {
 			mi.SetTitle(prefix + oneLine(todos[i].Text, labelWidth))
+			raw[i] = todos[i].Raw
 			mi.Show()
 		} else {
+			raw[i] = ""
 			mi.Hide()
 		}
 	}

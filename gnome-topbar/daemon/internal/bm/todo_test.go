@@ -56,3 +56,21 @@ func TestParseTodos(t *testing.T) {
 		}
 	}
 }
+
+func TestParseTodosKeepsRawLine(t *testing.T) {
+	md := "## Active\n- [ ] [2026-06-04] ship the thing\n- [ ] no date here\n## Done\n- [x] old\n"
+	today := time.Date(2026, 6, 4, 9, 0, 0, 0, time.UTC)
+	active, _ := ParseTodos(md, today)
+	if len(active) != 2 {
+		t.Fatalf("want 2 active, got %d", len(active))
+	}
+	if active[0].Raw != "- [ ] [2026-06-04] ship the thing" {
+		t.Errorf("raw[0] = %q", active[0].Raw)
+	}
+	if active[0].Text != "ship the thing" {
+		t.Errorf("text[0] = %q (date prefix should be stripped for display)", active[0].Text)
+	}
+	if active[1].Raw != "- [ ] no date here" {
+		t.Errorf("raw[1] = %q", active[1].Raw)
+	}
+}

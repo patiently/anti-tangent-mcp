@@ -1,5 +1,6 @@
-// Package server exposes the daemon snapshot over a loopback, bearer-protected
-// JSON API consumed by the GNOME extension.
+// Package server exposes the daemon over a loopback HTTP listener: a
+// bearer-protected JSON API (/state, /search, /ack), a cookie/token-authed HTML
+// UI (/ui/*) opened in the in-container browser, and a public /assets route.
 package server
 
 import (
@@ -15,6 +16,14 @@ type Provider interface {
 	Snapshot() state.Snapshot
 	Search(ctx context.Context, q string) ([]bm.SearchResult, error)
 	Ack(ids []string)
+	ReadNote(ctx context.Context, identifier string) (string, error)
+	AppendTodo(ctx context.Context, text string) error
+	ListHowtos(ctx context.Context) ([]bm.SearchResult, error)
+	ListGotchas(ctx context.Context) ([]bm.SearchResult, error)
+	ListModules(ctx context.Context) ([]bm.SearchResult, error)
+	ListFeatures(ctx context.Context) ([]bm.SearchResult, error)
+	ListDecisions(ctx context.Context) ([]bm.SearchResult, error)
+	ListMyNotes(ctx context.Context) ([]bm.SearchResult, error)
 }
 
 func New(p Provider, token string) http.Handler {
@@ -44,13 +53,14 @@ func New(p Provider, token string) http.Handler {
 		p.Ack(body.EventIDs)
 		writeJSON(w, map[string]any{"acked": len(body.EventIDs)})
 	}))
+	registerUI(mux, p, token)
 	return mux
 }
 
 func auth(token string, next http.HandlerFunc) http.HandlerFunc {
 	want := "Bearer " + token
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != want {
+		if !tokenOK(want, r.Header.Get("Authorization")) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

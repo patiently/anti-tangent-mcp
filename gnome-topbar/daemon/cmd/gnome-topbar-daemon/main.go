@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -107,11 +108,29 @@ func main() {
 		}
 	}()
 
-	tr := tray.New(p, func(url string) {
-		if err := tray.OpenURIOnHost(url); err != nil {
-			log.Error("open url", "url", url, "err", err)
+	localBase := fmt.Sprintf("http://127.0.0.1:%d", cfg.ListenPort)
+	// openLocal opens a daemon UI page in the in-container browser. path must be
+	// a bare path with no query component (the token is appended as ?t=).
+	openLocal := func(path string) {
+		u := localBase + path + "?t=" + url.QueryEscape(cfg.APIToken)
+		if err := tray.OpenLocal(u); err != nil {
+			log.Error("open local ui", "path", path, "err", err)
 		}
-	}, func(ids []string) { p.Ack(ids) })
+	}
+	actions := tray.Actions{
+		OpenSearch:  func() { openLocal("/ui/search") },
+		OpenNewTodo: func() { openLocal("/ui/new-todo") },
+		MarkDone: func(rawLine string) {
+			if err := p.MarkTodoDone(ctx, rawLine); err != nil {
+				log.Error("mark todo done", "err", err)
+			}
+		},
+	}
+	tr := tray.New(p, func(u string) {
+		if err := tray.OpenURIOnHost(u); err != nil {
+			log.Error("open url", "url", u, "err", err)
+		}
+	}, func(ids []string) { p.Ack(ids) }, actions)
 
 	tr.Run(ctx) // blocks until Quit / ctx cancel
 	cancel()
@@ -280,7 +299,73 @@ func (p *Poller) RefreshNow(ctx context.Context) {
 }
 
 func (p *Poller) Search(ctx context.Context, q string) ([]bm.SearchResult, error) {
-	return p.bm.SearchEpicsStories(ctx, q)
+	return p.bm.SearchKnowledge(ctx, q)
+}
+
+// ListHowtos returns all howto notes (used by the /ui/howtos browse page).
+func (p *Poller) ListHowtos(ctx context.Context) ([]bm.SearchResult, error) {
+	return p.bm.ListHowtos(ctx)
+}
+
+// ListGotchas returns all gotcha notes (used by the /ui/gotchas browse page).
+func (p *Poller) ListGotchas(ctx context.Context) ([]bm.SearchResult, error) {
+	return p.bm.ListGotchas(ctx)
+}
+
+// ListModules returns all module notes (used by the /ui/modules browse page).
+func (p *Poller) ListModules(ctx context.Context) ([]bm.SearchResult, error) {
+	return p.bm.ListModules(ctx)
+}
+
+// ListFeatures returns all feature notes (used by the /ui/features browse page).
+func (p *Poller) ListFeatures(ctx context.Context) ([]bm.SearchResult, error) {
+	return p.bm.ListFeatures(ctx)
+}
+
+// ListDecisions returns all decision notes (used by the /ui/decisions browse page).
+func (p *Poller) ListDecisions(ctx context.Context) ([]bm.SearchResult, error) {
+	return p.bm.ListDecisions(ctx)
+}
+
+// ListMyNotes returns the operator's personal notes (used by the /ui/notes page).
+func (p *Poller) ListMyNotes(ctx context.Context) ([]bm.SearchResult, error) {
+	if p.cfg.BMUsername == "" {
+		return nil, fmt.Errorf("bm_username not set")
+	}
+	return p.bm.ListMyNotes(ctx, p.cfg.BMUsername)
+}
+
+// ReadNote returns the raw markdown of a Basic Memory note (used by the note
+// view). identifier is caller-supplied, so unlike the write methods there is no
+// BMUsername guard here.
+func (p *Poller) ReadNote(ctx context.Context, identifier string) (string, error) {
+	return p.bm.ReadNote(ctx, identifier)
+}
+
+// AppendTodo adds a bullet to the rolling todo note, then refreshes BM so the
+// tray reflects it on the next render.
+func (p *Poller) AppendTodo(ctx context.Context, text string) error {
+	if p.cfg.BMUsername == "" {
+		return fmt.Errorf("bm_username not set")
+	}
+	if err := p.bm.AppendTodo(ctx, p.cfg.BMUsername, text); err != nil {
+		return err
+	}
+	p.refreshBM(ctx)
+	return nil
+}
+
+// MarkTodoDone ticks a specific bullet, then refreshes BM. rawLine must be the
+// full verbatim source bullet (TodoItem.Raw), not an index or display text.
+func (p *Poller) MarkTodoDone(ctx context.Context, rawLine string) error {
+	if p.cfg.BMUsername == "" {
+		return fmt.Errorf("bm_username not set")
+	}
+	if err := p.bm.MarkTodoDone(ctx, p.cfg.BMUsername, rawLine, time.Now()); err != nil {
+		return err
+	}
+	p.refreshBM(ctx)
+	return nil
 }
 
 func (p *Poller) Ack(ids []string) {
