@@ -162,5 +162,8 @@ func tokenOK(want, got string) bool {
 
 func writeHTML(w http.ResponseWriter, s string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Belt-and-suspenders: never leak the ?t= token (which rides the first-hit
+	// URL) via a Referer header should an external resource ever be added.
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	_, _ = fmt.Fprint(w, s)
 }

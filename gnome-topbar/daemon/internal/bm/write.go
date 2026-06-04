@@ -35,7 +35,10 @@ func (c *Client) MarkTodoDone(ctx context.Context, username, rawLine string, tod
 		"operation":  "find_replace",
 		"find_text":  rawLine,
 		"content":    replacement,
-		"project":    c.project,
+		// expected_replacements=1 makes a stale / already-ticked / whitespace-
+		// drifted line surface as a tool error instead of a silent 0-match no-op.
+		"expected_replacements": 1,
+		"project":               c.project,
 	})
 	return err
 }

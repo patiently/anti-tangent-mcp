@@ -1,5 +1,6 @@
-// Package server exposes the daemon snapshot over a loopback, bearer-protected
-// JSON API consumed by the GNOME extension.
+// Package server exposes the daemon over a loopback HTTP listener: a
+// bearer-protected JSON API (/state, /search, /ack), a cookie/token-authed HTML
+// UI (/ui/*) opened in the in-container browser, and a public /assets route.
 package server
 
 import (

@@ -53,4 +53,7 @@ func TestMarkTodoDoneCall(t *testing.T) {
 	if _, bad := fc.last.args["replace_text"]; bad {
 		t.Errorf("must not send replace_text (BM rejects it)")
 	}
+	if fc.last.args["expected_replacements"] != 1 {
+		t.Errorf("expected_replacements = %v (want 1, so a stale click errors instead of no-op)", fc.last.args["expected_replacements"])
+	}
 }
