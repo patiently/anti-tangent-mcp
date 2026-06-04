@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -41,5 +42,15 @@ func OpenLocal(rawURL string) error {
 	if err != nil || u.Scheme != "http" || (u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost") {
 		return fmt.Errorf("refusing non-loopback URL: %q", rawURL)
 	}
-	return exec.Command("xdg-open", rawURL).Start()
+	cmd := exec.Command("xdg-open", rawURL)
+	// Detach into a new session so the browser isn't tied to the daemon's
+	// process group, and reap the launcher in a goroutine so it doesn't linger
+	// as a zombie — the daemon is long-lived, so a bare Start() without Wait()
+	// would accumulate defunct xdg-open children over a session.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
