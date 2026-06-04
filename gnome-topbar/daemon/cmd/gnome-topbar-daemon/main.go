@@ -299,12 +299,17 @@ func (p *Poller) RefreshNow(ctx context.Context) {
 }
 
 func (p *Poller) Search(ctx context.Context, q string) ([]bm.SearchResult, error) {
-	return p.bm.SearchEpicsStories(ctx, q)
+	return p.bm.SearchKnowledge(ctx, q)
 }
 
 // ListHowtos returns all howto notes (used by the /ui/howtos browse page).
 func (p *Poller) ListHowtos(ctx context.Context) ([]bm.SearchResult, error) {
 	return p.bm.ListHowtos(ctx)
+}
+
+// ListGotchas returns all gotcha notes (used by the /ui/gotchas browse page).
+func (p *Poller) ListGotchas(ctx context.Context) ([]bm.SearchResult, error) {
+	return p.bm.ListGotchas(ctx)
 }
 
 // ListMyNotes returns the operator's personal notes (used by the /ui/notes page).

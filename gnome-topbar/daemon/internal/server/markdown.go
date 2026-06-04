@@ -96,8 +96,8 @@ ul.cards li a{font-weight:600}
 const topbar = `<header class="topbar">` +
 	`<a class="brand" href="/ui/search">🛠 gnome-topbar</a>` +
 	`<form class="search" method="GET" action="/ui/search/results">` +
-	`<input name="q" placeholder="Search epics &amp; stories…" aria-label="Search epics and stories"></form>` +
-	`<nav><a href="/ui/howtos">Howtos</a><a href="/ui/notes">Notes</a><a href="/ui/new-todo">New todo</a></nav>` +
+	`<input name="q" placeholder="Search epics, stories &amp; gotchas…" aria-label="Search epics, stories and gotchas"></form>` +
+	`<nav><a href="/ui/howtos">Howtos</a><a href="/ui/gotchas">Gotchas</a><a href="/ui/notes">Notes</a><a href="/ui/new-todo">New todo</a></nav>` +
 	`</header>`
 
 // pageShell wraps body HTML in a dark-themed document with the sticky topbar and

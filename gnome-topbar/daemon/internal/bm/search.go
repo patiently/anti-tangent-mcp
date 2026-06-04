@@ -13,13 +13,17 @@ type SearchResult struct {
 	Snippet   string `json:"snippet"`
 }
 
-// SearchEpicsStories runs a Basic Memory search limited to epic/story notes.
-func (c *Client) SearchEpicsStories(ctx context.Context, query string) ([]SearchResult, error) {
+// SearchKnowledge runs a Basic Memory full-text search across the work/lesson
+// note types surfaced by the tray search box: epics, stories, and gotchas.
+// page_size is raised above Basic Memory's default of 10 so an exact ticket-ID
+// match isn't buried beneath the many notes that merely mention it in passing.
+func (c *Client) SearchKnowledge(ctx context.Context, query string) ([]SearchResult, error) {
 	raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
 		"query":         query,
-		"note_types":    []string{"epic", "story"},
+		"note_types":    []string{"epic", "story", "gotcha"},
 		"project":       c.project,
 		"output_format": "json",
+		"page_size":     50,
 	})
 	if err != nil {
 		return nil, err
@@ -32,6 +36,20 @@ func (c *Client) SearchEpicsStories(ctx context.Context, query string) ([]Search
 func (c *Client) ListHowtos(ctx context.Context) ([]SearchResult, error) {
 	raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
 		"note_types":    []string{"howto"},
+		"project":       c.project,
+		"output_format": "json",
+		"page_size":     100,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return parseSearch(raw)
+}
+
+// ListGotchas returns all gotcha notes (module-scoped lessons learned).
+func (c *Client) ListGotchas(ctx context.Context) ([]SearchResult, error) {
+	raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
+		"note_types":    []string{"gotcha"},
 		"project":       c.project,
 		"output_format": "json",
 		"page_size":     100,

@@ -22,10 +22,11 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 	mux.HandleFunc("/ui/search", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
 		writeHTML(w, pageShell("gnome-topbar", `<h1>gnome-topbar</h1>`+
 			`<form method="GET" action="/ui/search/results">`+
-			`<input type="text" name="q" autofocus placeholder="Search epics &amp; stories…"> <button>Search</button></form>`+
+			`<input type="text" name="q" autofocus placeholder="Search epics, stories &amp; gotchas…"> <button>Search</button></form>`+
 			`<p class="muted">Or browse:</p>`+
 			`<ul class="cards">`+
 			`<li><a href="/ui/howtos">📓 Howtos</a></li>`+
+			`<li><a href="/ui/gotchas">⚠️ Gotchas</a></li>`+
 			`<li><a href="/ui/notes">🗒 My notes</a></li>`+
 			`<li><a href="/ui/new-todo">➕ New todo</a></li>`+
 			`</ul>`))
@@ -38,7 +39,7 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		writeHTML(w, listPage("Results for "+q, res, "No epics or stories matched."))
+		writeHTML(w, listPage("Results for "+q, res, "No epics, stories, or gotchas matched."))
 	}))
 
 	mux.HandleFunc("/ui/howtos", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +49,15 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 			return
 		}
 		writeHTML(w, listPage("Howtos", res, "No howtos found."))
+	}))
+
+	mux.HandleFunc("/ui/gotchas", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
+		res, err := p.ListGotchas(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		writeHTML(w, listPage("Gotchas", res, "No gotchas found."))
 	}))
 
 	mux.HandleFunc("/ui/notes", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {

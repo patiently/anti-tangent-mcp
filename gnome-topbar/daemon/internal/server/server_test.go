@@ -28,6 +28,9 @@ func (f *fakeProvider) AppendTodo(context.Context, string) error         { retur
 func (f *fakeProvider) ListHowtos(context.Context) ([]bm.SearchResult, error) {
 	return []bm.SearchResult{{Title: "H", Type: "howto", Permalink: "p/howtos/h/main"}}, nil
 }
+func (f *fakeProvider) ListGotchas(context.Context) ([]bm.SearchResult, error) {
+	return []bm.SearchResult{{Title: "G", Type: "gotcha", Permalink: "p/gotchas/0001-g/main"}}, nil
+}
 func (f *fakeProvider) ListMyNotes(context.Context) ([]bm.SearchResult, error) {
 	return []bm.SearchResult{{Title: "N", Type: "personal_note", Permalink: "u/notes/n/main"}}, nil
 }

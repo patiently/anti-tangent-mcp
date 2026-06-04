@@ -18,6 +18,7 @@ type Provider interface {
 	ReadNote(ctx context.Context, identifier string) (string, error)
 	AppendTodo(ctx context.Context, text string) error
 	ListHowtos(ctx context.Context) ([]bm.SearchResult, error)
+	ListGotchas(ctx context.Context) ([]bm.SearchResult, error)
 	ListMyNotes(ctx context.Context) ([]bm.SearchResult, error)
 }
 

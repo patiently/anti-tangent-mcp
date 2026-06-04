@@ -17,6 +17,7 @@ type fakeProv struct {
 	note     string
 	appended string
 	howtos   []bm.SearchResult
+	gotchas  []bm.SearchResult
 	notes    []bm.SearchResult
 }
 
@@ -29,6 +30,7 @@ func (f *fakeProv) ReadNote(context.Context, string) (string, error)       { ret
 func (f *fakeProv) AppendTodo(_ context.Context, text string) error        { f.appended = text; return nil }
 func (f *fakeProv) ListHowtos(context.Context) ([]bm.SearchResult, error)  { return f.howtos, nil }
 func (f *fakeProv) ListMyNotes(context.Context) ([]bm.SearchResult, error) { return f.notes, nil }
+func (f *fakeProv) ListGotchas(context.Context) ([]bm.SearchResult, error) { return f.gotchas, nil }
 
 const tok = "secret-token"
 
@@ -146,6 +148,21 @@ func TestUINotesLists(t *testing.T) {
 	body := w.Body.String()
 	if w.Code != 200 || !strings.Contains(body, "My Note") {
 		t.Fatalf("code %d body=%s", w.Code, body)
+	}
+}
+
+func TestUIGotchasLists(t *testing.T) {
+	p := &fakeProv{gotchas: []bm.SearchResult{{Title: "Koog wiring gotcha", Type: "gotcha", Permalink: "monorepo/gotchas/0001-koog/main"}}}
+	r := httptest.NewRequest("GET", "/ui/gotchas", nil)
+	r.AddCookie(&http.Cookie{Name: "gtb_session", Value: tok})
+	w := httptest.NewRecorder()
+	srv(p).ServeHTTP(w, r)
+	body := w.Body.String()
+	if w.Code != 200 || !strings.Contains(body, "Koog wiring gotcha") {
+		t.Fatalf("code %d body=%s", w.Code, body)
+	}
+	if !strings.Contains(body, `href="/ui/note?id=monorepo%2Fgotchas%2F0001-koog%2Fmain"`) {
+		t.Errorf("gotcha not linked to note view; body=%s", body)
 	}
 }
 
