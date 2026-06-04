@@ -109,6 +109,8 @@ func main() {
 	}()
 
 	localBase := fmt.Sprintf("http://127.0.0.1:%d", cfg.ListenPort)
+	// openLocal opens a daemon UI page in the in-container browser. path must be
+	// a bare path with no query component (the token is appended as ?t=).
 	openLocal := func(path string) {
 		u := localBase + path + "?t=" + url.QueryEscape(cfg.APIToken)
 		if err := tray.OpenLocal(u); err != nil {
@@ -300,7 +302,9 @@ func (p *Poller) Search(ctx context.Context, q string) ([]bm.SearchResult, error
 	return p.bm.SearchEpicsStories(ctx, q)
 }
 
-// ReadNote returns the raw markdown of a Basic Memory note (used by the note view).
+// ReadNote returns the raw markdown of a Basic Memory note (used by the note
+// view). identifier is caller-supplied, so unlike the write methods there is no
+// BMUsername guard here.
 func (p *Poller) ReadNote(ctx context.Context, identifier string) (string, error) {
 	return p.bm.ReadNote(ctx, identifier)
 }
@@ -318,7 +322,8 @@ func (p *Poller) AppendTodo(ctx context.Context, text string) error {
 	return nil
 }
 
-// MarkTodoDone ticks a specific bullet, then refreshes BM.
+// MarkTodoDone ticks a specific bullet, then refreshes BM. rawLine must be the
+// full verbatim source bullet (TodoItem.Raw), not an index or display text.
 func (p *Poller) MarkTodoDone(ctx context.Context, rawLine string) error {
 	if p.cfg.BMUsername == "" {
 		return fmt.Errorf("bm_username not set")
