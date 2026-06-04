@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"strings"
 
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
 )
@@ -101,6 +102,10 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 
 	mux.HandleFunc("/ui/note", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
+		if id == "" {
+			http.Error(w, "missing id", http.StatusBadRequest)
+			return
+		}
 		md, err := p.ReadNote(r.Context(), id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -120,7 +125,7 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 				http.Error(w, "bad form", http.StatusBadRequest)
 				return
 			}
-			text := r.FormValue("text")
+			text := strings.TrimSpace(r.FormValue("text"))
 			if text == "" {
 				http.Error(w, "empty todo", http.StatusBadRequest)
 				return

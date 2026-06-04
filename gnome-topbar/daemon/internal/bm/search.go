@@ -3,6 +3,7 @@ package bm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -83,6 +84,7 @@ func (c *Client) ListMyNotes(ctx context.Context, username string) ([]SearchResu
 func (c *Client) listAllByTypes(ctx context.Context, noteTypes []string) ([]SearchResult, error) {
 	const pageSize, maxListPages = 100, 20
 	var all []SearchResult
+	var hasMore bool
 	for page := 1; page <= maxListPages; page++ {
 		raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
 			"note_types":    noteTypes,
@@ -94,14 +96,19 @@ func (c *Client) listAllByTypes(ctx context.Context, noteTypes []string) ([]Sear
 		if err != nil {
 			return nil, err
 		}
-		res, hasMore, err := parseSearchPage(raw)
+		res, pageHasMore, err := parseSearchPage(raw)
 		if err != nil {
 			return nil, err
 		}
 		all = append(all, res...)
-		if !hasMore {
+		hasMore = pageHasMore
+		if !pageHasMore {
 			break
 		}
+	}
+	// Fail loudly rather than silently hide notes past the cap.
+	if hasMore {
+		return nil, fmt.Errorf("search_notes exceeded the %d-page cap for note_types=%v; refusing to return partial results", maxListPages, noteTypes)
 	}
 	return all, nil
 }

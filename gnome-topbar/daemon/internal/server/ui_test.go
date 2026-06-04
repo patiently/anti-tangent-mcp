@@ -80,6 +80,9 @@ func TestUINavigationViaCookie(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("cookie auth failed: %d", w.Code)
 	}
+	if got := w.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
 	if !strings.Contains(w.Body.String(), "<h1>Next</h1>") {
 		t.Error("note not rendered via cookie auth")
 	}
