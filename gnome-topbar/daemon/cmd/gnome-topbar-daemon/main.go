@@ -283,6 +283,36 @@ func (p *Poller) Search(ctx context.Context, q string) ([]bm.SearchResult, error
 	return p.bm.SearchEpicsStories(ctx, q)
 }
 
+// ReadNote returns the raw markdown of a Basic Memory note (used by the note view).
+func (p *Poller) ReadNote(ctx context.Context, identifier string) (string, error) {
+	return p.bm.ReadNote(ctx, identifier)
+}
+
+// AppendTodo adds a bullet to the rolling todo note, then refreshes BM so the
+// tray reflects it on the next render.
+func (p *Poller) AppendTodo(ctx context.Context, text string) error {
+	if p.cfg.BMUsername == "" {
+		return fmt.Errorf("bm_username not set")
+	}
+	if err := p.bm.AppendTodo(ctx, p.cfg.BMUsername, text); err != nil {
+		return err
+	}
+	p.refreshBM(ctx)
+	return nil
+}
+
+// MarkTodoDone ticks a specific bullet, then refreshes BM.
+func (p *Poller) MarkTodoDone(ctx context.Context, rawLine string) error {
+	if p.cfg.BMUsername == "" {
+		return fmt.Errorf("bm_username not set")
+	}
+	if err := p.bm.MarkTodoDone(ctx, p.cfg.BMUsername, rawLine, time.Now()); err != nil {
+		return err
+	}
+	p.refreshBM(ctx)
+	return nil
+}
+
 func (p *Poller) Ack(ids []string) {
 	if err := p.store.MarkSeen(ids); err != nil {
 		p.log.Warn("ack persist failed (events may re-notify after restart)", "err", err)
