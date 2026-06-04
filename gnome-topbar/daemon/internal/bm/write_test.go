@@ -46,7 +46,11 @@ func TestMarkTodoDoneCall(t *testing.T) {
 	if fc.last.args["find_text"] != raw {
 		t.Errorf("find_text = %v", fc.last.args["find_text"])
 	}
-	if fc.last.args["replace_text"] != "- [x] [2026-06-04] ship the thing — done 2026-06-04" {
-		t.Errorf("replace_text = %v", fc.last.args["replace_text"])
+	// BM find_replace puts the replacement in `content`, not `replace_text`.
+	if fc.last.args["content"] != "- [x] [2026-06-04] ship the thing — done 2026-06-04" {
+		t.Errorf("content = %v", fc.last.args["content"])
+	}
+	if _, bad := fc.last.args["replace_text"]; bad {
+		t.Errorf("must not send replace_text (BM rejects it)")
 	}
 }
