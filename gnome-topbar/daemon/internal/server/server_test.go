@@ -23,6 +23,8 @@ func (f *fakeProvider) Search(ctx context.Context, q string) ([]bm.SearchResult,
 	return []bm.SearchResult{{Title: "T", Type: "epic"}}, nil
 }
 func (f *fakeProvider) Ack(ids []string) { f.acked = append(f.acked, ids...) }
+func (f *fakeProvider) ReadNote(context.Context, string) (string, error) { return "", nil }
+func (f *fakeProvider) AppendTodo(context.Context, string) error         { return nil }
 
 func newTestServer() (*httptest.Server, *fakeProvider) {
 	fp := &fakeProvider{}

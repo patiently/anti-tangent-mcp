@@ -15,6 +15,8 @@ type Provider interface {
 	Snapshot() state.Snapshot
 	Search(ctx context.Context, q string) ([]bm.SearchResult, error)
 	Ack(ids []string)
+	ReadNote(ctx context.Context, identifier string) (string, error)
+	AppendTodo(ctx context.Context, text string) error
 }
 
 func New(p Provider, token string) http.Handler {
@@ -44,13 +46,14 @@ func New(p Provider, token string) http.Handler {
 		p.Ack(body.EventIDs)
 		writeJSON(w, map[string]any{"acked": len(body.EventIDs)})
 	}))
+	registerUI(mux, p, token)
 	return mux
 }
 
 func auth(token string, next http.HandlerFunc) http.HandlerFunc {
 	want := "Bearer " + token
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != want {
+		if !tokenOK(want, r.Header.Get("Authorization")) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
