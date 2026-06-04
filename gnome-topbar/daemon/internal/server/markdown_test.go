@@ -98,3 +98,16 @@ func TestRenderNoteHTML_TitleEscaped(t *testing.T) {
 		t.Errorf("title not HTML-escaped; out=%s", out)
 	}
 }
+
+func TestRenderNoteHTML_DarkThemeAndTopbar(t *testing.T) {
+	out, err := renderNoteHTML("d", "# H\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `class="topbar"`) {
+		t.Error("topbar missing from note page")
+	}
+	if !strings.Contains(out, `theme:"dark"`) {
+		t.Error("mermaid dark theme missing")
+	}
+}

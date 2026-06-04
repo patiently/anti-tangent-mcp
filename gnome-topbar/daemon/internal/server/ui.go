@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
 )
 
 const sessionCookie = "gtb_session"
@@ -18,10 +20,15 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 	})
 
 	mux.HandleFunc("/ui/search", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
-		writeHTML(w, pageShell("Search", `<h1>Search epics &amp; stories</h1>`+
+		writeHTML(w, pageShell("gnome-topbar", `<h1>gnome-topbar</h1>`+
 			`<form method="GET" action="/ui/search/results">`+
-			`<input name="q" autofocus placeholder="query" style="font-size:1rem;padding:.4rem;width:70%">`+
-			`<button style="font-size:1rem;padding:.4rem .8rem">Search</button></form>`))
+			`<input type="text" name="q" autofocus placeholder="Search epics &amp; stories…"> <button>Search</button></form>`+
+			`<p class="muted">Or browse:</p>`+
+			`<ul class="cards">`+
+			`<li><a href="/ui/howtos">📓 Howtos</a></li>`+
+			`<li><a href="/ui/notes">🗒 My notes</a></li>`+
+			`<li><a href="/ui/new-todo">➕ New todo</a></li>`+
+			`</ul>`))
 	}))
 
 	mux.HandleFunc("/ui/search/results", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
@@ -31,18 +38,25 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		body := `<h1>Results for ` + html.EscapeString(q) + `</h1>`
-		if len(res) == 0 {
-			body += `<p>No epics or stories matched.</p>`
+		writeHTML(w, listPage("Results for "+q, res, "No epics or stories matched."))
+	}))
+
+	mux.HandleFunc("/ui/howtos", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
+		res, err := p.ListHowtos(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
 		}
-		body += `<ul>`
-		for _, rr := range res {
-			body += `<li><a href="` + noteHref(rr.Permalink) + `">` + html.EscapeString(rr.Title) + `</a> ` +
-				`<small>(` + html.EscapeString(rr.Type) + `)</small><br><small>` +
-				html.EscapeString(rr.Snippet) + `</small></li>`
+		writeHTML(w, listPage("Howtos", res, "No howtos found."))
+	}))
+
+	mux.HandleFunc("/ui/notes", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
+		res, err := p.ListMyNotes(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
 		}
-		body += `</ul><p><a href="/ui/search">New search</a></p>`
-		writeHTML(w, pageShell("Results", body))
+		writeHTML(w, listPage("My notes", res, "No personal notes yet."))
 	}))
 
 	mux.HandleFunc("/ui/note", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
@@ -81,9 +95,31 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 		}
 		writeHTML(w, pageShell("New todo", `<h1>New todo</h1>`+
 			`<form method="POST" action="/ui/new-todo">`+
-			`<input name="text" autofocus placeholder="what needs doing" style="font-size:1rem;padding:.4rem;width:70%">`+
-			`<button style="font-size:1rem;padding:.4rem .8rem">Add</button></form>`))
+			`<input type="text" name="text" autofocus placeholder="what needs doing"> `+
+			`<button>Add</button></form>`))
 	}))
+}
+
+// listPage renders a titled list of Basic Memory notes as cards linking to the
+// note view. emptyMsg is shown when there are no results.
+func listPage(title string, res []bm.SearchResult, emptyMsg string) string {
+	body := `<h1>` + html.EscapeString(title) + `</h1>`
+	if len(res) == 0 {
+		body += `<p class="muted">` + html.EscapeString(emptyMsg) + `</p>`
+	}
+	body += `<ul class="cards">`
+	for _, rr := range res {
+		body += `<li><a href="` + noteHref(rr.Permalink) + `">` + html.EscapeString(rr.Title) + `</a>`
+		if rr.Type != "" {
+			body += `<span class="tag">` + html.EscapeString(rr.Type) + `</span>`
+		}
+		if rr.Snippet != "" {
+			body += `<div class="snippet">` + html.EscapeString(rr.Snippet) + `</div>`
+		}
+		body += `</li>`
+	}
+	body += `</ul>`
+	return pageShell(title, body)
 }
 
 // uiAuth allows a request bearing a valid ?t= token OR a valid session cookie.

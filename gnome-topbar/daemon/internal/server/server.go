@@ -17,6 +17,8 @@ type Provider interface {
 	Ack(ids []string)
 	ReadNote(ctx context.Context, identifier string) (string, error)
 	AppendTodo(ctx context.Context, text string) error
+	ListHowtos(ctx context.Context) ([]bm.SearchResult, error)
+	ListMyNotes(ctx context.Context) ([]bm.SearchResult, error)
 }
 
 func New(p Provider, token string) http.Handler {

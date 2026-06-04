@@ -16,6 +16,8 @@ type fakeProv struct {
 	results  []bm.SearchResult
 	note     string
 	appended string
+	howtos   []bm.SearchResult
+	notes    []bm.SearchResult
 }
 
 func (f *fakeProv) Snapshot() state.Snapshot { return state.Snapshot{} }
@@ -23,8 +25,10 @@ func (f *fakeProv) Ack([]string)             {}
 func (f *fakeProv) Search(context.Context, string) ([]bm.SearchResult, error) {
 	return f.results, nil
 }
-func (f *fakeProv) ReadNote(context.Context, string) (string, error) { return f.note, nil }
-func (f *fakeProv) AppendTodo(_ context.Context, text string) error  { f.appended = text; return nil }
+func (f *fakeProv) ReadNote(context.Context, string) (string, error)       { return f.note, nil }
+func (f *fakeProv) AppendTodo(_ context.Context, text string) error        { f.appended = text; return nil }
+func (f *fakeProv) ListHowtos(context.Context) ([]bm.SearchResult, error)  { return f.howtos, nil }
+func (f *fakeProv) ListMyNotes(context.Context) ([]bm.SearchResult, error) { return f.notes, nil }
 
 const tok = "secret-token"
 
@@ -115,5 +119,45 @@ func TestAssetServedWithoutAuth(t *testing.T) {
 	}
 	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/javascript") {
 		t.Errorf("content-type = %q", ct)
+	}
+}
+
+func TestUIHowtosLists(t *testing.T) {
+	p := &fakeProv{howtos: []bm.SearchResult{{Title: "Runbook A", Type: "howto", Permalink: "monorepo/howtos/a/main"}}}
+	r := httptest.NewRequest("GET", "/ui/howtos", nil)
+	r.AddCookie(&http.Cookie{Name: "gtb_session", Value: tok})
+	w := httptest.NewRecorder()
+	srv(p).ServeHTTP(w, r)
+	body := w.Body.String()
+	if w.Code != 200 || !strings.Contains(body, "Runbook A") {
+		t.Fatalf("code %d body=%s", w.Code, body)
+	}
+	if !strings.Contains(body, `href="/ui/note?id=monorepo%2Fhowtos%2Fa%2Fmain"`) {
+		t.Errorf("howto not linked to note view; body=%s", body)
+	}
+}
+
+func TestUINotesLists(t *testing.T) {
+	p := &fakeProv{notes: []bm.SearchResult{{Title: "My Note", Type: "personal_note", Permalink: "alice/notes/x/main"}}}
+	r := httptest.NewRequest("GET", "/ui/notes", nil)
+	r.AddCookie(&http.Cookie{Name: "gtb_session", Value: tok})
+	w := httptest.NewRecorder()
+	srv(p).ServeHTTP(w, r)
+	body := w.Body.String()
+	if w.Code != 200 || !strings.Contains(body, "My Note") {
+		t.Fatalf("code %d body=%s", w.Code, body)
+	}
+}
+
+func TestUIPagesAreDarkWithTopbar(t *testing.T) {
+	r := httptest.NewRequest("GET", "/ui/search?t="+tok, nil)
+	w := httptest.NewRecorder()
+	srv(&fakeProv{}).ServeHTTP(w, r)
+	body := w.Body.String()
+	if !strings.Contains(body, `class="topbar"`) {
+		t.Error("topbar missing")
+	}
+	if !strings.Contains(body, "background:#16181d") {
+		t.Error("dark theme missing")
 	}
 }

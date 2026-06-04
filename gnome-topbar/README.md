@@ -74,5 +74,27 @@ tray renders the body with a staleness indicator.
 
 ### v0.2.0
 - Basic Memory search, rendered note view (mermaid + clickable inter-note links), and todo create — opened in the in-container browser.
+- Browse pages: **Howtos** (`/ui/howtos`) and **My notes** (`/ui/notes`).
+- Dark-themed UI with a sticky topbar (search + Howtos / Notes / New todo navigation) on every page.
 - Mark a todo done by clicking its tray row.
 - Refresh / Quit / Search / New-todo pinned to the top of the menu.
+
+## Known sandbox gotcha — Chrome hijacks the default browser
+
+The UI pages open in the **in-container Chrome** via `xdg-open`, which follows the
+XDG default-browser setting. On a fresh container Chrome's first run registers
+*itself* (`google-chrome.desktop`, which launches `/usr/bin/google-chrome-stable`
+**without** `--no-sandbox`) as the default, replacing the container-safe
+`chrome-sandbox.desktop` wrapper. The stock launcher then FATALs on namespace
+creation in the unprivileged container, so the *first* page open works but every
+later one silently fails (Chrome crashes instantly).
+
+Workaround (per session):
+
+```bash
+xdg-settings set default-web-browser chrome-sandbox.desktop
+```
+
+Durable fix (claude-sandbox image): add `--no-default-browser-check --no-first-run`
+to the `chrome-wrapper` `ARGS` so Chrome never re-registers itself, or point
+`google-chrome.desktop`'s `Exec` at the wrapper.

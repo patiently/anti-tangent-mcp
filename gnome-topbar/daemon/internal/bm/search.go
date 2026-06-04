@@ -3,6 +3,7 @@ package bm
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 type SearchResult struct {
@@ -24,6 +25,48 @@ func (c *Client) SearchEpicsStories(ctx context.Context, query string) ([]Search
 		return nil, err
 	}
 	return parseSearch(raw)
+}
+
+// ListHowtos returns all howto notes (project-knowledge runbooks), in the order
+// Basic Memory returns them.
+func (c *Client) ListHowtos(ctx context.Context) ([]SearchResult, error) {
+	raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
+		"note_types":    []string{"howto"},
+		"project":       c.project,
+		"output_format": "json",
+		"page_size":     100,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return parseSearch(raw)
+}
+
+// ListMyNotes returns the caller's personal notes — those under
+// "<username>/notes/". It filters by permalink prefix so a shared Basic Memory
+// project only ever surfaces the caller's own notes, never another user's.
+func (c *Client) ListMyNotes(ctx context.Context, username string) ([]SearchResult, error) {
+	raw, err := c.caller.CallTool(ctx, "search_notes", map[string]any{
+		"note_types":    []string{"personal_note"},
+		"project":       c.project,
+		"output_format": "json",
+		"page_size":     100,
+	})
+	if err != nil {
+		return nil, err
+	}
+	all, err := parseSearch(raw)
+	if err != nil {
+		return nil, err
+	}
+	prefix := username + "/notes/"
+	out := make([]SearchResult, 0, len(all))
+	for _, r := range all {
+		if strings.HasPrefix(r.Permalink, prefix) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 func parseSearch(raw string) ([]SearchResult, error) {

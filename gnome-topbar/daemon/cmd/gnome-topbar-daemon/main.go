@@ -302,6 +302,19 @@ func (p *Poller) Search(ctx context.Context, q string) ([]bm.SearchResult, error
 	return p.bm.SearchEpicsStories(ctx, q)
 }
 
+// ListHowtos returns all howto notes (used by the /ui/howtos browse page).
+func (p *Poller) ListHowtos(ctx context.Context) ([]bm.SearchResult, error) {
+	return p.bm.ListHowtos(ctx)
+}
+
+// ListMyNotes returns the operator's personal notes (used by the /ui/notes page).
+func (p *Poller) ListMyNotes(ctx context.Context) ([]bm.SearchResult, error) {
+	if p.cfg.BMUsername == "" {
+		return nil, fmt.Errorf("bm_username not set")
+	}
+	return p.bm.ListMyNotes(ctx, p.cfg.BMUsername)
+}
+
 // ReadNote returns the raw markdown of a Basic Memory note (used by the note
 // view). identifier is caller-supplied, so unlike the write methods there is no
 // BMUsername guard here.

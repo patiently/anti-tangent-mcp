@@ -30,3 +30,35 @@ func TestSearchEpicsStoriesParsesResults(t *testing.T) {
 		t.Fatalf("note_types=%v", fc.last.args["note_types"])
 	}
 }
+
+func TestListHowtosParses(t *testing.T) {
+	payload := `{"results":[{"title":"Runbook A","type":"entity","permalink":"monorepo/howtos/a/main","content":"body","metadata":{"note_type":"howto"}}]}`
+	fc := &fakeCaller{ret: payload}
+	c := New(fc, "main")
+	res, err := c.ListHowtos(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Title != "Runbook A" || res[0].Permalink != "monorepo/howtos/a/main" {
+		t.Fatalf("bad: %+v", res)
+	}
+	if types, _ := fc.last.args["note_types"].([]string); len(types) != 1 || types[0] != "howto" {
+		t.Fatalf("note_types=%v", fc.last.args["note_types"])
+	}
+}
+
+func TestListMyNotesFiltersByNamespace(t *testing.T) {
+	payload := `{"results":[
+	  {"title":"Mine","type":"entity","permalink":"alice/notes/mine/main","metadata":{"note_type":"personal_note"}},
+	  {"title":"Theirs","type":"entity","permalink":"bob/notes/theirs/main","metadata":{"note_type":"personal_note"}}
+	]}`
+	fc := &fakeCaller{ret: payload}
+	c := New(fc, "main")
+	res, err := c.ListMyNotes(context.Background(), "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 || res[0].Title != "Mine" {
+		t.Fatalf("want only alice's note, got %+v", res)
+	}
+}
