@@ -41,9 +41,48 @@ func TestClaudeClock(t *testing.T) {
 
 func ptrF(f float64) *float64 { return &f }
 
-func TestClaudeInlineLabels_PrimaryAccount(t *testing.T) {
+func TestBarFill(t *testing.T) {
+	cases := []struct {
+		pct  float64
+		want string
+	}{
+		{0, "🟩"}, {59, "🟩"}, {59.9, "🟩"},
+		{60, "🟨"}, {79, "🟨"}, {79.9, "🟨"},
+		{80, "🟥"}, {100, "🟥"}, {150, "🟥"},
+	}
+	for _, c := range cases {
+		if got := barFill(c.pct); got != c.want {
+			t.Errorf("barFill(%v) = %q, want %q", c.pct, got, c.want)
+		}
+	}
+}
+
+func TestUsageBar(t *testing.T) {
+	cases := []struct {
+		pct  float64
+		want string
+	}{
+		{0, "⬜⬜⬜⬜⬜"},
+		{3, "🟩⬜⬜⬜⬜"},   // nonzero rounds to 0 cells → forced to 1
+		{27, "🟩⬜⬜⬜⬜"},  // round(1.35) = 1
+		{38, "🟩🟩⬜⬜⬜"},  // round(1.9) = 2
+		{60, "🟨🟨🟨⬜⬜"},  // round(3.0) = 3, yellow
+		{65, "🟨🟨🟨⬜⬜"},  // round(3.25) = 3
+		{80, "🟥🟥🟥🟥⬜"},  // round(4.0) = 4, red
+		{82, "🟥🟥🟥🟥⬜"},  // round(4.1) = 4
+		{100, "🟥🟥🟥🟥🟥"},
+		{150, "🟥🟥🟥🟥🟥"}, // clamped to width
+	}
+	for _, c := range cases {
+		if got := usageBar(c.pct, barWidth); got != c.want {
+			t.Errorf("usageBar(%v) = %q, want %q", c.pct, got, c.want)
+		}
+	}
+}
+
+func TestClaudeOverviewLabels_PrimaryAccount(t *testing.T) {
 	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
-	reset5h := time.Date(2026, 6, 3, 11, 46, 0, 0, time.UTC) // ~2h41m out
+	reset5h := time.Date(2026, 6, 3, 11, 46, 0, 0, time.UTC)
 	reset7d := time.Date(2026, 6, 8, 20, 0, 0, 0, time.UTC)
 	cs := claudestats.Stats{
 		Present:     true,
@@ -58,23 +97,25 @@ func TestClaudeInlineLabels_PrimaryAccount(t *testing.T) {
 			},
 		},
 	}
-	got := claudeInlineLabels(cs, now)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 inline rows, got %d: %q", len(got), got)
+	got := claudeOverviewLabels(cs, now)
+	if len(got) != 1 {
+		t.Fatalf("single account → one overview row, got %d: %q", len(got), got)
 	}
-	if !strings.Contains(got[0], "5h") || !strings.Contains(got[0], "4%") || !strings.Contains(got[0], "in 2h41m") {
-		t.Errorf("5h row = %q, want 5h/4%%/in 2h41m", got[0])
+	row := got[0]
+	for _, want := range []string{"5h", "4%", "wk", "26%", "🟩"} {
+		if !strings.Contains(row, want) {
+			t.Errorf("overview row %q missing %q", row, want)
+		}
 	}
-	if !strings.Contains(got[1], "7d") || !strings.Contains(got[1], "26%") || !strings.Contains(got[1], "$84") || !strings.Contains(got[1], "in 5d") {
-		t.Errorf("7d row = %q, want 7d/26%%/$84/in 5d", got[1])
+	if strings.Contains(row, "$84") || strings.Contains(row, "resets") || strings.Contains(row, "in 2h") {
+		t.Errorf("overview must not carry cost/reset: %q", row)
 	}
-	// Single limit-account → no account-name prefix.
-	if strings.Contains(got[0], "default") {
-		t.Errorf("single account should not be prefixed with its name: %q", got[0])
+	if strings.Contains(row, "default") {
+		t.Errorf("single account should not be prefixed with its name: %q", row)
 	}
 }
 
-func TestClaudeInlineLabels_HighUtilizationWarns(t *testing.T) {
+func TestClaudeOverviewLabels_HighUtilizationWarnsRed(t *testing.T) {
 	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
 	reset := now.Add(time.Hour)
 	cs := claudestats.Stats{
@@ -85,24 +126,69 @@ func TestClaudeInlineLabels_HighUtilizationWarns(t *testing.T) {
 			}},
 		},
 	}
-	got := claudeInlineLabels(cs, now)
-	if len(got) != 1 || !strings.Contains(got[0], "⚠") {
-		t.Errorf("91%% utilization should warn with ⚠: %q", got)
+	got := claudeOverviewLabels(cs, now)
+	if len(got) != 1 || !strings.Contains(got[0], "⚠") || !strings.Contains(got[0], "🟥") {
+		t.Errorf("91%% utilization should warn (⚠) and fill red (🟥): %q", got)
 	}
 }
 
-func TestClaudeInlineLabels_AbsentOrNoLimits(t *testing.T) {
-	now := time.Now()
-	if got := claudeInlineLabels(claudestats.Stats{Present: false}, now); got != nil {
-		t.Errorf("absent stats → nil inline rows, got %q", got)
+func TestClaudeOverviewLabels_MultiAccountPrefixed(t *testing.T) {
+	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
+	reset := now.Add(time.Hour)
+	cs := claudestats.Stats{
+		Present: true, GeneratedAt: now,
+		Accounts: map[string]claudestats.Account{
+			"default": {Limits: &claudestats.Limits{
+				FiveHour: &claudestats.Window{Utilization: ptrF(27), ResetsAt: &reset},
+				SevenDay: &claudestats.Window{Utilization: ptrF(38), ResetsAt: &reset},
+			}},
+			"alt": {Limits: &claudestats.Limits{
+				FiveHour: &claudestats.Window{Utilization: ptrF(65), ResetsAt: &reset},
+			}},
+		},
 	}
-	// Present but the only account's limit fetch failed → no inline rows.
+	got := claudeOverviewLabels(cs, now)
+	if len(got) != 2 {
+		t.Fatalf("two limit-accounts → two rows, got %d: %q", len(got), got)
+	}
+	// accountsWithWindows sorts keys: "alt" < "default".
+	if !strings.Contains(got[0], "alt") || !strings.Contains(got[0], "🟨") || !strings.Contains(got[0], "65%") {
+		t.Errorf("alt row should be first, yellow, 65%%: %q", got[0])
+	}
+	if !strings.Contains(got[1], "default") || !strings.Contains(got[1], "wk") {
+		t.Errorf("default row should be second and carry the week window: %q", got[1])
+	}
+}
+
+func TestClaudeOverviewLabels_AbsentOrNoLimits(t *testing.T) {
+	now := time.Now()
+	if got := claudeOverviewLabels(claudestats.Stats{Present: false}, now); got != nil {
+		t.Errorf("absent stats → nil overview rows, got %q", got)
+	}
 	errMsg := "usage endpoint HTTP 401"
 	cs := claudestats.Stats{Present: true, GeneratedAt: now, Accounts: map[string]claudestats.Account{
 		"alt": {Limits: &claudestats.Limits{Error: &errMsg}},
 	}}
-	if got := claudeInlineLabels(cs, now); len(got) != 0 {
-		t.Errorf("limit-error-only account → no inline rows, got %q", got)
+	if got := claudeOverviewLabels(cs, now); len(got) != 0 {
+		t.Errorf("limit-error-only account → no overview rows, got %q", got)
+	}
+}
+
+func TestClaudeOverviewLabels_StaleMarker(t *testing.T) {
+	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
+	reset := now.Add(time.Hour)
+	cs := claudestats.Stats{
+		Present:     true,
+		GeneratedAt: now.Add(-15 * time.Minute), // stale
+		Accounts: map[string]claudestats.Account{
+			"default": {Limits: &claudestats.Limits{
+				FiveHour: &claudestats.Window{Utilization: ptrF(4), ResetsAt: &reset},
+			}},
+		},
+	}
+	got := claudeOverviewLabels(cs, now)
+	if len(got) == 0 || !strings.Contains(got[0], "stale") {
+		t.Errorf("stale snapshot should lead with a stale marker row: %q", got)
 	}
 }
 
@@ -166,24 +252,6 @@ func TestClaudeUsageRows_Detail(t *testing.T) {
 	}
 }
 
-func TestClaudeInlineLabels_StaleMarker(t *testing.T) {
-	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
-	reset := now.Add(time.Hour)
-	cs := claudestats.Stats{
-		Present:     true,
-		GeneratedAt: now.Add(-15 * time.Minute), // stale
-		Accounts: map[string]claudestats.Account{
-			"default": {Limits: &claudestats.Limits{
-				FiveHour: &claudestats.Window{Utilization: ptrF(4), ResetsAt: &reset},
-			}},
-		},
-	}
-	got := claudeInlineLabels(cs, now)
-	if len(got) == 0 || !strings.Contains(got[0], "stale") {
-		t.Errorf("stale snapshot should lead with a stale marker row: %q", got)
-	}
-}
-
 func TestActiveBlockGatedOnIsActive(t *testing.T) {
 	now := time.Now()
 	mk := func(active bool) string {
@@ -205,12 +273,55 @@ func TestEmptyWindowNotRendered(t *testing.T) {
 	cs := claudestats.Stats{Present: true, GeneratedAt: now, Accounts: map[string]claudestats.Account{
 		"default": {Limits: &claudestats.Limits{FiveHour: &claudestats.Window{}}}, // all-null window
 	}}
-	if got := claudeInlineLabels(cs, now); len(got) != 0 {
-		t.Errorf("all-null window should produce no inline row, got %q", got)
+	if got := claudeOverviewLabels(cs, now); len(got) != 0 {
+		t.Errorf("all-null window should produce no overview row, got %q", got)
 	}
 	rows := strings.Join(claudeUsageRows(cs, now), "\n")
 	if strings.Contains(rows, "5h") {
 		t.Errorf("all-null window should not render a bare 5h detail row:\n%s", rows)
+	}
+}
+
+func TestMaxKeyLen(t *testing.T) {
+	if got := maxKeyLen(nil); got != 0 {
+		t.Errorf("maxKeyLen(nil) = %d, want 0", got)
+	}
+	if got := maxKeyLen([]string{"alt", "default", "x"}); got != 7 {
+		t.Errorf("maxKeyLen = %d, want 7 (len \"default\")", got)
+	}
+}
+
+func TestClaudeOverviewLabels_UnknownUtilization(t *testing.T) {
+	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
+	reset := now.Add(time.Hour)
+	cs := claudestats.Stats{
+		Present: true, GeneratedAt: now,
+		Accounts: map[string]claudestats.Account{
+			// HasData via ResetsAt, but Utilization is unknown (nil).
+			"default": {Limits: &claudestats.Limits{
+				FiveHour: &claudestats.Window{ResetsAt: &reset},
+			}},
+		},
+	}
+	got := claudeOverviewLabels(cs, now)
+	if len(got) != 1 || !strings.Contains(got[0], "5h —") {
+		t.Errorf("unknown utilization should render '5h —' (no bar): %q", got)
+	}
+}
+
+func TestClaudeOverviewLabels_StaleNoWindows(t *testing.T) {
+	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
+	errMsg := "usage endpoint HTTP 401"
+	cs := claudestats.Stats{
+		Present:     true,
+		GeneratedAt: now.Add(-15 * time.Minute), // stale
+		Accounts: map[string]claudestats.Account{
+			"alt": {Limits: &claudestats.Limits{Error: &errMsg}}, // no renderable windows
+		},
+	}
+	got := claudeOverviewLabels(cs, now)
+	if len(got) != 1 || !strings.Contains(got[0], "stale") {
+		t.Errorf("stale + no windows should yield exactly the stale marker row: %q", got)
 	}
 }
 

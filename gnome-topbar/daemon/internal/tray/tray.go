@@ -30,7 +30,7 @@ const (
 	capActive    = 40
 	capStat      = 3
 	capErr       = 4  // per-source error rows
-	capClaude    = 8  // inline Claude 5h/7d rows (+ stale marker) across accounts
+	capClaude    = 8  // per-account bar overview rows (+ stale marker)
 	capClaudeUse = 30 // Claude usage submenu detail rows across accounts
 
 	renderInterval = 30 * time.Second
@@ -47,23 +47,24 @@ type Tray struct {
 	nowItem *systray.MenuItem
 	errPool []*systray.MenuItem // per-source error rows (shown only on failure)
 
-	rrHeader *systray.MenuItem
+	rrParent *systray.MenuItem // collapsible submenu (hidden when empty)
 	rrPool   []*systray.MenuItem
 	rrURLs   []string
 
-	myPRsParent *systray.MenuItem // collapsible submenu (collapsed by default)
+	myPRsParent *systray.MenuItem // collapsible submenu (hidden when empty)
 	myPRsPool   []*systray.MenuItem
 	myPRsURLs   []string
 
-	dueHeader *systray.MenuItem
+	dueParent *systray.MenuItem // collapsible submenu (hidden when empty)
 	duePool   []*systray.MenuItem
 
-	activeParent *systray.MenuItem // collapsible submenu (collapsed by default)
+	activeParent *systray.MenuItem // collapsible submenu (hidden when empty)
 	activePool   []*systray.MenuItem
 
-	statPool []*systray.MenuItem
+	statsParent *systray.MenuItem // collapsible submenu (hidden when absent)
+	statPool    []*systray.MenuItem
 
-	claudePool      []*systray.MenuItem // inline Claude 5h/7d summary
+	claudePool      []*systray.MenuItem // inline Claude per-account bar overview
 	claudeParent    *systray.MenuItem   // collapsible "Claude usage" submenu
 	claudeUsagePool []*systray.MenuItem
 
@@ -96,36 +97,41 @@ func (t *Tray) onReady(ctx context.Context) {
 	// per-source error rows, shown only when a source is failing
 	t.errPool = t.makeDisabledPool(capErr, nil)
 
-	// Review requested — inline (high priority, short)
-	t.rrHeader = systray.AddMenuItem("", "")
-	t.rrHeader.Disable()
-	t.rrPool, t.rrURLs = t.makeClickPool(capReviewReq, nil)
+	// Review requested — collapsed submenu (hidden when count is 0)
+	t.rrParent = systray.AddMenuItem("🔵 Review requested", "PRs awaiting your review")
+	t.rrParent.Hide()
+	t.rrPool, t.rrURLs = t.makeClickPool(capReviewReq, t.rrParent)
 
-	// My open PRs — collapsed submenu (the long, lower-priority list)
+	// My open PRs — collapsed submenu (hidden when count is 0)
 	t.myPRsParent = systray.AddMenuItem("🟣 My open PRs", "your open pull requests")
+	t.myPRsParent.Hide()
 	t.myPRsPool, t.myPRsURLs = t.makeClickPool(capMyPRs, t.myPRsParent)
 
-	// Due / overdue todos — inline (high priority)
-	t.dueHeader = systray.AddMenuItem("", "")
-	t.dueHeader.Disable()
-	t.duePool = t.makeDisabledPool(capDue, nil)
+	// Due / overdue todos — collapsed submenu (hidden when count is 0)
+	t.dueParent = systray.AddMenuItem("✅ Due / overdue", "todos due or overdue")
+	t.dueParent.Hide()
+	t.duePool = t.makeDisabledPool(capDue, t.dueParent)
 
-	// Active todos — collapsed submenu
+	// Active todos — collapsed submenu (hidden when count is 0)
 	t.activeParent = systray.AddMenuItem("📋 Active todos", "your active todos")
+	t.activeParent.Hide()
 	t.activePool = t.makeDisabledPool(capActive, t.activeParent)
 
-	// anti-tangent / CodeScene stats — inline, shown only when present
-	t.statPool = t.makeDisabledPool(capStat, nil)
+	// anti-tangent / CodeScene stats — collapsed submenu, shown only when present
+	t.statsParent = systray.AddMenuItem("📊 Stats", "anti-tangent / CodeScene stats")
+	t.statsParent.Hide()
+	t.statPool = t.makeDisabledPool(capStat, t.statsParent)
 
-	// Claude usage — inline 5h/weekly summary (shown only when present), with a
+	// Claude usage — inline per-account bar overview (shown only when present), with a
 	// collapsed submenu carrying per-account detail.
 	t.claudePool = t.makeDisabledPool(capClaude, nil)
 	t.claudeParent = systray.AddMenuItem("🤖 Claude usage", "Claude Code usage + rate limits")
 	t.claudeParent.Hide()
 	t.claudeUsagePool = t.makeDisabledPool(capClaudeUse, t.claudeParent)
 
+	systray.AddSeparator()
 	t.refreshItem = systray.AddMenuItem("↻ Refresh", "")
-	t.quitItem = systray.AddMenuItem("Quit", "")
+	t.quitItem = systray.AddMenuItem("✕ Quit", "")
 	go func() {
 		for range t.refreshItem.ClickedCh {
 			t.prov.RefreshNow(ctx)
@@ -205,17 +211,21 @@ func (t *Tray) render() {
 	t.nowItem.SetTitle(nowWorkingLabel(snap.NowWorking, now))
 	fillSourceErrors(t.errPool, snap.Sources)
 
-	t.rrHeader.SetTitle(fmt.Sprintf("🔵 Review requested (%d)", len(snap.PRs.ReviewRequested)))
+	t.rrParent.SetTitle(fmt.Sprintf("🔵 Review requested (%d)", len(snap.PRs.ReviewRequested)))
 	fillPRPool(t.rrPool, t.rrURLs, snap.PRs.ReviewRequested)
+	showIf(t.rrParent, len(snap.PRs.ReviewRequested) > 0)
 
 	t.myPRsParent.SetTitle(fmt.Sprintf("🟣 My open PRs (%d)", len(snap.PRs.Authored)))
 	fillPRPool(t.myPRsPool, t.myPRsURLs, snap.PRs.Authored)
+	showIf(t.myPRsParent, len(snap.PRs.Authored) > 0)
 
-	t.dueHeader.SetTitle(fmt.Sprintf("✅ Due / overdue (%d)", len(snap.Todos.Due)))
+	t.dueParent.SetTitle(fmt.Sprintf("✅ Due / overdue (%d)", len(snap.Todos.Due)))
 	fillTodoPool(t.duePool, snap.Todos.Due, "⚠ ")
+	showIf(t.dueParent, len(snap.Todos.Due) > 0)
 
 	t.activeParent.SetTitle(fmt.Sprintf("📋 Active todos (%d)", len(snap.Todos.Active)))
 	fillTodoPool(t.activePool, snap.Todos.Active, "")
+	showIf(t.activeParent, len(snap.Todos.Active) > 0)
 
 	var stats []string
 	if at := snap.AntiTangent; at.Present {
@@ -225,9 +235,10 @@ func (t *Tray) render() {
 		}
 	}
 	fillLabelPool(t.statPool, stats)
+	showIf(t.statsParent, len(stats) > 0)
 
-	// Claude usage: inline 5h/weekly summary + per-account detail submenu.
-	fillLabelPool(t.claudePool, claudeInlineLabels(snap.ClaudeStats, now))
+	// Claude usage: inline per-account bar overview + per-account detail submenu.
+	fillLabelPool(t.claudePool, claudeOverviewLabels(snap.ClaudeStats, now))
 	fillLabelPool(t.claudeUsagePool, claudeUsageRows(snap.ClaudeStats, now))
 	if cs := snap.ClaudeStats; cs.Present && len(cs.Accounts) > 0 {
 		t.claudeParent.SetTitle(fmt.Sprintf("🤖 Claude usage (%d)", len(cs.Accounts)))
@@ -278,6 +289,16 @@ func selectUnraised(raised map[string]bool, events []state.Event) []state.Event 
 		}
 	}
 	return out
+}
+
+// showIf shows mi when cond is true, else hides it — used to drop a zero-count
+// submenu from the menu entirely (caller holds t.mu).
+func showIf(mi *systray.MenuItem, cond bool) {
+	if cond {
+		mi.Show()
+	} else {
+		mi.Hide()
+	}
 }
 
 // fillSourceErrors shows one "⚠ <source>: <reason>" row per failing source

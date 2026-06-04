@@ -2,6 +2,7 @@ package tray
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,9 +11,15 @@ import (
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/claudestats"
 )
 
-// utilWarnPct is the utilization at/above which a window is flagged ⚠ (close to
-// the plan limit).
-const utilWarnPct = 80.0
+// utilWarnPct is the utilization at/above which a window is flagged ⚠ and its bar
+// fills red (close to the plan limit). utilYellowPct is the lower amber threshold.
+const (
+	utilWarnPct   = 80.0
+	utilYellowPct = 60.0
+	// barWidth is the emoji cells per bar. Emoji are double-width, so a compact 5
+	// keeps the overview row from getting too wide.
+	barWidth = 5
+)
 
 // humanUntil renders a duration as a compact "in …" reset label.
 func humanUntil(d time.Duration) string {
@@ -60,8 +67,39 @@ func humanTokens(n int64) string {
 
 func trimDotZero(s string) string { return strings.TrimSuffix(s, ".0") }
 
+// barFill picks the severity glyph for a utilization percent: green below
+// utilYellowPct, yellow at/above it, red at/above utilWarnPct.
+func barFill(pct float64) string {
+	switch {
+	case pct >= utilWarnPct:
+		return "🟥"
+	case pct >= utilYellowPct:
+		return "🟨"
+	default:
+		return "🟩"
+	}
+}
+
+// usageBar renders a 0–100 percent as a width-cell colored bar (🟩/🟨/🟥 filled, ⬜
+// empty). A nonzero value that rounds to 0 cells still shows one filled cell, so a
+// low-but-present utilization never reads as fully empty; the cell count is clamped
+// to [0, width].
+func usageBar(pct float64, width int) string {
+	full := int(math.Round(pct / 100 * float64(width)))
+	if full < 0 {
+		full = 0
+	}
+	if full > width {
+		full = width
+	}
+	if full == 0 && pct > 0 {
+		full = 1
+	}
+	return strings.Repeat(barFill(pct), full) + strings.Repeat("⬜", width-full)
+}
+
 // accountsWithWindows returns the account keys (sorted) that carry at least one
-// rate-limit window, i.e. ones the inline summary can render.
+// rate-limit window, i.e. ones the overview summary can render.
 func accountsWithWindows(cs claudestats.Stats) []string {
 	var keys []string
 	for k, a := range cs.Accounts {
@@ -74,7 +112,7 @@ func accountsWithWindows(cs claudestats.Stats) []string {
 }
 
 // utilPct renders a window's utilization as "26%" (or "91% ⚠" past the warn
-// threshold), or "" when utilization is unknown. Shared by the inline and
+// threshold), or "" when utilization is unknown. Shared by the overview and
 // detail builders so the threshold/glyph/format live in one place; callers
 // supply their own leading separator.
 func utilPct(w *claudestats.Window) string {
@@ -88,49 +126,61 @@ func utilPct(w *claudestats.Window) string {
 	return s
 }
 
-// windowInlineSuffix renders " <util>% [⚠] [· extra] · resets in …" for a
-// window, omitting whichever fields are nil.
-func windowInlineSuffix(w *claudestats.Window, now time.Time, extra string) string {
-	var b strings.Builder
-	if p := utilPct(w); p != "" {
-		b.WriteString(" " + p)
+// windowBarSegment renders one window's overview cell: "5h 🟩⬜⬜⬜⬜ 27%" (the ⚠ is
+// appended by utilPct at/above utilWarnPct). Returns "<name> —" when the window
+// exists but its utilization is unknown, and "" when the window carries no data.
+func windowBarSegment(name string, w *claudestats.Window) string {
+	if !w.HasData() {
+		return ""
 	}
-	if extra != "" {
-		fmt.Fprintf(&b, " · %s", extra)
+	if w.Utilization == nil {
+		return name + " —"
 	}
-	if w.ResetsAt != nil {
-		fmt.Fprintf(&b, " · resets %s", humanUntil(w.ResetsAt.Sub(now)))
-	}
-	return b.String()
+	return name + " " + usageBar(*w.Utilization, barWidth) + " " + utilPct(w)
 }
 
-// claudeInlineLabels builds the always-visible inline rows: per account with
-// limit data, a 5h row and a 7d row (the latter carrying the week cost). Returns
-// nil when stats are absent or no account has limit windows. Account name is
-// prefixed only when more than one account has windows.
-func claudeInlineLabels(cs claudestats.Stats, now time.Time) []string {
+// maxKeyLen returns the longest key's byte length (0 for none) — used to pad account
+// names to an aligned column. Byte length, not rune width: account keys are ASCII
+// slugs, so bytes == runes and the column aligns; a multi-byte key would misalign,
+// which is acceptable for the expected key space.
+func maxKeyLen(keys []string) int {
+	n := 0
+	for _, k := range keys {
+		if len(k) > n {
+			n = len(k)
+		}
+	}
+	return n
+}
+
+// claudeOverviewLabels builds the always-visible overview rows: one row per account
+// that has rate-limit window data, each carrying a 5h bar and a week bar. Cost, reset
+// times, and per-period usage live in the detail submenu (claudeUsageRows), not here.
+// Returns nil when stats are absent or no account has limit windows. The account name
+// (key) is shown, left-padded for alignment, only when more than one account has
+// windows.
+func claudeOverviewLabels(cs claudestats.Stats, now time.Time) []string {
 	if !cs.Present {
 		return nil
 	}
 	keys := accountsWithWindows(cs)
 	multi := len(keys) > 1
+	nameW := maxKeyLen(keys)
 	var rows []string
 	for _, k := range keys {
 		a := cs.Accounts[k]
 		prefix := "🤖 "
 		if multi {
-			prefix = "🤖 " + k + " "
+			prefix += fmt.Sprintf("%-*s  ", nameW, k)
 		}
-		if w := a.Limits.FiveHour; w.HasData() {
-			rows = append(rows, prefix+"5h"+windowInlineSuffix(w, now, ""))
+		var segs []string
+		if s := windowBarSegment("5h", a.Limits.FiveHour); s != "" {
+			segs = append(segs, s)
 		}
-		if w := a.Limits.SevenDay; w.HasData() {
-			extra := ""
-			if a.Week != nil {
-				extra = usd(a.Week.CostUSD)
-			}
-			rows = append(rows, prefix+"7d"+windowInlineSuffix(w, now, extra))
+		if s := windowBarSegment("wk", a.Limits.SevenDay); s != "" {
+			segs = append(segs, s)
 		}
+		rows = append(rows, prefix+strings.Join(segs, "  "))
 	}
 	if cs.Stale(now) {
 		rows = append([]string{"🤖 ⚠ Claude stats stale (" + humanAge(now.Sub(cs.GeneratedAt)) + ")"}, rows...)
