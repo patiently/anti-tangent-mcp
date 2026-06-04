@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -107,11 +108,27 @@ func main() {
 		}
 	}()
 
-	tr := tray.New(p, func(url string) {
-		if err := tray.OpenURIOnHost(url); err != nil {
-			log.Error("open url", "url", url, "err", err)
+	localBase := fmt.Sprintf("http://127.0.0.1:%d", cfg.ListenPort)
+	openLocal := func(path string) {
+		u := localBase + path + "?t=" + url.QueryEscape(cfg.APIToken)
+		if err := tray.OpenLocal(u); err != nil {
+			log.Error("open local ui", "path", path, "err", err)
 		}
-	}, func(ids []string) { p.Ack(ids) }, tray.Actions{})
+	}
+	actions := tray.Actions{
+		OpenSearch:  func() { openLocal("/ui/search") },
+		OpenNewTodo: func() { openLocal("/ui/new-todo") },
+		MarkDone: func(rawLine string) {
+			if err := p.MarkTodoDone(ctx, rawLine); err != nil {
+				log.Error("mark todo done", "err", err)
+			}
+		},
+	}
+	tr := tray.New(p, func(u string) {
+		if err := tray.OpenURIOnHost(u); err != nil {
+			log.Error("open url", "url", u, "err", err)
+		}
+	}, func(ids []string) { p.Ack(ids) }, actions)
 
 	tr.Run(ctx) // blocks until Quit / ctx cancel
 	cancel()

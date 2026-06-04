@@ -69,3 +69,10 @@ Add to your AI assistant config (e.g. `~/.claude/CLAUDE.md`): when you start or
 switch tasks, update the Basic Memory note `<username>/notes/currently-working-on/main`
 with frontmatter `updated: <RFC3339 timestamp>` and a 1–3 sentence body. The
 tray renders the body with a staleness indicator.
+
+## Changelog
+
+### v0.2.0
+- Basic Memory search, rendered note view (mermaid + clickable inter-note links), and todo create — opened in the in-container browser.
+- Mark a todo done by clicking its tray row.
+- Refresh / Quit / Search / New-todo pinned to the top of the menu.
