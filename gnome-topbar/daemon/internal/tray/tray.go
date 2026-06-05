@@ -315,6 +315,15 @@ func (t *Tray) render() {
 		systray.SetTooltip("gnome-topbar")
 	}
 
+	// Reflect Claude usage in the tray icon itself: one bar per account, height ∝
+	// its worst rate-limit window, green/amber/red by threshold (gray when stale).
+	// Falls back to the static icon when there are no usage stats to show.
+	if icon, ok := usageIconPNG(snap.ClaudeStats, now); ok {
+		systray.SetIcon(icon)
+	} else {
+		systray.SetIcon(trayIcon)
+	}
+
 	// Ack only events whose notification was actually delivered, so a failed
 	// Notify isn't marked seen (it re-notifies after a restart instead of being
 	// silently lost).

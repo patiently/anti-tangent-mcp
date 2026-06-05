@@ -72,6 +72,9 @@ tray renders the body with a staleness indicator.
 
 ## Changelog
 
+### v0.2.1
+- Dynamic top-bar icon: one vertical bar per Claude account, height ∝ its worst rate-limit window (5h vs weekly), colored green/amber/red by the same 60/80 thresholds as the menu (gray when stats are stale). Falls back to the static icon when no usage stats are present; clicking still opens the full usage panel.
+
 ### v0.2.0
 - Basic Memory search across the knowledge base (epics, stories, gotchas, modules, features & decisions), rendered note view (mermaid + clickable inter-note links), and todo create — opened in the in-container browser.
 - Browse pages: **Howtos**, **Gotchas**, **Modules**, **Features**, **Decisions**, and **My notes** (`/ui/howtos`, `/ui/gotchas`, `/ui/modules`, `/ui/features`, `/ui/decisions`, `/ui/notes`).
