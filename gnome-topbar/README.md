@@ -72,7 +72,7 @@ tray renders the body with a staleness indicator.
 
 ## Changelog
 
-### v0.2.1
+### v0.2.2
 - Dynamic top-bar icon: one vertical bar per Claude account, height ∝ its worst rate-limit window (5h vs weekly), colored green/amber/red by the same 60/80 thresholds as the menu (gray when stats are stale). Falls back to the static icon when no usage stats are present; clicking still opens the full usage panel.
 
 ### v0.2.0
