@@ -21,6 +21,10 @@ const (
 	iconMinFillFrac = 0.08 // a present-but-tiny utilization still shows a sliver
 )
 
+// iconTrackColor is the faint full-height bar background (matches the dark UI
+// panel), so the unfilled portion reads as headroom.
+var iconTrackColor = color.RGBA{0x2c, 0x31, 0x3c, 0xff}
+
 // barColorFor maps a utilization percent to the same severity as the menu bars
 // (utilYellowPct / utilWarnPct, shared from claude.go). A stale snapshot dims to
 // gray so the bars don't read as live.
@@ -83,7 +87,6 @@ func usageIconPNG(cs claudestats.Stats, now time.Time) ([]byte, bool) {
 	stale := cs.Stale(now)
 
 	img := image.NewRGBA(image.Rect(0, 0, iconSize, iconSize)) // transparent bg
-	track := color.RGBA{0x2c, 0x31, 0x3c, 0xff}
 
 	n := len(keys)
 	span := iconSize - 2*iconMargin
@@ -102,7 +105,7 @@ func usageIconPNG(cs claudestats.Stats, now time.Time) ([]byte, bool) {
 			frac = iconMinFillFrac
 		}
 		fillH := int(float64(span) * frac)
-		fillRect(img, x, iconMargin, barW, span, track)                                  // full-height track
+		fillRect(img, x, iconMargin, barW, span, iconTrackColor)                         // full-height track
 		fillRect(img, x, iconMargin+(span-fillH), barW, fillH, barColorFor(util, stale)) // bottom-anchored fill
 		x += barW + iconBarGap
 	}

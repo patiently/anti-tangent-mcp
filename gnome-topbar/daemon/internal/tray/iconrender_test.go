@@ -100,3 +100,58 @@ func TestUsageIconPNG_StaleIsGray(t *testing.T) {
 		t.Error("stale snapshot must not render live (red) bars")
 	}
 }
+
+func TestUsageIconPNG_AmberBand(t *testing.T) {
+	now := time.Now()
+	raw, ok := usageIconPNG(fiveHourStats(map[string]float64{"a": 70}, now), now) // 60 ≤ 70 < 80
+	if !ok {
+		t.Fatal("expected an icon")
+	}
+	if countColor(decodePNG(t, raw), barColorFor(70, false)) == 0 {
+		t.Error("70%% should render an amber bar")
+	}
+}
+
+func TestUsageIconPNG_CapsAtMaxBarsByKeyOrder(t *testing.T) {
+	now := time.Now()
+	// 5 accounts; the only red one (e=90) sorts last, so the iconMaxBars=4 cap
+	// drops it — proving both the cap and the deterministic key ordering.
+	cs := fiveHourStats(map[string]float64{"a": 10, "b": 10, "c": 10, "d": 10, "e": 90}, now)
+	raw, ok := usageIconPNG(cs, now)
+	if !ok {
+		t.Fatal("expected an icon")
+	}
+	img := decodePNG(t, raw)
+	if countColor(img, barColorFor(90, false)) != 0 {
+		t.Error("5th account (e=90) should be dropped by the iconMaxBars cap")
+	}
+	if countColor(img, barColorFor(10, false)) == 0 {
+		t.Error("the first four (green) accounts should render")
+	}
+}
+
+func TestUsageIconPNG_ZeroRendersTrackOnly(t *testing.T) {
+	now := time.Now()
+	raw, ok := usageIconPNG(fiveHourStats(map[string]float64{"a": 0}, now), now)
+	if !ok {
+		t.Fatal("a known 0%% utilization is still renderable (track only)")
+	}
+	img := decodePNG(t, raw)
+	if countColor(img, iconTrackColor) == 0 {
+		t.Error("0%% account should still draw the track")
+	}
+	if countColor(img, barColorFor(0, false)) != 0 {
+		t.Error("0%% account must draw no fill")
+	}
+}
+
+func TestUsageIconPNG_TinyUtilShowsSliver(t *testing.T) {
+	now := time.Now()
+	raw, ok := usageIconPNG(fiveHourStats(map[string]float64{"a": 1}, now), now)
+	if !ok {
+		t.Fatal("expected an icon")
+	}
+	if countColor(decodePNG(t, raw), barColorFor(1, false)) == 0 {
+		t.Error("a present-but-tiny 1%% utilization should still show a fill sliver")
+	}
+}
