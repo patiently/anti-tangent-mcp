@@ -85,7 +85,7 @@ func renderStatsPage(at atstats.Stats) string {
 	if cs := at.CodeScene; cs != nil {
 		b.WriteString(kvTable("Code Health", [][2]string{
 			{"latest score", fmt.Sprintf("%.1f", cs.LatestScore)},
-			{"latest delta", fmt.Sprintf("%+.1f (%s)", cs.LatestDelta, esc(cs.LatestTrend))},
+			{"latest delta", fmt.Sprintf("%+.1f (%s)", cs.LatestDelta, cs.LatestTrend)},
 			{"score p50", fmt.Sprintf("%.1f", cs.ScoreP50)},
 			{"runs", strconv.Itoa(cs.Runs)},
 			{"reg / imp / neutral", fmt.Sprintf("%d / %d / %d", cs.Regressions, cs.Improvements, cs.Neutral)},
