@@ -63,13 +63,13 @@ func TestUsageBar(t *testing.T) {
 		want string
 	}{
 		{0, "⬜⬜⬜⬜⬜"},
-		{3, "🟩⬜⬜⬜⬜"},   // nonzero rounds to 0 cells → forced to 1
-		{27, "🟩⬜⬜⬜⬜"},  // round(1.35) = 1
-		{38, "🟩🟩⬜⬜⬜"},  // round(1.9) = 2
-		{60, "🟨🟨🟨⬜⬜"},  // round(3.0) = 3, yellow
-		{65, "🟨🟨🟨⬜⬜"},  // round(3.25) = 3
-		{80, "🟥🟥🟥🟥⬜"},  // round(4.0) = 4, red
-		{82, "🟥🟥🟥🟥⬜"},  // round(4.1) = 4
+		{3, "🟩⬜⬜⬜⬜"},  // nonzero rounds to 0 cells → forced to 1
+		{27, "🟩⬜⬜⬜⬜"}, // round(1.35) = 1
+		{38, "🟩🟩⬜⬜⬜"}, // round(1.9) = 2
+		{60, "🟨🟨🟨⬜⬜"}, // round(3.0) = 3, yellow
+		{65, "🟨🟨🟨⬜⬜"}, // round(3.25) = 3
+		{80, "🟥🟥🟥🟥⬜"}, // round(4.0) = 4, red
+		{82, "🟥🟥🟥🟥⬜"}, // round(4.1) = 4
 		{100, "🟥🟥🟥🟥🟥"},
 		{150, "🟥🟥🟥🟥🟥"}, // clamped to width
 	}
@@ -189,25 +189,6 @@ func TestClaudeOverviewLabels_StaleMarker(t *testing.T) {
 	got := claudeOverviewLabels(cs, now)
 	if len(got) == 0 || !strings.Contains(got[0], "stale") {
 		t.Errorf("stale snapshot should lead with a stale marker row: %q", got)
-	}
-}
-
-func TestHumanTokens(t *testing.T) {
-	cases := []struct {
-		n    int64
-		want string
-	}{
-		{0, "0"},
-		{512, "512"},
-		{4821, "4.8k"},
-		{512004, "512k"},
-		{4821093, "4.8M"},
-		{33106912, "33.1M"},
-	}
-	for _, c := range cases {
-		if got := humanTokens(c.n); got != c.want {
-			t.Errorf("humanTokens(%d) = %q, want %q", c.n, got, c.want)
-		}
 	}
 }
 

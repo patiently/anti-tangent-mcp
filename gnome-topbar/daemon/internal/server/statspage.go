@@ -100,29 +100,20 @@ func renderStatsPage(at atstats.Stats) string {
 	return pageShell("Stats", b.String())
 }
 
-// humanTokensS renders a token count compactly (local copy; tray has its own).
-func humanTokensS(n int64) string {
-	switch {
-	case n < 1000:
-		return strconv.FormatInt(n, 10)
-	case n < 1_000_000:
-		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1000), ".0") + "k"
-	default:
-		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000_000), ".0") + "M"
-	}
-}
-
-func usageStr(u *claudestats.Usage) string {
-	return fmt.Sprintf("$%.2f · %s tok", u.CostUSD, humanTokensS(u.TotalTokens))
-}
-
+// winStr renders a rate-limit window as "<util>% [⚠] · resets <clock>" — the util
+// label (incl. the ⚠ at/above claudestats.UtilWarnPct) matches the tray. A reset
+// already in the past collapses to "resets now" rather than a misleading wall-clock.
 func winStr(w *claudestats.Window, now time.Time) string {
-	s := "—"
-	if w.Utilization != nil {
-		s = fmt.Sprintf("%.0f%%", *w.Utilization)
+	s := w.UtilLabel()
+	if s == "" {
+		s = "—"
 	}
-	if w.ResetsAt != nil && w.ResetsAt.After(now) {
-		s += " · resets " + w.ResetsAt.Local().Format("Jan 2 15:04")
+	if w.ResetsAt != nil {
+		if w.ResetsAt.After(now) {
+			s += " · resets " + w.ResetsAt.Local().Format("Jan 2 15:04")
+		} else {
+			s += " · resets now"
+		}
 	}
 	return s
 }
@@ -151,13 +142,13 @@ func renderClaudePage(cs claudestats.Stats, now time.Time) string {
 		b.WriteString(`<h2>` + esc(name) + `</h2>`)
 		var urows [][2]string
 		if a.Today != nil {
-			urows = append(urows, [2]string{"today", usageStr(a.Today)})
+			urows = append(urows, [2]string{"today", a.Today.CostTokens()})
 		}
 		if a.Week != nil {
-			urows = append(urows, [2]string{"week", usageStr(a.Week)})
+			urows = append(urows, [2]string{"week", a.Week.CostTokens()})
 		}
 		if a.Month != nil {
-			urows = append(urows, [2]string{"month", usageStr(a.Month)})
+			urows = append(urows, [2]string{"month", a.Month.CostTokens()})
 		}
 		b.WriteString(kvTable("Usage", urows))
 		if a.Limits != nil {

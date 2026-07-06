@@ -93,8 +93,8 @@ type Limits struct {
 	SevenDay  *Window   `json:"seven_day"`
 	// Per-model weekly sub-limits and overage credits are decoded for
 	// contract-completeness but not yet rendered by the tray.
-	SevenDayOpus   *Window     `json:"seven_day_opus"`
-	SevenDaySonnet *Window     `json:"seven_day_sonnet"`
+	SevenDayOpus   *Window `json:"seven_day_opus"`
+	SevenDaySonnet *Window `json:"seven_day_sonnet"`
 	// WeeklyModels holds per-model weekly sub-limits keyed by model display_name
 	// (schema 1.2+, from the producer's /api/oauth/usage limits[] weekly_scoped
 	// entries). Nil/empty when the producer emits none.
