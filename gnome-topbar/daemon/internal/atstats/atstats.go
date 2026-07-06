@@ -12,16 +12,27 @@ import (
 )
 
 type Stats struct {
-	Present     bool            `json:"present"`
-	GeneratedAt time.Time       `json:"generated_at"`
-	TotalCalls  int             `json:"total_calls"`
-	PassPct     float64         `json:"pass_pct"`
-	WarnPct     float64         `json:"warn_pct"`
-	FailPct     float64         `json:"fail_pct"`
-	TopCategory string          `json:"top_category"`
-	ReviewMSP95 int64           `json:"review_ms_p95"`
-	Summary     string          `json:"summary"`
-	CodeScene   *CodeSceneStats `json:"codescene,omitempty"`
+	Present           bool            `json:"present"`
+	GeneratedAt       time.Time       `json:"generated_at"`
+	TotalCalls        int             `json:"total_calls"`
+	PassPct           float64         `json:"pass_pct"`
+	WarnPct           float64         `json:"warn_pct"`
+	FailPct           float64         `json:"fail_pct"`
+	TopCategory       string          `json:"top_category"`
+	ReviewMSP95       int64           `json:"review_ms_p95"`
+	Summary           string          `json:"summary"`
+	PerTool           map[string]int  `json:"per_tool,omitempty"`
+	VerdictCounts     map[string]int  `json:"verdict_counts,omitempty"`
+	FindingsPerCall   float64         `json:"findings_per_call"`
+	SeverityHistogram map[string]int  `json:"severity_histogram,omitempty"`
+	CategoryHistogram map[string]int  `json:"category_histogram,omitempty"`
+	ReviewMSP50       int64           `json:"review_ms_p50"`
+	CacheHitRate      float64         `json:"cache_hit_rate"`
+	PartialRate       float64         `json:"partial_rate"`
+	ModelUsage        map[string]int  `json:"model_usage,omitempty"`
+	WindowStart       time.Time       `json:"window_start"`
+	WindowEnd         time.Time       `json:"window_end"`
+	CodeScene         *CodeSceneStats `json:"codescene,omitempty"`
 }
 
 // CodeSceneStats mirrors the optional top-level "codescene" object inside
@@ -40,9 +51,18 @@ type CodeSceneStats struct {
 
 type rollup struct {
 	TotalCalls        int             `json:"total_calls"`
+	PerTool           map[string]int  `json:"per_tool"`
 	VerdictCounts     map[string]int  `json:"verdict_counts"`
+	FindingsPerCall   float64         `json:"findings_per_call"`
+	SeverityHistogram map[string]int  `json:"severity_histogram"`
 	CategoryHistogram map[string]int  `json:"category_histogram"`
+	ReviewMSP50       int64           `json:"review_ms_p50"`
 	ReviewMSP95       int64           `json:"review_ms_p95"`
+	CacheHitRate      float64         `json:"cache_hit_rate"`
+	PartialRate       float64         `json:"partial_rate"`
+	ModelUsage        map[string]int  `json:"model_usage"`
+	WindowStart       time.Time       `json:"window_start"`
+	WindowEnd         time.Time       `json:"window_end"`
 	GeneratedAt       time.Time       `json:"generated_at"`
 	CodeScene         *CodeSceneStats `json:"codescene"`
 }
@@ -73,6 +93,17 @@ func Read(dir string) Stats {
 	if sb, err := os.ReadFile(filepath.Join(dir, "summary.md")); err == nil {
 		s.Summary = truncate(string(sb), summaryMaxChars)
 	}
+	s.PerTool = r.PerTool
+	s.VerdictCounts = r.VerdictCounts
+	s.FindingsPerCall = r.FindingsPerCall
+	s.SeverityHistogram = r.SeverityHistogram
+	s.CategoryHistogram = r.CategoryHistogram
+	s.ReviewMSP50 = r.ReviewMSP50
+	s.CacheHitRate = r.CacheHitRate
+	s.PartialRate = r.PartialRate
+	s.ModelUsage = r.ModelUsage
+	s.WindowStart = r.WindowStart
+	s.WindowEnd = r.WindowEnd
 	return s
 }
 
