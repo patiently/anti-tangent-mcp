@@ -156,18 +156,11 @@ func (t *Tray) onReady(ctx context.Context) {
 	t.activeParent.Hide()
 	t.activePool, t.activeRaw = t.makeDonePool(capActive, t.activeParent)
 
-	// anti-tangent / CodeScene stats — collapsed submenu, shown only when present
+	// anti-tangent / CodeScene stats — collapsed submenu, shown only when present,
+	// with a "details…" item right after it that opens the full /ui/stats page.
 	t.statsParent = systray.AddMenuItem("📊 Stats", "anti-tangent / CodeScene stats")
 	t.statsParent.Hide()
 	t.statPool = t.makeDisabledPool(capStat, t.statsParent)
-
-	// Claude usage — inline per-account bar overview (shown only when present), with a
-	// collapsed submenu carrying per-account detail.
-	t.claudePool = t.makeDisabledPool(capClaude, nil)
-	t.claudeParent = systray.AddMenuItem("🤖 Claude usage", "Claude Code usage + rate limits")
-	t.claudeParent.Hide()
-	t.claudeUsagePool = t.makeDisabledPool(capClaudeUse, t.claudeParent)
-
 	t.statsDetailItem = systray.AddMenuItem("📊 Stats details…", "open the stats detail page")
 	t.statsDetailItem.Hide()
 	go func() {
@@ -177,6 +170,14 @@ func (t *Tray) onReady(ctx context.Context) {
 			}
 		}
 	}()
+
+	// Claude usage — inline per-account bar overview (shown only when present), a
+	// collapsed submenu with per-account detail, and a "details…" item (right after
+	// it) that opens the full /ui/claude page.
+	t.claudePool = t.makeDisabledPool(capClaude, nil)
+	t.claudeParent = systray.AddMenuItem("🤖 Claude usage", "Claude Code usage + rate limits")
+	t.claudeParent.Hide()
+	t.claudeUsagePool = t.makeDisabledPool(capClaudeUse, t.claudeParent)
 	t.claudeDetailItem = systray.AddMenuItem("🤖 Claude usage details…", "open the Claude usage detail page")
 	t.claudeDetailItem.Hide()
 	go func() {
