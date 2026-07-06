@@ -325,6 +325,26 @@ func TestClaudeOverviewLabels_StaleNoWindows(t *testing.T) {
 	}
 }
 
+func TestClaudeUsageRowsPerModel(t *testing.T) {
+	util := 69.0
+	reset := time.Date(2026, 6, 8, 20, 0, 0, 0, time.UTC)
+	cs := claudestats.Stats{Present: true, Accounts: map[string]claudestats.Account{
+		"default": {Limits: &claudestats.Limits{
+			WeeklyModels: map[string]*claudestats.Window{"Fable": {Utilization: &util, ResetsAt: &reset}},
+		}},
+	}}
+	rows := claudeUsageRows(cs, time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC))
+	found := false
+	for _, r := range rows {
+		if strings.Contains(r, "Fable") && strings.Contains(r, "69%") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no Fable per-model row in %#v", rows)
+	}
+}
+
 func TestPastResetRendersNow(t *testing.T) {
 	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
 	past := now.Add(-2 * time.Hour) // window already reset

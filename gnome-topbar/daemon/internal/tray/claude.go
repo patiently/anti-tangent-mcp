@@ -215,6 +215,17 @@ func claudeUsageRows(cs claudestats.Stats, now time.Time) []string {
 				if w := a.Limits.SevenDay; w.HasData() {
 					rows = append(rows, "· "+windowDetail("7d", w, now))
 				}
+				// Per-model weekly windows (schema 1.2+): Fable, Opus, …
+				mnames := make([]string, 0, len(a.Limits.WeeklyModels))
+				for name := range a.Limits.WeeklyModels {
+					mnames = append(mnames, name)
+				}
+				sort.Strings(mnames)
+				for _, name := range mnames {
+					if w := a.Limits.WeeklyModels[name]; w.HasData() {
+						rows = append(rows, "· "+windowDetail(name, w, now))
+					}
+				}
 			}
 		}
 		if a.Week != nil {
