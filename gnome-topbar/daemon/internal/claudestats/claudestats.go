@@ -95,7 +95,11 @@ type Limits struct {
 	// contract-completeness but not yet rendered by the tray.
 	SevenDayOpus   *Window     `json:"seven_day_opus"`
 	SevenDaySonnet *Window     `json:"seven_day_sonnet"`
-	ExtraUsage     *ExtraUsage `json:"extra_usage"`
+	// WeeklyModels holds per-model weekly sub-limits keyed by model display_name
+	// (schema 1.2+, from the producer's /api/oauth/usage limits[] weekly_scoped
+	// entries). Nil/empty when the producer emits none.
+	WeeklyModels map[string]*Window `json:"weekly_models"`
+	ExtraUsage   *ExtraUsage        `json:"extra_usage"`
 }
 
 // Window is one rate-limit window. Utilization is a percent 0-100 (nil when the

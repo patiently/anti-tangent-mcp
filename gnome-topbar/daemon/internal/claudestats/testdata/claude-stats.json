@@ -37,6 +37,7 @@
         "seven_day": { "utilization": 26.0, "resets_at": "2026-06-08T20:00:00.516553+00:00" },
         "seven_day_opus": null,
         "seven_day_sonnet": { "utilization": 7.0, "resets_at": "2026-06-08T20:00:00.516561+00:00" },
+        "weekly_models": { "Fable": { "utilization": 69.0, "resets_at": "2026-06-08T20:00:00.516553+00:00" } },
         "extra_usage": {
           "is_enabled": true,
           "monthly_limit": 20000,

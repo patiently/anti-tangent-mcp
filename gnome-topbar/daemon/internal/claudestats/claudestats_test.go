@@ -73,6 +73,14 @@ func TestReadNullableWindowsAndLimitError(t *testing.T) {
 	}
 }
 
+func TestReadWeeklyModels(t *testing.T) {
+	s, _ := Read("testdata")
+	w := s.Accounts["default"].Limits.WeeklyModels["Fable"]
+	if w == nil || w.Utilization == nil || *w.Utilization != 69.0 {
+		t.Fatalf("Fable weekly window = %+v, want utilization 69", w)
+	}
+}
+
 func TestReadAbsentReturnsNoError(t *testing.T) {
 	// Absent file / disabled feature is the common case, not an error.
 	if s, err := Read(t.TempDir()); err != nil || s.Present {
