@@ -91,8 +91,9 @@ type Limits struct {
 	Error     *string   `json:"error"`
 	FiveHour  *Window   `json:"five_hour"`
 	SevenDay  *Window   `json:"seven_day"`
-	// Per-model weekly sub-limits and overage credits are decoded for
-	// contract-completeness but not yet rendered by the tray.
+	// SevenDayOpus/SevenDaySonnet/ExtraUsage are decoded for contract-completeness
+	// but not yet rendered; WeeklyModels (below) IS rendered — per-model rows in the
+	// tray submenu and on /ui/claude.
 	SevenDayOpus   *Window `json:"seven_day_opus"`
 	SevenDaySonnet *Window `json:"seven_day_sonnet"`
 	// WeeklyModels holds per-model weekly sub-limits keyed by model display_name

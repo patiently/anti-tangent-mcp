@@ -13,6 +13,10 @@ func TestHumanTokens(t *testing.T) {
 		{512004, "512k"},
 		{4821093, "4.8M"},
 		{33106912, "33.1M"},
+		{999499, "999.5k"}, // just below the k→M rounding boundary
+		{999950, "1M"},     // rounds up out of the k range
+		{999999, "1M"},     // regression guard: was "1000k"
+		{1000000, "1M"},
 	}
 	for _, c := range cases {
 		if got := HumanTokens(c.n); got != c.want {

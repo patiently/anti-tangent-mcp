@@ -17,7 +17,9 @@ func HumanTokens(n int64) string {
 	switch {
 	case n < 1000:
 		return strconv.FormatInt(n, 10)
-	case n < 1_000_000:
+	case n < 999_950:
+		// Above 999_950, "%.1f" of n/1000 rounds up to "1000.0" — fall through to
+		// the M branch so e.g. 999_999 renders "1M", not "1000k".
 		return trimDotZero(fmt.Sprintf("%.1f", float64(n)/1000)) + "k"
 	default:
 		return trimDotZero(fmt.Sprintf("%.1f", float64(n)/1_000_000)) + "M"

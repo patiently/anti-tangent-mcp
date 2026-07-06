@@ -114,20 +114,8 @@ func (t *Tray) onReady(ctx context.Context) {
 	searchItem := systray.AddMenuItem("🔎 Search epics/stories…", "open BM search in the browser")
 	newTodoItem := systray.AddMenuItem("➕ New todo…", "create a todo in Basic Memory")
 	systray.AddSeparator()
-	go func() {
-		for range searchItem.ClickedCh {
-			if t.act.OpenSearch != nil {
-				t.act.OpenSearch()
-			}
-		}
-	}()
-	go func() {
-		for range newTodoItem.ClickedCh {
-			if t.act.OpenNewTodo != nil {
-				t.act.OpenNewTodo()
-			}
-		}
-	}()
+	bindClick(searchItem, t.act.OpenSearch)
+	bindClick(newTodoItem, t.act.OpenNewTodo)
 
 	// currently-working-on (inline header)
 	t.nowItem = systray.AddMenuItem("", "")
@@ -163,13 +151,7 @@ func (t *Tray) onReady(ctx context.Context) {
 	t.statPool = t.makeDisabledPool(capStat, t.statsParent)
 	t.statsDetailItem = systray.AddMenuItem("📊 Stats details…", "open the stats detail page")
 	t.statsDetailItem.Hide()
-	go func() {
-		for range t.statsDetailItem.ClickedCh {
-			if t.act.OpenStats != nil {
-				t.act.OpenStats()
-			}
-		}
-	}()
+	bindClick(t.statsDetailItem, t.act.OpenStats)
 
 	// Claude usage — inline per-account bar overview (shown only when present), a
 	// collapsed submenu with per-account detail, and a "details…" item (right after
@@ -180,13 +162,7 @@ func (t *Tray) onReady(ctx context.Context) {
 	t.claudeUsagePool = t.makeDisabledPool(capClaudeUse, t.claudeParent)
 	t.claudeDetailItem = systray.AddMenuItem("🤖 Claude usage details…", "open the Claude usage detail page")
 	t.claudeDetailItem.Hide()
-	go func() {
-		for range t.claudeDetailItem.ClickedCh {
-			if t.act.OpenClaude != nil {
-				t.act.OpenClaude()
-			}
-		}
-	}()
+	bindClick(t.claudeDetailItem, t.act.OpenClaude)
 
 	go func() {
 		for range t.refreshItem.ClickedCh {
@@ -211,6 +187,18 @@ func (t *Tray) onReady(ctx context.Context) {
 				return
 			case <-tk.C:
 				t.render()
+			}
+		}
+	}()
+}
+
+// bindClick spawns a goroutine that invokes action on each click of item. action
+// may be nil (a no-op), so callers can wire an optional Actions callback directly.
+func bindClick(item *systray.MenuItem, action func()) {
+	go func() {
+		for range item.ClickedCh {
+			if action != nil {
+				action()
 			}
 		}
 	}()

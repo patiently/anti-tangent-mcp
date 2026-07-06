@@ -58,13 +58,11 @@ func histTable(level int, title string, m map[string]int) string {
 		}
 		return items[i].k < items[j].k
 	})
-	var b strings.Builder
-	b.WriteString(heading(level, title) + `<div class="tbl"><table>`)
-	for _, it := range items {
-		b.WriteString(`<tr><th scope="row">` + esc(it.k) + `</th><td>` + strconv.Itoa(it.v) + `</td></tr>`)
+	rows := make([][2]string, len(items))
+	for i, it := range items {
+		rows[i] = [2]string{it.k, strconv.Itoa(it.v)}
 	}
-	b.WriteString(`</table></div>`)
-	return b.String()
+	return kvTable(level, title, rows)
 }
 
 // renderStatsPage renders the anti-tangent rollup aggregates + CodeScene block.
