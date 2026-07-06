@@ -27,6 +27,8 @@ type Actions struct {
 	OpenSearch  func()               // open the search page in the in-container browser
 	OpenNewTodo func()               // open the new-todo page
 	MarkDone    func(rawLine string) // tick a todo bullet in Basic Memory
+	OpenStats   func()               // open the /ui/stats detail page
+	OpenClaude  func()               // open the /ui/claude detail page
 }
 
 // Per-section item-pool caps. The systray menu is append-only, so we
@@ -78,6 +80,9 @@ type Tray struct {
 	claudePool      []*systray.MenuItem // inline Claude per-account bar overview
 	claudeParent    *systray.MenuItem   // collapsible "Claude usage" submenu
 	claudeUsagePool []*systray.MenuItem
+
+	statsDetailItem  *systray.MenuItem // opens /ui/stats (shown only when AntiTangent stats present)
+	claudeDetailItem *systray.MenuItem // opens /ui/claude (shown only when Claude stats present)
 
 	refreshItem *systray.MenuItem
 	quitItem    *systray.MenuItem
@@ -162,6 +167,25 @@ func (t *Tray) onReady(ctx context.Context) {
 	t.claudeParent = systray.AddMenuItem("🤖 Claude usage", "Claude Code usage + rate limits")
 	t.claudeParent.Hide()
 	t.claudeUsagePool = t.makeDisabledPool(capClaudeUse, t.claudeParent)
+
+	t.statsDetailItem = systray.AddMenuItem("📊 Stats details…", "open the stats detail page")
+	t.statsDetailItem.Hide()
+	go func() {
+		for range t.statsDetailItem.ClickedCh {
+			if t.act.OpenStats != nil {
+				t.act.OpenStats()
+			}
+		}
+	}()
+	t.claudeDetailItem = systray.AddMenuItem("🤖 Claude usage details…", "open the Claude usage detail page")
+	t.claudeDetailItem.Hide()
+	go func() {
+		for range t.claudeDetailItem.ClickedCh {
+			if t.act.OpenClaude != nil {
+				t.act.OpenClaude()
+			}
+		}
+	}()
 
 	go func() {
 		for range t.refreshItem.ClickedCh {
@@ -292,6 +316,7 @@ func (t *Tray) render() {
 	}
 	fillLabelPool(t.statPool, stats)
 	showIf(t.statsParent, len(stats) > 0)
+	showIf(t.statsDetailItem, snap.AntiTangent.Present)
 
 	// Claude usage: inline per-account bar overview + per-account detail submenu.
 	fillLabelPool(t.claudePool, claudeOverviewLabels(snap.ClaudeStats, now))
@@ -302,6 +327,7 @@ func (t *Tray) render() {
 	} else {
 		t.claudeParent.Hide()
 	}
+	showIf(t.claudeDetailItem, snap.ClaudeStats.Present && len(snap.ClaudeStats.Accounts) > 0)
 	// Dedup notifications under the lock (render runs from the ticker, the
 	// Refresh click, and startup concurrently — t.raised must not be touched
 	// without t.mu). Raise the actual notifications after unlocking, since
