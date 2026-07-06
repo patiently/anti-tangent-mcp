@@ -6,54 +6,14 @@
       "subject": "Task 1: [claude-sandbox] Producer emits weekly_models + back-fill (schema 1.2)",
       "status": "pending",
       "nativeTaskId": 6,
-      "description": "**Goal:** claude-stats.json limits carries a weekly_models map (Fable et al.) from /api/oauth/usage limits[]; opus/sonnet back-filled; schema 1.2. Repo: claude-sandbox (branch prep per plan Prerequisite).\n\n```json:metadata\n{\"repo\": \"claude-sandbox\", \"files\": [\"bin/claude-usage-stats\", \"docs/claude-stats/claude-stats.schema.json\", \"docs/claude-stats/README.md\", \"docs/claude-stats/claude-stats.example.json\", \"tests/claude-usage-stats/fake-usage.json\", \"tests/claude-usage-stats/run-tests.sh\"], \"verifyCommand\": \"./tests/claude-usage-stats/run-tests.sh\", \"acceptanceCriteria\": [\"weekly_models map from limits[] weekly_scoped\", \"weekly_models {} when none/error\", \"opus/sonnet back-filled else null\", \"SCHEMA_VERSION 1.2 + docs\", \"run-tests.sh passes\"], \"modelTier\": \"standard\"}\n```"
+      "note": "BLOCKED on user's claude-sandbox branch/WIP decision (dispatch gate). Not started."
     },
-    {
-      "id": 2,
-      "subject": "Task 2: [gnome-topbar] Decode weekly_models in claudestats",
-      "status": "pending",
-      "nativeTaskId": 7,
-      "description": "**Goal:** claudestats.Limits exposes per-model weekly windows (WeeklyModels map[string]*Window json weekly_models). Repo: anti-tangent-mcp, branch gnome-topbar-stats-detail.\n\n```json:metadata\n{\"repo\": \"anti-tangent-mcp\", \"files\": [\"gnome-topbar/daemon/internal/claudestats/claudestats.go\", \"gnome-topbar/daemon/internal/claudestats/testdata/claude-stats.json\", \"gnome-topbar/daemon/internal/claudestats/claudestats_test.go\"], \"verifyCommand\": \"cd gnome-topbar/daemon && go test -race ./internal/claudestats/...\", \"acceptanceCriteria\": [\"WeeklyModels decodes\", \"absent weekly_models still Present\"], \"modelTier\": \"mechanical\"}\n```"
-    },
-    {
-      "id": 3,
-      "subject": "Task 3: [gnome-topbar] Decode full anti-tangent rollup in atstats",
-      "status": "pending",
-      "nativeTaskId": 8,
-      "description": "**Goal:** atstats.Stats carries per-tool, severity, full categories, p50, cache/partial, model usage, window span; existing fields unchanged. Repo: anti-tangent-mcp, branch gnome-topbar-stats-detail.\n\n```json:metadata\n{\"repo\": \"anti-tangent-mcp\", \"files\": [\"gnome-topbar/daemon/internal/atstats/atstats.go\", \"gnome-topbar/daemon/internal/atstats/atstats_test.go\"], \"verifyCommand\": \"cd gnome-topbar/daemon && go test -race ./internal/atstats/...\", \"acceptanceCriteria\": [\"new rollup fields decode\", \"existing fields unchanged\", \"absent file Present false\"], \"modelTier\": \"mechanical\"}\n```"
-    },
-    {
-      "id": 4,
-      "subject": "Task 4: [gnome-topbar] Per-model rows in Claude usage submenu",
-      "status": "pending",
-      "blockedBy": [2],
-      "nativeTaskId": 9,
-      "description": "**Goal:** Claude usage submenu shows one row per weekly_models entry (Fable), after 5h/7d; overview + icon unchanged. Repo: anti-tangent-mcp, branch gnome-topbar-stats-detail.\n\n```json:metadata\n{\"repo\": \"anti-tangent-mcp\", \"files\": [\"gnome-topbar/daemon/internal/tray/claude.go\", \"gnome-topbar/daemon/internal/tray/claude_test.go\"], \"verifyCommand\": \"cd gnome-topbar/daemon && go test -race ./internal/tray/...\", \"acceptanceCriteria\": [\"per-model rows after 5h/7d\", \"overview unchanged\"], \"modelTier\": \"standard\"}\n```"
-    },
-    {
-      "id": 5,
-      "subject": "Task 5: [gnome-topbar] /ui/stats + /ui/claude web detail pages",
-      "status": "pending",
-      "blockedBy": [2, 3],
-      "nativeTaskId": 10,
-      "description": "**Goal:** Two authed pages render the anti-tangent rollup (+ CodeScene block/empty-state) and per-account Claude usage incl. per-model Fable. Repo: anti-tangent-mcp, branch gnome-topbar-stats-detail.\n\n```json:metadata\n{\"repo\": \"anti-tangent-mcp\", \"files\": [\"gnome-topbar/daemon/internal/server/statspage.go\", \"gnome-topbar/daemon/internal/server/statspage_test.go\", \"gnome-topbar/daemon/internal/server/ui.go\"], \"verifyCommand\": \"cd gnome-topbar/daemon && go test -race ./internal/server/...\", \"acceptanceCriteria\": [\"/ui/stats rollup + codescene/empty-state\", \"/ui/claude usage+limits+Fable+error\", \"landing links\", \"absent = graceful\"], \"modelTier\": \"standard\"}\n```"
-    },
-    {
-      "id": 6,
-      "subject": "Task 6: [gnome-topbar] Tray Details… items + daemon wiring",
-      "status": "pending",
-      "blockedBy": [5],
-      "nativeTaskId": 11,
-      "description": "**Goal:** Two tray items open /ui/stats and /ui/claude; shown only when the respective stats are present. Repo: anti-tangent-mcp, branch gnome-topbar-stats-detail.\n\n```json:metadata\n{\"repo\": \"anti-tangent-mcp\", \"files\": [\"gnome-topbar/daemon/internal/tray/tray.go\", \"gnome-topbar/daemon/cmd/gnome-topbar-daemon/main.go\"], \"verifyCommand\": \"cd gnome-topbar/daemon && go build ./... && go test -race ./internal/tray/...\", \"acceptanceCriteria\": [\"OpenStats/OpenClaude actions\", \"two Details items open pages\", \"shown only when present\"], \"modelTier\": \"standard\"}\n```"
-    },
-    {
-      "id": 7,
-      "subject": "Task 7: [gnome-topbar] Changelog v0.3.0",
-      "status": "pending",
-      "blockedBy": [4, 5, 6],
-      "nativeTaskId": 12,
-      "description": "**Goal:** Add a ### v0.3.0 gnome-topbar README changelog entry (per-model Fable usage + /ui/stats + /ui/claude pages). Repo: anti-tangent-mcp, branch gnome-topbar-stats-detail.\n\n```json:metadata\n{\"repo\": \"anti-tangent-mcp\", \"files\": [\"gnome-topbar/README.md\"], \"verifyCommand\": \"grep -n 'v0.3.0' gnome-topbar/README.md\", \"acceptanceCriteria\": [\"v0.3.0 entry present\"], \"modelTier\": \"mechanical\"}\n```"
-    }
+    {"id": 2, "subject": "Task 2: [gnome-topbar] Decode weekly_models in claudestats", "status": "completed", "nativeTaskId": 7, "commit": "b8a705b"},
+    {"id": 3, "subject": "Task 3: [gnome-topbar] Decode full anti-tangent rollup in atstats", "status": "completed", "nativeTaskId": 8, "commit": "25334b1"},
+    {"id": 4, "subject": "Task 4: [gnome-topbar] Per-model rows in Claude usage submenu", "status": "completed", "blockedBy": [2], "nativeTaskId": 9, "commit": "399c668"},
+    {"id": 5, "subject": "Task 5: [gnome-topbar] /ui/stats + /ui/claude web detail pages", "status": "completed", "blockedBy": [2, 3], "nativeTaskId": 10, "commit": "1645567 (+e91b154 fix)"},
+    {"id": 6, "subject": "Task 6: [gnome-topbar] Tray Details… items + daemon wiring", "status": "completed", "blockedBy": [5], "nativeTaskId": 11, "commit": "8d733bf"},
+    {"id": 7, "subject": "Task 7: [gnome-topbar] Changelog v0.3.0", "status": "completed", "blockedBy": [4, 5, 6], "nativeTaskId": 12, "commit": "docs [skip ci]"}
   ],
   "lastUpdated": "2026-07-06T15:35:10Z"
 }
