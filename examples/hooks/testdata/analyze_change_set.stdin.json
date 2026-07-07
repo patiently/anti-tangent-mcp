@@ -1,0 +1,9 @@
+{
+  "tool_name": "mcp__codescene__analyze_change_set",
+  "tool_response": [
+    {
+      "type": "text",
+      "text": "{\"results\":[{\"name\":\"internal/stats/codescene.go\",\"verdict\":\"degraded\",\"findings\":[{\"category\":\"Complex Method\",\"change-details\":[{\"change-type\":\"introduced\",\"description\":\"computeCodescene has a cyclomatic complexity of 10, threshold = 9\",\"locations\":[{\"end-line\":116,\"function\":\"computeCodescene\",\"start-line\":71}],\"value\":10}],\"change-type\":\"introduced\",\"new-pp\":1.0,\"threshold\":9}]},{\"name\":\"internal/stats/codescene_test.go\",\"verdict\":\"degraded\",\"findings\":[{\"category\":\"Complex Method\",\"change-details\":[{\"change-type\":\"degraded\",\"description\":\"TestComputeCodescene increases in cyclomatic complexity from 13 to 17, threshold = 9\",\"locations\":[{\"end-line\":45,\"end-line-before\":37,\"function\":\"TestComputeCodescene\",\"start-line\":10,\"start-line-before\":10}],\"value\":17,\"value-before\":13}],\"change-type\":\"unchanged\",\"new-pp\":1.0,\"old-pp\":1.0,\"threshold\":9},{\"category\":\"Complex Conditional\",\"change-details\":[{\"change-type\":\"degraded\",\"description\":\"TestComputeCodescene increases from 2 complex conditionals with 4 branches to 3 complex conditionals with 6 branches, threshold = 2\",\"locations\":[{\"end-line\":30,\"end-line-before\":28,\"function\":\"TestComputeCodescene\",\"start-line\":24,\"start-line-before\":25}],\"value\":18,\"value-before\":8}],\"change-type\":\"degraded\",\"new-pp\":3.0,\"old-pp\":2.0,\"threshold\":2}]}],\"quality_gates\":\"failed\"}"
+    }
+  ]
+}
