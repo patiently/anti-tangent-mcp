@@ -36,16 +36,21 @@ type Stats struct {
 }
 
 // CodeSceneStats mirrors the optional top-level "codescene" object inside
-// anti-tangent's rollup.json. Contract: 2026-06-02-anti-tangent-stats-design.md.
+// anti-tangent's rollup.json (verdict/quality-gate/problem-points shape, v0.11.0+;
+// analyze_change_set is categorical, not a 1-10 score). Contract:
+// docs/team-setup/codescene-stats.md.
 type CodeSceneStats struct {
 	Runs              int            `json:"runs"`
-	LatestScore       float64        `json:"latest_score"`
-	LatestDelta       float64        `json:"latest_delta"`
+	GatesPassed       int            `json:"gates_passed"`
+	GatesFailed       int            `json:"gates_failed"`
+	LatestGate        string         `json:"latest_gate"`
 	LatestTrend       string         `json:"latest_trend"`
-	ScoreP50          float64        `json:"score_p50"`
+	LatestNetPP       float64        `json:"latest_net_pp"`
+	NetPPP50          float64        `json:"net_pp_p50"`
 	Regressions       int            `json:"regressions"`
 	Improvements      int            `json:"improvements"`
 	Neutral           int            `json:"neutral"`
+	FilesAnalyzed     int            `json:"files_analyzed"`
 	CategoryHistogram map[string]int `json:"category_histogram"`
 }
 

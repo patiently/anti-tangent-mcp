@@ -95,11 +95,14 @@ func renderStatsPage(at atstats.Stats) string {
 	b.WriteString(`<h2>CodeScene</h2>`)
 	if cs := at.CodeScene; cs != nil {
 		b.WriteString(kvTable(3, "Code Health", [][2]string{
-			{"latest score", fmt.Sprintf("%.1f", cs.LatestScore)},
-			{"latest delta", fmt.Sprintf("%+.1f (%s)", cs.LatestDelta, cs.LatestTrend)},
-			{"score p50", fmt.Sprintf("%.1f", cs.ScoreP50)},
 			{"runs", strconv.Itoa(cs.Runs)},
+			{"latest gate", cs.LatestGate},
+			{"gates pass / fail", fmt.Sprintf("%d / %d", cs.GatesPassed, cs.GatesFailed)},
+			{"latest trend", cs.LatestTrend},
+			{"latest net pp", fmt.Sprintf("%+.1f", cs.LatestNetPP)},
+			{"net pp p50", fmt.Sprintf("%+.1f", cs.NetPPP50)},
 			{"reg / imp / neutral", fmt.Sprintf("%d / %d / %d", cs.Regressions, cs.Improvements, cs.Neutral)},
+			{"files analyzed", strconv.Itoa(cs.FilesAnalyzed)},
 		}))
 		b.WriteString(histTable(3, "CodeScene categories", cs.CategoryHistogram))
 	} else {

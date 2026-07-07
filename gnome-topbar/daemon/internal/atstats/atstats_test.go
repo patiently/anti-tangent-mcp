@@ -22,8 +22,8 @@ func TestReadParsesRollupSummaryAndCodescene(t *testing.T) {
 	  "per_tool":{"validate_completion":6},"findings_per_call":3.2,"severity_histogram":{"major":4},
 	  "review_ms_p50":900,"cache_hit_rate":0,"partial_rate":0,"model_usage":{"openai:gpt-5.5":10},
 	  "window_start":"2026-05-26T08:00:00Z","window_end":"2026-06-02T08:00:00Z",
-	  "codescene":{"runs":12,"latest_score":8.4,"latest_delta":-0.3,"latest_trend":"regression",
-	  "score_p50":8.6,"regressions":3,"improvements":7,"neutral":2,"category_histogram":{"complex-method":5}}}`
+	  "codescene":{"runs":12,"gates_passed":7,"gates_failed":5,"latest_gate":"failed","latest_trend":"regression",
+	  "latest_net_pp":2.3,"net_pp_p50":0.5,"regressions":3,"improvements":7,"neutral":2,"files_analyzed":84,"category_histogram":{"complex-method":5}}}`
 	_ = os.WriteFile(filepath.Join(dir, "rollup.json"), []byte(rollup), 0o600)
 	_ = os.WriteFile(filepath.Join(dir, "summary.md"), []byte("All healthy."), 0o600)
 	s := Read(dir)
@@ -36,7 +36,8 @@ func TestReadParsesRollupSummaryAndCodescene(t *testing.T) {
 	if s.TopCategory != "ambiguous_spec" || s.Summary != "All healthy." {
 		t.Fatalf("cat/summary: %+v", s)
 	}
-	if s.CodeScene == nil || s.CodeScene.Runs != 12 || s.CodeScene.LatestTrend != "regression" {
+	if s.CodeScene == nil || s.CodeScene.Runs != 12 || s.CodeScene.LatestGate != "failed" ||
+		s.CodeScene.GatesFailed != 5 || s.CodeScene.LatestTrend != "regression" || s.CodeScene.FilesAnalyzed != 84 {
 		t.Fatalf("codescene: %+v", s.CodeScene)
 	}
 	if s.PerTool["validate_completion"] != 6 || s.ReviewMSP50 != 900 || s.ModelUsage["openai:gpt-5.5"] != 10 {

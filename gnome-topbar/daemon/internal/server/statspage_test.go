@@ -18,9 +18,10 @@ func TestRenderStatsPageCodesceneEmptyState(t *testing.T) {
 }
 
 func TestRenderStatsPageCodescenePresent(t *testing.T) {
-	at := atstats.Stats{Present: true, CodeScene: &atstats.CodeSceneStats{LatestScore: 8.4, LatestTrend: "regression"}}
-	if !strings.Contains(renderStatsPage(at), "8.4") {
-		t.Fatal("CodeScene score not rendered")
+	at := atstats.Stats{Present: true, CodeScene: &atstats.CodeSceneStats{Runs: 12, GatesFailed: 5, LatestGate: "failed", LatestTrend: "regression", LatestNetPP: 2.3}}
+	out := renderStatsPage(at)
+	if !strings.Contains(out, "failed") || !strings.Contains(out, "regression") {
+		t.Fatalf("CodeScene gate/trend not rendered:\n%s", out)
 	}
 }
 
