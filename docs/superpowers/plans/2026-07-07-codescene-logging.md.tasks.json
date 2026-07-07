@@ -1,0 +1,29 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-07-codescene-logging.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "③-T1: Server — redesign CodeScene record + rollup (verdict/pp)",
+      "status": "pending",
+      "nativeTaskId": 16,
+      "description": "**Goal:** internal/stats/codescene.go reads the verdict/pp record and aggregates the new codescene rollup block; codescene key omitted when no records. Repo anti-tangent-mcp, branch version/0.11.0.\n\n```json:metadata\n{\"files\": [\"internal/stats/codescene.go\", \"internal/stats/codescene_test.go\", \"CHANGELOG.md\"], \"verifyCommand\": \"go test -race ./internal/stats/...\", \"acceptanceCriteria\": [\"CodesceneEvent verdict/pp fields no Score*\", \"CodesceneRollup gate/pp fields no score\", \"computeCodescene aggregates + nil on empty\", \"CHANGELOG 0.11.0\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 2,
+      "subject": "③-T2: CodeScene logging hook (script + test)",
+      "status": "pending",
+      "blockedBy": [1],
+      "nativeTaskId": 17,
+      "description": "**Goal:** fire-and-forget bash+jq PostToolUse hook appends one T1-shaped record per analyze_change_set run to codescene-events.jsonl; no paths/code/functions. STEP 0: pin tool_response shape empirically first.\n\n```json:metadata\n{\"files\": [\"examples/hooks/codescene-log.sh\", \"examples/hooks/codescene-log_test.sh\", \"examples/hooks/testdata/analyze_change_set.stdin.json\"], \"verifyCommand\": \"examples/hooks/codescene-log_test.sh\", \"acceptanceCriteria\": [\"record fields match CodesceneEvent\", \"no path/fn leak\", \"silent skip on unset dir/empty results\", \"trend = sign(net_pp)\"], \"modelTier\": \"standard\"}\n```"
+    },
+    {
+      "id": 3,
+      "subject": "③-T3: Contract doc + wire hook into settings",
+      "status": "pending",
+      "blockedBy": [1, 2],
+      "nativeTaskId": 18,
+      "description": "**Goal:** codescene-stats.md documents the new record/rollup + install; hook registered in ~/.claude/settings.json (additive PostToolUse entry, valid JSON, existing *-matcher preserved).\n\n```json:metadata\n{\"files\": [\"docs/team-setup/codescene-stats.md\"], \"verifyCommand\": \"grep -c score_before docs/team-setup/codescene-stats.md\", \"acceptanceCriteria\": [\"doc verdict/pp record+rollup+install\", \"no score_before\", \"settings.json scoped entry alongside existing\"], \"modelTier\": \"standard\"}\n```"
+    }
+  ],
+  "lastUpdated": "2026-07-07T00:00:00Z"
+}
