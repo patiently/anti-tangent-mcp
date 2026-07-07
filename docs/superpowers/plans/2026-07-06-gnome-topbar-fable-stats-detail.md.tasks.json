@@ -1,0 +1,19 @@
+{
+  "planPath": "docs/superpowers/plans/2026-07-06-gnome-topbar-fable-stats-detail.md",
+  "tasks": [
+    {
+      "id": 1,
+      "subject": "Task 1: [claude-sandbox] Producer emits weekly_models + back-fill (schema 1.2)",
+      "status": "pending",
+      "nativeTaskId": 6,
+      "note": "BLOCKED on user's claude-sandbox branch/WIP decision (dispatch gate). Not started."
+    },
+    {"id": 2, "subject": "Task 2: [gnome-topbar] Decode weekly_models in claudestats", "status": "completed", "nativeTaskId": 7, "commit": "b8a705b"},
+    {"id": 3, "subject": "Task 3: [gnome-topbar] Decode full anti-tangent rollup in atstats", "status": "completed", "nativeTaskId": 8, "commit": "25334b1"},
+    {"id": 4, "subject": "Task 4: [gnome-topbar] Per-model rows in Claude usage submenu", "status": "completed", "blockedBy": [2], "nativeTaskId": 9, "commit": "399c668"},
+    {"id": 5, "subject": "Task 5: [gnome-topbar] /ui/stats + /ui/claude web detail pages", "status": "completed", "blockedBy": [2, 3], "nativeTaskId": 10, "commit": "1645567 (+e91b154 fix)"},
+    {"id": 6, "subject": "Task 6: [gnome-topbar] Tray Details… items + daemon wiring", "status": "completed", "blockedBy": [5], "nativeTaskId": 11, "commit": "8d733bf"},
+    {"id": 7, "subject": "Task 7: [gnome-topbar] Changelog v0.3.0", "status": "completed", "blockedBy": [4, 5, 6], "nativeTaskId": 12, "commit": "docs [skip ci]"}
+  ],
+  "lastUpdated": "2026-07-06T15:35:10Z"
+}

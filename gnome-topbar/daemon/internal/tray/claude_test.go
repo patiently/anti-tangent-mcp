@@ -63,13 +63,13 @@ func TestUsageBar(t *testing.T) {
 		want string
 	}{
 		{0, "⬜⬜⬜⬜⬜"},
-		{3, "🟩⬜⬜⬜⬜"},   // nonzero rounds to 0 cells → forced to 1
-		{27, "🟩⬜⬜⬜⬜"},  // round(1.35) = 1
-		{38, "🟩🟩⬜⬜⬜"},  // round(1.9) = 2
-		{60, "🟨🟨🟨⬜⬜"},  // round(3.0) = 3, yellow
-		{65, "🟨🟨🟨⬜⬜"},  // round(3.25) = 3
-		{80, "🟥🟥🟥🟥⬜"},  // round(4.0) = 4, red
-		{82, "🟥🟥🟥🟥⬜"},  // round(4.1) = 4
+		{3, "🟩⬜⬜⬜⬜"},  // nonzero rounds to 0 cells → forced to 1
+		{27, "🟩⬜⬜⬜⬜"}, // round(1.35) = 1
+		{38, "🟩🟩⬜⬜⬜"}, // round(1.9) = 2
+		{60, "🟨🟨🟨⬜⬜"}, // round(3.0) = 3, yellow
+		{65, "🟨🟨🟨⬜⬜"}, // round(3.25) = 3
+		{80, "🟥🟥🟥🟥⬜"}, // round(4.0) = 4, red
+		{82, "🟥🟥🟥🟥⬜"}, // round(4.1) = 4
 		{100, "🟥🟥🟥🟥🟥"},
 		{150, "🟥🟥🟥🟥🟥"}, // clamped to width
 	}
@@ -192,25 +192,6 @@ func TestClaudeOverviewLabels_StaleMarker(t *testing.T) {
 	}
 }
 
-func TestHumanTokens(t *testing.T) {
-	cases := []struct {
-		n    int64
-		want string
-	}{
-		{0, "0"},
-		{512, "512"},
-		{4821, "4.8k"},
-		{512004, "512k"},
-		{4821093, "4.8M"},
-		{33106912, "33.1M"},
-	}
-	for _, c := range cases {
-		if got := humanTokens(c.n); got != c.want {
-			t.Errorf("humanTokens(%d) = %q, want %q", c.n, got, c.want)
-		}
-	}
-}
-
 func TestClaudeUsageRows_Detail(t *testing.T) {
 	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
 	r5 := time.Date(2026, 6, 3, 11, 46, 0, 0, time.UTC)
@@ -322,6 +303,26 @@ func TestClaudeOverviewLabels_StaleNoWindows(t *testing.T) {
 	got := claudeOverviewLabels(cs, now)
 	if len(got) != 1 || !strings.Contains(got[0], "stale") {
 		t.Errorf("stale + no windows should yield exactly the stale marker row: %q", got)
+	}
+}
+
+func TestClaudeUsageRowsPerModel(t *testing.T) {
+	util := 69.0
+	reset := time.Date(2026, 6, 8, 20, 0, 0, 0, time.UTC)
+	cs := claudestats.Stats{Present: true, Accounts: map[string]claudestats.Account{
+		"default": {Limits: &claudestats.Limits{
+			WeeklyModels: map[string]*claudestats.Window{"Fable": {Utilization: &util, ResetsAt: &reset}},
+		}},
+	}}
+	rows := claudeUsageRows(cs, time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC))
+	found := false
+	for _, r := range rows {
+		if strings.Contains(r, "Fable") && strings.Contains(r, "69%") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no Fable per-model row in %#v", rows)
 	}
 }
 

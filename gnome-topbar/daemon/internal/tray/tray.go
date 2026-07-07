@@ -27,6 +27,8 @@ type Actions struct {
 	OpenSearch  func()               // open the search page in the in-container browser
 	OpenNewTodo func()               // open the new-todo page
 	MarkDone    func(rawLine string) // tick a todo bullet in Basic Memory
+	OpenStats   func()               // open the /ui/stats detail page
+	OpenClaude  func()               // open the /ui/claude detail page
 }
 
 // Per-section item-pool caps. The systray menu is append-only, so we
@@ -79,6 +81,9 @@ type Tray struct {
 	claudeParent    *systray.MenuItem   // collapsible "Claude usage" submenu
 	claudeUsagePool []*systray.MenuItem
 
+	statsDetailItem  *systray.MenuItem // opens /ui/stats (shown only when AntiTangent stats present)
+	claudeDetailItem *systray.MenuItem // opens /ui/claude (shown only when Claude stats present)
+
 	refreshItem *systray.MenuItem
 	quitItem    *systray.MenuItem
 }
@@ -109,20 +114,8 @@ func (t *Tray) onReady(ctx context.Context) {
 	searchItem := systray.AddMenuItem("🔎 Search epics/stories…", "open BM search in the browser")
 	newTodoItem := systray.AddMenuItem("➕ New todo…", "create a todo in Basic Memory")
 	systray.AddSeparator()
-	go func() {
-		for range searchItem.ClickedCh {
-			if t.act.OpenSearch != nil {
-				t.act.OpenSearch()
-			}
-		}
-	}()
-	go func() {
-		for range newTodoItem.ClickedCh {
-			if t.act.OpenNewTodo != nil {
-				t.act.OpenNewTodo()
-			}
-		}
-	}()
+	bindClick(searchItem, t.act.OpenSearch)
+	bindClick(newTodoItem, t.act.OpenNewTodo)
 
 	// currently-working-on (inline header)
 	t.nowItem = systray.AddMenuItem("", "")
@@ -151,17 +144,25 @@ func (t *Tray) onReady(ctx context.Context) {
 	t.activeParent.Hide()
 	t.activePool, t.activeRaw = t.makeDonePool(capActive, t.activeParent)
 
-	// anti-tangent / CodeScene stats — collapsed submenu, shown only when present
+	// anti-tangent / CodeScene stats — collapsed submenu, shown only when present,
+	// with a "details…" item right after it that opens the full /ui/stats page.
 	t.statsParent = systray.AddMenuItem("📊 Stats", "anti-tangent / CodeScene stats")
 	t.statsParent.Hide()
 	t.statPool = t.makeDisabledPool(capStat, t.statsParent)
+	t.statsDetailItem = systray.AddMenuItem("📊 Stats details…", "open the stats detail page")
+	t.statsDetailItem.Hide()
+	bindClick(t.statsDetailItem, t.act.OpenStats)
 
-	// Claude usage — inline per-account bar overview (shown only when present), with a
-	// collapsed submenu carrying per-account detail.
+	// Claude usage — inline per-account bar overview (shown only when present), a
+	// collapsed submenu with per-account detail, and a "details…" item (right after
+	// it) that opens the full /ui/claude page.
 	t.claudePool = t.makeDisabledPool(capClaude, nil)
 	t.claudeParent = systray.AddMenuItem("🤖 Claude usage", "Claude Code usage + rate limits")
 	t.claudeParent.Hide()
 	t.claudeUsagePool = t.makeDisabledPool(capClaudeUse, t.claudeParent)
+	t.claudeDetailItem = systray.AddMenuItem("🤖 Claude usage details…", "open the Claude usage detail page")
+	t.claudeDetailItem.Hide()
+	bindClick(t.claudeDetailItem, t.act.OpenClaude)
 
 	go func() {
 		for range t.refreshItem.ClickedCh {
@@ -186,6 +187,18 @@ func (t *Tray) onReady(ctx context.Context) {
 				return
 			case <-tk.C:
 				t.render()
+			}
+		}
+	}()
+}
+
+// bindClick spawns a goroutine that invokes action on each click of item. action
+// may be nil (a no-op), so callers can wire an optional Actions callback directly.
+func bindClick(item *systray.MenuItem, action func()) {
+	go func() {
+		for range item.ClickedCh {
+			if action != nil {
+				action()
 			}
 		}
 	}()
@@ -292,6 +305,7 @@ func (t *Tray) render() {
 	}
 	fillLabelPool(t.statPool, stats)
 	showIf(t.statsParent, len(stats) > 0)
+	showIf(t.statsDetailItem, snap.AntiTangent.Present)
 
 	// Claude usage: inline per-account bar overview + per-account detail submenu.
 	fillLabelPool(t.claudePool, claudeOverviewLabels(snap.ClaudeStats, now))
@@ -302,6 +316,7 @@ func (t *Tray) render() {
 	} else {
 		t.claudeParent.Hide()
 	}
+	showIf(t.claudeDetailItem, snap.ClaudeStats.Present && len(snap.ClaudeStats.Accounts) > 0)
 	// Dedup notifications under the lock (render runs from the ticker, the
 	// Refresh click, and startup concurrently — t.raised must not be touched
 	// without t.mu). Raise the actual notifications after unlocking, since

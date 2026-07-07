@@ -125,6 +125,8 @@ func main() {
 				log.Error("mark todo done", "err", err)
 			}
 		},
+		OpenStats:  func() { openLocal("/ui/stats") },
+		OpenClaude: func() { openLocal("/ui/claude") },
 	}
 	tr := tray.New(p, func(u string) {
 		if err := tray.OpenURIOnHost(u); err != nil {

@@ -6,6 +6,7 @@ import (
 	"html"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
 )
@@ -33,7 +34,16 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 			`<li><a href="/ui/decisions">📐 Decisions</a></li>`+
 			`<li><a href="/ui/notes">🗒 My notes</a></li>`+
 			`<li><a href="/ui/new-todo">➕ New todo</a></li>`+
+			`<li><a href="/ui/stats">📊 Stats</a></li>`+
+			`<li><a href="/ui/claude">🤖 Claude usage</a></li>`+
 			`</ul>`))
+	}))
+
+	mux.HandleFunc("/ui/stats", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
+		writeHTML(w, renderStatsPage(p.Snapshot().AntiTangent))
+	}))
+	mux.HandleFunc("/ui/claude", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
+		writeHTML(w, renderClaudePage(p.Snapshot().ClaudeStats, time.Now()))
 	}))
 
 	mux.HandleFunc("/ui/search/results", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {

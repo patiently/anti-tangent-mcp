@@ -26,13 +26,13 @@ const (
 var iconTrackColor = color.RGBA{0x2c, 0x31, 0x3c, 0xff}
 
 // barColorFor maps a utilization percent to the same severity as the menu bars
-// (utilYellowPct / utilWarnPct, shared from claude.go). A stale snapshot dims to
-// gray so the bars don't read as live.
+// (utilYellowPct here for amber; claudestats.UtilWarnPct for red). A stale
+// snapshot dims to gray so the bars don't read as live.
 func barColorFor(pct float64, stale bool) color.RGBA {
 	switch {
 	case stale:
 		return color.RGBA{0x6b, 0x72, 0x80, 0xff} // gray
-	case pct >= utilWarnPct:
+	case pct >= claudestats.UtilWarnPct:
 		return color.RGBA{0xe5, 0x39, 0x35, 0xff} // red
 	case pct >= utilYellowPct:
 		return color.RGBA{0xe6, 0xb0, 0x00, 0xff} // amber

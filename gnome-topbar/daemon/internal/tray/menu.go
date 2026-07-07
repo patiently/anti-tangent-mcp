@@ -37,8 +37,8 @@ func antiTangentLabel(at atstats.Stats) string {
 }
 
 func codeSceneLabel(cs *atstats.CodeSceneStats) string {
-	return fmt.Sprintf("📊 CodeScene — score %.1f (%s) · %dr/%di",
-		cs.LatestScore, dash(cs.LatestTrend), cs.Regressions, cs.Improvements)
+	return fmt.Sprintf("📊 CodeScene — %d runs · gate %s · %s · %dr/%di",
+		cs.Runs, dash(cs.LatestGate), dash(cs.LatestTrend), cs.Regressions, cs.Improvements)
 }
 
 func prLabel(repo string, num int, title string) string {

@@ -82,7 +82,9 @@ pre{background:#0f1115;padding:.75rem;border-radius:8px;overflow:auto;border:1px
 pre.mermaid{background:transparent;border:0}
 code{font-family:ui-monospace,Menlo,monospace}
 :not(pre)>code{background:#262b34;padding:.1rem .3rem;border-radius:4px}
+.tbl{overflow-x:auto}
 table{border-collapse:collapse}td,th{border:1px solid #2c313c;padding:.3rem .6rem}
+th[scope=row]{text-align:left;font-weight:600;color:#cdd3df}
 ul.cards{list-style:none;padding:0}
 ul.cards li{padding:.6rem .8rem;margin:.45rem 0;background:#1f232b;border:1px solid #2c313c;border-radius:8px}
 ul.cards li a{font-weight:600}
@@ -97,7 +99,7 @@ const topbar = `<header class="topbar">` +
 	`<a class="brand" href="/ui/search">🛠 gnome-topbar</a>` +
 	`<form class="search" method="GET" action="/ui/search/results">` +
 	`<input name="q" placeholder="Search the knowledge base…" aria-label="Search the knowledge base"></form>` +
-	`<nav><a href="/ui/howtos">Howtos</a><a href="/ui/gotchas">Gotchas</a><a href="/ui/modules">Modules</a><a href="/ui/features">Features</a><a href="/ui/decisions">Decisions</a><a href="/ui/notes">Notes</a><a href="/ui/new-todo">New todo</a></nav>` +
+	`<nav><a href="/ui/stats">Stats</a><a href="/ui/claude">Claude</a><a href="/ui/howtos">Howtos</a><a href="/ui/gotchas">Gotchas</a><a href="/ui/modules">Modules</a><a href="/ui/features">Features</a><a href="/ui/decisions">Decisions</a><a href="/ui/notes">Notes</a><a href="/ui/new-todo">New todo</a></nav>` +
 	`</header>`
 
 // pageShell wraps body HTML in a dark-themed document with the sticky topbar and

@@ -72,6 +72,11 @@ tray renders the body with a staleness indicator.
 
 ## Changelog
 
+### v0.3.0
+- Per-model weekly Claude usage: the Claude usage submenu now shows a row per model (incl. **Fable**), decoded from the producer's new `limits.weekly_models` (claude-stats schema 1.2); the legacy `seven_day_opus`/`seven_day_sonnet` are back-filled from it.
+- New web detail pages opened from the tray: **📊 Stats details…** (`/ui/stats` — the full anti-tangent rollup: verdict mix, per-tool split, severity/category histograms, p50/p95, cache/partial, model usage, plus a CodeScene block or empty-state hint) and **🤖 Claude usage details…** (`/ui/claude` — per-account usage, 5h/weekly/per-model rate limits, and error/stale states). The tray dropdown stays lean; the top-bar icon and compact overview are unchanged.
+- CodeScene stats now render the **verdict / quality-gate / problem-points** shape from anti-tangent **v0.11.0**'s redesigned `codescene` rollup block (`analyze_change_set` is categorical, not a 1-10 score): the tray line shows runs · gate · trend · reg/imp, and `/ui/stats` shows gates pass/fail, latest gate/trend, net-pp + p50, files analyzed, and the category histogram. (Replaces the old score/delta fields.)
+
 ### v0.2.2
 - Dynamic top-bar icon: one vertical bar per Claude account, height ∝ its worst rate-limit window (5h vs weekly), colored green/amber/red by the same 60/80 thresholds as the menu (gray when stats are stale). Falls back to the static icon when no usage stats are present; clicking still opens the full usage panel.
 
