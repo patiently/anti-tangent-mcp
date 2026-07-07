@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-07-07
+
+### Changed
+- CodeScene stats record + rollup redesigned around `analyze_change_set`'s actual
+  categorical output (per-file verdicts, quality-gate, problem-points) instead of a
+  numeric Code Health score, which the tool does not return for a change set.
+  `CodesceneEvent`/`CodesceneRollup` drop `score_before`/`score_after`/`delta`/
+  `latest_score`/`score_p50`; add `quality_gate`/`verdicts`/`net_pp` and rollup
+  `gates_passed`/`gates_failed`/`latest_gate`/`latest_net_pp`/`net_pp_p50`.
+
+### Added
+- `examples/hooks/codescene-log.sh`: a PostToolUse hook that appends one counts-only
+  record per `analyze_change_set` run to `codescene-events.jsonl`. See
+  `docs/team-setup/codescene-stats.md`.
+
 ## [0.10.0] - 2026-06-02
 
 ### Added

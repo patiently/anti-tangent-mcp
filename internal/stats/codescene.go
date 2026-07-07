@@ -7,31 +7,41 @@ import (
 
 const codesceneFile = "codescene-events.jsonl"
 
-// CodesceneEvent is the per-run record the AGENT appends (see INTEGRATION.md and
-// docs/team-setup/codescene-stats.md). anti-tangent only ever READS this file;
-// it never writes it. Counts + metadata only — no file paths.
+// Verdicts is the per-file verdict tally from an analyze_change_set run.
+type Verdicts struct {
+	Improved int `json:"improved"`
+	Degraded int `json:"degraded"`
+	Stable   int `json:"stable"`
+}
+
+// CodesceneEvent is the per-run record the hook appends (see
+// docs/team-setup/codescene-stats.md). anti-tangent only READS this file; it
+// never writes it. Counts + metadata only — no file paths. analyze_change_set is
+// categorical (verdicts / quality-gate / problem-points), not a 1-10 score.
 type CodesceneEvent struct {
 	Ts             time.Time      `json:"ts"`
 	Tool           string         `json:"tool"`
-	ScoreBefore    float64        `json:"score_before"`
-	ScoreAfter     float64        `json:"score_after"`
-	Delta          float64        `json:"delta"`
-	Trend          string         `json:"trend"`
+	QualityGate    string         `json:"quality_gate"` // passed|failed
 	FilesAnalyzed  int            `json:"files_analyzed"`
+	Verdicts       Verdicts       `json:"verdicts"`
+	Trend          string         `json:"trend"` // improvement|regression|neutral
+	NetPP          float64        `json:"net_pp"`
 	CategoryCounts map[string]int `json:"category_counts,omitempty"`
 }
 
-// CodesceneRollup is the nested `codescene` block in rollup.json. snake_case
-// json tags are part of the same cross-component contract as Rollup (§12.4).
+// CodesceneRollup is the nested `codescene` block in rollup.json.
 type CodesceneRollup struct {
 	Runs              int            `json:"runs"`
-	LatestScore       float64        `json:"latest_score"`
-	LatestDelta       float64        `json:"latest_delta"`
+	GatesPassed       int            `json:"gates_passed"`
+	GatesFailed       int            `json:"gates_failed"`
+	LatestGate        string         `json:"latest_gate"`
 	LatestTrend       string         `json:"latest_trend"`
-	ScoreP50          float64        `json:"score_p50"`
+	LatestNetPP       float64        `json:"latest_net_pp"`
+	NetPPP50          float64        `json:"net_pp_p50"`
 	Regressions       int            `json:"regressions"`
 	Improvements      int            `json:"improvements"`
 	Neutral           int            `json:"neutral"`
+	FilesAnalyzed     int            `json:"files_analyzed"`
 	CategoryHistogram map[string]int `json:"category_histogram"`
 	WindowStart       time.Time      `json:"window_start"`
 	WindowEnd         time.Time      `json:"window_end"`
@@ -68,7 +78,7 @@ func computeCodescene(events []CodesceneEvent) *CodesceneRollup {
 		WindowEnd:         events[0].Ts,
 		Runs:              len(events),
 	}
-	scores := make([]int64, 0, len(events)) // score*100 so we can reuse percentile (int64)
+	nps := make([]int64, 0, len(events)) // net_pp*100 as int64 for percentile()
 	latest := events[0]
 	for _, e := range events {
 		if e.Ts.Before(cr.WindowStart) {
@@ -78,6 +88,12 @@ func computeCodescene(events []CodesceneEvent) *CodesceneRollup {
 			cr.WindowEnd = e.Ts
 			latest = e
 		}
+		switch e.QualityGate {
+		case "passed":
+			cr.GatesPassed++
+		case "failed":
+			cr.GatesFailed++
+		}
 		switch e.Trend {
 		case "regression":
 			cr.Regressions++
@@ -86,14 +102,15 @@ func computeCodescene(events []CodesceneEvent) *CodesceneRollup {
 		default:
 			cr.Neutral++
 		}
+		cr.FilesAnalyzed += e.FilesAnalyzed
 		for k, v := range e.CategoryCounts {
 			cr.CategoryHistogram[k] += v
 		}
-		scores = append(scores, int64(math.Round(e.ScoreAfter*100)))
+		nps = append(nps, int64(math.Round(e.NetPP*100)))
 	}
-	cr.LatestScore = latest.ScoreAfter
-	cr.LatestDelta = latest.Delta
+	cr.LatestGate = latest.QualityGate
 	cr.LatestTrend = latest.Trend
-	cr.ScoreP50 = float64(percentile(scores, 50)) / 100
+	cr.LatestNetPP = latest.NetPP
+	cr.NetPPP50 = float64(percentile(nps, 50)) / 100
 	return cr
 }
