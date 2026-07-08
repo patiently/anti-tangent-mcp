@@ -4,33 +4,33 @@
     {
       "id": 24,
       "subject": "Task 1: Scaffold anti-tangent-protocol plugin + register",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Create the plugin (manifest + skill + bundled doc + README) and register it in the marketplace so `claude plugin install anti-tangent-protocol@anti-tangent-mcp` resolves.\n\n**Files:** plugin/anti-tangent-protocol/.claude-plugin/plugin.json; skills/anti-tangent-protocol/SKILL.md; INTEGRATION.md (cp from root); README.md; .claude-plugin/marketplace.json (add entry + bump 0.7.1→0.8.0).\n\n**Acceptance Criteria:** manifests parse + marketplace lists the plugin; SKILL.md name+Goal/AC-trigger description; bundled copy byte-identical to root; no plugin CLAUDE.md; skill references ../../INTEGRATION.md.\n\n**Verify:** jq marketplace/plugin.json parse + diff -q bundled==root + test ! -e plugin CLAUDE.md → OK.\n\n```json:metadata\n{\"files\": [\"plugin/anti-tangent-protocol/.claude-plugin/plugin.json\",\"plugin/anti-tangent-protocol/skills/anti-tangent-protocol/SKILL.md\",\"plugin/anti-tangent-protocol/INTEGRATION.md\",\"plugin/anti-tangent-protocol/README.md\",\".claude-plugin/marketplace.json\"], \"modelTier\": \"mechanical\", \"lightweightEligible\": true}\n```"
     },
     {
       "id": 25,
       "subject": "Task 2: CI guard — bundled INTEGRATION.md matches root",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [24],
       "description": "**Goal:** Fail CI if plugin/anti-tangent-protocol/INTEGRATION.md drifts from root.\n\n**Files:** .github/workflows/ci.yml (step in integration-size job after the size step).\n\n**Acceptance Criteria:** identical→exit0; drift→nonzero + cp hint; step in integration-size job.\n\n**Verify:** diff -q identical PASS; temp drift fails; restore via cp.\n\n```json:metadata\n{\"files\": [\".github/workflows/ci.yml\"], \"modelTier\": \"mechanical\", \"lightweightEligible\": true}\n```"
     },
     {
       "id": 26,
       "subject": "Task 3: opencode slim-pointer template",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Add the canonical slim pointer opencode installs into instructions.\n\n**Files:** examples/anti-tangent-pointer.md.\n\n**Acceptance Criteria:** <1500 bytes + Goal/AC trigger; Read on demand at __ANTI_TANGENT_DOC_PATH__; not-from-pointer-alone note.\n\n**Verify:** file exists + token present + <1500 bytes → OK.\n\n```json:metadata\n{\"files\": [\"examples/anti-tangent-pointer.md\"], \"modelTier\": \"mechanical\", \"lightweightEligible\": true}\n```"
     },
     {
       "id": 27,
       "subject": "Task 4: Rewrite README install flows",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [24, 26],
       "description": "**Goal:** Replace always-inlined INTEGRATION.md with plugin (CC) + slim pointer (opencode) in both one-shot prompts, intro, and Integration section.\n\n**Files:** README.md (intro; CC steps 7-9 + Report line; opencode steps 6-8; Integration section).\n\n**Acceptance Criteria:** CC installs plugin (no @-import/no ~/.claude write); bm-scribe reuses marketplace add; Report line → plugin list; opencode full-on-demand + slim-pointer-only; no inline-full instruction remains.\n\n**Verify:** ! grep @-import + grep plugin install + grep __ANTI_TANGENT_DOC_PATH__ → OK.\n\n```json:metadata\n{\"files\": [\"README.md\"], \"modelTier\": \"mechanical\", \"lightweightEligible\": true}\n```"
     },
     {
       "id": 28,
       "subject": "Task 5: CLAUDE.md invariants + CHANGELOG 0.11.1",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Document INTEGRATION.md invariants (size + bundled-copy sync) and add the release changelog entry.\n\n**Files:** CLAUDE.md (## Editing INTEGRATION.md after ## Architecture); CHANGELOG.md (## [0.11.1] - 2026-07-08 above [0.11.0]).\n\n**Acceptance Criteria:** CLAUDE.md documents <40000-byte budget + cp resync; CHANGELOG [0.11.1] Changed+Added; go build passes. Note: [0.11.1] entry is required for the version/0.11.1 branch CI changelog job.\n\n**Verify:** grep section + grep CHANGELOG header + go build → OK.\n\n```json:metadata\n{\"files\": [\"CLAUDE.md\",\"CHANGELOG.md\"], \"modelTier\": \"mechanical\", \"lightweightEligible\": true}\n```"
     }
   ],
