@@ -63,7 +63,11 @@ your reports — redact to `***` whenever a step would otherwise print one.
    INTEGRATION.md import (do NOT write INTEGRATION.md into ~/.claude/):
        claude plugin marketplace add patiently/anti-tangent-mcp
        claude plugin install anti-tangent-protocol@anti-tangent-mcp
-   Verify with `claude plugin list`.
+   Verify with `claude plugin list`. Migration (if I previously installed the
+   old way): so the protocol is not double-loaded alongside the plugin, delete
+   the old `@`-import of `anti-tangent.md` from `~/.claude/CLAUDE.md` (the line
+   under `## Active integrations`, and the heading if it is now empty), and
+   delete the `~/.claude/anti-tangent.md` mirror file.
 8. Optional: install the bm-scribe companion plugin (available since
    anti-tangent-mcp v0.7.1). It wraps the standard `basic-memory` MCP tools with
    skills that enforce the v0.7.0 project-knowledge layout and the BM v0.21.1
@@ -151,7 +155,10 @@ reports — redact to `***` whenever a step would otherwise print one.
    continuing: `grep -c __ANTI_TANGENT_DOC_PATH__
    ~/.config/opencode/anti-tangent-pointer.md` must print `0`, and the
    substituted path (the `anti-tangent.md` from step 6) must exist (`test -f`).
-   Report both.
+   Report both. Migration: if the `instructions` array already lists
+   `anti-tangent.md` (the full file, from a prior old-flow install), remove THAT
+   entry — the file stays on disk for on-demand reads; only the pointer belongs
+   in `instructions`.
 8. Tell me to restart opencode so the new MCP entry and `instructions` are
    loaded.
 
