@@ -1,0 +1,19 @@
+{
+  "name": "anti-tangent-protocol",
+  "description": "On-demand loader for the anti-tangent-mcp drift-protection protocol. A description-triggered skill that loads the full INTEGRATION.md only when a Goal/Acceptance-criteria task appears — keeping the always-loaded footprint to one line instead of ~10k tokens.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Patrick Gilmore",
+    "email": "p@patiently.io"
+  },
+  "homepage": "https://github.com/patiently/anti-tangent-mcp",
+  "repository": "https://github.com/patiently/anti-tangent-mcp",
+  "license": "MIT",
+  "keywords": [
+    "anti-tangent",
+    "drift-protection",
+    "mcp",
+    "skills",
+    "implementation-plan"
+  ]
+}

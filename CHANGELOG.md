@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] - 2026-07-08
+
+### Changed
+- Recommended install is now slim + on-demand. Claude Code installs the new
+  `anti-tangent-protocol` plugin — a description-triggered skill that `Read`s the
+  bundled `INTEGRATION.md` only when a task carries a Goal/Acceptance-criteria
+  header — instead of `@`-importing the full ~40 KB `INTEGRATION.md` into global
+  `~/.claude/CLAUDE.md`. opencode wires a slim pointer into `instructions` and
+  loads the full document on demand. The always-loaded footprint drops from
+  ~10k tokens to a single skill-description line.
+
+### Added
+- `plugin/anti-tangent-protocol/` — companion plugin carrying the protocol as an
+  on-demand skill; registered in the marketplace.
+- `examples/anti-tangent-pointer.md` — slim opencode / non-skill-host pointer
+  template.
+- CI guard that the plugin's bundled `INTEGRATION.md` stays byte-identical to
+  root.
+
 ## [0.11.0] - 2026-07-07
 
 ### Changed

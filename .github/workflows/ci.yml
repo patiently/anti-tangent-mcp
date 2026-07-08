@@ -64,6 +64,14 @@ jobs:
           fi
           echo "✓ within budget ($((40000 - BYTES)) bytes to spare)"
 
+      - name: Verify anti-tangent-protocol bundled INTEGRATION.md matches root
+        run: |
+          if ! diff -q INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md >/dev/null; then
+            echo "::error file=plugin/anti-tangent-protocol/INTEGRATION.md::Bundled copy has drifted from root INTEGRATION.md. Resync with: cp INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md"
+            exit 1
+          fi
+          echo "✓ bundled plugin copy matches root INTEGRATION.md"
+
   build-test:
     name: Build & Test (Go)
     needs: [changelog, integration-size]
