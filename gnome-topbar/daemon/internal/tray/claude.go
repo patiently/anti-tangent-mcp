@@ -121,6 +121,29 @@ func maxKeyLen(keys []string) int {
 	return n
 }
 
+// fableWindow returns the WeeklyModels entry for the Fable family, or nil. It
+// matches on a case-insensitive "fable" display_name prefix rather than an exact
+// key so a producer rename (e.g. "Fable" → "Fable 5") still resolves to the f5
+// overview segment. WeeklyModels is a map (randomized iteration), so if more than
+// one key matches — e.g. "Fable" and "Fable 5" coexisting mid-rename — the
+// most-specific (greatest by name) key wins, deterministically, rather than the
+// f5 segment flickering between refreshes.
+func fableWindow(l *claudestats.Limits) *claudestats.Window {
+	if l == nil {
+		return nil
+	}
+	match := ""
+	for name := range l.WeeklyModels {
+		if strings.HasPrefix(strings.ToLower(name), "fable") && name > match {
+			match = name
+		}
+	}
+	if match == "" {
+		return nil
+	}
+	return l.WeeklyModels[match]
+}
+
 // claudeOverviewLabels builds the always-visible overview rows: one row per account
 // that has rate-limit window data, each carrying a 5h bar and a week bar. Cost, reset
 // times, and per-period usage live in the detail submenu (claudeUsageRows), not here.
@@ -146,6 +169,11 @@ func claudeOverviewLabels(cs claudestats.Stats, now time.Time) []string {
 			segs = append(segs, s)
 		}
 		if s := windowBarSegment("wk", a.Limits.SevenDay); s != "" {
+			segs = append(segs, s)
+		}
+		// Fable's weekly sub-limit sits beside 5h/wk as "f5" when the producer
+		// supplies it (schema 1.2+ weekly_models); absent → segment omitted.
+		if s := windowBarSegment("f5", fableWindow(a.Limits)); s != "" {
 			segs = append(segs, s)
 		}
 		rows = append(rows, prefix+strings.Join(segs, "  "))

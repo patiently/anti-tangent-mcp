@@ -326,6 +326,75 @@ func TestClaudeUsageRowsPerModel(t *testing.T) {
 	}
 }
 
+func TestClaudeOverviewLabels_FableSegment(t *testing.T) {
+	now := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+	reset5h := now.Add(2 * time.Hour)
+	reset7d := now.Add(5 * 24 * time.Hour)
+	withFableKey := func(modelKey string) claudestats.Stats {
+		return claudestats.Stats{
+			Present: true, GeneratedAt: now,
+			Accounts: map[string]claudestats.Account{
+				"default": {Limits: &claudestats.Limits{
+					FiveHour: &claudestats.Window{Utilization: ptrF(5), ResetsAt: &reset5h},
+					SevenDay: &claudestats.Window{Utilization: ptrF(22), ResetsAt: &reset7d},
+					WeeklyModels: map[string]*claudestats.Window{
+						modelKey: {Utilization: ptrF(13), ResetsAt: &reset7d},
+					},
+				}},
+			},
+		}
+	}
+	// "Fable" is today's API display_name; "Fable 5" guards a future rename —
+	// both must resolve to the f5 overview segment (case-insensitive prefix match).
+	for _, key := range []string{"Fable", "Fable 5"} {
+		got := claudeOverviewLabels(withFableKey(key), now)
+		if len(got) != 1 {
+			t.Fatalf("%s: want one overview row, got %d: %q", key, len(got), got)
+		}
+		row := got[0]
+		for _, want := range []string{"5h", "wk", "f5", "13%"} {
+			if !strings.Contains(row, want) {
+				t.Errorf("%s: overview row %q missing %q", key, row, want)
+			}
+		}
+	}
+}
+
+func TestClaudeOverviewLabels_NoFableNoSegment(t *testing.T) {
+	now := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(time.Hour)
+	cs := claudestats.Stats{
+		Present: true, GeneratedAt: now,
+		Accounts: map[string]claudestats.Account{
+			"default": {Limits: &claudestats.Limits{
+				FiveHour: &claudestats.Window{Utilization: ptrF(5), ResetsAt: &reset},
+				SevenDay: &claudestats.Window{Utilization: ptrF(22), ResetsAt: &reset},
+			}},
+		},
+	}
+	if got := claudeOverviewLabels(cs, now); len(got) != 1 || strings.Contains(got[0], "f5") {
+		t.Errorf("no Fable window → no f5 segment: %q", got)
+	}
+}
+
+func TestFableWindow_DeterministicOnDualKey(t *testing.T) {
+	// A transient producer rename can leave both "Fable" and "Fable 5" in
+	// WeeklyModels at once. Map iteration is randomized, so fableWindow must
+	// still resolve to one stable window (most-specific name wins) rather than
+	// flickering the f5 segment between refreshes.
+	newer, older := 13.0, 99.0
+	l := &claudestats.Limits{WeeklyModels: map[string]*claudestats.Window{
+		"Fable":   {Utilization: &older},
+		"Fable 5": {Utilization: &newer},
+	}}
+	for i := 0; i < 64; i++ {
+		w := fableWindow(l)
+		if w == nil || w.Utilization == nil || *w.Utilization != newer {
+			t.Fatalf("iter %d: want the most-specific 'Fable 5' window (%.0f%%), got %+v", i, newer, w)
+		}
+	}
+}
+
 func TestPastResetRendersNow(t *testing.T) {
 	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
 	past := now.Add(-2 * time.Hour) // window already reset
