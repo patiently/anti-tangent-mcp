@@ -18,7 +18,7 @@ docker pull ghcr.io/patiently/anti-tangent-mcp:latest
 
 ### One-shot install via paste-in prompt
 
-If your host is Claude Code or opencode, you can paste the matching prompt below into a fresh session and the agent will fetch the latest release binary, register the MCP, download `INTEGRATION.md`, and wire it into your user-level instructions so every future session sees the protocol. The prompts resolve "latest" from the GitHub API, so they don't need to be edited each release.
+If your host is Claude Code or opencode, you can paste the matching prompt below into a fresh session and the agent will fetch the latest release binary, register the MCP, and set up the protocol so it loads **on demand** (Claude Code installs the `anti-tangent-protocol` plugin; opencode wires a slim pointer). The full protocol document loads only when a task carries a Goal/Acceptance-criteria header — not on every call. The prompts resolve "latest" from the GitHub API, so they don't need to be edited each release.
 
 These prompts target Linux and macOS. Windows users should follow the manual install above and adapt the steps to their host's MCP config format.
 
@@ -56,31 +56,27 @@ your reports — redact to `***` whenever a step would otherwise print one.
    re-register with `-e KEY=VALUE` so the key lives in Claude Code's MCP
    config instead of my shell env. Do not print the value back in any
    subsequent report.
-7. Download `INTEGRATION.md` for the installed version to
-   `~/.claude/anti-tangent.md` (overwrite if present — it is a mirror, not a
-   user file):
-       https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}/INTEGRATION.md
-8. Wire that file into `~/.claude/CLAUDE.md` so every Claude Code session
-   sees the protocol. Claude Code's `@`-import does NOT expand `~` — use the
-   literal absolute path (e.g. `@/Users/me/.claude/anti-tangent.md` on macOS,
-   `@/home/me/.claude/anti-tangent.md` on Linux):
-   - If `~/.claude/CLAUDE.md` exists, append the import line under an
-     `## Active integrations` heading (create the heading if absent). Skip if
-     the same import is already present.
-   - If it doesn't exist, create it with that heading and one import line.
-9. Optional: install the bm-scribe companion plugin (v0.7.1+). It wraps the
-   standard `basic-memory` MCP tools with fourteen skills that enforce the
-   v0.7.0 project-knowledge layout and the BM v0.21.1 three-step permalink-
-   canonicalization pattern. Ask me whether to enable it. If yes:
+7. Install the anti-tangent-protocol plugin — it carries the drift-protection
+   protocol as an on-demand skill. Its one-line description is the only
+   always-loaded footprint; the full protocol loads only when a task has a
+   Goal/Acceptance-criteria header. This replaces the old always-inlined
+   INTEGRATION.md import (do NOT write INTEGRATION.md into ~/.claude/):
        claude plugin marketplace add patiently/anti-tangent-mcp
+       claude plugin install anti-tangent-protocol@anti-tangent-mcp
+   Verify with `claude plugin list`.
+8. Optional: install the bm-scribe companion plugin (available since
+   anti-tangent-mcp v0.7.1). It wraps the standard `basic-memory` MCP tools with
+   skills that enforce the v0.7.0 project-knowledge layout and the BM v0.21.1
+   three-step permalink-canonicalization pattern. Ask me whether to enable it.
+   If yes (the marketplace was already added in step 7):
        claude plugin install bm-scribe@anti-tangent-mcp
    Verify with `claude plugin list`. Tell me to set `BM_SCRIBE_PROJECT` (and
    optionally `BM_SCRIBE_USERNAME`) in my shell env before using any of the
    `bm-scribe:*` skills. Skip this step if I say no — the MCP install from
-   steps 1-8 is complete and useful without the plugin.
+   steps 1-7 is complete and useful without the plugin.
 
 Report: installed version, binary path, `claude mcp list` output (with any
-key values redacted), and the final contents of `~/.claude/CLAUDE.md`.
+key values redacted), and `claude plugin list` output.
 ````
 
 #### opencode
@@ -135,17 +131,23 @@ reports — redact to `***` whenever a step would otherwise print one.
          }
        }
 6. Download `INTEGRATION.md` for the installed version to
-   `~/.config/opencode/anti-tangent.md` (overwrite if present):
+   `~/.config/opencode/anti-tangent.md` (overwrite if present). This is the
+   FULL protocol, loaded ON DEMAND — it is NOT added to `instructions`:
        https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}/INTEGRATION.md
-7. Wire that file into opencode's top-level `instructions` array in the same
-   `~/.config/opencode/opencode.json` you edited in step 5 — opencode loads
-   files listed there automatically; it does NOT process `@`-imports inside
-   `AGENTS.md`. Use the literal absolute path (no `~`):
+7. opencode has no skill mechanism, so wire only a SLIM POINTER into
+   `instructions` (not the full file). Download the pointer template:
+       https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}/examples/anti-tangent-pointer.md
+   to `~/.config/opencode/anti-tangent-pointer.md`, then replace the token
+   `__ANTI_TANGENT_DOC_PATH__` in it with the absolute path to the
+   `anti-tangent.md` you downloaded in step 6. Add ONLY the pointer's absolute
+   path to opencode's top-level `instructions` array in the same
+   `opencode.json` you edited in step 5:
        {
-         "instructions": ["/abs/path/to/.config/opencode/anti-tangent.md"]
+         "instructions": ["/abs/path/to/.config/opencode/anti-tangent-pointer.md"]
        }
-   If an `instructions` array is already present, append the path only if
-   not already listed. Do not duplicate entries.
+   If an `instructions` array is already present, append the pointer path only
+   if not already listed. Do NOT add `anti-tangent.md` itself to `instructions`
+   — it must stay on-demand.
 8. Tell me to restart opencode so the new MCP entry and `instructions` are
    loaded.
 
@@ -404,6 +406,12 @@ bm-scribe is **advisory wrapper** over Basic Memory — it doesn't replace the `
 ## Integration
 
 For wiring this MCP into your LLM-driven implementation workflow (superpowers, hone-ai, vanilla Claude Code, or any harness with MCP support), see [`INTEGRATION.md`](INTEGRATION.md).
+
+For Claude Code, the recommended install packages this playbook as the
+`anti-tangent-protocol` plugin, which loads `INTEGRATION.md` on demand only when
+a task carries a Goal/Acceptance-criteria header (see the one-shot install
+above). opencode loads it on demand via the slim pointer
+(`examples/anti-tangent-pointer.md`).
 
 ## Design
 
