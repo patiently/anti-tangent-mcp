@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-07-08
+
+### Changed
+- CodeScene companion calls are now **required when `codescene-mcp` is
+  configured** in the host, raised from RECOMMENDED (mid-task
+  `pre_commit_code_health_safeguard`) / OPTIONAL (pre-DONE
+  `analyze_change_set`) in `INTEGRATION.md` §4.2 steps 2b/3b, the §4.2 short
+  variant, and the "CodeScene MCP companion" section (and mirrored in
+  `README.md`). The companion exists to cover anti-tangent's text-only blind
+  spot, but under-adoption of the optional calls meant that coverage was
+  largely not happening. The requirement is **prompt-level only** — a
+  deliberate skip must be stated in the DONE report; anti-tangent remains
+  advisory and never enforces CodeScene findings server-side, and all
+  companion calls are still skipped silently when CodeScene MCP isn't
+  configured or on lightweight-protocol tasks. (#49)
+
 ## [0.11.1] - 2026-07-08
 
 ### Changed
