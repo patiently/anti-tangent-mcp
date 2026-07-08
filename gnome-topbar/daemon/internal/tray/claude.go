@@ -124,17 +124,24 @@ func maxKeyLen(keys []string) int {
 // fableWindow returns the WeeklyModels entry for the Fable family, or nil. It
 // matches on a case-insensitive "fable" display_name prefix rather than an exact
 // key so a producer rename (e.g. "Fable" → "Fable 5") still resolves to the f5
-// overview segment.
+// overview segment. WeeklyModels is a map (randomized iteration), so if more than
+// one key matches — e.g. "Fable" and "Fable 5" coexisting mid-rename — the
+// most-specific (greatest by name) key wins, deterministically, rather than the
+// f5 segment flickering between refreshes.
 func fableWindow(l *claudestats.Limits) *claudestats.Window {
 	if l == nil {
 		return nil
 	}
-	for name, w := range l.WeeklyModels {
-		if strings.HasPrefix(strings.ToLower(name), "fable") {
-			return w
+	match := ""
+	for name := range l.WeeklyModels {
+		if strings.HasPrefix(strings.ToLower(name), "fable") && name > match {
+			match = name
 		}
 	}
-	return nil
+	if match == "" {
+		return nil
+	}
+	return l.WeeklyModels[match]
 }
 
 // claudeOverviewLabels builds the always-visible overview rows: one row per account

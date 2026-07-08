@@ -377,6 +377,24 @@ func TestClaudeOverviewLabels_NoFableNoSegment(t *testing.T) {
 	}
 }
 
+func TestFableWindow_DeterministicOnDualKey(t *testing.T) {
+	// A transient producer rename can leave both "Fable" and "Fable 5" in
+	// WeeklyModels at once. Map iteration is randomized, so fableWindow must
+	// still resolve to one stable window (most-specific name wins) rather than
+	// flickering the f5 segment between refreshes.
+	newer, older := 13.0, 99.0
+	l := &claudestats.Limits{WeeklyModels: map[string]*claudestats.Window{
+		"Fable":   {Utilization: &older},
+		"Fable 5": {Utilization: &newer},
+	}}
+	for i := 0; i < 64; i++ {
+		w := fableWindow(l)
+		if w == nil || w.Utilization == nil || *w.Utilization != newer {
+			t.Fatalf("iter %d: want the most-specific 'Fable 5' window (%.0f%%), got %+v", i, newer, w)
+		}
+	}
+}
+
 func TestPastResetRendersNow(t *testing.T) {
 	now := time.Date(2026, 6, 3, 9, 5, 0, 0, time.UTC)
 	past := now.Add(-2 * time.Hour) // window already reset
