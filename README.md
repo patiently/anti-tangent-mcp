@@ -73,7 +73,7 @@ your reports — redact to `***` whenever a step would otherwise print one.
    Verify with `claude plugin list`. Tell me to set `BM_SCRIBE_PROJECT` (and
    optionally `BM_SCRIBE_USERNAME`) in my shell env before using any of the
    `bm-scribe:*` skills. Skip this step if I say no — the MCP install from
-   steps 1-7 is complete and useful without the plugin.
+   steps 1-7 is complete and useful without the bm-scribe plugin.
 
 Report: installed version, binary path, `claude mcp list` output (with any
 key values redacted), and `claude plugin list` output.
@@ -147,7 +147,11 @@ reports — redact to `***` whenever a step would otherwise print one.
        }
    If an `instructions` array is already present, append the pointer path only
    if not already listed. Do NOT add `anti-tangent.md` itself to `instructions`
-   — it must stay on-demand.
+   — it must stay on-demand. Then verify the substitution actually took before
+   continuing: `grep -c __ANTI_TANGENT_DOC_PATH__
+   ~/.config/opencode/anti-tangent-pointer.md` must print `0`, and the
+   substituted path (the `anti-tangent.md` from step 6) must exist (`test -f`).
+   Report both.
 8. Tell me to restart opencode so the new MCP entry and `instructions` are
    loaded.
 
