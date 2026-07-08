@@ -174,12 +174,13 @@ Per the 0.3.1 protocol revision this call is advisory — most tasks will
 skip it. When you do call, pass: the session_id, a one-sentence
 `working_on` summary, and the changed files.
 
-**2b. CodeScene mid-task check (RECOMMENDED — when codescene-mcp is
+**2b. CodeScene mid-task check (REQUIRED when codescene-mcp is
 configured in your host).** Call `pre_commit_code_health_safeguard` after
 meaningful code changes to catch Code Health regressions on uncommitted/staged files. This is
 deterministic and fast (no LLM call) — complementary to the
-LLM-based `check_progress` and higher-signal mid-task. If
-codescene-mcp is not configured, skip this step silently.
+LLM-based `check_progress` and higher-signal mid-task. State any
+deliberate skip in your DONE report. If codescene-mcp is not
+configured, skip this step silently.
 
 **3. Before reporting DONE (REQUIRED).** Call `validate_completion` with
 the session_id, your summary, the final files, and any test evidence.
@@ -187,13 +188,14 @@ the session_id, your summary, the final files, and any test evidence.
 If the verdict is `fail` or contains `critical`/`major` findings, do
 not report DONE — fix the findings and re-validate.
 
-**3b. CodeScene pre-DONE check (OPTIONAL — when codescene-mcp is
+**3b. CodeScene pre-DONE check (REQUIRED when codescene-mcp is
 configured in your host).** Call `analyze_change_set` for the full
 branch-vs-base Code Health view. If the delta shows a regression,
 include the finding in your DONE summary alongside anti-tangent's
 `summary_block` and consider iterating before declaring DONE.
 Anti-tangent remains advisory-only; CodeScene findings are
 codebase-grounded signal that the text-only reviewer can't produce.
+If you deliberately skip this call, state so in your DONE report.
 If codescene-mcp is not configured, skip this step silently.
 
 ## Project knowledge (auto-attached by the controller)
@@ -231,7 +233,7 @@ If a `severity: major` pre-task finding is accepted rather than fixed, include a
 Use anti-tangent per the standard dispatch protocol. For this task:
 - Call `validate_task_spec` before edits unless `lightweight_eligible: true` is set by the controller.
 - Call `validate_completion` before DONE and paste its `summary_block`.
-- If CodeScene MCP is configured, run `pre_commit_code_health_safeguard` after meaningful code changes.
+- If CodeScene MCP is configured, `pre_commit_code_health_safeguard` (mid-task) and `analyze_change_set` (pre-DONE) are required; note in DONE if you skip either.
 - If any major pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
 - If a Project knowledge section is auto-attached, read it before validate_task_spec and pass it verbatim as project_knowledge.
 ````
@@ -246,17 +248,17 @@ Use lightweight mode when ALL of: (a) ≤ 2 files or docs/config/data-only; (b) 
 
 Use the full protocol for: new production logic, test-design choices, or ACs requiring observable invariants. Reference lightweight dispatch clause: `examples/lightweight-dispatch.md`.
 
-### CodeScene MCP companion (optional)
+### CodeScene MCP companion
 
-The recommended pairing for anti-tangent's text-only blind spot (see `## Scope and limits`) is the open-source [CodeScene MCP server](https://github.com/codescene-oss/codescene-mcp-server), which exposes deterministic Code Health analysis as MCP tools. The two are complementary: anti-tangent reasons over plan text via an LLM reviewer; CodeScene reasons over the actual files on disk via static analysis.
+CodeScene covers anti-tangent's text-only blind spot (see `## Scope and limits`): the open-source [CodeScene MCP server](https://github.com/codescene-oss/codescene-mcp-server) runs deterministic Code Health analysis over the actual files, complementing anti-tangent's LLM review of plan text.
 
-**Tool-to-phase mapping.** When CodeScene MCP is configured alongside anti-tangent, instruct implementers to also call:
+**Tool-to-phase mapping.** When CodeScene MCP is configured, these calls are **required** (§4.2 steps 2b/3b); state any deliberate skip in the DONE report:
 
-- Mid-task: `pre_commit_code_health_safeguard` after meaningful changes (uncommitted/staged files only; deterministic and fast). High-signal, unlike anti-tangent's `check_progress`.
-- Before DONE (alongside `validate_completion`): `analyze_change_set` for the full branch-vs-base view. If the Code Health delta is negative, surface it in the DONE summary and consider iterating.
+- Mid-task: `pre_commit_code_health_safeguard` after meaningful changes (uncommitted/staged only; deterministic and fast).
+- Before DONE (with `validate_completion`): `analyze_change_set` for the full branch-vs-base view. If the delta is negative, surface it in the DONE summary and consider iterating.
 - Drill-down on a flagged issue: `code_health_review`.
 
-Anti-tangent never enforces CodeScene findings server-side; the integration lives at the dispatch-clause layer. If CodeScene MCP isn't configured, the companion calls are skipped. Lightweight-protocol tasks (doc-only / mechanical) skip all CodeScene calls too.
+The requirement is prompt-level — anti-tangent never enforces CodeScene findings server-side, staying advisory. If CodeScene MCP isn't configured, the companion calls are skipped, as are all CodeScene calls on lightweight-protocol tasks (doc-only / mechanical).
 
 **CodeScene stats:** CodeScene keeps no history — see [docs/team-setup/codescene-stats.md](docs/team-setup/codescene-stats.md) to log Code Health to `codescene-events.jsonl`.
 
