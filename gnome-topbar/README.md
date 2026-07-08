@@ -72,6 +72,9 @@ tray renders the body with a staleness indicator.
 
 ## Changelog
 
+### v0.3.1
+- Compact Claude overview now carries a third segment, **`f5`** (Fable's weekly sub-limit), beside `5h` and `wk` — same bar + `%` styling and 60/80 amber/red thresholds. Sourced from the producer's `limits.weekly_models` (matched on a case-insensitive `fable` display-name prefix, so a `Fable`→`Fable 5` rename still resolves); the segment is omitted until the producer emits that data. Complements the per-model rows already shown in the usage submenu (v0.3.0).
+
 ### v0.3.0
 - Per-model weekly Claude usage: the Claude usage submenu now shows a row per model (incl. **Fable**), decoded from the producer's new `limits.weekly_models` (claude-stats schema 1.2); the legacy `seven_day_opus`/`seven_day_sonnet` are back-filled from it.
 - New web detail pages opened from the tray: **📊 Stats details…** (`/ui/stats` — the full anti-tangent rollup: verdict mix, per-tool split, severity/category histograms, p50/p95, cache/partial, model usage, plus a CodeScene block or empty-state hint) and **🤖 Claude usage details…** (`/ui/claude` — per-account usage, 5h/weekly/per-model rate limits, and error/stale states). The tray dropdown stays lean; the top-bar icon and compact overview are unchanged.
