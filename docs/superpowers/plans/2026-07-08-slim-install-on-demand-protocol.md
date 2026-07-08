@@ -59,13 +59,14 @@ All tasks are docs/config only (no new logic, exact content given) → each is *
 
 **Verify:**
 ```bash
-jq -e '.plugins[] | select(.name=="anti-tangent-protocol")' .claude-plugin/marketplace.json && \
+jq -e '.plugins[] | select(.name=="anti-tangent-protocol" and .source=="./plugin/anti-tangent-protocol")' .claude-plugin/marketplace.json && \
 jq -e '.name=="anti-tangent-protocol"' plugin/anti-tangent-protocol/.claude-plugin/plugin.json && \
 diff -q INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md && \
-head -3 plugin/anti-tangent-protocol/skills/anti-tangent-protocol/SKILL.md | grep -q 'anti-tangent-protocol:anti-tangent-protocol' && \
+grep -q 'name: anti-tangent-protocol:anti-tangent-protocol' plugin/anti-tangent-protocol/skills/anti-tangent-protocol/SKILL.md && \
+grep -qF '../../INTEGRATION.md' plugin/anti-tangent-protocol/skills/anti-tangent-protocol/SKILL.md && \
 test ! -e plugin/anti-tangent-protocol/CLAUDE.md && echo OK
 ```
-Expected: `OK`
+Expected: `OK` (asserts the marketplace `source`, the skill `name`, the bundled-doc relative path in the body, byte-identical bundle, and no plugin CLAUDE.md).
 
 **Steps:**
 
@@ -228,10 +229,11 @@ Modify `.claude-plugin/marketplace.json` — bump the top-level `version` from `
 - [ ] **Step 6: Verify and commit**
 
 ```bash
-jq -e '.plugins[] | select(.name=="anti-tangent-protocol")' .claude-plugin/marketplace.json >/dev/null && \
+jq -e '.plugins[] | select(.name=="anti-tangent-protocol" and .source=="./plugin/anti-tangent-protocol")' .claude-plugin/marketplace.json >/dev/null && \
 jq -e '.name=="anti-tangent-protocol"' plugin/anti-tangent-protocol/.claude-plugin/plugin.json >/dev/null && \
 diff -q INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md && \
-head -3 plugin/anti-tangent-protocol/skills/anti-tangent-protocol/SKILL.md | grep -q 'anti-tangent-protocol:anti-tangent-protocol' && \
+grep -q 'name: anti-tangent-protocol:anti-tangent-protocol' plugin/anti-tangent-protocol/skills/anti-tangent-protocol/SKILL.md && \
+grep -qF '../../INTEGRATION.md' plugin/anti-tangent-protocol/skills/anti-tangent-protocol/SKILL.md && \
 test ! -e plugin/anti-tangent-protocol/CLAUDE.md && echo OK
 git add plugin/anti-tangent-protocol .claude-plugin/marketplace.json
 git commit -m "feat: add anti-tangent-protocol on-demand plugin + register in marketplace"
@@ -279,13 +281,17 @@ In `.github/workflows/ci.yml`, inside the `integration-size` job, immediately af
           echo "✓ bundled plugin copy matches root INTEGRATION.md"
 ```
 
-- [ ] **Step 2: Sanity-check YAML + drift behavior locally**
+- [ ] **Step 2: Confirm the step landed with the exact hint, and drift behavior locally**
 
 ```bash
-python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/ci.yml')); print('yaml ok')"
+# step present with the exact resync hint text (the AC's "print the resync hint"):
+grep -q 'Verify anti-tangent-protocol bundled INTEGRATION.md matches root' .github/workflows/ci.yml && \
+grep -q 'Resync with: cp INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md' .github/workflows/ci.yml && echo "step+hint ok"
+# YAML sanity only if a parser is available (do not require PyYAML):
+command -v yq >/dev/null && yq . .github/workflows/ci.yml >/dev/null && echo "yaml ok" || echo "yaml check skipped (no yq)"
 diff -q INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md && echo "identical ok"
 ```
-Expected: `yaml ok`, `identical ok`.
+Expected: `step+hint ok`, a yaml line (ok or skipped), `identical ok`.
 
 - [ ] **Step 3: Commit**
 
@@ -313,6 +319,7 @@ git commit -m "ci: guard that anti-tangent-protocol bundled INTEGRATION.md match
 test -f examples/anti-tangent-pointer.md && \
 grep -q '__ANTI_TANGENT_DOC_PATH__' examples/anti-tangent-pointer.md && \
 grep -qi 'Goal / Acceptance' examples/anti-tangent-pointer.md && \
+grep -qi 'not act on the protocol from this pointer alone' examples/anti-tangent-pointer.md && \
 [ "$(wc -c < examples/anti-tangent-pointer.md)" -lt 1500 ] && echo OK
 ```
 Expected: `OK`
@@ -349,7 +356,7 @@ only when a Goal/Acceptance-criteria task actually appears.
 - [ ] **Step 2: Verify + commit**
 
 ```bash
-test -f examples/anti-tangent-pointer.md && grep -q '__ANTI_TANGENT_DOC_PATH__' examples/anti-tangent-pointer.md && [ "$(wc -c < examples/anti-tangent-pointer.md)" -lt 1500 ] && echo OK
+test -f examples/anti-tangent-pointer.md && grep -q '__ANTI_TANGENT_DOC_PATH__' examples/anti-tangent-pointer.md && grep -qi 'not act on the protocol from this pointer alone' examples/anti-tangent-pointer.md && [ "$(wc -c < examples/anti-tangent-pointer.md)" -lt 1500 ] && echo OK
 git add examples/anti-tangent-pointer.md
 git commit -m "docs: add slim opencode protocol-pointer template"
 ```
@@ -369,15 +376,19 @@ Expected: `OK`, then a commit.
 - [ ] The bm-scribe step reuses the already-added marketplace (no duplicate `marketplace add`).
 - [ ] The Claude Code Report line no longer asks for "the final contents of `~/.claude/CLAUDE.md`".
 - [ ] The opencode prompt downloads the full `INTEGRATION.md` to `~/.config/opencode/anti-tangent.md` (on-demand) and adds ONLY the slim pointer to `instructions`.
-- [ ] No remaining README text tells a user to inline/always-load the full `INTEGRATION.md`.
+- [ ] No remaining README text tells a user to always-load the full doc: (a) no Claude `@`-import of an `anti-tangent.md` path, AND (b) no opencode `"instructions"` array entry pointing at `anti-tangent.md` (only the `anti-tangent-pointer.md` path is allowed), AND (c) the opencode step carries an explicit "must stay on-demand" guard.
 
 **Verify:**
 ```bash
-# no always-load instruction remains, and the plugin install is present:
-! grep -nE '@/.*/\.claude/anti-tangent\.md' README.md && \
+# (a) no Claude @-import of an anti-tangent.md path; (b) no opencode instructions
+# entry pointing at the full anti-tangent.md (pointer path is fine); plus the
+# plugin install, the pointer, the substitution token, and the on-demand guard:
+! grep -nE '@[^ ]*/\.claude/anti-tangent\.md' README.md && \
+! grep -nE '"instructions":[^]]*/anti-tangent\.md"' README.md && \
 grep -q 'anti-tangent-protocol@anti-tangent-mcp' README.md && \
 grep -q 'anti-tangent-pointer' README.md && \
-grep -q '__ANTI_TANGENT_DOC_PATH__' README.md && echo OK
+grep -q '__ANTI_TANGENT_DOC_PATH__' README.md && \
+grep -q 'must stay on-demand' README.md && echo OK
 ```
 Expected: `OK`
 
@@ -407,7 +418,8 @@ Replace the current steps 7, 8, and 9 (lines ~59-80) with:
        claude plugin marketplace add patiently/anti-tangent-mcp
        claude plugin install anti-tangent-protocol@anti-tangent-mcp
    Verify with `claude plugin list`.
-8. Optional: install the bm-scribe companion plugin (v0.7.1+). It wraps the
+8. Optional: install the bm-scribe companion plugin (available since
+   anti-tangent-mcp v0.7.1). It wraps the
    standard `basic-memory` MCP tools with skills that enforce the v0.7.0
    project-knowledge layout and the BM v0.21.1 three-step permalink-
    canonicalization pattern. Ask me whether to enable it. If yes (the
@@ -472,10 +484,12 @@ above). opencode loads it on demand via the slim pointer
 - [ ] **Step 6: Verify + commit**
 
 ```bash
-! grep -nE '@/.*/\.claude/anti-tangent\.md' README.md && \
+! grep -nE '@[^ ]*/\.claude/anti-tangent\.md' README.md && \
+! grep -nE '"instructions":[^]]*/anti-tangent\.md"' README.md && \
 grep -q 'anti-tangent-protocol@anti-tangent-mcp' README.md && \
 grep -q 'anti-tangent-pointer' README.md && \
-grep -q '__ANTI_TANGENT_DOC_PATH__' README.md && echo OK
+grep -q '__ANTI_TANGENT_DOC_PATH__' README.md && \
+grep -q 'must stay on-demand' README.md && echo OK
 git add README.md
 git commit -m "docs(readme): slim install — plugin (CC) + slim pointer (opencode), drop always-inlined INTEGRATION.md"
 ```
