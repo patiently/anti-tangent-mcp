@@ -53,6 +53,22 @@ internal/
 
 Each package has one responsibility. `cmd/` only wires; logic lives in `internal/`.
 
+## Editing INTEGRATION.md
+
+`INTEGRATION.md` is the single source of truth for the integration protocol, and
+is bundled byte-for-byte into the `anti-tangent-protocol` plugin so Claude Code
+can load it on demand. Two invariants are CI-enforced:
+
+- It must stay **under 40,000 bytes** (user-instructions context budget).
+- The bundled copy `plugin/anti-tangent-protocol/INTEGRATION.md` must be
+  **identical** to root.
+
+After editing `INTEGRATION.md`, resync the bundled copy in the same commit:
+
+```bash
+cp INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md
+```
+
 ## Branch & Version Conventions
 
 Feature work goes on `version/X.Y.Z` branches. The branch name's `X.Y.Z` **must** match a `## [X.Y.Z] - YYYY-MM-DD` entry in `CHANGELOG.md` — CI enforces this.
