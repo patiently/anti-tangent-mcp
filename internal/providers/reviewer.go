@@ -53,6 +53,9 @@ var allowlist = map[string]map[string]bool{
 		"gpt-5.5-2026-04-23":      true,
 		"gpt-5.4-mini":            true,
 		"gpt-5.4-mini-2026-03-17": true,
+		"gpt-5.6-sol":             true,
+		"gpt-5.6-terra":           true,
+		"gpt-5.6-luna":            true,
 	},
 	"google": {
 		"gemini-2.5-pro":         true,

@@ -332,10 +332,15 @@ Set `ANTI_TANGENT_*_MODEL` (or pass `model` per call) using `provider:model-id`.
 | `openai` | `gpt-5.5-2026-04-23` | heavy (pinned) |
 | `openai` | `gpt-5.4-mini` | balanced (rolling snapshot) |
 | `openai` | `gpt-5.4-mini-2026-03-17` | balanced (pinned) |
+| `openai` | `gpt-5.6-sol` | heavy (preview) |
+| `openai` | `gpt-5.6-terra` | balanced (preview) |
+| `openai` | `gpt-5.6-luna` | fast (preview) |
 | `google` | `gemini-3.1-pro-preview` | heavy |
 | `google` | `gemini-3.1-flash-lite` | fast |
 | `google` | `gemini-2.5-pro` | heavy |
 | `google` | `gemini-2.5-flash` | fast |
+
+The GPT-5.6 family (`gpt-5.6-sol` heavy, `gpt-5.6-terra` balanced, `gpt-5.6-luna` fast) is a **gated limited preview** at launch — API access is restricted to a small set of partner organizations pending broader rollout, so calls fail with an access error unless your key is enrolled. Smoke-test with a single `validate_task_spec` call before pointing a hook at it. OpenAI has not yet published dated snapshot ids for the 5.6 family; prefer a pinned snapshot (as with `gpt-5.5-2026-04-23`) once one exists rather than the rolling slug for a standing default.
 
 Adding a new model is a one-line change in [`internal/providers/reviewer.go`](internal/providers/reviewer.go) — open a PR.
 
