@@ -338,7 +338,7 @@ The append:
 - **Granularity:** one record per task, sourced from the **pre-DONE `analyze_change_set`**
   result (the branch-vs-base Code Health delta — the meaningful per-task metric).
 - **Writer:** in the subagent/controller model, the **controller** appends from the
-  implementer's DONE report (which already may carry the CodeScene delta per INTEGRATION.md
+  implementer's DONE report (which since v0.13.0 carries a one-line CodeScene status whenever CodeScene is configured, per INTEGRATION.md
   §3b); in the inline / vanilla-`CLAUDE.md` model, the single agent appends when it runs
   `analyze_change_set`.
 - **Not recorded:** mid-task `pre_commit_code_health_safeguard` (intermediate / noisy; the

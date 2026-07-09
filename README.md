@@ -271,10 +271,10 @@ For trivial tasks (doc-only edits, mechanical relocations, dependency bumps), th
 
 CodeScene is optional to adopt, but **once it is configured in your host, the companion calls are required** — see below. Anti-tangent's reviewer is intentionally text-only: it reasons over plan text and submitted evidence, not the codebase. That bounds what it can catch (see "Scope and limits" in INTEGRATION.md). For the codebase-grounded blind spot — Code Health regressions, complexity creep, low cohesion in actually-modified files — the companion is [CodeScene MCP](https://github.com/codescene-oss/codescene-mcp-server), open-sourced by CodeScene (https://codescene.com).
 
-When CodeScene MCP is configured in your host alongside anti-tangent, these calls are **required** of dispatched implementers, and the DONE report must carry a one-line CodeScene status — the `analyze_change_set` delta, or that it was skipped and why. A missing status line reads as non-adoption, which is how the controller sees that the required check actually ran:
+When CodeScene MCP is configured in your host alongside anti-tangent, these calls are **required** of dispatched implementers, and the DONE report must carry a one-line CodeScene status — the `analyze_change_set` delta, or that it was skipped and why. That line is how the controller sees the required check actually ran; a missing line reads as non-adoption:
 
 - `pre_commit_code_health_safeguard` mid-task — deterministic Code Health check on uncommitted/staged files. Fast, cheap, and complementary to anti-tangent's optional `check_progress`.
-- `analyze_change_set` before reporting DONE — full branch-vs-base Code Health analysis. Cite the delta and any findings in the DONE summary alongside anti-tangent's `summary_block`.
+- `analyze_change_set` before reporting DONE — full branch-vs-base Code Health analysis. Cite the delta (e.g. `CodeScene: Code Health 9.1 → 9.1, no regression`) and any findings in the DONE summary alongside anti-tangent's `summary_block`.
 
 The requirement is prompt-level: the pairing stays **advisory** on the anti-tangent side — anti-tangent never enforces CodeScene findings server-side, and the calls are skipped silently when CodeScene MCP isn't configured. See INTEGRATION.md's "CodeScene MCP companion" section for the dispatch-clause integration details.
 
