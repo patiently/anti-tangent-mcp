@@ -193,10 +193,10 @@ configured in your host).** Call `analyze_change_set` for the full
 branch-vs-base Code Health view. **Record a one-line CodeScene status
 in your DONE report either way** — the change set's delta (surface any
 regression alongside `summary_block` and consider iterating first), or
-that you skipped and why. A missing status line reads as non-adoption.
+that you skipped and why.
 Anti-tangent stays advisory; CodeScene is codebase-grounded signal the
 text-only reviewer can't produce. If codescene-mcp is not configured,
-skip this step silently.
+skip silently; otherwise a missing status line reads as non-adoption.
 
 ## Project knowledge (auto-attached by the controller)
 
@@ -233,7 +233,7 @@ If a `severity: major` pre-task finding is accepted rather than fixed, include a
 Use anti-tangent per the standard dispatch protocol. For this task:
 - Call `validate_task_spec` before edits unless `lightweight_eligible: true` is set by the controller.
 - Call `validate_completion` before DONE and paste its `summary_block`.
-- If CodeScene MCP is configured, `pre_commit_code_health_safeguard` (mid-task) and `analyze_change_set` (pre-DONE) are required; report the CodeScene status in DONE (delta, or skip + reason).
+- If CodeScene MCP is configured, `pre_commit_code_health_safeguard` (mid-task) and `analyze_change_set` (pre-DONE) are required; report the pre-DONE CodeScene status in DONE (delta, or skip + reason).
 - If any major pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
 - If a Project knowledge section is auto-attached, read it before validate_task_spec and pass it verbatim as project_knowledge.
 ````
@@ -252,7 +252,7 @@ Use the full protocol for: new production logic, test-design choices, or ACs req
 
 CodeScene covers anti-tangent's text-only blind spot (see `## Scope and limits`): the open-source [CodeScene MCP server](https://github.com/codescene-oss/codescene-mcp-server) runs deterministic Code Health analysis over the actual files, complementing anti-tangent's LLM review of plan text.
 
-**Tool-to-phase mapping.** When CodeScene MCP is configured, these calls are **required** (§4.2 steps 2b/3b); record the CodeScene status in the DONE report (delta, or skip + reason):
+**Tool-to-phase mapping.** When CodeScene MCP is configured, these calls are **required** (§4.2 steps 2b/3b); record the pre-DONE CodeScene status in the DONE report (delta, or skip + reason):
 
 - Mid-task: `pre_commit_code_health_safeguard` after meaningful changes (uncommitted/staged only; deterministic and fast).
 - Before DONE (with `validate_completion`): `analyze_change_set` for the full branch-vs-base view.
