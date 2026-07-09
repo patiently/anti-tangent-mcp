@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-07-09
+
+### Added
+- OpenAI **GPT-5.6** family to the reviewer allowlist: `gpt-5.6-sol` (heavy),
+  `gpt-5.6-terra` (balanced), `gpt-5.6-luna` (fast). No client change was
+  needed — GPT-5.6 speaks the same Chat Completions surface the existing OpenAI
+  reviewer already uses (`/v1/chat/completions` with `max_completion_tokens` and
+  `response_format: json_schema`). At launch the 5.6 family is a **gated limited
+  preview**, so calls fail with an access error unless the `OPENAI_API_KEY` is
+  enrolled; OpenAI has not yet published dated snapshot ids, so pin a snapshot
+  (as with `gpt-5.5-2026-04-23`) once one exists before making it a standing
+  default. README's "Supported reviewer models" table and the model-picking
+  notes document the caveats.
+
 ## [0.13.0] - 2026-07-09
 
 ### Changed
