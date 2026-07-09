@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-07-09
+
+### Changed
+- The CodeScene pre-DONE check now asks for a **positive one-line CodeScene
+  status in every DONE report** (the `analyze_change_set` delta, or that the
+  call was skipped and why), not only a mention on regression or deliberate
+  skip. Because anti-tangent structurally cannot observe whether the companion
+  calls ran, a clean run and a silent non-adoption previously looked identical
+  to the controller; requiring the status line makes a *missing* line itself
+  the non-adoption signal. This unifies the previously scattered "surface a
+  regression" / "state a deliberate skip" wording in `INTEGRATION.md` §4.2 step
+  3b, the §4.2 short variant, and the "CodeScene MCP companion" section (and
+  `README.md`) into one attestation rule. Still prompt-level only — anti-tangent
+  stays advisory and never enforces CodeScene findings server-side. Follows up
+  the v0.12.0 required-when-configured promotion (#49).
+
 ## [0.12.0] - 2026-07-08
 
 ### Changed
