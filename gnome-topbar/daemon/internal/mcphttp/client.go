@@ -179,9 +179,11 @@ func (c *Client) post(ctx context.Context, payload any) (rpcResponse, error) {
 	if err != nil {
 		return out, err
 	}
-	c.mu.Lock()
-	hadSession := c.sessionID != ""
-	c.mu.Unlock()
+	// Derive hadSession from the request newReq actually built, not a second
+	// read of c.sessionID — a concurrent reset() between the two reads could
+	// otherwise make this false for a request that did carry a session header,
+	// misclassifying its 404 and skipping recovery.
+	hadSession := req.Header.Get("Mcp-Session-Id") != ""
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return out, err
