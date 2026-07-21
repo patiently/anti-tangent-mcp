@@ -9,12 +9,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 )
+
+// errStaleSession signals that a session-bearing request was answered HTTP 404
+// ("Session not found") — the server has forgotten our MCP session (it restarted
+// or expired it). CallTool detects this to drop the session and re-initialize.
+var errStaleSession = errors.New("mcp session expired (http 404)")
 
 type Client struct {
 	url   string
@@ -51,7 +57,33 @@ type rpcResponse struct {
 
 // CallTool ensures the session is initialized, then invokes name with args and
 // returns result.content[0].text.
+//
+// If the server has evicted our session (e.g. Basic Memory restarted), a
+// session-bearing request comes back HTTP 404 "Session not found". Per the MCP
+// streamable-HTTP spec the client must then start a new session with a fresh
+// InitializeRequest, so on that one condition we drop the dead session and retry
+// the call exactly once. Any other error — including a 404 on a request that
+// carried no session id (a genuinely bad endpoint) — is returned unchanged, so
+// there is no unbounded re-init loop.
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
+	text, err := c.callTool(ctx, name, args)
+	if err != nil && errors.Is(err, errStaleSession) {
+		c.reset()
+		text, err = c.callTool(ctx, name, args)
+	}
+	return text, err
+}
+
+// reset drops the cached session so the next call performs a fresh initialize
+// handshake.
+func (c *Client) reset() {
+	c.mu.Lock()
+	c.sessionID = ""
+	c.ready = false
+	c.mu.Unlock()
+}
+
+func (c *Client) callTool(ctx context.Context, name string, args map[string]any) (string, error) {
 	if err := c.ensureReady(ctx); err != nil {
 		return "", err
 	}
@@ -147,6 +179,9 @@ func (c *Client) post(ctx context.Context, payload any) (rpcResponse, error) {
 	if err != nil {
 		return out, err
 	}
+	c.mu.Lock()
+	hadSession := c.sessionID != ""
+	c.mu.Unlock()
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return out, err
@@ -156,6 +191,12 @@ func (c *Client) post(ctx context.Context, payload any) (rpcResponse, error) {
 		c.mu.Lock()
 		c.sessionID = sid
 		c.mu.Unlock()
+	}
+	// A 404 on a request that carried a session id means the server no longer
+	// knows that session; surface it distinctly so CallTool re-initializes. A
+	// 404 without a session id is a real endpoint error and falls through.
+	if resp.StatusCode == http.StatusNotFound && hadSession {
+		return out, errStaleSession
 	}
 	if resp.StatusCode >= 300 {
 		return out, fmt.Errorf("mcp http %d", resp.StatusCode)
