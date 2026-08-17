@@ -2879,6 +2879,32 @@ func TestValidateCompletion_CodesceneRequired_UndeclaredSkipIsNotRun(t *testing.
 	assert.True(t, hasCategory(env.Findings, verdict.CategoryCodesceneNotRun))
 }
 
+func TestValidateCompletion_CodesceneRequired_WhitespaceOnlySkipReasonIsNotRun(t *testing.T) {
+	// A skip_reason that is present but blank (whitespace-only) must be
+	// treated identically to an absent skip_reason: codescene_not_run at
+	// major, not codescene_skipped. Pins the strings.TrimSpace(d.SkipReason)
+	// == "" boundary in codesceneFindings — a naive d.SkipReason == "" check
+	// would let this slip through as a declared skip.
+	h := newTestHandlersWithCodescene(t, "required")
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+		Codescene: &codescene.Digest{Ran: false, SkipReason: "   "},
+	})
+	require.NoError(t, err)
+
+	var found *verdict.Finding
+	for i := range env.Findings {
+		if env.Findings[i].Category == verdict.CategoryCodesceneNotRun {
+			found = &env.Findings[i]
+		}
+	}
+	require.NotNil(t, found, "whitespace-only skip_reason must be treated as absent (codescene_not_run)")
+	assert.Equal(t, verdict.SeverityMajor, found.Severity)
+	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneSkipped))
+}
+
 func TestValidateCompletion_CodesceneOff_NoFinding(t *testing.T) {
 	h := newTestHandlersWithCodescene(t, "")
 	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
@@ -2931,4 +2957,22 @@ func TestValidateCompletion_CodesceneRegressionFinding(t *testing.T) {
 		}
 	}
 	t.Fatal("expected a minor code-health regression finding")
+}
+
+func TestValidateCompletion_CodesceneRequired_RanTrueNoAdoptionFinding(t *testing.T) {
+	// Row 4 of the behaviour table under enforcement: mode "required" with a
+	// ran:true digest must not emit codescene_not_run or codescene_skipped —
+	// the adoption requirement is satisfied. NetPP is negative so Normalize()
+	// resolves Trend to "improvement", keeping the regression finding out of
+	// scope too, isolating this test to the adoption-check switch alone.
+	h := newTestHandlersWithCodescene(t, "required")
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+		Codescene: &codescene.Digest{Ran: true, QualityGate: "passed", NetPP: -1.0},
+	})
+	require.NoError(t, err)
+	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneNotRun))
+	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneSkipped))
 }
