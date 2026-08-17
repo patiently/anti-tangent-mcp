@@ -2,6 +2,7 @@ package codescene
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -109,4 +110,29 @@ func TestNormalize_CategoryKeyCollisionSumsCounts(t *testing.T) {
 	d.Normalize()
 	assert.Equal(t, 1, len(d.CategoryCounts), "both long keys truncate to the same prefix")
 	assert.Equal(t, 7, d.CategoryCounts[truncateRunes(prefix+"-first", codesceneCategoryKeyMaxRunes)])
+}
+
+// Two distinct keys can truncate to the same key, at which point their
+// caller-supplied counts are summed. A plain + would wrap to a negative and
+// reorder (or drop) entries in the top-N cap; saturating keeps the ordering
+// meaningful. Regression for the overflow CodeRabbit flagged on PR #59.
+func TestCapCategoryCounts_CollidingKeysSaturateInsteadOfWrapping(t *testing.T) {
+	long := strings.Repeat("a", 120) // exceeds the 100-rune key cap, so both keys truncate to the same prefix
+	d := Digest{CategoryCounts: map[string]int{
+		long + "-one": math.MaxInt - 1,
+		long + "-two": math.MaxInt - 1,
+		"small":       3,
+	}}
+	d.Normalize()
+
+	for k, v := range d.CategoryCounts {
+		assert.GreaterOrEqual(t, v, 0, "key %q wrapped negative", k)
+	}
+	var merged int
+	for k, v := range d.CategoryCounts {
+		if k != "small" {
+			merged = v
+		}
+	}
+	assert.Equal(t, math.MaxInt, merged, "colliding counts must saturate, not wrap")
 }

@@ -10,6 +10,7 @@
 package codescene
 
 import (
+	"math"
 	"sort"
 	"strings"
 )
@@ -116,6 +117,21 @@ func truncateRunes(s string, max int) string {
 	return string(runes[:max]) + "…"
 }
 
+// saturatingAdd returns a+b, clamped to the int range instead of wrapping.
+// Both operands are caller-supplied: CategoryCounts arrives straight off the
+// wire, and key truncation can make two distinct keys collide so their counts
+// are summed. A plain + could wrap to a negative, which would then reorder or
+// silently drop entries in the top-N cap below.
+func saturatingAdd(a, b int) int {
+	if b > 0 && a > math.MaxInt-b {
+		return math.MaxInt
+	}
+	if b < 0 && a < math.MinInt-b {
+		return math.MinInt
+	}
+	return a + b
+}
+
 // capCategoryCounts truncates every key to at most maxKeyRunes, then bounds
 // the result to at most maxEntries entries, keeping the highest-count
 // categories and breaking ties alphabetically so which entries survive is
@@ -132,7 +148,8 @@ func capCategoryCounts(counts map[string]int, maxEntries, maxKeyRunes int) map[s
 	}
 	truncated := make(map[string]int, len(counts))
 	for k, v := range counts {
-		truncated[truncateRunes(k, maxKeyRunes)] += v
+		key := truncateRunes(k, maxKeyRunes)
+		truncated[key] = saturatingAdd(truncated[key], v)
 	}
 	if len(truncated) <= maxEntries {
 		return truncated
