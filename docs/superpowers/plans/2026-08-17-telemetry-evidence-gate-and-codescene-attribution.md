@@ -3191,6 +3191,171 @@ silent break."
 
 ---
 
+### Task 14: Repair the opencode install path for the protocol split
+
+**Goal:** An opencode install of v0.15.0 lands the whole role-scoped protocol locally with working links, instead of a router pointing at files the user does not have.
+
+**Files:**
+- Modify: `README.md` (opencode install steps 6-7)
+- Modify: `examples/anti-tangent-pointer.md`
+- Modify: `CHANGELOG.md` (one figure correction)
+- Modify: `CLAUDE.md` (one wording correction)
+
+**Acceptance Criteria:**
+- [ ] README step 6 downloads the router **and** all five `docs/protocol/*.md` parts into `~/.config/opencode/anti-tangent-protocol/`.
+- [ ] The instructions rewrite the router's relative links to the absolute local paths, so every link in the installed router resolves on the user's machine.
+- [ ] `examples/anti-tangent-pointer.md` no longer calls a single file "the FULL protocol"; it routes the reader to the router, then to the part matching their role.
+- [ ] The pointer's tool list names all seven tools.
+- [ ] No step still describes `INTEGRATION.md` as the complete protocol.
+- [ ] `CHANGELOG.md`'s "~13 KB of project-knowledge protocol" becomes "~10 KB" (measured: the pre-split section was 9,687 B plus a 518 B blurb).
+- [ ] `CLAUDE.md`'s "Two invariants are CI-enforced" accounts for the third (`INTEGRATION.md` under 2,000 bytes).
+
+**Verify:** `bash -c 'grep -q "anti-tangent-protocol/" README.md && ! grep -q "This is the FULL protocol" README.md && ! grep -q "the full document" examples/anti-tangent-pointer.md && grep -c plan_run_report examples/anti-tangent-pointer.md && echo OK'` → `OK`
+
+**Steps:**
+
+- [ ] **Step 1: Read what the split actually produced**
+
+The router `INTEGRATION.md` links to `docs/protocol/{core,authoring,implementer,controller,project-knowledge}.md` using repo-relative paths. On an opencode machine those paths do not exist, which is the bug.
+
+- [ ] **Step 2: Rewrite README step 6** to fetch the router plus all five parts:
+
+```
+6. Download the protocol for the installed version. It is five role-scoped
+   parts plus a small router — an agent reads the router, then only the part
+   its role needs.
+       mkdir -p ~/.config/opencode/anti-tangent-protocol
+       BASE=https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}
+       curl -fsSL $BASE/INTEGRATION.md -o ~/.config/opencode/anti-tangent.md
+       for p in core authoring implementer controller project-knowledge; do
+         curl -fsSL $BASE/docs/protocol/$p.md \
+           -o ~/.config/opencode/anti-tangent-protocol/$p.md
+       done
+   Then rewrite the router's links so they resolve locally: in
+   `~/.config/opencode/anti-tangent.md`, replace every occurrence of
+   `docs/protocol/` with the absolute path to the directory you just created
+   (e.g. `/home/you/.config/opencode/anti-tangent-protocol/`). Confirm by
+   opening the router and checking one link points at a file that exists.
+```
+
+- [ ] **Step 3: Rewrite `examples/anti-tangent-pointer.md`** so it names seven tools and routes by role rather than promising one document. Replace the "load the full protocol on demand" paragraph with:
+
+```markdown
+**When it applies, load the protocol on demand:** `Read` the router at
+`__ANTI_TANGENT_DOC_PATH__`, then read the part for your role — the
+implementer part if you are writing the code, the controller part if you
+dispatch subagents or are reporting on a finished plan run. Do not act on
+the protocol from this pointer alone; the parts are the source of truth.
+```
+
+Update the tools line to list all seven: `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`, `plan_run_report`, and the optional project-knowledge pair.
+
+- [ ] **Step 4: Correct the two figures**
+
+In `CHANGELOG.md`, change `~13 KB of project-knowledge protocol` to `~10 KB of project-knowledge protocol`.
+In `CLAUDE.md`, change `Two invariants are CI-enforced:` to `Three invariants are CI-enforced:` and make the `INTEGRATION.md` cap a bullet rather than a trailing parenthetical.
+
+- [ ] **Step 5: Verify and commit**
+
+```bash
+bash -c 'grep -q "anti-tangent-protocol/" README.md && ! grep -q "This is the FULL protocol" README.md && echo OK'
+git add README.md examples/anti-tangent-pointer.md CHANGELOG.md CLAUDE.md
+git commit -m "fix(install): repair the opencode protocol install for the role-scoped split
+
+README step 6 downloaded INTEGRATION.md and called it the full protocol. Since
+the split that file is a router whose relative links point at docs/protocol/,
+which does not exist on an opencode machine — so every install since would have
+landed a router with dead links. The install now fetches all five parts and
+rewrites the router's links to absolute local paths.
+
+Also corrects two overstated figures caught in review."
+```
+
+---
+
+### Task 15: Prune plan-runs.jsonl on the retention tick
+
+**Goal:** The plan-run ledger is retention-pruned like every other stats artifact, so the one file carrying task titles does not grow without bound.
+
+**Files:**
+- Modify: `internal/planrun/ledger.go`
+- Modify: `internal/planrun/ledger_test.go`
+- Modify: `internal/stats/recorder.go` (or `cmd/anti-tangent-mcp/main.go` — see Step 1)
+- Modify: `docs/team-setup/codescene-stats.md`
+
+**Acceptance Criteria:**
+- [ ] A `Prune(cutoff time.Time) error` method on `*planrun.Ledger` rewrites `plan-runs.jsonl` keeping only rows at or after the cutoff.
+- [ ] It keys on `Row.CompletedAt`, since ledger lines carry no line-level timestamp of their own.
+- [ ] A nil `*Ledger` and an empty `Dir` are both no-ops.
+- [ ] Pruning runs on the same retention schedule as `pruneEvents` / `pruneCodescene`, using `ANTI_TANGENT_STATS_RETENTION_DAYS`.
+- [ ] A torn trailing line does not abort the prune, and is not silently promoted into a kept row.
+- [ ] `docs/team-setup/codescene-stats.md` is corrected: the ledger IS now retention-pruned.
+
+**Verify:** `go test -race ./internal/planrun/... ./internal/stats/...` → PASS
+
+**Steps:**
+
+- [ ] **Step 1: Decide where the prune is driven from, and say why in your report**
+
+`internal/stats`'s `Recorder.compact` already prunes the two stats files on the retention tick. `internal/planrun` is a separate package and `stats` does not import it today. Two workable shapes:
+
+  (a) Give `Recorder` an optional `LedgerPruner interface{ Prune(time.Time) error }` field that `main.go` populates with the ledger. Keeps the retention policy in one place; no new import edge.
+  (b) Drive it from `main.go`'s existing ticker alongside `EvictExpired`. Simpler wiring, but splits retention across two places.
+
+Prefer (a) — retention belongs with the other retention. Do **not** make `internal/stats` import `internal/planrun` directly; an interface avoids the coupling.
+
+- [ ] **Step 2: Write the failing test**
+
+```go
+func TestLedger_PruneDropsOldRows(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+	run := &Run{ID: "pr_x", PlanVerdict: "pass", TaskCount: 2}
+	old := time.Now().Add(-48 * time.Hour)
+	recent := time.Now().Add(-1 * time.Hour)
+
+	require.NoError(t, l.Append(run, TaskRow{Index: 1, TaskTitle: "old", CompletedAt: old}))
+	require.NoError(t, l.Append(run, TaskRow{Index: 2, TaskTitle: "recent", CompletedAt: recent}))
+
+	require.NoError(t, l.Prune(time.Now().Add(-24*time.Hour)))
+
+	got, ok := l.Load("pr_x")
+	require.True(t, ok)
+	require.Len(t, got.Rows, 1)
+	assert.Equal(t, "recent", got.Rows[0].TaskTitle)
+}
+
+func TestLedger_PruneNilAndEmptyDirAreNoops(t *testing.T) {
+	var nilLedger *Ledger
+	assert.NoError(t, nilLedger.Prune(time.Now()))
+	assert.NoError(t, (&Ledger{}).Prune(time.Now()))
+}
+```
+
+- [ ] **Step 3: Run it and watch it fail** — `go test ./internal/planrun/ -run Prune -v`. Expected: `Prune` undefined.
+
+- [ ] **Step 4: Implement `Prune`** — read every line, keep those whose `Row.CompletedAt` is at or after the cutoff, rewrite the file atomically (write a temp file in the same directory, then rename). Skip unparseable lines rather than aborting, and do not write them back.
+
+- [ ] **Step 5: Wire it to the retention tick** per your Step 1 decision, and add a test proving it is actually called on that tick — not merely that the method exists.
+
+- [ ] **Step 6: Correct the doc** — `docs/team-setup/codescene-stats.md` currently states the ledger is not pruned. It now is; say so, and name the env var.
+
+- [ ] **Step 7: Prove the tests discriminate** — break the cutoff comparison (keep everything), capture the failure; restore; capture the pass. Check first that the break is not already caught by another test.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add internal/planrun internal/stats cmd docs/team-setup/codescene-stats.md
+git commit -m "feat(planrun): retention-prune the plan-run ledger
+
+plan-runs.jsonl was the only stats artifact never pruned, and it is the one
+carrying task titles. The spec claimed it was pruned alongside the others;
+that was never built. It now prunes on the same retention tick, keyed on each
+row's CompletedAt since ledger lines carry no timestamp of their own."
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage**
