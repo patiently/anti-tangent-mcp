@@ -38,6 +38,10 @@ type Config struct {
 	StatsSummaryThreshold int
 	StatsRetentionDays    int
 	StatsMaxTokens        int
+	// PlanLedger enables the durable plan-run ledger. Requires StatsDir; on
+	// its own it does nothing. Separate from the stats opt-in because
+	// plan-runs.jsonl carries task titles, unlike every other stats artifact.
+	PlanLedger bool
 	// KBStore selects the optional knowledge-store integration used for
 	// output adaptation by the prime/extract tools. Empty string (the
 	// default) disables KB-specific output (e.g. paste-ready commands);
@@ -312,6 +316,10 @@ func Load(env func(string) string) (Config, error) {
 	}
 	if cfg.StatsMaxTokens > cfg.MaxTokensCeiling {
 		cfg.StatsMaxTokens = cfg.MaxTokensCeiling
+	}
+
+	if v := env("ANTI_TANGENT_PLAN_LEDGER"); v == "1" || strings.EqualFold(v, "true") {
+		cfg.PlanLedger = true
 	}
 
 	if v := env("ANTI_TANGENT_LOG_LEVEL"); v != "" {

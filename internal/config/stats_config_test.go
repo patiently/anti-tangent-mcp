@@ -4,6 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 )
 
@@ -100,4 +103,20 @@ func TestStatsInvalidValues(t *testing.T) {
 	if _, err := config.Load(envWith(map[string]string{"ANTI_TANGENT_STATS_SUMMARY_INTERVAL": "0s"})); err == nil {
 		t.Errorf("ANTI_TANGENT_STATS_SUMMARY_INTERVAL=%q: expected error, got nil", "0s")
 	}
+}
+
+// TestLoad_PlanLedgerRequiresStatsDir pins the two-opt-in gate: setting
+// ANTI_TANGENT_PLAN_LEDGER alone must not implicitly enable StatsDir. The
+// ledger stays inert (Ledger.Dir == "") until an operator sets
+// ANTI_TANGENT_STATS_DIR too.
+func TestLoad_PlanLedgerRequiresStatsDir(t *testing.T) {
+	get := func(m map[string]string) func(string) string {
+		return func(k string) string { return m[k] }
+	}
+	cfg, err := config.Load(get(map[string]string{
+		"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_LEDGER": "1",
+	}))
+	require.NoError(t, err)
+	assert.True(t, cfg.PlanLedger)
+	assert.Equal(t, "", cfg.StatsDir, "the ledger is inert without a stats dir")
 }

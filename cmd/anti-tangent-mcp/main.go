@@ -107,13 +107,20 @@ func main() {
 		}
 	}
 
+	var ledger *planrun.Ledger
+	if cfg.StatsDir != "" && cfg.PlanLedger {
+		ledger = &planrun.Ledger{Dir: cfg.StatsDir}
+		logger.Info("plan ledger enabled", "dir", cfg.StatsDir)
+	}
+
 	mcpsrv.Version = version
 	srv := mcpsrv.New(mcpsrv.Deps{
-		Cfg:      cfg,
-		Sessions: store,
-		Reviews:  registry,
-		Stats:    statsRec,
-		PlanRuns: planRuns,
+		Cfg:        cfg,
+		Sessions:   store,
+		Reviews:    registry,
+		Stats:      statsRec,
+		PlanRuns:   planRuns,
+		PlanLedger: ledger,
 	})
 
 	sigCh := make(chan os.Signal, 1)

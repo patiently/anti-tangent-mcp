@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -1244,6 +1245,22 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			row.CodesceneState = state
 			row.CompletedAt = time.Now().UTC()
 		})
+
+		// Best-effort ledger append. Never lets a write failure change the
+		// result: logged and swallowed, not returned.
+		//
+		// Snapshot, not Get: this walks run.Rows after the lock is released,
+		// and concurrent subagents under the same plan run may be appending.
+		if run, ok := h.deps.PlanRuns.Snapshot(sess.PlanRunID); ok {
+			for _, row := range run.Rows {
+				if row.SessionID == sess.ID {
+					if err := h.deps.PlanLedger.Append(run, row); err != nil {
+						slog.Warn("plan ledger append failed", "err", err)
+					}
+					break
+				}
+			}
+		}
 	}
 
 	h.recordStat(statParams{
@@ -1904,6 +1921,12 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 	// Snapshot, not Get: this walks run.Rows after the lock is released, and
 	// other subagents under the same plan run may be appending concurrently.
 	run, ok := h.deps.PlanRuns.Snapshot(args.PlanRunID)
+	if !ok {
+		// Fall back to the durable ledger (nil-safe: PlanLedger is nil unless
+		// both ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER are set).
+		// This is what lets a report survive a server restart.
+		run, ok = h.deps.PlanLedger.Load(args.PlanRunID)
+	}
 	if !ok {
 		res := PlanRunReportResult{
 			PlanRunID: args.PlanRunID,

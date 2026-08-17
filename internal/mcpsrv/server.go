@@ -23,6 +23,9 @@ type Deps struct {
 	Stats *stats.Recorder
 	// PlanRuns tracks multi-task plan executions. Never nil; New() fills it in.
 	PlanRuns *planrun.Store
+	// PlanLedger is nil unless both ANTI_TANGENT_STATS_DIR and
+	// ANTI_TANGENT_PLAN_LEDGER are set. All calls are nil-safe.
+	PlanLedger *planrun.Ledger
 }
 
 // Version is the server version reported via the MCP Implementation block.
