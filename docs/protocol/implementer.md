@@ -67,7 +67,8 @@ branch-vs-base Code Health view, then pass the result to
 `{"ran": true, "quality_gate": …, "verdicts": {…}, "trend": …, "net_pp": …, "category_counts": {…}}`.
 If you deliberately skipped, pass `{"ran": false, "skip_reason": "…"}` instead.
 The structured field supersedes the prose status line: it reaches the reviewer as
-codebase-grounded evidence and lands in the plan-run report. If codescene-mcp
+authoritative caller-attested context (no independent verification) and lands in the
+plan-run report. If codescene-mcp
 is not configured, omit the argument.
 
 ## Project knowledge (auto-attached by the controller)
