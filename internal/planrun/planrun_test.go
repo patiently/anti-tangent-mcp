@@ -77,34 +77,58 @@ func TestConcurrentAppend(t *testing.T) {
 	assert.Len(t, got.Rows, 50)
 }
 
-func TestSnapshot_IndependentOfLaterAppend(t *testing.T) {
+// TestSnapshot_IndependentOfLaterUpdate is the load-bearing proof that
+// Snapshot copies Rows rather than aliasing the live slice. The lever is
+// UpdateRow, not AppendRow: UpdateRow writes into the existing backing array
+// via mutate(&r.Rows[i]) with no reallocation, so a non-copying Snapshot
+// would alias that same array and the snapshot would observe the mutation.
+// (An append-based version of this test is NOT discriminating: appending to
+// a slice at cap==len forces Go to allocate a new backing array regardless
+// of whether Snapshot copied, so the isolation would come from the runtime's
+// realloc, not from the fix under test — see fix-round-2 notes in the task
+// report for the empirical proof.)
+func TestSnapshot_IndependentOfLaterUpdate(t *testing.T) {
 	s := NewStore(time.Hour)
-	r := s.Create("pass", "rigorous", 2)
+	r := s.Create("pass", "rigorous", 1)
 	require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: "s1", TaskTitle: "first"}))
 
 	snap, ok := s.Snapshot(r.ID)
 	require.True(t, ok)
 	require.Len(t, snap.Rows, 1)
 
-	require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: "s2", TaskTitle: "second"}))
 	require.True(t, s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
 		row.TaskTitle = "mutated-after-snapshot"
 	}))
 
-	// The snapshot taken before the append/update must be untouched by
-	// either — proves Rows was deep-copied, not aliased to the live slice.
-	assert.Len(t, snap.Rows, 1, "snapshot length must not grow when the live run gains a row")
 	assert.Equal(t, "first", snap.Rows[0].TaskTitle, "snapshot row must not observe the later in-place mutation")
 
 	got, ok := s.Get(r.ID)
 	require.True(t, ok)
-	require.Len(t, got.Rows, 2)
 	assert.Equal(t, "mutated-after-snapshot", got.Rows[0].TaskTitle)
 }
 
-func TestConcurrentSnapshotWhileAppending(t *testing.T) {
+// TestConcurrentSnapshotWhileUpdating is the race-detector counterpart to
+// TestSnapshot_IndependentOfLaterUpdate. It replaces a prior
+// TestConcurrentSnapshotWhileAppending, which raced Snapshot against
+// AppendRow only: AppendRow only ever writes into array slots beyond the
+// length any earlier-captured snapshot already saw (or, on reallocation,
+// leaves the old array's contents untouched), so a reader ranging over
+// snap.Rows (bounded by the length captured at Snapshot time) never
+// physically overlaps memory with an AppendRow write. That made it
+// structurally incapable of ever catching a non-copying Snapshot under
+// -race, no matter how many iterations — confirmed empirically (see the
+// task report). UpdateRow is the only operation that writes into an index a
+// prior snapshot's slice already exposed, so it is the only lever that can
+// produce a genuine overlapping, unsynchronized access against a broken
+// (aliasing) Snapshot.
+func TestConcurrentSnapshotWhileUpdating(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 50)
+	sessionIDs := make([]string, 50)
+	for i := 0; i < 50; i++ {
+		sessionIDs[i] = string(rune('a'+i%26)) + string(rune('0'+i/26))
+		require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: sessionIDs[i], TaskTitle: "x"}))
+	}
 
 	stop := make(chan struct{})
 	var readers sync.WaitGroup
@@ -128,12 +152,14 @@ func TestConcurrentSnapshotWhileAppending(t *testing.T) {
 	}()
 
 	var writers sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for _, id := range sessionIDs {
 		writers.Add(1)
-		go func(i int) {
+		go func(id string) {
 			defer writers.Done()
-			s.AppendRow(r.ID, TaskRow{SessionID: string(rune('a' + i%26)), TaskTitle: "x"})
-		}(i)
+			s.UpdateRow(r.ID, id, func(row *TaskRow) {
+				row.TaskTitle = "updated"
+			})
+		}(id)
 	}
 	writers.Wait()
 	close(stop)
