@@ -197,7 +197,7 @@ func TestLoad_KBStore_Default(t *testing.T) {
 
 func TestLoad_KBStore_BasicMemoryAccepted(t *testing.T) {
 	cfg, err := Load(env(map[string]string{
-		"ANTHROPIC_API_KEY":    "k",
+		"ANTHROPIC_API_KEY":     "k",
 		"ANTI_TANGENT_KB_STORE": "basic-memory",
 	}))
 	require.NoError(t, err)
@@ -206,7 +206,7 @@ func TestLoad_KBStore_BasicMemoryAccepted(t *testing.T) {
 
 func TestLoad_KBStore_InvalidValueRejected(t *testing.T) {
 	_, err := Load(env(map[string]string{
-		"ANTHROPIC_API_KEY":    "k",
+		"ANTHROPIC_API_KEY":     "k",
 		"ANTI_TANGENT_KB_STORE": "bogus",
 	}))
 	require.Error(t, err)
@@ -296,4 +296,26 @@ func TestLoad_PrimeExtractMaxTokens_Reject(t *testing.T) {
 		_, err := Load(env(tc))
 		require.Error(t, err)
 	}
+}
+
+func TestLoad_Codescene(t *testing.T) {
+	base := map[string]string{"ANTHROPIC_API_KEY": "k"}
+	get := func(m map[string]string) func(string) string {
+		return func(k string) string { return m[k] }
+	}
+
+	cfg, err := Load(get(base))
+	require.NoError(t, err)
+	assert.Equal(t, "", cfg.Codescene, "default is off")
+
+	m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_CODESCENE": "required"}
+	cfg, err = Load(get(m))
+	require.NoError(t, err)
+	assert.Equal(t, "required", cfg.Codescene)
+
+	m = map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_CODESCENE": "optional"}
+	_, err = Load(get(m))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_CODESCENE")
+	assert.Contains(t, err.Error(), `allowed: "", "required"`)
 }

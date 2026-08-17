@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
@@ -775,15 +776,16 @@ func validateCompletionTool() *mcp.Tool {
 }
 
 type ValidateCompletionArgs struct {
-	SessionID             string    `json:"session_id"  jsonschema:"required"`
-	Summary               string    `json:"summary"     jsonschema:"required"`
-	FinalFiles            []FileArg `json:"final_files,omitempty"`
-	FinalDiff             string    `json:"final_diff,omitempty"`
-	TestEvidence          string    `json:"test_evidence,omitempty"`
-	ExitContracts         []string  `json:"exit_contracts,omitempty"`
-	ExitContractsInferred bool      `json:"exit_contracts_inferred,omitempty"`
-	ModelOverride         string    `json:"model_override,omitempty"`
-	MaxTokensOverride     int       `json:"max_tokens_override,omitempty"`
+	SessionID             string            `json:"session_id"  jsonschema:"required"`
+	Summary               string            `json:"summary"     jsonschema:"required"`
+	FinalFiles            []FileArg         `json:"final_files,omitempty"`
+	FinalDiff             string            `json:"final_diff,omitempty"`
+	TestEvidence          string            `json:"test_evidence,omitempty"`
+	ExitContracts         []string          `json:"exit_contracts,omitempty"`
+	ExitContractsInferred bool              `json:"exit_contracts_inferred,omitempty"`
+	ModelOverride         string            `json:"model_override,omitempty"`
+	MaxTokensOverride     int               `json:"max_tokens_override,omitempty"`
+	Codescene             *codescene.Digest `json:"codescene,omitempty"`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
@@ -1016,6 +1018,10 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty")
 	}
 
+	if args.Codescene != nil {
+		args.Codescene.Normalize()
+	}
+
 	// 3. lightweight marker.
 	lightweight := args.SessionID == ""
 
@@ -1126,6 +1132,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
 				ExitContracts:                  exitContracts,
 				ExitContractsInferred:          args.ExitContractsInferred,
+				Codescene:                      args.Codescene,
 			})
 		},
 		"render post prompt",
@@ -1173,6 +1180,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			sess = refreshed
 		}
 		sessID = sess.ID
+	}
+
+	if cs := codesceneFindings(h.deps.Cfg.Codescene, args.Codescene); len(cs) > 0 {
+		result.Findings = append(cs, result.Findings...)
+		result = verdict.FinalizeVerdict(result)
 	}
 
 	env := Envelope{

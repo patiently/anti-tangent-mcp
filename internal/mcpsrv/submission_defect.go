@@ -2,7 +2,14 @@
 // "the submission was incomplete" versus "the code is wrong".
 package mcpsrv
 
-import "github.com/patiently/anti-tangent-mcp/internal/verdict"
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/patiently/anti-tangent-mcp/internal/codescene"
+	"github.com/patiently/anti-tangent-mcp/internal/verdict"
+)
 
 // submissionDefectCategories are the findings that describe what the
 // implementer sent rather than what they built. Fixing one means attaching
@@ -33,4 +40,91 @@ func isSubmissionDefectOnly(findings []verdict.Finding) bool {
 		}
 	}
 	return blocking > 0
+}
+
+// codesceneFindings returns the findings implied by an inbound digest.
+// mode is cfg.Codescene: "" disables the adoption check entirely, "required"
+// makes a missing or undeclared-skipped run observable. The regression finding
+// fires regardless of mode, because a supplied digest is signal whether or not
+// the operator opted into enforcement.
+//
+// d is normalized by the caller before this runs.
+func codesceneFindings(mode string, d *codescene.Digest) []verdict.Finding {
+	var out []verdict.Finding
+
+	if mode == "required" {
+		switch {
+		case d == nil:
+			out = append(out, verdict.Finding{
+				Severity:  verdict.SeverityMajor,
+				Category:  verdict.CategoryCodesceneNotRun,
+				Criterion: "codescene_adoption",
+				Evidence: "ANTI_TANGENT_CODESCENE=required, but this validate_completion call " +
+					"carried no `codescene` argument.",
+				Suggestion: "Run CodeScene `analyze_change_set` and re-submit with the result as " +
+					"the `codescene` argument, or pass {\"ran\": false, \"skip_reason\": \"…\"} if " +
+					"the skip is deliberate. This is a submission defect — no code rework is implied.",
+			})
+		case !d.Ran && strings.TrimSpace(d.SkipReason) == "":
+			out = append(out, verdict.Finding{
+				Severity:  verdict.SeverityMajor,
+				Category:  verdict.CategoryCodesceneNotRun,
+				Criterion: "codescene_adoption",
+				Evidence:  "`codescene.ran` is false and no `skip_reason` was given.",
+				Suggestion: "State why CodeScene was skipped in `skip_reason`, or run " +
+					"`analyze_change_set` and re-submit the result.",
+			})
+		case !d.Ran:
+			out = append(out, verdict.Finding{
+				Severity:   verdict.SeverityMinor,
+				Category:   verdict.CategoryCodesceneSkipped,
+				Criterion:  "codescene_adoption",
+				Evidence:   "CodeScene deliberately skipped: " + strings.TrimSpace(d.SkipReason),
+				Suggestion: "No action needed if the reason holds; the skip is recorded in the plan-run ledger.",
+			})
+		}
+	}
+
+	if d != nil && d.Ran && d.Trend == codescene.TrendRegression {
+		out = append(out, verdict.Finding{
+			Severity:  verdict.SeverityMinor,
+			Category:  verdict.CategoryQuality,
+			Criterion: "code_health_regression",
+			Evidence: fmt.Sprintf("CodeScene reports a Code Health regression: net problem points %+.1f%s.",
+				d.NetPP, topCategoriesSuffix(d.CategoryCounts)),
+			Suggestion: "Consider addressing the flagged functions before reporting DONE. " +
+				"Advisory only — anti-tangent never fails a verdict on CodeScene.",
+		})
+	}
+	return out
+}
+
+// topCategoriesSuffix renders up to three CodeScene categories, highest count
+// first, deterministically ordered so the finding text is stable.
+func topCategoriesSuffix(counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	type kv struct {
+		k string
+		v int
+	}
+	pairs := make([]kv, 0, len(counts))
+	for k, v := range counts {
+		pairs = append(pairs, kv{k, v})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].v != pairs[j].v {
+			return pairs[i].v > pairs[j].v
+		}
+		return pairs[i].k < pairs[j].k
+	})
+	if len(pairs) > 3 {
+		pairs = pairs[:3]
+	}
+	parts := make([]string, len(pairs))
+	for i, p := range pairs {
+		parts[i] = fmt.Sprintf("%s x%d", p.k, p.v)
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
 }
