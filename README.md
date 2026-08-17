@@ -134,21 +134,23 @@ reports — redact to `***` whenever a step would otherwise print one.
            }
          }
        }
-6. Download the protocol for the installed version. It is five role-scoped
-   parts plus a small router — an agent reads the router, then only the part
-   its role needs. All of it is loaded ON DEMAND — none of it is added to
-   `instructions`:
+6. Download the protocol for the installed version — the router plus all
+   five role-scoped parts — into a single local directory. An agent reads
+   the router, then only the part its role needs. All of it is loaded ON
+   DEMAND — none of it is added to `instructions`:
        mkdir -p ~/.config/opencode/anti-tangent-protocol
        BASE=https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}
-       curl -fsSL $BASE/INTEGRATION.md -o ~/.config/opencode/anti-tangent.md
+       curl -fsSL $BASE/INTEGRATION.md \
+         -o ~/.config/opencode/anti-tangent-protocol/anti-tangent.md
        for p in core authoring implementer controller project-knowledge; do
          curl -fsSL $BASE/docs/protocol/$p.md \
            -o ~/.config/opencode/anti-tangent-protocol/$p.md
        done
    (overwrite existing files if present.) Then rewrite the router's links so
-   they resolve locally: in `~/.config/opencode/anti-tangent.md`, replace
-   every occurrence of `docs/protocol/` with the absolute path to the
-   directory you just created, including the trailing slash — e.g.
+   they resolve locally: in
+   `~/.config/opencode/anti-tangent-protocol/anti-tangent.md`, replace every
+   occurrence of `docs/protocol/` with the absolute path to the directory
+   you just created, including the trailing slash — e.g.
    `/home/you/.config/opencode/anti-tangent-protocol/` (substitute your
    actual home directory; do not leave `~` unexpanded). Confirm by opening
    the router and checking one link points at a file that exists.

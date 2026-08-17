@@ -134,7 +134,7 @@ CodeScene covers anti-tangent's text-only blind spot (see `## Scope and limits`)
 
 Enforcement is prompt-level: the requirement to call these tools lives here and in §4.2, not in the server. Once you do call `validate_completion`, `ANTI_TANGENT_CODESCENE=required` can deterministically add a `codescene_not_run` / `codescene_skipped` finding server-side (see `core.md`) — but anti-tangent never *fails a verdict* on a CodeScene finding itself. If CodeScene MCP isn't configured, the companion calls are skipped, as are all CodeScene calls on lightweight-protocol tasks (doc-only / mechanical).
 
-**CodeScene stats:** CodeScene keeps no history — see [docs/team-setup/codescene-stats.md](docs/team-setup/codescene-stats.md) to log Code Health to `codescene-events.jsonl`.
+**CodeScene stats:** CodeScene keeps no history — see [docs/team-setup/codescene-stats.md](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/codescene-stats.md) to log Code Health to `codescene-events.jsonl`.
 
 ### 4.3 How to address findings
 

@@ -84,6 +84,9 @@ jobs:
           fi
           echo "✓ bundled plugin copy matches docs/protocol"
 
+      - name: Protocol cross-reference and section guards
+        run: bash scripts/check-protocol-docs.sh
+
   build-test:
     name: Build & Test (Go)
     needs: [changelog, protocol-docs]

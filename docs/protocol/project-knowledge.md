@@ -10,7 +10,7 @@ An optional v0.6.0+ loop that grounds the reviewer in **what's already true abou
 
 Two new MCP tools — `prime_project_knowledge` (pre-task; recommends notes to read) and `extract_project_knowledge` (post-task; proposes notes to write) — plus a `project_knowledge` field on `validate_task_spec` and `validate_plan`. Knowledge lives in [Basic Memory](https://github.com/basicmachines-co/basic-memory) (recommended) or any markdown-backed store; anti-tangent has **zero code dependency** on Basic Memory.
 
-Architecture diagram and component boundaries: see [project-knowledge design spec §1](docs/superpowers/specs/2026-05-18-project-knowledge-design.md#1-architecture--boundaries).
+Architecture diagram and component boundaries: see [project-knowledge design spec §1](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/superpowers/specs/2026-05-18-project-knowledge-design.md#1-architecture--boundaries).
 
 ### Controller workflow (per epic)
 
@@ -43,7 +43,7 @@ Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the t
 
 **Permalink-slug expectations.** BM auto-derives the stored slug from `title` (lowercased, hyphenated), so the permalink extract proposes (e.g. `<PROJECT>/decisions/0042-docker-bm-deployment-is-alternative`) diverges from what BM stores. Cross-links (`epic_origin`, etc.) then won't resolve. Cleanest fix: a **three-step pattern** — `write_note` to create, `move_note` to the canonical path, `edit_note(find_replace)` to rewrite the YAML `permalink:` line. Step 3 is load-bearing; steps 1+2 alone leave wikilinks broken.
 
-**Worked example.** See [`plugin/bm-scribe/docs/three-step-pattern.md`](plugin/bm-scribe/docs/three-step-pattern.md) for a literal end-to-end example showing `write_note → move_note → read_note → edit_note(find_replace)` with annotated BM responses at each step. The `plugin/bm-scribe/` plugin shipped from this repo encodes this pattern across every creator skill.
+**Worked example.** See [`plugin/bm-scribe/docs/three-step-pattern.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/plugin/bm-scribe/docs/three-step-pattern.md) for a literal end-to-end example showing `write_note → move_note → read_note → edit_note(find_replace)` with annotated BM responses at each step. The `plugin/bm-scribe/` plugin shipped from this repo encodes this pattern across every creator skill.
 
 ### Eight note types in three groups
 
@@ -58,7 +58,7 @@ Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the t
 | `story` | operational | live dashboard: brief, multi-PR table, subtasks, deployment state, decisions produced (v0.7.0+) |
 | `gotcha` | lessons-learned | module-scoped lesson learned; ADR-numbered slug; supersede chain (v0.8.0+) |
 
-Templates: [`examples/project-knowledge/`](examples/project-knowledge/); frozen real examples: [`examples/project-knowledge/dogfood/`](examples/project-knowledge/dogfood/). Per-project tuning: [`docs/team-setup/project-knowledge-conventions.md`](docs/team-setup/project-knowledge-conventions.md).
+Templates: [`examples/project-knowledge/`](https://github.com/patiently/anti-tangent-mcp/tree/main/examples/project-knowledge); frozen real examples: [`examples/project-knowledge/dogfood/`](https://github.com/patiently/anti-tangent-mcp/tree/main/examples/project-knowledge/dogfood). Per-project tuning: [`docs/team-setup/project-knowledge-conventions.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/project-knowledge-conventions.md).
 
 ### v0.7.0 canonical layout
 
@@ -89,13 +89,13 @@ Recommended default disposition (the server doesn't enforce; teams can override)
 
 ### Anchored Basic Memory tool names
 
-When `ANTI_TANGENT_KB_STORE=basic-memory`, prime and extract emit `bm_commands` arrays referencing canonical BM tool names (`search_notes`, `read_note`, `write_note`, `edit_note`, `move_note`, `delete_note`). BM has no `supersede_note` verb — a `Proposal{action: "supersede"}` maps to `write_note` (new note with `status: accepted`, `supersedes: [<predecessor>]`) plus `edit_note` flipping the predecessor's `status` to `superseded`. Full contract: [Basic Memory contract block](docs/superpowers/plans/2026-05-19-project-knowledge-v0.6.0.md#basic-memory-contract-verified-yyyy-mm-dd) at the bottom of the v0.6.0 plan.
+When `ANTI_TANGENT_KB_STORE=basic-memory`, prime and extract emit `bm_commands` arrays referencing canonical BM tool names (`search_notes`, `read_note`, `write_note`, `edit_note`, `move_note`, `delete_note`). BM has no `supersede_note` verb — a `Proposal{action: "supersede"}` maps to `write_note` (new note with `status: accepted`, `supersedes: [<predecessor>]`) plus `edit_note` flipping the predecessor's `status` to `superseded`. Full contract: [Basic Memory contract block](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/superpowers/plans/2026-05-19-project-knowledge-v0.6.0.md#basic-memory-contract-verified-yyyy-mm-dd) at the bottom of the v0.6.0 plan.
 
-For the operator-side topology of running BM as a shared service across a team, see [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md) — covers a dedicated VM via stdio-over-SSH and a Docker container via SSE behind a reverse proxy.
+For the operator-side topology of running BM as a shared service across a team, see [`docs/team-setup/basic-memory-shared-vm.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/basic-memory-shared-vm.md) — covers a dedicated VM via stdio-over-SSH and a Docker container via SSE behind a reverse proxy.
 
 ### Environment variables
 
-Defaults shown; see [`README.md`](README.md) for the full dotenv block.
+Defaults shown; see [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md) for the full dotenv block.
 
 - `ANTI_TANGENT_KB_STORE` — `""` (off). Set to `basic-memory` to enable `bm_commands` arrays in prime/extract outputs. Any other non-empty value is rejected at startup.
 - `ANTI_TANGENT_PRIME_MODEL` — reviewer for `prime_project_knowledge`. Falls back to `ANTI_TANGENT_PLAN_MODEL` then `ANTI_TANGENT_PRE_MODEL`.

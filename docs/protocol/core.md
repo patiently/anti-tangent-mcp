@@ -6,9 +6,9 @@ catch, when the protocol applies at all, and the FAQ. Then read the part for you
 (writing the code), [`controller.md`](controller.md) (dispatching subagents or running a plan
 end to end).
 
-`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It exposes seven tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`), an optional project-knowledge pair (`prime_project_knowledge` / `extract_project_knowledge`), and a deterministic plan-run report (`plan_run_report`). The reviewer LLM is intentionally a different model from the implementer, so reviews are not blind to the implementer's blind spots. See [`README.md`](README.md) for the tool surface and [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md) for the authoritative design.
+`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It exposes seven tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`), an optional project-knowledge pair (`prime_project_knowledge` / `extract_project_knowledge`), and a deterministic plan-run report (`plan_run_report`). The reviewer LLM is intentionally a different model from the implementer, so reviews are not blind to the implementer's blind spots. See [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md) for the tool surface and [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md) for the authoritative design.
 
-**Install and configure:** see [`README.md`](README.md). This document covers the using-the-MCP protocol.
+**Install and configure:** see [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md). This document covers the using-the-MCP protocol.
 
 This document has three audiences:
 
@@ -123,7 +123,7 @@ implied, and the reviewer has not yet been able to review your code.
 
 ## Environment variables
 
-Defaults shown; see [`README.md`](README.md) for the full dotenv block.
+Defaults shown; see [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md) for the full dotenv block.
 
 - `ANTI_TANGENT_CODESCENE` — `""` (off). Set to `required` to make a `validate_completion` call
   with no `codescene` argument emit a `codescene_not_run` finding. Prompt-level enforcement
