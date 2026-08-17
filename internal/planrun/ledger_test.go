@@ -75,14 +75,19 @@ func TestLedger_DisabledIsNoop(t *testing.T) {
 }
 
 // TestLedger_EmptyDirIsNoop covers the branch TestLedger_DisabledIsNoop
-// cannot reach: a non-nil *Ledger whose Dir is empty. This is the shape a
-// caller actually produces when ANTI_TANGENT_PLAN_LEDGER=1 is set without
-// ANTI_TANGENT_STATS_DIR — main.go's gate only ever constructs a *Ledger from
-// cfg.StatsDir, so a missing stats dir always yields Dir == "" on a live
-// pointer, never a nil one being tested here. If the `|| l.Dir == ""` half of
-// Append/Load's guard were ever dropped, this test is what would catch a
-// relative "plan-runs.jsonl" being written into the process's working
-// directory instead of silently doing nothing.
+// cannot reach: a non-nil *Ledger whose Dir is empty. This is NOT the shape
+// production actually produces today — main.go (main.go:110-113) only ever
+// constructs a live *Ledger when both ANTI_TANGENT_STATS_DIR and
+// ANTI_TANGENT_PLAN_LEDGER are set, and leaves the pointer nil otherwise, so
+// ANTI_TANGENT_PLAN_LEDGER=1 alone never reaches this branch in the current
+// wiring. This test is belt-and-suspenders: `l == nil || l.Dir == ""` is a
+// genuine two-clause guard, and the second clause deserves its own cover in
+// case a future refactor of the gate (e.g. constructing the Ledger earlier,
+// before cfg.StatsDir is known) starts producing a live pointer with an
+// empty Dir. If the `|| l.Dir == ""` half of Append/Load's guard were ever
+// dropped, this test is what would catch a relative "plan-runs.jsonl" being
+// written into the process's working directory instead of silently doing
+// nothing.
 func TestLedger_EmptyDirIsNoop(t *testing.T) {
 	l := &Ledger{Dir: ""}
 	assert.NoError(t, l.Append(&Run{ID: "x"}, TaskRow{TaskTitle: "t"}))
