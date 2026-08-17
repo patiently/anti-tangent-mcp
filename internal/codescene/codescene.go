@@ -67,6 +67,15 @@ const codesceneSkipReasonMaxRunes = 300
 // (totalCompletionBytes) and lands verbatim in plan-runs.jsonl.
 const codesceneCategoryCountsMax = 20
 
+// codesceneCategoryKeyMaxRunes bounds each CategoryCounts key's length in
+// Normalize. Entry count alone isn't enough: a caller can stay under
+// codesceneCategoryCountsMax while sending a handful of enormous keys, which
+// would still ride the entry-count cap straight into the reviewer prompt and
+// plan-runs.jsonl. Real CodeScene category names are short fixed labels
+// (e.g. "Complex Method"); this cap exists only to bound caller-attested
+// input, not to accommodate legitimate long names.
+const codesceneCategoryKeyMaxRunes = 100
+
 // Normalize derives Trend from NetPP, lowercases and validates QualityGate,
 // and bounds the two caller-supplied free-form fields (SkipReason,
 // CategoryCounts). It is the only integrity/size check applied to an inbound
@@ -88,7 +97,7 @@ func (d *Digest) Normalize() {
 		d.QualityGate = qualityGateUnrecognized
 	}
 	d.SkipReason = truncateRunes(strings.TrimSpace(d.SkipReason), codesceneSkipReasonMaxRunes)
-	d.CategoryCounts = capCategoryCounts(d.CategoryCounts, codesceneCategoryCountsMax)
+	d.CategoryCounts = capCategoryCounts(d.CategoryCounts, codesceneCategoryCountsMax, codesceneCategoryKeyMaxRunes)
 }
 
 // truncateRunes returns s if its rune count is at or below max; otherwise the
@@ -107,22 +116,33 @@ func truncateRunes(s string, max int) string {
 	return string(runes[:max]) + "…"
 }
 
-// capCategoryCounts bounds counts to at most max entries, keeping the
-// highest-count categories and breaking ties alphabetically so which entries
-// survive is deterministic rather than depending on Go's randomized map
-// iteration order. nil or already-small maps pass through unchanged (nil
-// stays nil so json omitempty keeps behaving the same way for callers who
-// never set the field).
-func capCategoryCounts(counts map[string]int, max int) map[string]int {
-	if len(counts) <= max {
-		return counts
+// capCategoryCounts truncates every key to at most maxKeyRunes, then bounds
+// the result to at most maxEntries entries, keeping the highest-count
+// categories and breaking ties alphabetically so which entries survive is
+// deterministic rather than depending on Go's randomized map iteration
+// order. Key truncation runs unconditionally — including when the map is
+// already at or under maxEntries — because entry count and key length are
+// independent knobs a caller controls separately. Truncated keys that
+// collide have their counts summed rather than one silently overwriting the
+// other. nil maps pass through unchanged (nil stays nil so json omitempty
+// keeps behaving the same way for callers who never set the field).
+func capCategoryCounts(counts map[string]int, maxEntries, maxKeyRunes int) map[string]int {
+	if counts == nil {
+		return nil
+	}
+	truncated := make(map[string]int, len(counts))
+	for k, v := range counts {
+		truncated[truncateRunes(k, maxKeyRunes)] += v
+	}
+	if len(truncated) <= maxEntries {
+		return truncated
 	}
 	type kv struct {
 		k string
 		v int
 	}
-	pairs := make([]kv, 0, len(counts))
-	for k, v := range counts {
+	pairs := make([]kv, 0, len(truncated))
+	for k, v := range truncated {
 		pairs = append(pairs, kv{k, v})
 	}
 	sort.Slice(pairs, func(i, j int) bool {
@@ -131,8 +151,8 @@ func capCategoryCounts(counts map[string]int, max int) map[string]int {
 		}
 		return pairs[i].k < pairs[j].k
 	})
-	out := make(map[string]int, max)
-	for _, p := range pairs[:max] {
+	out := make(map[string]int, maxEntries)
+	for _, p := range pairs[:maxEntries] {
 		out[p.k] = p.v
 	}
 	return out

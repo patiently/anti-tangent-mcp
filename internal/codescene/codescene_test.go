@@ -85,3 +85,28 @@ func TestNormalize_SmallCategoryCountsUntouched(t *testing.T) {
 	d.Normalize()
 	assert.Equal(t, map[string]int{"complexity": 2}, d.CategoryCounts)
 }
+
+func TestNormalize_CapsCategoryKeyLength(t *testing.T) {
+	// Well under codesceneCategoryCountsMax entries, so the entry-count cap
+	// alone would let this through untouched. The key-length cap must fire
+	// independently of the entry-count cap.
+	longKey := strings.Repeat("x", 500)
+	d := Digest{CategoryCounts: map[string]int{longKey: 5}}
+	d.Normalize()
+	for k := range d.CategoryCounts {
+		assert.LessOrEqual(t, len([]rune(k)), codesceneCategoryKeyMaxRunes+1, "truncated key (plus ellipsis) must not exceed the cap")
+		assert.True(t, strings.HasSuffix(k, "…"), "over-cap key must be marked truncated")
+	}
+	assert.Equal(t, 5, d.CategoryCounts[truncateRunes(longKey, codesceneCategoryKeyMaxRunes)])
+}
+
+func TestNormalize_CategoryKeyCollisionSumsCounts(t *testing.T) {
+	prefix := strings.Repeat("y", codesceneCategoryKeyMaxRunes)
+	d := Digest{CategoryCounts: map[string]int{
+		prefix + "-first":  3,
+		prefix + "-second": 4,
+	}}
+	d.Normalize()
+	assert.Equal(t, 1, len(d.CategoryCounts), "both long keys truncate to the same prefix")
+	assert.Equal(t, 7, d.CategoryCounts[truncateRunes(prefix+"-first", codesceneCategoryKeyMaxRunes)])
+}
