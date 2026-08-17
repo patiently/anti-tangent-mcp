@@ -176,6 +176,14 @@ func Render(r *Run) string {
 	fmt.Fprintf(&b, "  net problem points across run: %+.1f\n", t.NetPP)
 	if n := r.TaskCount - len(r.Rows); n > 0 {
 		fmt.Fprintf(&b, "  %d task(s) in the plan were never dispatched\n", n)
+	} else if len(r.Rows) > r.TaskCount {
+		// Reachable when a task is re-dispatched after its first subagent died:
+		// validate_task_spec runs again with the same plan_run_id and AppendRow
+		// stamps a new row rather than refusing the append (a re-dispatch is
+		// legitimate history, not an error). Without this branch the negative
+		// n above is silently skipped and "tasks: 4 of 3 completed" prints with
+		// no explanation.
+		fmt.Fprintf(&b, "  %d rows for %d tasks — includes re-dispatched or duplicate attempts\n", len(r.Rows), r.TaskCount)
 	}
 	return b.String()
 }

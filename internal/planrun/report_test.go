@@ -118,6 +118,27 @@ func TestRender_MultiByteTitleTruncatesOnRuneBoundary(t *testing.T) {
 	assert.Contains(t, got, wantCell)
 }
 
+// TestRender_OverDispatchedRows pins the over-dispatch case: len(Rows) >
+// TaskCount is reachable when a task is re-dispatched after its first
+// subagent died (validate_task_spec called again with the same
+// plan_run_id), producing two rows for one task slot. Render's
+// under-dispatch branch (n := TaskCount - len(Rows)) goes negative and is
+// silently skipped in that case, so this pins the sibling branch that makes
+// the anomaly visible instead of leaving "tasks: 4 of 3 completed" (or
+// similar) unexplained.
+func TestRender_OverDispatchedRows(t *testing.T) {
+	r := &Run{
+		ID: "pr_over00000001", CreatedAt: time.Unix(0, 0).UTC(),
+		PlanVerdict: "warn", PlanQuality: "rigorous", TaskCount: 1,
+		Rows: []TaskRow{
+			{Index: 1, TaskTitle: "Flaky task", PostVerdict: "fail"},
+			{Index: 2, TaskTitle: "Flaky task (retry)", PostVerdict: "pass"},
+		},
+	}
+	got := Render(r)
+	assert.Contains(t, got, "2 rows for 1 tasks — includes re-dispatched or duplicate attempts")
+}
+
 func TestTotals(t *testing.T) {
 	tot := Totals(sampleRun())
 	assert.Equal(t, 1, tot.Pass)

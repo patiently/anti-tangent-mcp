@@ -105,6 +105,16 @@ func (s *Store) Get(id string) (*Run, bool) {
 // Snapshot returns a copy of the run with its rows copied, safe to read after
 // the lock is released. Use it for any read that walks Rows; Get returns the
 // live run and is for callers that only need identity or metadata.
+//
+// Rows are deep-copied, not just the slice: TaskRow.Codescene (pointer) and
+// TaskRow.Severity (map) would otherwise still alias the live row's values.
+// Every current mutation site replaces both wholesale (UpdateRow's mutate
+// closures assign row.Severity = newMap / row.Codescene = newDigest rather
+// than writing into the existing map/struct), so aliasing is harmless today —
+// but row.Checkpoints++ three lines away in UpdateRow establishes an
+// in-place-mutation pattern too, and nothing enforces "replace only" for the
+// other fields. Deep-copying here removes the dependency on that convention
+// holding forever.
 func (s *Store) Snapshot(id string) (*Run, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -114,7 +124,21 @@ func (s *Store) Snapshot(id string) (*Run, bool) {
 	}
 	r.LastAccessed = time.Now()
 	cp := *r
-	cp.Rows = append([]TaskRow(nil), r.Rows...)
+	cp.Rows = make([]TaskRow, len(r.Rows))
+	for i, row := range r.Rows {
+		if row.Severity != nil {
+			sevCopy := make(map[string]int, len(row.Severity))
+			for k, v := range row.Severity {
+				sevCopy[k] = v
+			}
+			row.Severity = sevCopy
+		}
+		if row.Codescene != nil {
+			d := *row.Codescene
+			row.Codescene = &d
+		}
+		cp.Rows[i] = row
+	}
 	return &cp, true
 }
 

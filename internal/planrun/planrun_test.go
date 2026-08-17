@@ -107,6 +107,36 @@ func TestSnapshot_IndependentOfLaterUpdate(t *testing.T) {
 	assert.Equal(t, "mutated-after-snapshot", got.Rows[0].TaskTitle)
 }
 
+// TestSnapshot_DeepCopiesSeverityAndCodescene proves Snapshot does not share
+// TaskRow.Severity (map) or TaskRow.Codescene (pointer) with the live run.
+// Both are mutated IN PLACE on the live run's row after the snapshot is
+// taken — reassigning the whole field (row.Severity = newMap) would pass
+// even against a shallow copy, since the snapshot would keep the old
+// map/pointer value regardless. Only a write into the SAME underlying
+// map/struct a shallow copy would still alias can prove the copy is deep.
+func TestSnapshot_DeepCopiesSeverityAndCodescene(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.Create("pass", "rigorous", 1)
+	require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: "s1", TaskTitle: "first"}))
+	require.True(t, s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
+		row.Severity = map[string]int{"major": 1}
+		row.Codescene = &codescene.Digest{Ran: true, NetPP: -1.5}
+	}))
+
+	snap, ok := s.Snapshot(r.ID)
+	require.True(t, ok)
+	require.Len(t, snap.Rows, 1)
+
+	// Mutate the live run's map/struct in place, not by reassigning the field.
+	s.mu.Lock()
+	s.runs[r.ID].Rows[0].Severity["major"] = 99
+	s.runs[r.ID].Rows[0].Codescene.NetPP = 999
+	s.mu.Unlock()
+
+	assert.Equal(t, 1, snap.Rows[0].Severity["major"], "snapshot must not observe an in-place Severity mutation")
+	assert.InDelta(t, -1.5, snap.Rows[0].Codescene.NetPP, 0.0001, "snapshot must not observe an in-place Codescene mutation")
+}
+
 // TestConcurrentSnapshotWhileUpdating is the race-detector counterpart to
 // TestSnapshot_IndependentOfLaterUpdate. It replaces a prior
 // TestConcurrentSnapshotWhileAppending, which raced Snapshot against
