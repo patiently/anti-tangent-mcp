@@ -41,6 +41,13 @@ per-task attribution falls out for free.
 And feedback finding 2 turns out to be the same shape of problem as a missing CodeScene run:
 a defect in the *submission*, not in the *code*. That observation is the spine of this design.
 
+**A fourth item, surfaced during design review.** Threading all of the above into the protocol
+document exposed that its size cap is justified by a rationale that stopped being true at
+v0.11.1, and that the on-demand skill hands every implementing subagent ~13 KB of
+project-knowledge protocol it is explicitly forbidden from acting on. §7 addresses both, and it
+is not optional garnish: `plan_run_report` fires at a moment the skill's current trigger does
+not cover, so without the §7 work the §6 tool is unreachable in the recommended install.
+
 ## 2. Goals and non-goals
 
 **Goals**
@@ -51,6 +58,8 @@ a defect in the *submission*, not in the *code*. That observation is the spine o
   CodeScene is in play.
 - Produce a deterministic per-task report at the end of a plan run, carrying both verdicts.
 - Land the feedback's two smaller documentation notes.
+- Cut what each dispatched subagent pays to load the protocol, by slicing it to the reader's
+  role instead of handing everyone the whole document.
 
 **Non-goals** (existing project non-goals this design does not breach)
 
@@ -377,6 +386,12 @@ existing `session_not_found` category and `criterion: plan_run_id`, rather than 
 — the failure mode and the remedy (the state expired; re-run is the only recovery) are the
 same.
 
+**Reachability.** The report is called *after the last task reports DONE* — a moment at which
+the protocol skill's current trigger ("about to implement, or dispatch a subagent to
+implement") is false, so a controller finishing a plan may not have the protocol loaded and
+would never learn the tool exists. §7.2 widens the trigger to cover end-of-run. Without that
+change this component is unreachable in the recommended install.
+
 ### 6.4 Durability and the privacy carve-out
 
 In-memory state is lost on restart. When both `ANTI_TANGENT_STATS_DIR` **and**
@@ -393,45 +408,134 @@ change in privacy posture, and silently applying it to everyone who already set
 `docs/team-setup/codescene-stats.md` (renamed in scope to cover both) as the one stats artifact
 that is not content-free.
 
-## 7. Component 5 — documentation
+## 7. Component 5 — the protocol document and the plugin skill
 
-### 7.1 The budget constraint
+### 7.1 Why this is restructuring, not editing
 
-`INTEGRATION.md` is 39,963 bytes against a CI-enforced `< 40,000`
-(`.github/workflows/ci.yml:51-65`) — 37 bytes of headroom. This design adds to §3.1, §4.2
-twice, §5.1, §6, and the environment-variable list.
+The obvious framing is "INTEGRATION.md is 39,963 bytes against a CI-enforced `< 40,000`
+(`.github/workflows/ci.yml:51-65`), so trim something." That framing is wrong twice over.
 
-Room is made by relocating the most version-churny, least protocol-shaped content, which is
-what the CI failure message itself advises ("details live in the conventions doc / design
-specs"). Moving into the existing `docs/team-setup/project-knowledge-conventions.md`, which
-INTEGRATION.md §"Eight note types in three groups" already links to:
+First, the cap's stated rationale is stale. The CI message calls it a "user-instructions context
+budget", which described the pre-v0.11.1 world where the protocol was pasted into user
+instructions. Since v0.11.1 the recommended install is the `anti-tangent-protocol` plugin: a
+1,713-byte `SKILL.md` whose Step 1 `Read`s `../../INTEGRATION.md`, existing (in its own words)
+"so the ~10k-token `INTEGRATION.md` is not always resident in context". Nothing about this file
+is resident any more.
 
-- "Applying bm_commands to BM v0.21.1" including the arg-mapping table, the `edit_note`
-  operation hints, and the permalink-slug three-step pattern (~2.5 KB).
-- The eight-note-types table and the "v0.7.0 canonical layout" paragraph (~1.5 KB).
+Second — and this is the part that changes the design — the cost did not go away, it changed
+shape. A resident 10k tokens is paid once per session. An on-demand read is paid **once per
+agent that fires the skill**, which for a controller dispatching subagents means once per task.
+A 20-task plan pays it twenty times. The budget matters more now than it did, not less.
 
-Each leaves a one-line pointer. Net headroom after relocation: roughly 4 KB, comfortably more
-than this release consumes. The 40,000-byte cap is left intact.
+And the read is mostly waste. Mapping the current sections against the two roles:
 
-`plugin/anti-tangent-protocol/INTEGRATION.md` must be resynced byte-for-byte in the same commit
-(`cp INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md`); CI enforces the match at
-`.github/workflows/ci.yml:67-73`.
+| Section | Implementer needs it | Controller needs it |
+|---|---|---|
+| intro, `## Scope and limits`, §1, §6 FAQ | yes | yes |
+| §3 plan format + review-noise guidance | no (fields arrive in the dispatch clause) | yes |
+| §4 lifecycle, dispatch clause, lightweight, CodeScene | yes | reference only |
+| §5 handoff gate, dispatch addendum | no | yes |
+| `## Project knowledge` (~13 KB) | **no** | yes |
 
-### 7.2 INTEGRATION.md edits
+The project-knowledge block is the single largest section and is controller-only by its own
+text: the controller workflow states "The subagent makes no prime/extract calls." Every
+implementing subagent currently reads 13 KB describing a loop it is structurally forbidden from
+participating in.
 
-**§3.1** names the generator and the casing tolerance:
+### 7.2 The new shape
+
+The protocol splits into role-scoped parts under `docs/protocol/`, and `INTEGRATION.md` becomes
+a ~1 KB router that says what each part covers and links to it.
+
+| File | Contents | Approx |
+|---|---|---|
+| `docs/protocol/core.md` | intro, `## Scope and limits`, §1 when the protocol applies, §6 FAQ | 6 KB |
+| `docs/protocol/authoring.md` | §3 task format, review-noise guidance, `pinned_by` / `context` / CVR | 7 KB |
+| `docs/protocol/implementer.md` | §4 lifecycle, the dispatch clause, lightweight mode, CodeScene companion, §4.3 | 8 KB |
+| `docs/protocol/controller.md` | §5 handoff gate, dispatch addendum, end-of-run reporting | 5 KB |
+| `docs/protocol/project-knowledge.md` | prime/extract loop, note types, BM translation, auto-apply ladder | 13 KB |
+
+**Section numbers are preserved verbatim.** `§4.2`, `§5.1`, `§3.8` and the rest keep their
+identifiers inside their new files. This is load-bearing: the user's global CLAUDE.md cites
+"anti-tangent.md §5.1", the FAQ cross-references §3.8, and external integrators cite section
+numbers. Renumbering would silently break every one of those references. The router maps
+number ranges to files so a reader who knows only "§5.1" can find it.
+
+**No assembly step and no generated file.** The parts are the source of truth outright. This is
+the trade the router buys: the "one file you can read end to end" property is lost, and the
+CLAUDE.md invariant "INTEGRATION.md is the single source of truth ... bundled byte-for-byte" is
+rewritten to name the directory instead.
+
+**CI changes** (`.github/workflows/ci.yml:51-73`):
+
+- The single `< 40,000` byte cap on the monolith becomes a per-part cap. Proposed: `< 16,000`
+  per part, which every part clears with room and which caps the worst-case role read at
+  roughly 22 KB even if two parts both grow to the limit.
+- The byte-identical bundle check widens from one file to a directory comparison
+  (`diff -r docs/protocol plugin/anti-tangent-protocol/protocol`), plus the router itself.
+- The CI failure message is rewritten to state the real cost model — per-subagent read, paid
+  once per dispatch — so the next person to hit it reasons about the right thing.
+
+**Plugin bundle.** `plugin/anti-tangent-protocol/INTEGRATION.md` is replaced by
+`plugin/anti-tangent-protocol/protocol/*.md` plus the router. The resync command in CLAUDE.md
+becomes `rsync -a --delete docs/protocol/ plugin/anti-tangent-protocol/protocol/` (or the
+equivalent `rm -rf` + `cp -R`), and `plugin.json`'s description — which currently promises to
+load "the full INTEGRATION.md" — is corrected.
+
+### 7.3 The skill
+
+`plugin/anti-tangent-protocol/skills/anti-tangent-protocol/SKILL.md` gets two changes, one of
+which is a functional fix rather than a cosmetic one.
+
+**Step 1 becomes role-scoped.** Instead of one unconditional `Read` of the monolith:
+
+> Read `../../protocol/core.md` first — it applies to every role. Then read the part for what
+> you are about to do:
+>
+> - **Implementer** (you will write the code): `../../protocol/implementer.md`.
+> - **Controller** (you dispatch subagents, or you are running a plan end to end):
+>   `../../protocol/controller.md`.
+> - **Plan author** (you are drafting or revising the task blocks):
+>   `../../protocol/authoring.md`.
+> - Additionally, **only if a project knowledge base is in play**:
+>   `../../protocol/project-knowledge.md`.
+
+**The trigger widens to cover end-of-run.** This is the fix for the reachability hole in §6.3.
+The current description fires on "about to implement, or dispatch a subagent to implement" — a
+condition that is false at exactly the moment `plan_run_report` is meant to be called. The
+description gains the closing beat:
+
+> Use when you are about to implement, or dispatch a subagent to implement, a task that has a
+> Goal / Acceptance-criteria header from an implementation plan — **or when a multi-task plan
+> run has just finished and you need to report on it.**
+
+and Step 2's controller bullet gains:
+
+> When the last task has reported DONE, call `plan_run_report` with the `plan_run_id` you
+> captured from `validate_plan` and surface the table to the user.
+
+Widening a description-triggered skill's trigger has a cost: it fires in more situations, and a
+false fire now costs a `core.md` + `controller.md` read rather than the full monolith. That
+trade is only acceptable *because* of the split — which is a reason to sequence §7.2 before
+§7.3, not merely a convenience.
+
+### 7.4 Protocol-text edits (in their new homes)
+
+All of these land in the part files listed in §7.2, not in the router.
+
+**§3.1** (`authoring.md`) names the generator and the casing tolerance:
 
 > This is the shape superpowers' `writing-plans` skill emits (it writes
 > `**Acceptance Criteria:**` with a capital C; the parser matches case-insensitively, so either
 > casing works).
 
-**§3.1, adjacent** — the second smaller note from the feedback:
+**§3.1, adjacent** (`authoring.md`) — the second smaller note from the feedback:
 
 > `writing-plans` does not emit `**Non-goals:**`. Plans from it arrive with no scope bound, and
 > the reviewer will say so. Add non-goals by hand, or set a repo-level instruction that does.
 
-**§4.2 step 3** is replaced with the feedback's suggested text, adapted to the computed flag
-rather than asking the implementer to classify findings themselves:
+**§4.2 step 3** (`implementer.md`) is replaced with the feedback's suggested text, adapted to
+the computed flag rather than asking the implementer to classify findings themselves:
 
 > **3. Before reporting DONE (REQUIRED).** Call `validate_completion` with the session_id, your
 > summary, **a complete `final_diff` (or full `final_files`)**, and test evidence. A complete
@@ -444,7 +548,7 @@ rather than asking the implementer to classify findings themselves:
 > `submission_defect_only: true`, the blocking findings are all about what you submitted, not
 > about your code. Attach the missing evidence and re-submit; no rework is implied.**
 
-**§4.2 step 3b** gains the argument:
+**§4.2 step 3b** (`implementer.md`) gains the argument:
 
 > Pass the result to `validate_completion` as the `codescene` argument (`ran`, `quality_gate`,
 > `verdicts`, `trend`, `net_pp`, `category_counts`), or `{"ran": false, "skip_reason": "…"}` if
@@ -452,31 +556,40 @@ rather than asking the implementer to classify findings themselves:
 
 The short variant in §4.2 gets the same substitution in one line.
 
-**§5.1** gains a step 6:
+**§5.1** (`controller.md`) gains a step 6:
 
 > 6. Capture `plan_run_id` from the passing `validate_plan` response and pass it as
 >    `plan_run_id` in each implementing subagent's `validate_task_spec` call (add it to the
 >    dispatch clause's task-spec field list). After the last task reports DONE, call
 >    `plan_run_report` with that id and surface the table to the user.
 
-**§6** corrects the category list so `insufficient_evidence` is documented for
+**§6** (`core.md`) corrects the category list so `insufficient_evidence` is documented for
 `validate_completion` as well as extract, and adds `codescene_not_run` / `codescene_skipped` to
 the operational (server-only) group alongside `malformed_evidence`.
 
-**Environment variables** gains `ANTI_TANGENT_CODESCENE` and `ANTI_TANGENT_PLAN_LEDGER`.
+**Environment variables** (`project-knowledge.md` today; the two new vars belong in
+`core.md`, since neither is KB-related) gains `ANTI_TANGENT_CODESCENE` and
+`ANTI_TANGENT_PLAN_LEDGER`.
 
-**The opening paragraph** says "It exposes six tools"; that becomes seven, with
-`plan_run_report` named alongside the plan-handoff gate.
+**The intro** (`core.md`, and echoed in the router) says "It exposes six tools"; that becomes
+seven, with `plan_run_report` named alongside the plan-handoff gate.
 
-### 7.3 Other documents
+### 7.5 Other documents
 
-- `README.md` — the new tool in the tool table, both new env vars in the dotenv block, and the
-  CodeScene section updated to describe the in-band argument.
-- `CLAUDE.md` — the Project Overview says "exposes four tools", which was already stale at six;
-  correct it to seven and name `plan_run_report`.
+- `README.md` — the new tool in the tool table, both new env vars in the dotenv block, the
+  CodeScene section updated to describe the in-band argument, and every `INTEGRATION.md#…`
+  link repointed at the relevant part file.
+- `CLAUDE.md` — three edits. The Project Overview says "exposes four tools", which was already
+  stale at six; correct it to seven and name `plan_run_report`. The "Editing INTEGRATION.md"
+  section is rewritten around `docs/protocol/`, its two CI invariants restated (per-part cap,
+  directory match), and the resync command replaced.
 - `CHANGELOG.md` — a `## [0.15.0] - <date>` entry written as the code lands, not at the end.
+  The protocol restructure is a `### Changed` entry in its own right: anyone who links to
+  `INTEGRATION.md` anchors will find them moved.
 - `docs/team-setup/codescene-stats.md` — document `plan-runs.jsonl`, its two opt-ins, and its
   privacy carve-out.
+- `plugin/anti-tangent-protocol/README.md` (1,631 bytes) — describes what the plugin bundles;
+  needs the same monolith → directory correction as `plugin.json`.
 
 ## 8. Testing
 
@@ -502,9 +615,20 @@ golden files for prompts regenerated with `-update` only after intentional templ
   two `validate_task_spec` → two `validate_completion` (one with a digest, one without) →
   `plan_run_report`, asserting the rendered table.
 
+The protocol restructure needs its own checks, since a docs-only mistake here silently degrades
+every future dispatch rather than failing a test:
+
+- CI per-part byte cap and the `docs/protocol/` ↔ plugin directory match (§7.2), including a
+  deliberate red case proving a drifted bundle actually fails.
+- A link check over `docs/protocol/*.md`, `INTEGRATION.md`, and `README.md` — the restructure
+  moves every anchor, and a dead cross-reference is the most likely defect in this component.
+- An assertion that every section identifier the router advertises (`§1`, `§3`, `§4`, `§5`,
+  `§6` and their subsections) exists exactly once across the parts. This is what protects the
+  external references that motivated preserving the numbering.
+
 ## 9. Rollout and compatibility
 
-Everything is additive and default-off:
+Everything on the server side is additive and default-off:
 
 - `ANTI_TANGENT_CODESCENE` unset → no new findings, no `codescene` handling beyond recording a
   digest if one is volunteered.
@@ -514,6 +638,19 @@ Everything is additive and default-off:
 - `submission_defect_only` is `omitempty` and absent whenever false.
 - New rollup keys are `omitempty` pointers; the gnome-topbar consumer sees new optional keys and
   is otherwise untouched.
+
+**The documentation restructure is the one breaking change**, and it breaks links rather than
+code. Deep links into `INTEGRATION.md` anchors — from the README, from `~/.claude` mirrors,
+from anything external — stop resolving; the router redirects a reader but not a URL fragment.
+The plugin's bundled layout changes shape, so a stale plugin checkout paired with a fresh skill
+would `Read` paths that no longer exist. Both argue for shipping the restructure as its own
+early commit on the branch, with the `### Changed` changelog entry calling the moved anchors out
+explicitly.
+
+**Sequencing on the branch.** §7.2 (restructure) lands first, because §7.3 (the widened skill
+trigger) is only affordable once a false fire costs a slice rather than the monolith, and
+because every protocol-text edit in §7.4 needs to know which file it is editing. Server
+components 1–4 are independent of that ordering and of each other.
 
 Branch `version/0.15.0`, with a matching `## [0.15.0]` CHANGELOG heading (CI-enforced). The
 merge commit into `main` carries `[minor]`. Per repo convention `VERSION` is **not** bumped on
@@ -534,5 +671,20 @@ not fabrication.
 run unless the ledger opt-in is on; the report then covers only rows written after the restart.
 Documented, not solved.
 
-**INTEGRATION.md will fill up again.** This release buys roughly 4 KB. The next one that needs
-space should consider the core/appendix split rather than another trim.
+**The split can put a reader on the wrong side of a boundary.** The role slices are a judgement
+about who needs what, and a wrong call means an agent proceeds without protocol text it needed
+— a silent failure, unlike the loud one of an oversized file. Two mitigations: `core.md` is
+deliberately generous (it carries scope-and-limits and the whole FAQ, the two places a
+misrouted reader is most likely to look), and every part opens with a one-line "if you are also
+X, read Y" pointer. The riskiest boundary is §3 authoring versus §4 implementing, because a
+subagent handed a thin task block sits on both sides of it.
+
+**Losing the single-file read is a real cost, not just a trade.** Reviewing the protocol as a
+whole — which is how both the 2026-05 and 2026-08 feedback rounds were produced — gets harder
+when it lives in five files. If that turns out to bite, the assembled-monolith option from the
+design discussion can be added later as a generated artifact without undoing anything here.
+
+**The widened skill trigger will fire more often.** §7.3 adds an end-of-run condition to a
+description-triggered skill, and description triggers are fuzzy. Expect some false fires on
+"the plan is finished"-adjacent phrasing. Cost per false fire is now a `core.md` +
+`controller.md` read rather than 40 KB, which is what makes it tolerable.
