@@ -7,6 +7,27 @@ import (
 	"time"
 )
 
+// fakeLedgerPruner is a test double for LedgerPruner that records every
+// cutoff it was called with, so a test can assert both the call count and
+// the exact argument — not merely that compaction ran without panicking.
+type fakeLedgerPruner struct {
+	mu     sync.Mutex
+	cutoff []time.Time
+}
+
+func (f *fakeLedgerPruner) Prune(cutoff time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cutoff = append(f.cutoff, cutoff)
+	return nil
+}
+
+func (f *fakeLedgerPruner) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.cutoff)
+}
+
 func newTestRecorder(t *testing.T, threshold int) *Recorder {
 	t.Helper()
 	r, err := New(Options{
@@ -171,5 +192,108 @@ func TestCompactDecrementsCounterAndStampsFreshTime(t *testing.T) {
 	// 3 in-flight events - 3 processed = 0.
 	if r.state.EventsSinceSummary != 0 {
 		t.Errorf("EventsSinceSummary = %d after compact, want 0 (3 - 3)", r.state.EventsSinceSummary)
+	}
+}
+
+// TestCompactCallsLedgerPrunerOnRetentionTick proves the LedgerPruner is
+// actually invoked by compact()'s retention tick — not merely that a Prune
+// method exists somewhere. It asserts zero calls before compact runs,
+// exactly one call after, and that the cutoff argument matches the same
+// completedAt/RetentionDays arithmetic pruneEvents/pruneCodescene use.
+func TestCompactCallsLedgerPrunerOnRetentionTick(t *testing.T) {
+	fake := &fakeLedgerPruner{}
+	r, err := New(Options{
+		Dir:              t.TempDir(),
+		SummaryInterval:  24 * time.Hour,
+		SummaryThreshold: 1000,
+		RetentionDays:    30,
+		Logger:           slog.Default(),
+		LedgerPruner:     fake,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := fake.callCount(); got != 0 {
+		t.Fatalf("LedgerPruner.Prune called %d times before any compaction, want 0", got)
+	}
+
+	triggerNow := time.Unix(1700000000, 0).UTC()
+	completedAt := time.Unix(1700005000, 0).UTC()
+	r.clock = func() time.Time { return completedAt }
+
+	r.compact(triggerNow)
+
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("LedgerPruner.Prune called %d times after one compact, want exactly 1", got)
+	}
+	wantCutoff := completedAt.AddDate(0, 0, -30)
+	if !fake.cutoff[0].Equal(wantCutoff) {
+		t.Fatalf("LedgerPruner.Prune cutoff = %v, want %v (completedAt - RetentionDays, same arithmetic as pruneEvents/pruneCodescene)", fake.cutoff[0], wantCutoff)
+	}
+}
+
+// TestCompactNilLedgerPrunerIsNoop pins that leaving LedgerPruner unset (the
+// default for any caller that doesn't use the plan-run ledger) never panics
+// compact() — the nil check in compact() must guard the call.
+func TestCompactNilLedgerPrunerIsNoop(t *testing.T) {
+	r := newTestRecorder(t, 1000) // LedgerPruner left nil
+	r.compact(time.Now().UTC())   // must not panic
+}
+
+// TestRecordSchedulingCallsLedgerPrunerOnlyAtThreshold strengthens
+// TestCompactCallsLedgerPrunerOnRetentionTick by driving the LedgerPruner
+// through Record's actual due()-gated scheduling path (the same path
+// TestRecordSingleFlightCompaction exercises) instead of calling
+// r.compact() directly. It asserts zero calls while EventsSinceSummary is
+// below SummaryThreshold, and exactly one call once a Record crosses the
+// threshold and the resulting async compaction has completed — proving the
+// pruner fires exactly when a real retention tick fires, not merely that
+// calling compact() by hand reaches it.
+func TestRecordSchedulingCallsLedgerPrunerOnlyAtThreshold(t *testing.T) {
+	fake := &fakeLedgerPruner{}
+	r, err := New(Options{
+		Dir:              t.TempDir(),
+		SummaryInterval:  24 * time.Hour, // long enough that only the threshold can trigger due()
+		SummaryThreshold: 3,
+		RetentionDays:    30,
+		Logger:           slog.Default(),
+		LedgerPruner:     fake,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	completedAt := time.Now().UTC()
+	r.clock = func() time.Time { return completedAt }
+
+	// Wrap (not replace) the real compact so the test can wait deterministically
+	// for the async compaction Record() launches, without faking compaction
+	// itself the way TestRecordSingleFlightCompaction does.
+	realCompact := r.compact
+	done := make(chan struct{}, 1)
+	r.runCompaction = func(now time.Time) {
+		realCompact(now)
+		done <- struct{}{}
+	}
+
+	r.Record(Event{Ts: completedAt, Tool: "validate_task_spec"})
+	r.Record(Event{Ts: completedAt, Tool: "validate_task_spec"})
+	if got := fake.callCount(); got != 0 {
+		t.Fatalf("LedgerPruner.Prune called %d times while below SummaryThreshold, want 0", got)
+	}
+
+	r.Record(Event{Ts: completedAt, Tool: "validate_task_spec"}) // 3rd record crosses the threshold: due() becomes true
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the threshold-triggered compaction to run")
+	}
+
+	if got := fake.callCount(); got != 1 {
+		t.Fatalf("LedgerPruner.Prune called %d times after Record crossed the threshold, want exactly 1", got)
+	}
+	wantCutoff := completedAt.AddDate(0, 0, -30)
+	if !fake.cutoff[0].Equal(wantCutoff) {
+		t.Fatalf("LedgerPruner.Prune cutoff = %v, want %v", fake.cutoff[0], wantCutoff)
 	}
 }

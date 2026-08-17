@@ -26,6 +26,19 @@ type Options struct {
 	SummaryThreshold int
 	RetentionDays    int
 	Logger           *slog.Logger
+	// LedgerPruner, when set, is retention-pruned in the same compact() pass
+	// as events.jsonl and codescene-events.jsonl, keyed on the same cutoff.
+	// Optional so packages that don't use the plan-run ledger (or tests) can
+	// leave it nil; main.go populates it with the enabled *planrun.Ledger.
+	LedgerPruner LedgerPruner
+}
+
+// LedgerPruner prunes the plan-run ledger by retention cutoff. Declared here
+// rather than imported from internal/planrun so internal/stats does not gain
+// an import edge on that package; *planrun.Ledger satisfies this interface
+// structurally via its own Prune(time.Time) error method.
+type LedgerPruner interface {
+	Prune(cutoff time.Time) error
 }
 
 // Recorder appends counts-only events and launches single-flight async
@@ -39,6 +52,7 @@ type Recorder struct {
 	threshold     int
 	retentionDays int
 	compactor     *Compactor
+	ledgerPruner  LedgerPruner
 	running       atomic.Bool
 	clock         func() time.Time
 	logger        *slog.Logger
@@ -79,6 +93,7 @@ func New(opts Options) (*Recorder, error) {
 		interval:      opts.SummaryInterval,
 		threshold:     opts.SummaryThreshold,
 		retentionDays: opts.RetentionDays,
+		ledgerPruner:  opts.LedgerPruner,
 		compactor: &Compactor{
 			dir:       opts.Dir,
 			reviewer:  opts.Reviewer,
@@ -165,6 +180,11 @@ func (r *Recorder) compact(now time.Time) {
 	}
 	if err := pruneCodescene(r.dir, cutoff); err != nil {
 		r.logger.Warn("stats codescene prune failed", "err", err)
+	}
+	if r.ledgerPruner != nil {
+		if err := r.ledgerPruner.Prune(cutoff); err != nil {
+			r.logger.Warn("stats ledger prune failed", "err", err)
+		}
 	}
 	r.state.LastSummaryAt = completedAt
 	r.state.EventsSinceSummary -= processed

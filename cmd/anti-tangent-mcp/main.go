@@ -80,6 +80,15 @@ func main() {
 	defer cancel()
 	go evictLoop(ctx, store, planRuns, 5*time.Minute, logger)
 
+	// The ledger is constructed before stats.Options so its retention pruning
+	// can be wired into the same Recorder that already prunes events.jsonl
+	// and codescene-events.jsonl (internal/stats.Recorder.LedgerPruner).
+	var ledger *planrun.Ledger
+	if cfg.StatsDir != "" && cfg.PlanLedger {
+		ledger = &planrun.Ledger{Dir: cfg.StatsDir}
+		logger.Info("plan ledger enabled", "dir", cfg.StatsDir)
+	}
+
 	var statsRec *stats.Recorder
 	if cfg.StatsDir != "" {
 		if err := providers.ValidateModel(cfg.StatsModel); err != nil {
@@ -88,7 +97,7 @@ func main() {
 		// A missing API key for the stats provider disables only the summary
 		// step (reviewer == nil); recording + rollup still work.
 		statsReviewer := registry[cfg.StatsModel.Provider]
-		rec, err := stats.New(stats.Options{
+		opts := stats.Options{
 			Dir:              cfg.StatsDir,
 			Reviewer:         statsReviewer,
 			Model:            cfg.StatsModel.Model,
@@ -98,19 +107,24 @@ func main() {
 			SummaryThreshold: cfg.StatsSummaryThreshold,
 			RetentionDays:    cfg.StatsRetentionDays,
 			Logger:           logger,
-		})
+		}
+		// Guarded explicitly rather than assigning `ledger` unconditionally:
+		// ledger is a typed *planrun.Ledger that may be nil, and assigning a
+		// nil pointer straight into an interface-typed field produces a
+		// non-nil interface holding a nil pointer (Go's classic typed-nil
+		// gotcha) — relying on Prune's own nil-receiver safety to paper over
+		// that would work today but is a needless footgun for a future
+		// change to either side.
+		if ledger != nil {
+			opts.LedgerPruner = ledger
+		}
+		rec, err := stats.New(opts)
 		if err != nil {
 			logger.Warn("stats disabled", "err", err)
 		} else {
 			statsRec = rec
 			logger.Info("stats enabled", "dir", cfg.StatsDir, "model", cfg.StatsModel.String(), "summary_enabled", statsReviewer != nil)
 		}
-	}
-
-	var ledger *planrun.Ledger
-	if cfg.StatsDir != "" && cfg.PlanLedger {
-		ledger = &planrun.Ledger{Dir: cfg.StatsDir}
-		logger.Info("plan ledger enabled", "dir", cfg.StatsDir)
 	}
 
 	mcpsrv.Version = version

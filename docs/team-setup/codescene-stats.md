@@ -87,11 +87,10 @@ in-memory plan-run store is otherwise lost like every other session state.
 **Privacy: this file is different from the others.** `events.jsonl` and
 `codescene-events.jsonl` are deliberately content-free — no titles, no paths, no code.
 `plan-runs.jsonl` carries **task titles**. That is why it needs its own opt-in instead of
-inheriting `ANTI_TANGENT_STATS_DIR`. Unlike `events.jsonl` and `codescene-events.jsonl`,
-`plan-runs.jsonl` is **not** currently subject to `ANTI_TANGENT_STATS_RETENTION_DAYS` pruning —
-retention-pruning only rewrites the two files above. If your `plan-runs.jsonl` needs to be
-bounded (long-running server, sensitive task titles), manage that file's lifecycle yourself
-until server-side pruning covers it too.
+inheriting `ANTI_TANGENT_STATS_DIR`. `plan-runs.jsonl` **is** now subject to
+`ANTI_TANGENT_STATS_RETENTION_DAYS` pruning, on the same retention tick as the two files above:
+a row is dropped once its task's completion time is older than the cutoff. A row written
+without a completion timestamp is retained rather than treated as infinitely old.
 
 The two channels do not double-count: the hook writes `codescene-events.jsonl` and feeds the
 rollup's `codescene` block; the in-band argument writes `plan-runs.jsonl` and feeds
