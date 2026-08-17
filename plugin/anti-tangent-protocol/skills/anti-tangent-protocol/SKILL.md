@@ -15,9 +15,14 @@ Either of:
 - The current task carries a structured **Goal / Acceptance criteria / (Non-goals) /
   (Context)** header from an implementation plan.
 - A multi-task plan run has just finished and you are reporting on it.
+- You are drafting or revising task blocks for an implementation plan (plan authoring).
 
-For read-only research, Q&A, ad-hoc edits, plan authoring, or code review, the protocol does
-not apply — stop here.
+For read-only research, Q&A, ad-hoc edits, or code review, the protocol does not apply —
+stop here.
+
+Plan authors: read `authoring.md` in Step 1 below for the recommended task format, but do
+NOT call the implementation lifecycle tools (`validate_task_spec`, `check_progress`,
+`validate_completion`) — those are for implementers, not for drafting the plan.
 
 ## Step 1 — Read the protocol for your role
 
@@ -48,6 +53,9 @@ no prime/extract calls.
   returned `plan_run_id`, and paste the §4.2 clause into each implementer's prompt. When the
   last task has reported DONE, call `plan_run_report` with that `plan_run_id` and surface the
   table to the user.
+- **Plan author:** follow §3's task-block format so `validate_task_spec` inputs map cleanly.
+  Plan authors do not call any of the lifecycle tools themselves — those run once the plan is
+  handed off for implementation.
 
 Anti-tangent is advisory — it never blocks. Treat `critical` / `major` findings as
 blocking-or-explain per the protocol. A response carrying `submission_defect_only: true` is

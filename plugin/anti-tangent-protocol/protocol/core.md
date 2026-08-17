@@ -16,7 +16,7 @@ This document has three audiences:
 - **Controllers** (orchestrators that dispatch implementing subagents — superpowers' `subagent-driven-development`, hone-ai's equivalent, or a hand-rolled loop) — get a **required plan-handoff gate** plus a paste-in dispatch clause to thread the protocol into each subagent prompt.
 - **Implementing subagents** — get a paste-in lifecycle clause that mandates pre + post calls, treats mid calls as optional (call only when you suspect drift), and tells them how to handle findings.
 
-The integration is **system-agnostic**: it works with superpowers, hone-ai, vanilla Claude Code with a project-level `CLAUDE.md`, Cursor, or any harness that supports MCP servers. It ships as a single markdown document; you paste the relevant chunks where they need to go.
+The integration is **system-agnostic**: it works with superpowers, hone-ai, vanilla Claude Code with a project-level `CLAUDE.md`, Cursor, or any harness that supports MCP servers. It ships as this core part plus role-scoped parts (`authoring.md`, `implementer.md`, `controller.md`, and the optional `project-knowledge.md`); you load the parts relevant to your role and paste the relevant chunks where they need to go.
 
 > **When does anti-tangent-mcp earn its keep?** Its value compounds when (a) tasks are specced before being implemented, (b) the implementer is an LLM that can drift, and (c) the implementer LLM differs from the reviewer LLM. Without all three, anti-tangent is just extra latency.
 
@@ -58,7 +58,7 @@ When the reviewer encounters a plan claim it cannot verify text-only, as of v0.3
 
 ## 1. When the protocol applies
 
-**Strict trigger:** the work is a task from an implementation plan with the structured **Goal / Acceptance criteria / (Non-goals) / (Context)** header (see §3). If those fields are present, the protocol applies — whether you implement directly or dispatch to a subagent.
+**Strict trigger:** the work is a task from an implementation plan with the structured **Goal / Acceptance criteria / (Non-goals) / (Context)** header (see [`authoring.md`](authoring.md) §3). If those fields are present, the protocol applies — whether you implement directly or dispatch to a subagent.
 
 **Skip the protocol entirely** for:
 
@@ -98,7 +98,7 @@ If you're unsure, look for the structured task block. No block → no protocol. 
 - `codescene: {"ran": false}` with no `skip_reason` → `codescene_not_run`, `severity: major`, same as no argument at all. **An undeclared skip is treated exactly like a non-run** — the server can't tell "forgot to run it" from "ran it and didn't say" without a stated reason, so state one.
 - `codescene: {"ran": true, …}` → no adoption finding.
 
-Fix: pass the `codescene` argument (§4.2 step 3b), or if you deliberately skipped, always include `skip_reason`.
+Fix: pass the `codescene` argument (see [`implementer.md`](implementer.md) §4.2 step 3b), or if you deliberately skipped, always include `skip_reason`.
 
 **What is `submission_defect_only: true`?** Every blocking finding on that `validate_completion`
 response is about what you submitted — absent evidence, malformed evidence, or a CodeScene run
@@ -107,11 +107,11 @@ implied, and the reviewer has not yet been able to review your code.
 
 **A hook returned `category: other` with `criterion: reviewer_response`.** Reviewer output was cut off at the token budget. As of v0.3.0, the server runs truncated responses through a tolerant parser and surfaces any complete findings before the cap (look for `"partial": true` and a `severity: minor` truncation marker). To get the full response next call, raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` / `ANTI_TANGENT_PLAN_MAX_TOKENS` globally, or pass `max_tokens_override`.
 
-**A finding has `category: attestation_contradiction` — what is that?** An AC explicitly contradicts a `harness_shape_attestation` entry (see §3.8). NOT severity-floored (unlike `convention_deviation` / `unverifiable_codebase_claim`); the reviewer's chosen severity is preserved.
+**A finding has `category: attestation_contradiction` — what is that?** An AC explicitly contradicts a `harness_shape_attestation` entry (see [`authoring.md`](authoring.md) §3.8). NOT severity-floored (unlike `convention_deviation` / `unverifiable_codebase_claim`); the reviewer's chosen severity is preserved.
 
 **`validate_task_spec` is asking for ACs my plan doesn't have.** Spec quality gate working as designed. Either (a) add the missing ACs and re-validate, or (b) acknowledge the gap in the next `working_on` description so the reviewer expects implementer-discretion choices.
 
-**What if the implementer skips the post-hook?** Two defenses: §4.2 marks post REQUIRED in the implementer prompt, and the controller can require the post-hook envelope in the DONE report (§5.3).
+**What if the implementer skips the post-hook?** Two defenses: [`implementer.md`](implementer.md) §4.2 marks post REQUIRED in the implementer prompt, and the controller can require the post-hook envelope in the DONE report ([`controller.md`](controller.md) §5.3).
 
 **Does `check_progress` catch failing tests?** No — the reviewer reasons over text, not execution. Use it for drift detection (scope creep, untouched ACs, unaddressed prior findings); run tests separately.
 
