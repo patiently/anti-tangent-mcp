@@ -134,10 +134,24 @@ reports — redact to `***` whenever a step would otherwise print one.
            }
          }
        }
-6. Download `INTEGRATION.md` for the installed version to
-   `~/.config/opencode/anti-tangent.md` (overwrite if present). This is the
-   FULL protocol, loaded ON DEMAND — it is NOT added to `instructions`:
-       https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}/INTEGRATION.md
+6. Download the protocol for the installed version. It is five role-scoped
+   parts plus a small router — an agent reads the router, then only the part
+   its role needs. All of it is loaded ON DEMAND — none of it is added to
+   `instructions`:
+       mkdir -p ~/.config/opencode/anti-tangent-protocol
+       BASE=https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}
+       curl -fsSL $BASE/INTEGRATION.md -o ~/.config/opencode/anti-tangent.md
+       for p in core authoring implementer controller project-knowledge; do
+         curl -fsSL $BASE/docs/protocol/$p.md \
+           -o ~/.config/opencode/anti-tangent-protocol/$p.md
+       done
+   (overwrite existing files if present.) Then rewrite the router's links so
+   they resolve locally: in `~/.config/opencode/anti-tangent.md`, replace
+   every occurrence of `docs/protocol/` with the absolute path to the
+   directory you just created, including the trailing slash — e.g.
+   `/home/you/.config/opencode/anti-tangent-protocol/` (substitute your
+   actual home directory; do not leave `~` unexpanded). Confirm by opening
+   the router and checking one link points at a file that exists.
 7. opencode has no skill mechanism, so wire only a SLIM POINTER into
    `instructions` (not the full file). Download the pointer template:
        https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}/examples/anti-tangent-pointer.md

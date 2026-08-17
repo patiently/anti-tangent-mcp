@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The protocol document is now role-scoped.** `INTEGRATION.md` is a router over
   `docs/protocol/{core,authoring,implementer,controller,project-knowledge}.md`, and the
   `anti-tangent-protocol` skill reads only `core.md` plus the part matching the agent's role.
-  An implementing subagent previously read the whole ~40 KB document — including ~13 KB of
+  An implementing subagent previously read the whole ~40 KB document — including ~10 KB of
   project-knowledge protocol it is structurally forbidden from acting on — once per dispatch;
   it now reads `core.md` + `implementer.md`, roughly 22 KB. **Deep links to `INTEGRATION.md`
   anchors no longer resolve**; section numbers are unchanged, so `§4.2` is still `§4.2`, now

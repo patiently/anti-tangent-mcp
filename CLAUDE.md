@@ -57,11 +57,13 @@ Each package has one responsibility. `cmd/` only wires; logic lives in `internal
 
 The protocol lives in `docs/protocol/` as five role-scoped parts; `INTEGRATION.md` is a router
 over them, and the parts are bundled into the `anti-tangent-protocol` plugin so Claude Code can
-load only what a given role needs. Two invariants are CI-enforced:
+load only what a given role needs. Three invariants are CI-enforced:
 
 - Each part must stay **under 16,000 bytes**. The cost is a read per dispatched subagent, not a
   resident context cost — so it is paid once per task on a multi-task plan.
 - `plugin/anti-tangent-protocol/protocol/` must be **identical** to `docs/protocol/`.
+- `INTEGRATION.md` itself must stay **under 2,000 bytes** — it stays an index over
+  `docs/protocol/`, never a place for protocol text.
 
 After editing any part, resync the bundle in the same commit:
 
@@ -69,9 +71,6 @@ After editing any part, resync the bundle in the same commit:
 rm -f plugin/anti-tangent-protocol/protocol/*.md
 cp docs/protocol/*.md plugin/anti-tangent-protocol/protocol/
 ```
-
-(`INTEGRATION.md` itself is capped at under 2,000 bytes by the same CI job — it stays an index
-over `docs/protocol/`, never a place for protocol text.)
 
 Section numbers (§1, §3.x, §4.x, §5.x, §6) are stable across the split and are cited
 externally — do not renumber.
