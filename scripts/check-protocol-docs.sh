@@ -5,7 +5,7 @@
 # numbers are cited externally (README, ~/.claude mirrors, "§5.1" in prose),
 # so losing one is a silent break.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || { echo "::error::failed to cd to repo root"; exit 1; }
 
 fail=0
 
