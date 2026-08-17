@@ -20,6 +20,12 @@ Before executing a multi-task plan — whether you implement it yourself or disp
 3. **Apply the proposed header blocks** (the controller may apply automatically when verdicts are `pass`/`warn` and the human approves; defer to the human for `fail`).
 4. If anything material changed, call `validate_plan` again. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified).
 5. **Only proceed to dispatch when the plan-level gate passes.**
+6. **Capture `plan_run_id`** from the passing `validate_plan` response and pass it as
+   `plan_run_id` in each implementing subagent's `validate_task_spec` call — add it to the
+   dispatch clause's task-spec field list. After the last task reports DONE, call
+   `plan_run_report` with that id and surface the table to the user. The report is
+   deterministic and free (no reviewer call). If you re-validate the plan after the 3-minute
+   cache window expires, use the id from your **final** passing call.
 
 The implementing subagent still calls `validate_task_spec` at task start in its own session — see §4. The plan-level gate and the per-task implementer gate are two different responsibilities at two different moments.
 

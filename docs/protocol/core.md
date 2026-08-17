@@ -6,9 +6,7 @@ catch, when the protocol applies at all, and the FAQ. Then read the part for you
 (writing the code), [`controller.md`](controller.md) (dispatching subagents or running a plan
 end to end).
 
-# Integrating anti-tangent-mcp
-
-`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It exposes six tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`), and an optional project-knowledge pair (`prime_project_knowledge` / `extract_project_knowledge`). The reviewer LLM is intentionally a different model from the implementer, so reviews are not blind to the implementer's blind spots. See [`README.md`](README.md) for the tool surface and [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md) for the authoritative design.
+`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It exposes seven tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`), an optional project-knowledge pair (`prime_project_knowledge` / `extract_project_knowledge`), and a deterministic plan-run report (`plan_run_report`). The reviewer LLM is intentionally a different model from the implementer, so reviews are not blind to the implementer's blind spots. See [`README.md`](README.md) for the tool surface and [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md) for the authoritative design.
 
 **Install and configure:** see [`README.md`](README.md). This document covers the using-the-MCP protocol.
 
@@ -21,7 +19,6 @@ This document has three audiences:
 The integration is **system-agnostic**: it works with superpowers, hone-ai, vanilla Claude Code with a project-level `CLAUDE.md`, Cursor, or any harness that supports MCP servers. It ships as a single markdown document; you paste the relevant chunks where they need to go.
 
 > **When does anti-tangent-mcp earn its keep?** Its value compounds when (a) tasks are specced before being implemented, (b) the implementer is an LLM that can drift, and (c) the implementer LLM differs from the reviewer LLM. Without all three, anti-tangent is just extra latency.
-
 
 ---
 
@@ -82,8 +79,9 @@ If you're unsure, look for the structured task block. No block → no protocol. 
 **Finding categories.** Canonical set surfaced by the reviewer (see `internal/verdict/verdict.go` for the authoritative enum):
 
 - Spec / lifecycle: `missing_acceptance_criterion`, `scope_drift`, `ambiguous_spec`, `unaddressed_finding`, `quality`, `convention_deviation`, `attestation_contradiction`, `unverifiable_codebase_claim`, `other`.
+- Evidence: `insufficient_evidence` — emitted by `validate_completion` when an AC cannot be assessed from the submitted evidence, and by `extract_project_knowledge`. Server-only: `malformed_evidence`, `codescene_not_run`, `codescene_skipped`.
 - Operational: `session_not_found`, `payload_too_large`.
-- Project-knowledge (v0.6.0+): `kb_gap`, `ambiguous_pick`, `missing_index_entry` (prime); `insufficient_evidence`, `redundant_proposal`, `contradicts_existing` (extract).
+- Project-knowledge (v0.6.0+): `kb_gap`, `ambiguous_pick`, `missing_index_entry` (prime); `redundant_proposal`, `contradicts_existing` (extract).
 
 **My implementer is also Claude Sonnet — does this still help?** Less than if they were different models — same model + same training data ≈ same blind spots. Different provider is best; failing that, different family (Sonnet implementer, Opus reviewer; or Haiku for cheap mid-checks plus Opus for post).
 
@@ -92,6 +90,11 @@ If you're unsure, look for the structured task block. No block → no protocol. 
 **My payload is too big.** A `category: payload_too_large` finding. Default cap is 200 KB across `changed_files`, `final_files`, and `final_diff`. For `validate_completion`, pass `final_diff` instead of or alongside `final_files`; for `check_progress`, reduce `changed_files` or split the call. `ANTI_TANGENT_MAX_PAYLOAD_BYTES` controls the cap.
 
 **A `validate_completion` call returned `category: malformed_evidence`.** The server's evidence-shape guard rejected your submission pre-review. The `evidence` field names the offending pattern — typically a truncation marker (`(truncated)`, `[truncated]`, `// ... unchanged`), a `...`-only placeholder line, or empty `Path` entries in `final_files`. Re-submit with full file contents or a complete unified diff. Rejection is cached for 5 minutes by canonical content hash. If your file legitimately contains one of these literal strings (e.g. a fixture or doc), pass a complete `final_diff` rather than `final_files`.
+
+**What is `submission_defect_only: true`?** Every blocking finding on that `validate_completion`
+response is about what you submitted — absent evidence, malformed evidence, or a CodeScene run
+that did not happen — not about your code. Attach what is missing and call again. No rework is
+implied, and the reviewer has not yet been able to review your code.
 
 **A hook returned `category: other` with `criterion: reviewer_response`.** Reviewer output was cut off at the token budget. As of v0.3.0, the server runs truncated responses through a tolerant parser and surfaces any complete findings before the cap (look for `"partial": true` and a `severity: minor` truncation marker). To get the full response next call, raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` / `ANTI_TANGENT_PLAN_MAX_TOKENS` globally, or pass `max_tokens_override`.
 
@@ -106,3 +109,16 @@ If you're unsure, look for the structured task block. No block → no protocol. 
 **Cost / latency overhead.** Roughly 1–2 s and $0.001–$0.02 per call. One mandatory `validate_plan` per handoff, two mandatory implementer calls per task (pre + post). Use a cheap-fast model for mid-checks and a stronger model for handoff/post.
 
 **Where do I file bugs?** [`https://github.com/patiently/anti-tangent-mcp/issues`](https://github.com/patiently/anti-tangent-mcp/issues).
+
+---
+
+## Environment variables
+
+Defaults shown; see [`README.md`](README.md) for the full dotenv block.
+
+- `ANTI_TANGENT_CODESCENE` — `""` (off). Set to `required` to make a `validate_completion` call
+  with no `codescene` argument emit a `codescene_not_run` finding. Prompt-level enforcement
+  only; anti-tangent never fails a verdict on CodeScene findings.
+- `ANTI_TANGENT_PLAN_LEDGER` — `0` (off). With `ANTI_TANGENT_STATS_DIR` set, `1` persists each
+  completed task row to `plan-runs.jsonl` so `plan_run_report` survives a restart. Unlike every
+  other stats artifact this file carries task titles, which is why it has its own opt-in.

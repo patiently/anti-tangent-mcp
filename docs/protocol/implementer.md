@@ -48,20 +48,27 @@ deliberate skip in your DONE report. If codescene-mcp is not
 configured, skip this step silently.
 
 **3. Before reporting DONE (REQUIRED).** Call `validate_completion` with
-the session_id, your summary, the final files, and any test evidence.
-**Copy the `summary_block` field from the response verbatim into your DONE report** — it carries the full envelope formatted for paste; you do not need to re-extract JSON fields.
+the session_id, your summary, **a complete `final_diff` (or full
+`final_files`)**, and test evidence. A complete diff is a **precondition
+of the first call**, not something to add after a rejection —
+evidence-poor submissions fail most of the time and buy you a formatting
+review instead of a code review.
+**Copy the `summary_block` field from the response verbatim into your DONE report.**
 If the verdict is `fail` or contains `critical`/`major` findings, do
-not report DONE — fix the findings and re-validate.
+not report DONE — fix the findings and re-validate. **Exception: when the
+response carries `submission_defect_only: true`, every blocking finding is
+about what you submitted, not about your code. Attach the missing evidence
+and re-submit; no rework is implied.**
 
 **3b. CodeScene pre-DONE check (REQUIRED when codescene-mcp is
 configured in your host).** Call `analyze_change_set` for the full
-branch-vs-base Code Health view. **Record a one-line CodeScene status
-in your DONE report either way** — the change set's delta (surface any
-regression alongside `summary_block` and consider iterating first), or
-that you skipped and why.
-Anti-tangent stays advisory; CodeScene is codebase-grounded signal the
-text-only reviewer can't produce. If codescene-mcp is not configured,
-skip silently; otherwise a missing status line reads as non-adoption.
+branch-vs-base Code Health view, then pass the result to
+`validate_completion` as the `codescene` argument:
+`{"ran": true, "quality_gate": …, "verdicts": {…}, "trend": …, "net_pp": …, "category_counts": {…}}`.
+If you deliberately skipped, pass `{"ran": false, "skip_reason": "…"}` instead.
+The structured field supersedes the prose status line: it reaches the reviewer as
+codebase-grounded evidence and lands in the plan-run report. If codescene-mcp
+is not configured, omit the argument.
 
 ## Project knowledge (auto-attached by the controller)
 
@@ -83,6 +90,7 @@ this block if there is no KB attached.)
 - context:              <from "Context:" if present>
 - pinned_by:            <optional anchors for existing behavior>
 - controller_verified_references: <optional references the controller already verified>
+- plan_run_id:          <optional, v0.15.0+; from the controller's validate_plan>
 - project_knowledge:    <optional, v0.6.0+; markdown excerpts the controller pre-selected from the KB>
 - harness_shape_attestation: <optional structured input; see §3.8>
 - phase:                <optional; "pre" (default) or "post" for post-hoc/session-recovery>
@@ -98,7 +106,8 @@ If a `severity: major` pre-task finding is accepted rather than fixed, include a
 Use anti-tangent per the standard dispatch protocol. For this task:
 - Call `validate_task_spec` before edits unless `lightweight_eligible: true` is set by the controller.
 - Call `validate_completion` before DONE and paste its `summary_block`.
-- If CodeScene MCP is configured, `pre_commit_code_health_safeguard` (mid-task) and `analyze_change_set` (pre-DONE) are required; report the pre-DONE CodeScene status in DONE (delta, or skip + reason).
+- If CodeScene MCP is configured, `pre_commit_code_health_safeguard` (mid-task) and `analyze_change_set` (pre-DONE) are required; pass the pre-DONE result to `validate_completion` as the `codescene` argument (or `{"ran": false, "skip_reason": "…"}`).
+- If the response carries `submission_defect_only: true`, attach the missing evidence and re-submit — that is a submission defect, not a code defect.
 - If any major pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
 - If a Project knowledge section is auto-attached, read it before validate_task_spec and pass it verbatim as project_knowledge.
 ````
