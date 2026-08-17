@@ -1535,7 +1535,7 @@ Quality gate: {{.Codescene.QualityGate}}
 {{if .Codescene.Verdicts}}Files analyzed: {{.Codescene.FilesAnalyzed}} — improved {{.Codescene.Verdicts.Improved}} / degraded {{.Codescene.Verdicts.Degraded}} / stable {{.Codescene.Verdicts.Stable}}
 {{end}}Trend: {{.Codescene.Trend}} (net problem points {{printf "%+.1f" .Codescene.NetPP}})
 
-This is deterministic analysis of the actual files, not a claim by the implementer. Treat it as authoritative for Code Health. It does not by itself fail an acceptance criterion — weigh it alongside the evidence.
+Caller-supplied CodeScene output. anti-tangent does not run CodeScene and cannot verify this digest came from a real run — treat it as authoritative context, not as an independently established fact. If genuine it reflects deterministic Code Health analysis of the changed files, which is signal the text alone cannot give you. It does not by itself fail an acceptance criterion — weigh it alongside the evidence.
 {{end}}
 ```
 
