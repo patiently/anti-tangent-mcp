@@ -792,6 +792,30 @@ func TestRenderPre_CVRInstructionIncludesMultiSymbolExample(t *testing.T) {
 	require.Contains(t, out.User, "the path matches one of the claim's substrings")
 }
 
+func TestRenderPost_WithExitContracts_Golden(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:                  sampleSpec(),
+		Summary:               "Added Gin handler at /healthz returning \"ok\".",
+		FinalDiff:             "diff --git a/handlers/health.go b/handlers/health.go\n+func Health(c *gin.Context) { c.String(200, \"ok\") }\n",
+		ExitContracts:         []string{"Defines handlerName", "Exports DECLINE_NODE"},
+		ExitContractsInferred: false,
+	})
+	require.NoError(t, err)
+	golden(t, "post_with_exit_contracts", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPost_WithExitContractsInferred_Golden(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:                  sampleSpec(),
+		Summary:               "Added Gin handler at /healthz returning \"ok\".",
+		FinalDiff:             "diff --git a/handlers/health.go b/handlers/health.go\n+func Health(c *gin.Context) { c.String(200, \"ok\") }\n",
+		ExitContracts:         []string{"Exports DECLINE_NODE"},
+		ExitContractsInferred: true,
+	})
+	require.NoError(t, err)
+	golden(t, "post_with_exit_contracts_inferred", out.System+"\n---USER---\n"+out.User)
+}
+
 func TestRenderPost_WithExplicitExitContractsIncludesSection(t *testing.T) {
 	out, err := RenderPost(PostInput{
 		Spec:                  sampleSpec(),

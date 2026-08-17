@@ -18,7 +18,7 @@ docker pull ghcr.io/patiently/anti-tangent-mcp:latest
 
 ### One-shot install via paste-in prompt
 
-If your host is Claude Code or opencode, you can paste the matching prompt below into a fresh session and the agent will fetch the latest release binary, register the MCP, and set up the protocol so it loads **on demand** (Claude Code installs the `anti-tangent-protocol` plugin; opencode wires a slim pointer). The full protocol document loads only when a task carries a Goal/Acceptance-criteria header — not on every call. The prompts resolve "latest" from the GitHub API, so they don't need to be edited each release.
+If your host is Claude Code or opencode, you can paste the matching prompt below into a fresh session and the agent will fetch the latest release binary, register the MCP, and set up the protocol so it loads **on demand** (Claude Code installs the `anti-tangent-protocol` plugin; opencode wires a slim pointer). Only `core.md` plus the part matching the agent's role loads — not on every call, and only when a task carries a Goal/Acceptance-criteria header, or a controller has just finished a multi-task plan run and needs to call `plan_run_report`. The prompts resolve "latest" from the GitHub API, so they don't need to be edited each release.
 
 These prompts target Linux and macOS. Windows users should follow the manual install above and adapt the steps to their host's MCP config format.
 
