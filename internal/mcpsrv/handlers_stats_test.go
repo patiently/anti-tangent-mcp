@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
@@ -103,6 +104,7 @@ func TestValidatePlanRecordsStats(t *testing.T) {
 		Reviews:   providers.Registry{"anthropic": rv},
 		Stats:     rec,
 		planCache: newPlanPassCache(),
+		PlanRuns:  planrun.NewStore(cfg.SessionTTL),
 	}}
 
 	_, pr, callErr := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
@@ -159,6 +161,7 @@ func TestValidatePlan_CacheHitRecordsPlanHeaderCounts(t *testing.T) {
 		Reviews:   providers.Registry{"anthropic": rv},
 		Stats:     newStatsRecorder(t, dir),
 		planCache: newPlanPassCache(),
+		PlanRuns:  planrun.NewStore(cfg.SessionTTL),
 	}}
 
 	// 3 headered tasks so the counts are unambiguously non-zero and not just

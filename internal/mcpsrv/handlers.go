@@ -17,6 +17,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
@@ -61,6 +62,9 @@ type ValidateTaskSpecArgs struct {
 	Phase                        string                            `json:"phase,omitempty"`
 	ModelOverride                string                            `json:"model_override,omitempty"`
 	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty"`
+	// PlanRunID ties this task to a plan run minted by validate_plan. Best
+	// effort: an unknown or expired id must not fail the review.
+	PlanRunID string `json:"plan_run_id,omitempty"`
 }
 
 type handlers struct {
@@ -158,7 +162,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 
 	// Create the session only after the review succeeds so failed reviews
 	// don't leave orphan sessions in the store waiting for TTL eviction.
-	sess := h.deps.Sessions.Create(spec)
+	sess := h.deps.Sessions.Create(spec, args.PlanRunID)
 	h.deps.Sessions.SetPreFindings(sess.ID, result.Findings)
 	// Re-fetch after SetPreFindings so LastAccessed reflects the final mutation.
 	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
@@ -175,6 +179,17 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		Partial:    result.Partial,
 	}
 	env = h.withSessionTTL(env, sess)
+
+	if args.PlanRunID != "" {
+		// Best-effort: an unknown or expired run must not fail the review.
+		h.deps.PlanRuns.AppendRow(args.PlanRunID, planrun.TaskRow{
+			SessionID:      sess.ID,
+			TaskTitle:      args.TaskTitle,
+			PreVerdict:     env.Verdict,
+			CodesceneState: planrun.StateMissing,
+		})
+	}
+
 	h.recordStat(statParams{
 		tool:      "validate_task_spec",
 		verdict:   env.Verdict,
@@ -453,6 +468,13 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		Verdict:   result.Verdict,
 		Findings:  result.Findings,
 	})
+
+	if sess.PlanRunID != "" {
+		h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
+			row.Checkpoints++
+		})
+	}
+
 	// Re-fetch after AppendCheckpoint so LastAccessed reflects the final mutation.
 	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
 		sess = refreshed
@@ -1203,6 +1225,27 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		env.SubmissionDefectOnly = true
 		env.NextAction = resubmitNextAction + env.NextAction
 	}
+
+	if !lightweight && sess.PlanRunID != "" {
+		sev, _, _ := stats.CountFindings(env.Findings)
+		state := planrun.StateMissing
+		if args.Codescene != nil {
+			if args.Codescene.Ran {
+				state = planrun.StateRan
+			} else {
+				state = planrun.StateSkipped
+			}
+		}
+		h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
+			row.PostVerdict = env.Verdict
+			row.Severity = sev
+			row.SubmissionOnly = env.SubmissionDefectOnly
+			row.Codescene = args.Codescene
+			row.CodesceneState = state
+			row.CompletedAt = time.Now().UTC()
+		})
+	}
+
 	h.recordStat(statParams{
 		tool:         "validate_completion",
 		verdict:      env.Verdict,
@@ -1347,6 +1390,11 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	populateNormativeTestBodies(&pr, tasks)
 	pr = prependPlanClamp(pr, clamp)
 	pr = finalizePlanResult(pr, modelUsed, ms)
+	if pr.PlanRunID == "" {
+		run := h.deps.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
+		pr.PlanRunID = run.ID
+		pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
+	}
 	h.planCache().store(cacheKey, pr, modelUsed)
 	h.recordStat(statParams{
 		tool:            "validate_plan",

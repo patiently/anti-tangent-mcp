@@ -6,6 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
@@ -20,6 +21,8 @@ type Deps struct {
 	// Stats is nil when ANTI_TANGENT_STATS_DIR is unset; all call sites are
 	// nil-safe no-ops in that case.
 	Stats *stats.Recorder
+	// PlanRuns tracks multi-task plan executions. Never nil; New() fills it in.
+	PlanRuns *planrun.Store
 }
 
 // Version is the server version reported via the MCP Implementation block.
@@ -32,6 +35,9 @@ var Version = "dev"
 func New(d Deps) *mcp.Server {
 	if d.planCache == nil {
 		d.planCache = newPlanPassCache()
+	}
+	if d.PlanRuns == nil {
+		d.PlanRuns = planrun.NewStore(d.Cfg.SessionTTL)
 	}
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "anti-tangent-mcp",

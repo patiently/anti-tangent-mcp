@@ -63,4 +63,8 @@ type Session struct {
 	Checkpoints   []Checkpoint
 	PostFindings  []verdict.Finding
 	ModelDefaults ModelDefaults
+	// PlanRunID ties this session to a plan_run_id minted by validate_plan, so
+	// check_progress and validate_completion can update the right planrun row
+	// without new arguments. Empty for tasks not dispatched under a plan run.
+	PlanRunID string
 }

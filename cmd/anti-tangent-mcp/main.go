@@ -14,6 +14,7 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/mcpsrv"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
@@ -74,9 +75,10 @@ func main() {
 	}
 
 	store := session.NewStore(cfg.SessionTTL)
+	planRuns := planrun.NewStore(cfg.SessionTTL)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go evictLoop(ctx, store, 5*time.Minute, logger)
+	go evictLoop(ctx, store, planRuns, 5*time.Minute, logger)
 
 	var statsRec *stats.Recorder
 	if cfg.StatsDir != "" {
@@ -111,6 +113,7 @@ func main() {
 		Sessions: store,
 		Reviews:  registry,
 		Stats:    statsRec,
+		PlanRuns: planRuns,
 	})
 
 	sigCh := make(chan os.Signal, 1)
@@ -131,7 +134,7 @@ func main() {
 	}
 }
 
-func evictLoop(ctx context.Context, store *session.Store, every time.Duration, logger *slog.Logger) {
+func evictLoop(ctx context.Context, store *session.Store, planRuns *planrun.Store, every time.Duration, logger *slog.Logger) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -139,9 +142,14 @@ func evictLoop(ctx context.Context, store *session.Store, every time.Duration, l
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			n := store.EvictExpired(time.Now())
+			now := time.Now()
+			n := store.EvictExpired(now)
 			if n > 0 {
 				logger.Info("evicted sessions", "count", n)
+			}
+			pn := planRuns.EvictExpired(now)
+			if pn > 0 {
+				logger.Info("evicted plan runs", "count", pn)
 			}
 		}
 	}

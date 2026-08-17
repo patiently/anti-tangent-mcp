@@ -15,6 +15,7 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -57,6 +58,7 @@ func newDeps(t *testing.T, rv *fakeReviewer) Deps {
 		Sessions:  session.NewStore(1 * time.Hour),
 		Reviews:   providers.Registry{"anthropic": rv},
 		planCache: newPlanPassCache(),
+		PlanRuns:  planrun.NewStore(1 * time.Hour),
 	}
 }
 
@@ -178,7 +180,7 @@ func TestEnvelope_SessionTTLFieldsSerializeCorrectly(t *testing.T) {
 		// the computed expiry (LastAccessed + TTL) lies in the past, exercising
 		// the clamp branch inside withSessionTTL.
 		store := session.NewStore(1 * time.Hour)
-		sess := store.Create(session.TaskSpec{Title: "t", Goal: "g"})
+		sess := store.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 		sess.LastAccessed = time.Now().Add(-2 * time.Hour)
 
 		h := &handlers{deps: Deps{Sessions: store}}
@@ -2829,7 +2831,7 @@ func hasCategory(fs []verdict.Finding, c verdict.Category) bool {
 
 func TestValidateCompletion_CodesceneRequired_MissingBlock(t *testing.T) {
 	h := newTestHandlersWithCodescene(t, "required")
-	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
@@ -2849,7 +2851,7 @@ func TestValidateCompletion_CodesceneRequired_MissingBlock(t *testing.T) {
 
 func TestValidateCompletion_CodesceneRequired_DeclaredSkip(t *testing.T) {
 	h := newTestHandlersWithCodescene(t, "required")
-	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
@@ -2869,7 +2871,7 @@ func TestValidateCompletion_CodesceneRequired_DeclaredSkip(t *testing.T) {
 
 func TestValidateCompletion_CodesceneRequired_UndeclaredSkipIsNotRun(t *testing.T) {
 	h := newTestHandlersWithCodescene(t, "required")
-	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
@@ -2886,7 +2888,7 @@ func TestValidateCompletion_CodesceneRequired_WhitespaceOnlySkipReasonIsNotRun(t
 	// == "" boundary in codesceneFindings — a naive d.SkipReason == "" check
 	// would let this slip through as a declared skip.
 	h := newTestHandlersWithCodescene(t, "required")
-	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
@@ -2907,7 +2909,7 @@ func TestValidateCompletion_CodesceneRequired_WhitespaceOnlySkipReasonIsNotRun(t
 
 func TestValidateCompletion_CodesceneOff_NoFinding(t *testing.T) {
 	h := newTestHandlersWithCodescene(t, "")
-	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
@@ -2923,7 +2925,7 @@ func TestValidateCompletion_CodesceneOff_DigestStillThreadedToReviewer(t *testin
 	// text-only reviewer gets codebase-grounded input, even though the
 	// server-side adoption check is disabled.
 	h := newTestHandlersWithCodescene(t, "")
-	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 
 	_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
@@ -2938,7 +2940,7 @@ func TestValidateCompletion_CodesceneOff_DigestStillThreadedToReviewer(t *testin
 
 func TestValidateCompletion_CodesceneRegressionFinding(t *testing.T) {
 	h := newTestHandlersWithCodescene(t, "") // fires regardless of the switch
-	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
@@ -2966,7 +2968,7 @@ func TestValidateCompletion_CodesceneRequired_RanTrueNoAdoptionFinding(t *testin
 	// resolves Trend to "improvement", keeping the regression finding out of
 	// scope too, isolating this test to the adoption-check switch alone.
 	h := newTestHandlersWithCodescene(t, "required")
-	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"})
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",

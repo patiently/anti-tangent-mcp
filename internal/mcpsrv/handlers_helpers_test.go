@@ -40,6 +40,24 @@ func (s *scriptedReviewer) Review(_ context.Context, _ providers.Request) (provi
 	return s.responses[i], nil
 }
 
+// newTestHandlers returns handlers wired with a default passing per-task
+// reviewer response, for tests that only care about validate_task_spec /
+// check_progress / validate_completion plumbing, not the review's content.
+func newTestHandlers(t *testing.T) *handlers {
+	t.Helper()
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	return &handlers{deps: newDeps(t, rv)}
+}
+
+// newTestPlanHandlers returns handlers wired with a default passing
+// single-task plan reviewer response, for validate_plan tests that only care
+// about plumbing, not the review's content.
+func newTestPlanHandlers(t *testing.T) *handlers {
+	t.Helper()
+	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+	return &handlers{deps: newDeps(t, rv)}
+}
+
 // newDepsWithScripted builds a Deps wired to use the scripted reviewer for the
 // plan model provider ("anthropic") with PlanTasksPerChunk set to chunkSize.
 func newDepsWithScripted(t *testing.T, sr *scriptedReviewer, chunkSize int) Deps {

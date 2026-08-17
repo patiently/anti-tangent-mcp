@@ -12,7 +12,7 @@ import (
 
 func TestStore_CreateAndGet(t *testing.T) {
 	s := NewStore(1 * time.Hour)
-	sess := s.Create(TaskSpec{Title: "t", Goal: "g"})
+	sess := s.Create(TaskSpec{Title: "t", Goal: "g"}, "")
 	require.NotEmpty(t, sess.ID)
 
 	got, ok := s.Get(sess.ID)
@@ -29,7 +29,7 @@ func TestStore_GetUnknown(t *testing.T) {
 
 func TestStore_AppendCheckpoint(t *testing.T) {
 	s := NewStore(1 * time.Hour)
-	sess := s.Create(TaskSpec{Title: "t"})
+	sess := s.Create(TaskSpec{Title: "t"}, "")
 
 	cp := Checkpoint{
 		At:        time.Now(),
@@ -51,7 +51,7 @@ func TestStore_AppendCheckpointUnknown(t *testing.T) {
 
 func TestStore_TTL_Eviction(t *testing.T) {
 	s := NewStore(50 * time.Millisecond)
-	sess := s.Create(TaskSpec{Title: "t"})
+	sess := s.Create(TaskSpec{Title: "t"}, "")
 
 	// Force LastAccessed into the past by directly mutating (test-only).
 	s.mu.Lock()
@@ -67,7 +67,7 @@ func TestStore_TTL_Eviction(t *testing.T) {
 
 func TestStore_GetUpdatesLastAccessed(t *testing.T) {
 	s := NewStore(1 * time.Hour)
-	sess := s.Create(TaskSpec{Title: "t"})
+	sess := s.Create(TaskSpec{Title: "t"}, "")
 	first := sess.LastAccessed
 
 	time.Sleep(2 * time.Millisecond)
