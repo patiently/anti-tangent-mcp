@@ -47,34 +47,46 @@ jobs:
 
           echo "✓ Found changelog entry for $VERSION"
 
-  integration-size:
-    name: INTEGRATION.md size budget
+  protocol-docs:
+    name: Protocol docs budget & bundle
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Verify INTEGRATION.md is under the 40,000-byte budget
+      - name: Verify each protocol part is under the 16,000-byte budget
+        run: |
+          FAIL=0
+          for f in docs/protocol/*.md; do
+            BYTES=$(wc -c < "$f")
+            echo "$f = $BYTES bytes (budget: strictly < 16000)"
+            if [ "$BYTES" -ge 16000 ]; then
+              echo "::error file=$f::$f is $BYTES bytes; must be < 16000. This file is Read in full by every agent whose role matches it — the cost is paid once per dispatched subagent, not once per session. Split it or move reference detail into docs/team-setup/."
+              FAIL=1
+            fi
+          done
+          exit $FAIL
+
+      - name: Verify INTEGRATION.md is still a router, not a monolith
         run: |
           BYTES=$(wc -c < INTEGRATION.md)
-          echo "INTEGRATION.md = $BYTES bytes (budget: strictly < 40000)"
-          if [ "$BYTES" -ge 40000 ]; then
-            echo "::error file=INTEGRATION.md::INTEGRATION.md is $BYTES bytes; must be < 40000 (user-instructions context budget). Trim redundant content — details live in the conventions doc / design specs."
+          echo "INTEGRATION.md = $BYTES bytes (budget: strictly < 2000)"
+          if [ "$BYTES" -ge 2000 ]; then
+            echo "::error file=INTEGRATION.md::INTEGRATION.md is $BYTES bytes; it is an index over docs/protocol/, not a place for protocol text. Put the content in the matching part file."
             exit 1
           fi
-          echo "✓ within budget ($((40000 - BYTES)) bytes to spare)"
 
-      - name: Verify anti-tangent-protocol bundled INTEGRATION.md matches root
+      - name: Verify anti-tangent-protocol bundled protocol matches docs/protocol
         run: |
-          if ! diff -q INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md >/dev/null; then
-            echo "::error file=plugin/anti-tangent-protocol/INTEGRATION.md::Bundled copy has drifted from root INTEGRATION.md. Resync with: cp INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md"
+          if ! diff -r docs/protocol plugin/anti-tangent-protocol/protocol; then
+            echo "::error file=plugin/anti-tangent-protocol/protocol::Bundled copy has drifted. Resync with: rm -f plugin/anti-tangent-protocol/protocol/*.md && cp docs/protocol/*.md plugin/anti-tangent-protocol/protocol/"
             exit 1
           fi
-          echo "✓ bundled plugin copy matches root INTEGRATION.md"
+          echo "✓ bundled plugin copy matches docs/protocol"
 
   build-test:
     name: Build & Test (Go)
-    needs: [changelog, integration-size]
+    needs: [changelog, protocol-docs]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
