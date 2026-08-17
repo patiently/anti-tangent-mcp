@@ -9,7 +9,10 @@
 // as caller-attested, exactly like pinned_by.
 package codescene
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Verdicts is the per-file verdict tally from an analyze_change_set run.
 type Verdicts struct {
@@ -45,10 +48,32 @@ const (
 	TrendNeutral     = "neutral"
 )
 
-// Normalize derives Trend from NetPP and lowercases QualityGate. It is the
-// only integrity check applied to an inbound digest: it cannot tell whether
-// the numbers came from a real CodeScene run, but it does stop a caller
-// reporting an improvement alongside positive problem points.
+// qualityGateUnrecognized is what Normalize maps QualityGate to when it is
+// non-empty but not one of the recognized values. QualityGate is caller-
+// supplied free text with only a comment ("// passed|failed") pinning its
+// shape; without this, an out-of-range value renders as bare, unvalidated
+// prose in both the reviewer prompt and the plan-run report table.
+const qualityGateUnrecognized = "unrecognized"
+
+// codesceneSkipReasonMaxRunes bounds SkipReason's length in Normalize.
+// SkipReason is free text with no request-level cap, and lands verbatim in
+// the reviewer prompt and plan-runs.jsonl; a few hundred runes is generous
+// for a one-line reason.
+const codesceneSkipReasonMaxRunes = 300
+
+// codesceneCategoryCountsMax bounds how many CategoryCounts entries
+// Normalize retains. CategoryCounts is an unbounded caller-supplied map that,
+// like SkipReason, is excluded from the request-level payload cap
+// (totalCompletionBytes) and lands verbatim in plan-runs.jsonl.
+const codesceneCategoryCountsMax = 20
+
+// Normalize derives Trend from NetPP, lowercases and validates QualityGate,
+// and bounds the two caller-supplied free-form fields (SkipReason,
+// CategoryCounts). It is the only integrity/size check applied to an inbound
+// digest: it cannot tell whether the numbers came from a real CodeScene run,
+// but it does stop a caller reporting an improvement alongside positive
+// problem points, an unrecognized quality-gate string, or an unbounded
+// payload riding along in fields the request-level cap doesn't cover.
 func (d *Digest) Normalize() {
 	switch {
 	case d.NetPP > 0:
@@ -59,4 +84,56 @@ func (d *Digest) Normalize() {
 		d.Trend = TrendNeutral
 	}
 	d.QualityGate = strings.ToLower(strings.TrimSpace(d.QualityGate))
+	if d.QualityGate != "" && d.QualityGate != "passed" && d.QualityGate != "failed" {
+		d.QualityGate = qualityGateUnrecognized
+	}
+	d.SkipReason = truncateRunes(strings.TrimSpace(d.SkipReason), codesceneSkipReasonMaxRunes)
+	d.CategoryCounts = capCategoryCounts(d.CategoryCounts, codesceneCategoryCountsMax)
+}
+
+// truncateRunes returns s if its rune count is at or below max; otherwise the
+// first max runes followed by a single UTF-8 ellipsis. Rune-based truncation
+// avoids splitting multi-byte UTF-8 characters mid-codepoint. Duplicated from
+// (rather than sharing) internal/mcpsrv/summary.go's truncate: codescene is a
+// leaf package (see the package doc) and must not import internal/mcpsrv.
+func truncateRunes(s string, max int) string {
+	if s == "" || max <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return string(runes[:max]) + "…"
+}
+
+// capCategoryCounts bounds counts to at most max entries, keeping the
+// highest-count categories and breaking ties alphabetically so which entries
+// survive is deterministic rather than depending on Go's randomized map
+// iteration order. nil or already-small maps pass through unchanged (nil
+// stays nil so json omitempty keeps behaving the same way for callers who
+// never set the field).
+func capCategoryCounts(counts map[string]int, max int) map[string]int {
+	if len(counts) <= max {
+		return counts
+	}
+	type kv struct {
+		k string
+		v int
+	}
+	pairs := make([]kv, 0, len(counts))
+	for k, v := range counts {
+		pairs = append(pairs, kv{k, v})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].v != pairs[j].v {
+			return pairs[i].v > pairs[j].v
+		}
+		return pairs[i].k < pairs[j].k
+	})
+	out := make(map[string]int, max)
+	for _, p := range pairs[:max] {
+		out[p.k] = p.v
+	}
+	return out
 }
