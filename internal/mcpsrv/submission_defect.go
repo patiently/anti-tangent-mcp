@@ -4,10 +4,10 @@ package mcpsrv
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -91,40 +91,10 @@ func codesceneFindings(mode string, d *codescene.Digest) []verdict.Finding {
 			Category:  verdict.CategoryQuality,
 			Criterion: "code_health_regression",
 			Evidence: fmt.Sprintf("CodeScene reports a Code Health regression: net problem points %+.1f%s.",
-				d.NetPP, topCategoriesSuffix(d.CategoryCounts)),
+				d.NetPP, planrun.TopCategories(d.CategoryCounts, 3)),
 			Suggestion: "Consider addressing the flagged functions before reporting DONE. " +
 				"Advisory only — anti-tangent never fails a verdict on CodeScene.",
 		})
 	}
 	return out
-}
-
-// topCategoriesSuffix renders up to three CodeScene categories, highest count
-// first, deterministically ordered so the finding text is stable.
-func topCategoriesSuffix(counts map[string]int) string {
-	if len(counts) == 0 {
-		return ""
-	}
-	type kv struct {
-		k string
-		v int
-	}
-	pairs := make([]kv, 0, len(counts))
-	for k, v := range counts {
-		pairs = append(pairs, kv{k, v})
-	}
-	sort.Slice(pairs, func(i, j int) bool {
-		if pairs[i].v != pairs[j].v {
-			return pairs[i].v > pairs[j].v
-		}
-		return pairs[i].k < pairs[j].k
-	})
-	if len(pairs) > 3 {
-		pairs = pairs[:3]
-	}
-	parts := make([]string, len(pairs))
-	for i, p := range pairs {
-		parts[i] = fmt.Sprintf("%s x%d", p.k, p.v)
-	}
-	return " (" + strings.Join(parts, ", ") + ")"
 }

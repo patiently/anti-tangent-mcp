@@ -1869,3 +1869,80 @@ func validateChunkIdentity(parsed verdict.TasksOnly, chunkTasks []planparser.Raw
 	}
 	return nil
 }
+
+// PlanRunReportArgs is the input schema for the plan-run report.
+type PlanRunReportArgs struct {
+	PlanRunID string `json:"plan_run_id" jsonschema:"required"`
+}
+
+// PlanRunReportResult is what plan_run_report returns. Deterministic: no
+// reviewer call, no provider round-trip, no cost.
+type PlanRunReportResult struct {
+	PlanRunID    string            `json:"plan_run_id"`
+	PlanVerdict  string            `json:"plan_verdict,omitempty"`
+	PlanQuality  string            `json:"plan_quality,omitempty"`
+	Tasks        []planrun.TaskRow `json:"tasks"`
+	Totals       planrun.RunTotals `json:"totals"`
+	Findings     []verdict.Finding `json:"findings,omitempty"`
+	SummaryBlock string            `json:"summary_block"`
+}
+
+func planRunReportTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name: "plan_run_report",
+		Description: "Report the per-task outcome of a finished multi-task plan run: the anti-tangent verdict and the CodeScene result for each task. " +
+			"Call once after the last task reports DONE, with the plan_run_id returned by validate_plan. " +
+			"Deterministic and free — no reviewer model is called.",
+	}
+}
+
+func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args PlanRunReportArgs) (*mcp.CallToolResult, PlanRunReportResult, error) {
+	if args.PlanRunID == "" {
+		return nil, PlanRunReportResult{}, errors.New("plan_run_id is required")
+	}
+
+	// Snapshot, not Get: this walks run.Rows after the lock is released, and
+	// other subagents under the same plan run may be appending concurrently.
+	run, ok := h.deps.PlanRuns.Snapshot(args.PlanRunID)
+	if !ok {
+		res := PlanRunReportResult{
+			PlanRunID: args.PlanRunID,
+			Tasks:     []planrun.TaskRow{},
+			Findings: []verdict.Finding{{
+				Severity:  verdict.SeverityMajor,
+				Category:  verdict.CategorySessionMissing,
+				Criterion: "plan_run_id",
+				Evidence: fmt.Sprintf("No plan run %q is known to this server. Runs expire after %s, "+
+					"and in-memory state is lost on restart.", args.PlanRunID, h.deps.PlanRuns.TTL()),
+				Suggestion: "Nothing to recover — report from the per-task DONE envelopes instead. " +
+					"Set ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER=1 to persist future runs.",
+			}},
+			SummaryBlock: "anti-tangent plan run report\n  plan_run_id:  " + args.PlanRunID +
+				"\n  (unknown or expired — no rows)\n",
+		}
+		return planRunReportResult(res)
+	}
+
+	res := PlanRunReportResult{
+		PlanRunID:    run.ID,
+		PlanVerdict:  run.PlanVerdict,
+		PlanQuality:  run.PlanQuality,
+		Tasks:        run.Rows,
+		Totals:       planrun.Totals(run),
+		SummaryBlock: planrun.Render(run),
+	}
+	if res.Tasks == nil {
+		res.Tasks = []planrun.TaskRow{}
+	}
+	return planRunReportResult(res)
+}
+
+func planRunReportResult(res PlanRunReportResult) (*mcp.CallToolResult, PlanRunReportResult, error) {
+	body, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return nil, PlanRunReportResult{}, err
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
+	}, res, nil
+}
