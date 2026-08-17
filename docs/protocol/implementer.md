@@ -126,13 +126,13 @@ Use the full protocol for: new production logic, test-design choices, or ACs req
 
 CodeScene covers anti-tangent's text-only blind spot (see `## Scope and limits`): the open-source [CodeScene MCP server](https://github.com/codescene-oss/codescene-mcp-server) runs deterministic Code Health analysis over the actual files, complementing anti-tangent's LLM review of plan text.
 
-**Tool-to-phase mapping.** When CodeScene MCP is configured, these calls are **required** (§4.2 steps 2b/3b); record the pre-DONE CodeScene status in the DONE report (delta, or skip + reason):
+**Tool-to-phase mapping.** When CodeScene MCP is configured, these calls are **required** (§4.2 steps 2b/3b):
 
 - Mid-task: `pre_commit_code_health_safeguard` after meaningful changes (uncommitted/staged only; deterministic and fast).
-- Before DONE (with `validate_completion`): `analyze_change_set` for the full branch-vs-base view.
+- Before DONE: `analyze_change_set` for the full branch-vs-base view — see §4.2 step 3b for what to do with the result.
 - Drill-down on a flagged issue: `code_health_review`.
 
-The requirement is prompt-level — anti-tangent never enforces CodeScene findings server-side, staying advisory. If CodeScene MCP isn't configured, the companion calls are skipped, as are all CodeScene calls on lightweight-protocol tasks (doc-only / mechanical).
+Enforcement is prompt-level: the requirement to call these tools lives here and in §4.2, not in the server. Once you do call `validate_completion`, `ANTI_TANGENT_CODESCENE=required` can deterministically add a `codescene_not_run` / `codescene_skipped` finding server-side (see `core.md`) — but anti-tangent never *fails a verdict* on a CodeScene finding itself. If CodeScene MCP isn't configured, the companion calls are skipped, as are all CodeScene calls on lightweight-protocol tasks (doc-only / mechanical).
 
 **CodeScene stats:** CodeScene keeps no history — see [docs/team-setup/codescene-stats.md](docs/team-setup/codescene-stats.md) to log Code Health to `codescene-events.jsonl`.
 

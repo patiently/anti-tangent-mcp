@@ -91,6 +91,15 @@ If you're unsure, look for the structured task block. No block → no protocol. 
 
 **A `validate_completion` call returned `category: malformed_evidence`.** The server's evidence-shape guard rejected your submission pre-review. The `evidence` field names the offending pattern — typically a truncation marker (`(truncated)`, `[truncated]`, `// ... unchanged`), a `...`-only placeholder line, or empty `Path` entries in `final_files`. Re-submit with full file contents or a complete unified diff. Rejection is cached for 5 minutes by canonical content hash. If your file legitimately contains one of these literal strings (e.g. a fixture or doc), pass a complete `final_diff` rather than `final_files`.
 
+**A `validate_completion` call returned `category: codescene_not_run` or `category: codescene_skipped`.** Only fires when `ANTI_TANGENT_CODESCENE=required`. Four cases:
+
+- No `codescene` argument on the call → `codescene_not_run`, `severity: major` — a submission defect (see `submission_defect_only` below).
+- `codescene: {"ran": false, "skip_reason": "…"}` → `codescene_skipped`, `severity: minor` — recorded in the plan-run ledger; does not block.
+- `codescene: {"ran": false}` with no `skip_reason` → `codescene_not_run`, `severity: major`, same as no argument at all. **An undeclared skip is treated exactly like a non-run** — the server can't tell "forgot to run it" from "ran it and didn't say" without a stated reason, so state one.
+- `codescene: {"ran": true, …}` → no adoption finding.
+
+Fix: pass the `codescene` argument (§4.2 step 3b), or if you deliberately skipped, always include `skip_reason`.
+
 **What is `submission_defect_only: true`?** Every blocking finding on that `validate_completion`
 response is about what you submitted — absent evidence, malformed evidence, or a CodeScene run
 that did not happen — not about your code. Attach what is missing and call again. No rework is

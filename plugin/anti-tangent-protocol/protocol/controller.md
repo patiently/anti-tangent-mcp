@@ -60,7 +60,7 @@ The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`: `plan
 
 ### 5.6 Per-call tool args and partial-response handling (v0.3.0+)
 
-**`max_tokens_override`** (all six tools): optional non-negative int. Replaces `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` finding appended. Negative values rejected with `max_tokens_override must be ≥ 0`.
+**`max_tokens_override`** (all six reviewer-calling tools — `plan_run_report` makes no reviewer call, so it takes no token budget): optional non-negative int. Replaces `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` finding appended. Negative values rejected with `max_tokens_override must be ≥ 0`.
 
 **`mode`** (`validate_plan` only): optional `"quick"` or `"thorough"` (default `"thorough"`). `"quick"` surfaces only the most-severe findings (at most 3 per scope) and omits stylistic nits. Invalid values rejected with `mode must be "quick" or "thorough"`.
 
