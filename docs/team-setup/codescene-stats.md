@@ -50,6 +50,8 @@ During compaction, anti-tangent reads `codescene-events.jsonl`, aggregates the c
 
 Consumers read `rollup.json` and look for the optional `codescene` block — **absence means "no CodeScene data this window," not an error.** The raw `codescene-events.jsonl` is retention-pruned by `ANTI_TANGENT_STATS_RETENTION_DAYS` alongside `events.jsonl`.
 
+**Note on pruning and zero-valued fields.** The record's fields (`quality_gate`, `files_analyzed`, `verdicts`, `trend`, `net_pp`, `category_counts`) are all `omitempty` in Go. Retention-pruning rewrites `codescene-events.jsonl` by re-marshalling the records it keeps, so after a prune, a genuinely-neutral record (e.g. `net_pp: 0`, no findings) may be missing keys that a fresh record — like the example above — would still show. This round-trips losslessly in Go (the zero value and "key absent" decode to the same thing) and no consumer reads the raw file directly, so it is not a defect, but don't read a pruned record's missing key as "field never recorded."
+
 ## Enable it
 
 The hook script ships in this repo at `examples/hooks/codescene-log.sh`. Register it as a Claude Code PostToolUse hook in `~/.claude/settings.json` (additive — keep any existing PostToolUse entries):
@@ -70,3 +72,27 @@ The hook script ships in this repo at `examples/hooks/codescene-log.sh`. Registe
 ```
 
 The hook reads the PostToolUse stdin (`tool_response` is a content-block array `[{type:"text", text:"<json>"}]`), extracts the `analyze_change_set` result, and appends the record. It is fire-and-forget: it always exits 0 and silently skips when `ANTI_TANGENT_STATS_DIR` is unset or the payload is unusable.
+
+## Per-task attribution: `plan-runs.jsonl`
+
+The hook above records CodeScene runs anonymously and in aggregate — it cannot know which task
+it was inside. From v0.15.0 the implementer can instead pass the `analyze_change_set` digest to
+`validate_completion` as the `codescene` argument, which attributes it to a task exactly and
+surfaces it in `plan_run_report`'s per-task table.
+
+Set `ANTI_TANGENT_PLAN_LEDGER=1` (with `ANTI_TANGENT_STATS_DIR`) to persist one line per
+completed task to `plan-runs.jsonl`, so `plan_run_report` survives a server restart — the
+in-memory plan-run store is otherwise lost like every other session state.
+
+**Privacy: this file is different from the others.** `events.jsonl` and
+`codescene-events.jsonl` are deliberately content-free — no titles, no paths, no code.
+`plan-runs.jsonl` carries **task titles**. That is why it needs its own opt-in instead of
+inheriting `ANTI_TANGENT_STATS_DIR`. Unlike `events.jsonl` and `codescene-events.jsonl`,
+`plan-runs.jsonl` is **not** currently subject to `ANTI_TANGENT_STATS_RETENTION_DAYS` pruning —
+retention-pruning only rewrites the two files above. If your `plan-runs.jsonl` needs to be
+bounded (long-running server, sensitive task titles), manage that file's lifecycle yourself
+until server-side pruning covers it too.
+
+The two channels do not double-count: the hook writes `codescene-events.jsonl` and feeds the
+rollup's `codescene` block; the in-band argument writes `plan-runs.jsonl` and feeds
+`plan_run_report`. A task can use either, both, or neither.

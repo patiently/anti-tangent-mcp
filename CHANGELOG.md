@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-08-17
+
+### Added
+- **`plan_run_report`** (seventh tool) — a deterministic, reviewer-free per-task report over a
+  finished plan run, showing the anti-tangent verdict and the CodeScene result side by side.
+  `validate_plan` now mints a `plan_run_id` the controller threads into each
+  `validate_task_spec` call.
+- **In-band CodeScene results.** `validate_completion` accepts a structured `codescene`
+  argument (the `analyze_change_set` digest). It reaches the reviewer as codebase-grounded
+  evidence — the first input that partially covers anti-tangent's text-only blind spot — and is
+  attributed to the task in the plan-run report. `ANTI_TANGENT_CODESCENE=required` makes a
+  missing run observable as a `codescene_not_run` finding; unset (the default) changes nothing.
+  Still advisory: a failed quality gate never fails a verdict server-side.
+- **`submission_defect_only`** on `validate_completion` envelopes. True when every blocking
+  finding is about the submission (`insufficient_evidence`, `malformed_evidence`,
+  `codescene_not_run`) rather than the code, so an implementer re-submits instead of reworking.
+  Field data showed two-thirds of first-round failures were evidence complaints treated as
+  blocking code defects.
+- **Plan-header adoption telemetry** in `rollup.json` (`plan_headers`), and an optional durable
+  plan-run ledger behind `ANTI_TANGENT_PLAN_LEDGER=1`.
+
+### Fixed
+- `HasStructuredHeader` matched `**Acceptance criteria:**` case-sensitively and was read
+  nowhere outside tests. superpowers' `writing-plans` — the dominant plan generator — emits a
+  capital C and grep-enforces it, so every plan it produced scored as headerless and the
+  resulting adoption signal was false. The matcher is now case-insensitive and the result is
+  reported as telemetry.
+
+### Changed
+- **The protocol document is now role-scoped.** `INTEGRATION.md` is a router over
+  `docs/protocol/{core,authoring,implementer,controller,project-knowledge}.md`, and the
+  `anti-tangent-protocol` skill reads only `core.md` plus the part matching the agent's role.
+  An implementing subagent previously read the whole ~40 KB document — including ~13 KB of
+  project-knowledge protocol it is structurally forbidden from acting on — once per dispatch;
+  it now reads `core.md` + `implementer.md`, roughly 22 KB. **Deep links to `INTEGRATION.md`
+  anchors no longer resolve**; section numbers are unchanged, so `§4.2` is still `§4.2`, now
+  inside `implementer.md`.
+- The skill's trigger covers the end of a plan run, so a controller calling `plan_run_report`
+  after the last task reports DONE has the protocol loaded.
+- `post.tmpl` instructs the reviewer to use `insufficient_evidence` for acceptance criteria it
+  cannot assess, instead of `missing_acceptance_criterion`.
+
 ## [0.14.0] - 2026-07-09
 
 ### Added
