@@ -14,6 +14,8 @@ role so an agent loads only what applies to it.
 | [`controller.md`](docs/protocol/controller.md) | controllers | §5 plan-handoff gate, dispatch addendum, end-of-run reporting |
 | [`project-knowledge.md`](docs/protocol/project-knowledge.md) | controllers, only with a KB | prime/extract loop, note types, Basic Memory translation |
 
+The five parts live in `docs/protocol/`; the installer rewrites these paths to your local copy.
+
 Section numbers are stable across the split: §1 and §6 are in `core.md`, §3 in `authoring.md`,
 §4 in `implementer.md`, §5 in `controller.md`.
 
