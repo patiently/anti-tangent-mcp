@@ -183,12 +183,15 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 
 	if args.PlanRunID != "" {
 		// Best-effort: an unknown or expired run must not fail the review.
-		h.deps.PlanRuns.AppendRow(args.PlanRunID, planrun.TaskRow{
+		if !h.deps.PlanRuns.AppendRow(args.PlanRunID, planrun.TaskRow{
 			SessionID:      sess.ID,
 			TaskTitle:      args.TaskTitle,
 			PreVerdict:     env.Verdict,
 			CodesceneState: planrun.StateMissing,
-		})
+		}) {
+			slog.Warn("plan run row append failed; run unknown or expired",
+				"plan_run_id", args.PlanRunID, "session_id", sess.ID)
+		}
 	}
 
 	h.recordStat(statParams{
@@ -471,9 +474,12 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 	})
 
 	if sess.PlanRunID != "" {
-		h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
+		if !h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
 			row.Checkpoints++
-		})
+		}) {
+			slog.Warn("plan run row update failed; run or row unknown",
+				"plan_run_id", sess.PlanRunID, "session_id", sess.ID)
+		}
 	}
 
 	// Re-fetch after AppendCheckpoint so LastAccessed reflects the final mutation.
@@ -1237,14 +1243,17 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				state = planrun.StateSkipped
 			}
 		}
-		h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
+		if !h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
 			row.PostVerdict = env.Verdict
 			row.Severity = sev
 			row.SubmissionOnly = env.SubmissionDefectOnly
 			row.Codescene = args.Codescene
 			row.CodesceneState = state
 			row.CompletedAt = time.Now().UTC()
-		})
+		}) {
+			slog.Warn("plan run row update failed; run or row unknown",
+				"plan_run_id", sess.PlanRunID, "session_id", sess.ID)
+		}
 
 		// Best-effort ledger append. Never lets a write failure change the
 		// result: logged and swallowed, not returned.

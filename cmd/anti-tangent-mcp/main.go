@@ -163,16 +163,32 @@ func evictLoop(ctx context.Context, store *session.Store, planRuns *planrun.Stor
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			now := time.Now()
-			n := store.EvictExpired(now)
-			if n > 0 {
-				logger.Info("evicted sessions", "count", n)
-			}
-			pn := planRuns.EvictExpired(now)
-			if pn > 0 {
-				logger.Info("evicted plan runs", "count", pn)
-			}
+			evictTick(store, planRuns, logger)
 		}
+	}
+}
+
+// evictTick runs one eviction pass, recovering from a panic so a single bad
+// tick can't take down the eviction goroutine. Mirrors
+// internal/stats/recorder.go's recover-and-warn pattern for its own
+// background goroutine. No realistic panic path exists today — both
+// EvictExpired bodies are pure mutex/map/time code — but this keeps the two
+// background loops consistent rather than one being hardened and the other
+// not.
+func evictTick(store *session.Store, planRuns *planrun.Store, logger *slog.Logger) {
+	defer func() {
+		if v := recover(); v != nil {
+			logger.Warn("evict tick panicked", "panic", v)
+		}
+	}()
+	now := time.Now()
+	n := store.EvictExpired(now)
+	if n > 0 {
+		logger.Info("evicted sessions", "count", n)
+	}
+	pn := planRuns.EvictExpired(now)
+	if pn > 0 {
+		logger.Info("evicted plan runs", "count", pn)
 	}
 }
 
