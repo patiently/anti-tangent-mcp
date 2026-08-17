@@ -107,7 +107,7 @@
     {
       "id": 13,
       "subject": "Task 13: Documentation guard CI",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** CI catches the two defects most likely to slip through a documentation restructure - a dead cross-reference and a section identifier that got duplicated or lost.\n\n**Files:**\n- Create: `scripts/check-protocol-docs.sh`\n- Modify: `.github/workflows/ci.yml` (the protocol-docs job)\n\n**Acceptance Criteria:**\n- [ ] The script fails when a relative markdown link in INTEGRATION.md, README.md, or docs/protocol/*.md points at a nonexistent file\n- [ ] It fails when any tracked section identifier appears zero times or more than once across docs/protocol/*.md\n- [ ] It exits 0 on the committed tree\n- [ ] It runs in the protocol-docs CI job\n- [ ] Both failure modes are demonstrated locally before the task is closed\n\n**Verify:** `bash scripts/check-protocol-docs.sh` -> exits 0 with `OK protocol docs`; plus `go build ./... && go test -race ./...` PASS\n\n```json:metadata\n{\"files\": [\"scripts/check-protocol-docs.sh\", \".github/workflows/ci.yml\"], \"verifyCommand\": \"bash scripts/check-protocol-docs.sh && go build ./... && go test -race ./...\", \"acceptanceCriteria\": [\"broken relative links fail the script\", \"duplicate or missing section identifiers fail the script\", \"clean tree exits 0\", \"wired into CI\", \"both failure modes demonstrated\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         11,
@@ -117,7 +117,7 @@
     {
       "id": 14,
       "subject": "Task 14: Repair opencode install path",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** An opencode install of v0.15.0 lands the whole role-scoped protocol locally with working links, instead of a router pointing at files the user does not have.\n\n**Files:**\n- Modify: `README.md` (opencode install steps 6-7)\n- Modify: `examples/anti-tangent-pointer.md`\n- Modify: `CHANGELOG.md` (one figure correction)\n- Modify: `CLAUDE.md` (one wording correction)\n\n**Acceptance Criteria:**\n- [ ] README step 6 downloads the router AND all five docs/protocol parts into ~/.config/opencode/anti-tangent-protocol/\n- [ ] Instructions rewrite the router's relative links to absolute local paths so every link resolves on the user's machine\n- [ ] examples/anti-tangent-pointer.md no longer calls a single file 'the FULL protocol'; it routes to the router then the role part\n- [ ] The pointer's tool list names all seven tools\n- [ ] No step still describes INTEGRATION.md as the complete protocol\n- [ ] CHANGELOG's '~13 KB of project-knowledge protocol' becomes '~10 KB' (measured 9,687 B + 518 B)\n- [ ] CLAUDE.md's 'Two invariants are CI-enforced' accounts for the third (INTEGRATION.md under 2,000 bytes)\n\n**Verify:** `bash -c 'grep -q \"anti-tangent-protocol/\" README.md && ! grep -q \"This is the FULL protocol\" README.md && echo OK'` -> `OK`\n\n```json:metadata\n{\"files\": [\"README.md\", \"examples/anti-tangent-pointer.md\", \"CHANGELOG.md\", \"CLAUDE.md\"], \"verifyCommand\": \"grep -q 'anti-tangent-protocol/' README.md && ! grep -q 'This is the FULL protocol' README.md\", \"acceptanceCriteria\": [\"router plus five parts downloaded\", \"links rewritten to absolute local paths\", \"pointer routes by role\", \"seven tools named\", \"no 'full protocol' claim remains\", \"CHANGELOG figure corrected\", \"CLAUDE.md invariant count corrected\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         12
@@ -126,12 +126,12 @@
     {
       "id": 15,
       "subject": "Task 15: Prune plan-runs.jsonl on retention tick",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The plan-run ledger is retention-pruned like every other stats artifact, so the one file carrying task titles does not grow without bound.\n\n**Files:**\n- Modify: `internal/planrun/ledger.go`\n- Modify: `internal/planrun/ledger_test.go`\n- Modify: `internal/stats/recorder.go` (or `cmd/anti-tangent-mcp/main.go`)\n- Modify: `docs/team-setup/codescene-stats.md`\n\n**Acceptance Criteria:**\n- [ ] A Prune(cutoff time.Time) error method on *planrun.Ledger rewrites plan-runs.jsonl keeping only rows at or after the cutoff\n- [ ] It keys on Row.CompletedAt, since ledger lines carry no line-level timestamp\n- [ ] A nil *Ledger and an empty Dir are both no-ops\n- [ ] Pruning runs on the same retention schedule as pruneEvents/pruneCodescene, using ANTI_TANGENT_STATS_RETENTION_DAYS\n- [ ] A torn trailing line does not abort the prune and is not promoted into a kept row\n- [ ] docs/team-setup/codescene-stats.md is corrected: the ledger IS now retention-pruned\n\n**Verify:** `go test -race ./internal/planrun/... ./internal/stats/...` -> PASS\n\n```json:metadata\n{\"files\": [\"internal/planrun/ledger.go\", \"internal/stats/recorder.go\", \"docs/team-setup/codescene-stats.md\"], \"verifyCommand\": \"go test -race ./internal/planrun/... ./internal/stats/...\", \"acceptanceCriteria\": [\"Prune method keyed on CompletedAt\", \"nil and empty Dir no-ops\", \"runs on the retention tick\", \"torn line tolerated and not promoted\", \"doc corrected\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         10
       ]
     }
   ],
-  "lastUpdated": "2026-08-17T14:02:53.386539Z"
+  "lastUpdated": "2026-08-17T14:51:26.025871Z"
 }

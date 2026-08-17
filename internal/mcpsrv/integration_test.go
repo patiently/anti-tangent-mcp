@@ -559,7 +559,7 @@ func TestIntegration_PlanRunReport(t *testing.T) {
 	assert.NotEmpty(t, report.SummaryBlock)
 	assert.Contains(t, report.SummaryBlock, "Add /healthz endpoint")
 	assert.Contains(t, report.SummaryBlock, "Retry backoff")
-	assert.Contains(t, report.SummaryBlock, "passed") // the one ran:true CodeScene result
+	assert.Contains(t, report.SummaryBlock, "passed")  // the one ran:true CodeScene result
 	assert.Contains(t, report.SummaryBlock, "not run") // the one task with no digest
 
 	t.Logf("rendered plan_run_report summary_block:\n%s", report.SummaryBlock)
