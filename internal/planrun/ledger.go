@@ -90,7 +90,7 @@ func (l *Ledger) Append(run *Run, row TaskRow) error {
 	if l.afterAppendLock != nil {
 		l.afterAppendLock()
 	}
-	f, err := os.OpenFile(filepath.Join(l.Dir, ledgerFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(l.Dir, ledgerFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -168,7 +168,9 @@ func (l *Ledger) Load(planRunID string) (*Run, bool) {
 // the zero time predates any real cutoff) and silently drop rows we have no
 // actual evidence are old. Keeping them is the conservative choice: at worst
 // a timestamp-less row lingers past retention; the alternative is a
-// data-loss bug indistinguishable from a real timestamp check.
+// data-loss bug indistinguishable from a real timestamp check. Not reachable
+// via today's single call site (Append always follows a CompletedAt stamp);
+// kept for forward compatibility.
 //
 // A torn trailing line (unparseable JSON, e.g. a partial write from a killed
 // process) is skipped exactly like Load already does, and is never written
@@ -236,7 +238,7 @@ func (l *Ledger) Prune(cutoff time.Time) error {
 		buf.Write(line)
 		buf.WriteByte('\n')
 	}
-	return writeFileAtomic(path, buf.Bytes(), 0o644)
+	return writeFileAtomic(path, buf.Bytes(), 0o600)
 }
 
 // writeFileAtomic mirrors internal/stats/io.go's helper of the same name.
