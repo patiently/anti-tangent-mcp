@@ -59,6 +59,12 @@ const (
 	// intentionally NOT included in validCategory and NOT included in any
 	// JSON schema, so a reviewer cannot emit it.
 	CategoryMalformedEvidence Category = "malformed_evidence"
+	// CategoryCodesceneNotRun and CategoryCodesceneSkipped are server-only,
+	// like CategoryMalformedEvidence: emitted by the validate_completion
+	// CodeScene check when ANTI_TANGENT_CODESCENE=required, never by a
+	// reviewer. Both are intentionally absent from validCategory.
+	CategoryCodesceneNotRun  Category = "codescene_not_run"
+	CategoryCodesceneSkipped Category = "codescene_skipped"
 
 	// Categories emitted by prime_project_knowledge (v0.6.0).
 	CategoryKBGap             Category = "kb_gap"

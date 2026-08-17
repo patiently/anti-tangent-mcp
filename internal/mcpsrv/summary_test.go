@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -106,6 +108,15 @@ func TestFormatEnvelopeSummary_Partial_LineShown(t *testing.T) {
 	if !strings.Contains(got, "partial:       true") {
 		t.Errorf("partial=true envelope should show the partial line:\n%s", got)
 	}
+}
+
+func TestFormatEnvelopeSummary_SubmissionDefectLine(t *testing.T) {
+	got := formatEnvelopeSummary(Envelope{
+		SessionID: "s1", Verdict: "fail", NextAction: "n",
+		ModelUsed: "m", SubmissionDefectOnly: true,
+	})
+	assert.Contains(t, got, "submission_defect_only: true")
+	assert.Contains(t, got, "no code rework implied")
 }
 
 func TestFormatPlanSummary_Basic(t *testing.T) {

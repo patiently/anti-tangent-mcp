@@ -32,6 +32,8 @@ The `Context:` block in the task spec above is authoritative. If an AC reads one
 
 Evidence for completion comes from `final_files` (full file contents), `final_diff` (a unified diff), and `test_evidence` (test command output). The `summary` is the implementer's description of what was done — cross-reference it against the evidence, but the summary on its own is not evidence; the request schema requires at least one of the three evidence fields to be non-empty. Grade whatever evidence is provided, in any combination. Do not emit a `missing_acceptance_criterion` finding solely because `final_files` is missing when `final_diff` or `test_evidence` already covers the same AC. Do emit one if (a) the evidence affirmatively contradicts an AC, (b) the evidence is internally inconsistent with the summary's claims, or (c) an AC is not addressed by any of the provided evidence.
 
+When an acceptance criterion cannot be assessed because the submitted evidence is absent, partial, or does not cover it, emit `category: insufficient_evidence` rather than `missing_acceptance_criterion`. Reserve `missing_acceptance_criterion` for evidence that affirmatively fails or contradicts a criterion. This distinction is load-bearing: `insufficient_evidence` tells the implementer to attach what is missing, while `missing_acceptance_criterion` tells them to change the code.
+
 ## Implementer's summary
 
 Added Gin handler at /healthz returning "ok".

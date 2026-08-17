@@ -35,6 +35,11 @@ type Envelope struct {
 	SessionExpiresAt           *time.Time        `json:"session_expires_at,omitempty"`
 	SessionTTLRemainingSeconds *int              `json:"session_ttl_remaining_seconds,omitempty"`
 	SummaryBlock               string            `json:"summary_block,omitempty"`
+	// SubmissionDefectOnly is set on validate_completion responses whose
+	// blocking findings are all about the submission rather than the code.
+	// The implementer should attach what is missing and re-submit; no rework
+	// is implied. Server-computed; see submission_defect.go.
+	SubmissionDefectOnly bool `json:"submission_defect_only,omitempty"`
 }
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
@@ -1181,6 +1186,10 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	}
 	if !lightweight {
 		env = h.withSessionTTL(env, sess)
+	}
+	if isSubmissionDefectOnly(env.Findings) {
+		env.SubmissionDefectOnly = true
+		env.NextAction = resubmitNextAction + env.NextAction
 	}
 	h.recordStat(statParams{
 		tool:         "validate_completion",
