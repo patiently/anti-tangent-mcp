@@ -13,11 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_plan` now mints a `plan_run_id` the controller threads into each
   `validate_task_spec` call.
 - **In-band CodeScene results.** `validate_completion` accepts a structured `codescene`
-  argument (the `analyze_change_set` digest). It reaches the reviewer as codebase-grounded
-  evidence — the first input that partially covers anti-tangent's text-only blind spot — and is
-  attributed to the task in the plan-run report. `ANTI_TANGENT_CODESCENE=required` makes a
-  missing run observable as a `codescene_not_run` finding; unset (the default) changes nothing.
-  Still advisory: a failed quality gate never fails a verdict server-side.
+  argument (the `analyze_change_set` digest). It reaches the reviewer as authoritative
+  caller-attested context (no independent verification) — the first input that partially
+  covers anti-tangent's text-only blind spot — and is attributed to the task in the plan-run
+  report. `ANTI_TANGENT_CODESCENE=required` makes a missing run observable as a
+  `codescene_not_run` finding; unset (the default) changes nothing. Still advisory: a failed
+  quality gate never fails a verdict server-side.
 - **`submission_defect_only`** on `validate_completion` envelopes. True when every blocking
   finding is about the submission (`insufficient_evidence`, `malformed_evidence`,
   `codescene_not_run`) rather than the code, so an implementer re-submits instead of reworking.

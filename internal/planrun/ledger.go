@@ -95,6 +95,12 @@ func (l *Ledger) Append(run *Run, row TaskRow) error {
 		return err
 	}
 	defer f.Close()
+	// OpenFile's mode argument only applies at creation, so a file left behind
+	// by a pre-fix binary (0o644) would otherwise never get tightened by a
+	// plain append. Chmod is best-effort and its error is intentionally
+	// swallowed: ledger writes are advisory, and a chmod failure must never
+	// turn into a failed append.
+	_ = f.Chmod(0o600)
 	_, err = f.Write(append(b, '\n'))
 	return err
 }

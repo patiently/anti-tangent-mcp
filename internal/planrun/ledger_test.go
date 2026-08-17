@@ -68,6 +68,46 @@ func TestLedger_ToleratesTornTrailingLine(t *testing.T) {
 	assert.Equal(t, "Second", got.Rows[1].TaskTitle)
 }
 
+// TestLedger_AppendSetsFileMode0600 pins the permission bits Append leaves on
+// a freshly created ledger file. os.Stat.Mode().Perm() is checked directly
+// rather than trusting the O_CREATE mode argument, since that argument is
+// silently inert once the file already exists (see the *_test.go helpers
+// above that pass 0o644 to an OpenFile call with no O_CREATE — that argument
+// does nothing there, precisely the trap this test must not fall into).
+func TestLedger_AppendSetsFileMode0600(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+
+	require.NoError(t, l.Append(&Run{ID: "pr_mode1"}, TaskRow{Index: 1, TaskTitle: "first"}))
+
+	info, err := os.Stat(filepath.Join(dir, ledgerFile))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+// TestLedger_AppendTightensPreExistingFileMode covers the upgrade scenario
+// the round-2 fix (Append's unconditional f.Chmod(0o600)) closes: an
+// installation that already has plan-runs.jsonl on disk at 0o644 from a
+// pre-fix binary. The file is created here with os.WriteFile (NOT via
+// l.Append), simulating that pre-existing state, before the first Append
+// under the fixed code runs against it.
+func TestLedger_AppendTightensPreExistingFileMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ledgerFile)
+	require.NoError(t, os.WriteFile(path, []byte(`{"plan_run_id":"pr_old","row":{"index":1}}`+"\n"), 0o644))
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o644), info.Mode().Perm(), "precondition: file starts world-readable")
+
+	l := &Ledger{Dir: dir}
+	require.NoError(t, l.Append(&Run{ID: "pr_new"}, TaskRow{Index: 1, TaskTitle: "second"}))
+
+	info, err = os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "Append must tighten a pre-existing 0o644 file to 0o600")
+}
+
 func TestLedger_DisabledIsNoop(t *testing.T) {
 	var l *Ledger
 	assert.NoError(t, l.Append(&Run{ID: "x"}, TaskRow{}))
@@ -116,6 +156,22 @@ func TestLedger_PruneDropsOldRows(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, got.Rows, 1)
 	assert.Equal(t, "recent", got.Rows[0].TaskTitle)
+}
+
+// TestLedger_PruneWritesFileMode0600 pins the permission bits Prune's atomic
+// rewrite (writeFileAtomic) leaves on the replaced ledger file, the second of
+// the two write paths (Append is the other, see TestLedger_AppendSetsFileMode0600).
+func TestLedger_PruneWritesFileMode0600(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+	recent := time.Now().Add(-1 * time.Hour)
+
+	require.NoError(t, l.Append(&Run{ID: "pr_prunemode"}, TaskRow{Index: 1, TaskTitle: "keep", CompletedAt: recent}))
+	require.NoError(t, l.Prune(time.Now().Add(-24*time.Hour)))
+
+	info, err := os.Stat(filepath.Join(dir, ledgerFile))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
 func TestLedger_PruneNilAndEmptyDirAreNoops(t *testing.T) {
