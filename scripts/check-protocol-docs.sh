@@ -14,6 +14,32 @@ fail=0
 # file that contains it (the only way GitHub, VS Code, and every other
 # renderer resolve them). External URLs, mailto:, and pure same-document
 # anchors (#foo) are skipped — this guard is for relative paths only.
+#
+# LIMITATION (deliberate): only inline links — [text](target) — are checked.
+# Reference-style links ([text][ref] plus a separate `[ref]: target`
+# definition line) are NOT matched, and never have been on purpose. None
+# exist anywhere in the scanned files today, so this is not a live gap.
+#
+# A prior round did try to close it with a bash/awk extractor plus a fence
+# tracker to skip documented examples of the syntax. Review found it
+# introduced more risk than it removed and it was reverted before merge.
+# Recorded here so nobody repeats the same four traps:
+#   - A single shared boolean toggled by both ``` and ~~~ desyncs on an
+#     unclosed fence, or on an odd number of ~~~ lines appearing inside a
+#     ``` block (plausible in docs that discuss markdown syntax itself) —
+#     and everything after that point in the file is silently skipped, with
+#     the guard still reporting clean. A silent-miss bug in a guard is worse
+#     than the gap it was meant to close.
+#   - CommonMark allows 1-3 spaces of leading indentation on a definition
+#     line; an anchored `^\[` pattern misses those.
+#   - Angle-bracketed targets, `[ref]: <path with spaces>`, mis-extract:
+#     the literal `<`/`>` end up in the path, or extraction truncates at the
+#     first space inside the brackets.
+#   - Labels containing `]` (`[a][b]]: target`, however rare) break a naive
+#     `[^]]+` label pattern.
+# If reference-style links are ever introduced into these files, extend this
+# guard carefully and re-prove all four cases before trusting it — a linked
+# markdown-parsing library beats hand-rolled bash/awk for this.
 while IFS=$'\t' read -r src target; do
   case "$target" in
     '#'*|http://*|https://*|mailto:*) continue ;;
@@ -28,26 +54,7 @@ while IFS=$'\t' read -r src target; do
 done < <(
   for f in INTEGRATION.md README.md docs/protocol/*.md; do
     [ -f "$f" ] || continue
-    # Inline links: [text](target)
     grep -oE '\]\([^)]+\)' "$f" | sed -E 's/^\]\(//; s/\)$//' | while IFS= read -r t; do
-      printf '%s\t%s\n' "$f" "$t"
-    done
-    # Reference-style link definitions: [label]: target "optional title"
-    # `[text][label]` usages don't carry a path themselves — the definition
-    # line is where the path actually lives, so checking every definition
-    # catches the breakage regardless of how many places reference the
-    # label. Fenced code blocks are excluded so a documented example of this
-    # syntax isn't misread as a real cross-reference; intervals confuse
-    # mawk's ERE engine (the default /usr/bin/awk on Debian/Ubuntu, so also
-    # on GitHub's runners), hence the two plain fence patterns instead of one
-    # combined regex with {0,3} and an alternation.
-    awk '
-      /^```/ { infence = !infence; next }
-      /^~~~/ { infence = !infence; next }
-      infence { next }
-      { print }
-    ' "$f" | grep -oE '^\[[^]]+\]:[[:space:]]*[^[:space:]]+' \
-           | sed -E 's/^\[[^]]+\]:[[:space:]]*//' | while IFS= read -r t; do
       printf '%s\t%s\n' "$f" "$t"
     done
   done
