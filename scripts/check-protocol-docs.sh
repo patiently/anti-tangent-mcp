@@ -28,7 +28,26 @@ while IFS=$'\t' read -r src target; do
 done < <(
   for f in INTEGRATION.md README.md docs/protocol/*.md; do
     [ -f "$f" ] || continue
+    # Inline links: [text](target)
     grep -oE '\]\([^)]+\)' "$f" | sed -E 's/^\]\(//; s/\)$//' | while IFS= read -r t; do
+      printf '%s\t%s\n' "$f" "$t"
+    done
+    # Reference-style link definitions: [label]: target "optional title"
+    # `[text][label]` usages don't carry a path themselves — the definition
+    # line is where the path actually lives, so checking every definition
+    # catches the breakage regardless of how many places reference the
+    # label. Fenced code blocks are excluded so a documented example of this
+    # syntax isn't misread as a real cross-reference; intervals confuse
+    # mawk's ERE engine (the default /usr/bin/awk on Debian/Ubuntu, so also
+    # on GitHub's runners), hence the two plain fence patterns instead of one
+    # combined regex with {0,3} and an alternation.
+    awk '
+      /^```/ { infence = !infence; next }
+      /^~~~/ { infence = !infence; next }
+      infence { next }
+      { print }
+    ' "$f" | grep -oE '^\[[^]]+\]:[[:space:]]*[^[:space:]]+' \
+           | sed -E 's/^\[[^]]+\]:[[:space:]]*//' | while IFS= read -r t; do
       printf '%s\t%s\n' "$f" "$t"
     done
   done
