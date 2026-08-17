@@ -5,17 +5,22 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 )
 
 func TestComputeCodescene(t *testing.T) {
 	base := time.Unix(1700000000, 0).UTC()
 	events := []CodesceneEvent{
-		{Ts: base, Tool: "analyze_change_set", QualityGate: "passed", FilesAnalyzed: 3,
-			Verdicts: Verdicts{Improved: 2, Stable: 1}, Trend: "improvement", NetPP: -1.5,
-			CategoryCounts: map[string]int{"Complex Method": 1}},
-		{Ts: base.Add(time.Hour), Tool: "analyze_change_set", QualityGate: "failed", FilesAnalyzed: 5,
-			Verdicts: Verdicts{Degraded: 4, Stable: 1}, Trend: "regression", NetPP: 2.3,
-			CategoryCounts: map[string]int{"Complex Method": 2, "Bumpy Road Ahead": 1}},
+		{Ts: base, Digest: codescene.Digest{Tool: "analyze_change_set", QualityGate: "passed", FilesAnalyzed: 3,
+			Verdicts: &Verdicts{Improved: 2, Stable: 1}, Trend: "improvement", NetPP: -1.5,
+			CategoryCounts: map[string]int{"Complex Method": 1}}},
+		{Ts: base.Add(time.Hour), Digest: codescene.Digest{Tool: "analyze_change_set", QualityGate: "failed", FilesAnalyzed: 5,
+			Verdicts: &Verdicts{Degraded: 4, Stable: 1}, Trend: "regression", NetPP: 2.3,
+			CategoryCounts: map[string]int{"Complex Method": 2, "Bumpy Road Ahead": 1}}},
 	}
 	cr := computeCodescene(events)
 	if cr == nil {
@@ -68,11 +73,32 @@ func TestCodesceneRollupJSONContract(t *testing.T) {
 	}
 }
 
+func TestCodesceneEvent_UnmarshalsHookWrittenRecord(t *testing.T) {
+	// Exactly what examples/hooks/codescene-log.sh appends: no "ran" key.
+	line := `{"ts":"2026-07-07T13:11:28Z","tool":"analyze_change_set",` +
+		`"quality_gate":"failed","files_analyzed":2,` +
+		`"verdicts":{"improved":0,"degraded":2,"stable":0},` +
+		`"trend":"regression","net_pp":2.0,"category_counts":{"Complex Method":2}}`
+
+	var ev CodesceneEvent
+	require.NoError(t, json.Unmarshal([]byte(line), &ev))
+	assert.Equal(t, "failed", ev.QualityGate)
+	assert.Equal(t, 2, ev.FilesAnalyzed)
+	require.NotNil(t, ev.Verdicts)
+	assert.Equal(t, 2, ev.Verdicts.Degraded)
+	assert.Equal(t, 2.0, ev.NetPP)
+	assert.False(t, ev.Ran, "hook records carry no ran field")
+
+	out, err := json.Marshal(ev)
+	require.NoError(t, err)
+	assert.NotContains(t, string(out), `"ran"`)
+}
+
 func TestPruneCodescene(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Unix(1700000000, 0).UTC()
-	old := CodesceneEvent{Ts: base.Add(-48 * time.Hour), Tool: "analyze_change_set"}
-	fresh := CodesceneEvent{Ts: base, Tool: "analyze_change_set"}
+	old := CodesceneEvent{Ts: base.Add(-48 * time.Hour), Digest: codescene.Digest{Tool: "analyze_change_set"}}
+	fresh := CodesceneEvent{Ts: base, Digest: codescene.Digest{Tool: "analyze_change_set"}}
 	if err := appendJSONL(dir, codesceneFile, old); err != nil {
 		t.Fatal(err)
 	}
