@@ -102,6 +102,22 @@ func (s *Store) Get(id string) (*Run, bool) {
 	return r, true
 }
 
+// Snapshot returns a copy of the run with its rows copied, safe to read after
+// the lock is released. Use it for any read that walks Rows; Get returns the
+// live run and is for callers that only need identity or metadata.
+func (s *Store) Snapshot(id string) (*Run, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[id]
+	if !ok {
+		return nil, false
+	}
+	r.LastAccessed = time.Now()
+	cp := *r
+	cp.Rows = append([]TaskRow(nil), r.Rows...)
+	return &cp, true
+}
+
 // AppendRow adds a task row, stamping its Index from the current length.
 // Returns false when the run id is unknown or expired.
 func (s *Store) AppendRow(runID string, row TaskRow) bool {
