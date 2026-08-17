@@ -15,21 +15,31 @@ import (
 // The Codescene field (added in Task 9) is populated when the agent appends
 // CodeScene per-run records to codescene-events.jsonl.
 type Rollup struct {
-	WindowStart       time.Time        `json:"window_start"`
-	WindowEnd         time.Time        `json:"window_end"`
-	TotalCalls        int              `json:"total_calls"`
-	PerTool           map[string]int   `json:"per_tool"`
-	VerdictCounts     map[string]int   `json:"verdict_counts"`
-	FindingsPerCall   float64          `json:"findings_per_call"`
-	SeverityHistogram map[string]int   `json:"severity_histogram"`
-	CategoryHistogram map[string]int   `json:"category_histogram"`
-	ReviewMSP50       int64            `json:"review_ms_p50"`
-	ReviewMSP95       int64            `json:"review_ms_p95"`
-	CacheHitRate      float64          `json:"cache_hit_rate"`
-	PartialRate       float64          `json:"partial_rate"`
-	ModelUsage        map[string]int   `json:"model_usage"`
-	GeneratedAt       time.Time        `json:"generated_at"`
-	Codescene         *CodesceneRollup `json:"codescene,omitempty"`
+	WindowStart       time.Time          `json:"window_start"`
+	WindowEnd         time.Time          `json:"window_end"`
+	TotalCalls        int                `json:"total_calls"`
+	PerTool           map[string]int     `json:"per_tool"`
+	VerdictCounts     map[string]int     `json:"verdict_counts"`
+	FindingsPerCall   float64            `json:"findings_per_call"`
+	SeverityHistogram map[string]int     `json:"severity_histogram"`
+	CategoryHistogram map[string]int     `json:"category_histogram"`
+	ReviewMSP50       int64              `json:"review_ms_p50"`
+	ReviewMSP95       int64              `json:"review_ms_p95"`
+	CacheHitRate      float64            `json:"cache_hit_rate"`
+	PartialRate       float64            `json:"partial_rate"`
+	ModelUsage        map[string]int     `json:"model_usage"`
+	GeneratedAt       time.Time          `json:"generated_at"`
+	Codescene         *CodesceneRollup   `json:"codescene,omitempty"`
+	PlanHeaders       *PlanHeadersRollup `json:"plan_headers,omitempty"`
+}
+
+// PlanHeadersRollup reports structured-header adoption across the window's
+// validate_plan calls. Nil (and so absent from rollup.json) when the window
+// contains no plan events — absence means "no data", not "zero adoption".
+type PlanHeadersRollup struct {
+	TasksTotal      int     `json:"tasks_total"`
+	TasksWithHeader int     `json:"tasks_with_header"`
+	Adoption        float64 `json:"adoption"`
 }
 
 // computeRollup aggregates events into a Rollup. now stamps GeneratedAt (and the
@@ -49,6 +59,7 @@ func computeRollup(events []Event, now time.Time) Rollup {
 		return r
 	}
 	var totalFindings, cached, partial int
+	var planEvents, planTasks, planTasksWithHeader int
 	latencies := make([]int64, 0, len(events))
 	r.WindowStart, r.WindowEnd = events[0].Ts, events[0].Ts
 	for _, e := range events {
@@ -78,6 +89,11 @@ func computeRollup(events []Event, now time.Time) Rollup {
 		if e.Partial {
 			partial++
 		}
+		if e.Tool == "validate_plan" {
+			planEvents++
+			planTasks += e.TasksTotal
+			planTasksWithHeader += e.TasksWithHeader
+		}
 		latencies = append(latencies, e.ReviewMS)
 	}
 	n := float64(len(events))
@@ -86,6 +102,13 @@ func computeRollup(events []Event, now time.Time) Rollup {
 	r.PartialRate = float64(partial) / n
 	r.ReviewMSP50 = percentile(latencies, 50)
 	r.ReviewMSP95 = percentile(latencies, 95)
+	if planEvents > 0 {
+		ph := &PlanHeadersRollup{TasksTotal: planTasks, TasksWithHeader: planTasksWithHeader}
+		if planTasks > 0 {
+			ph.Adoption = float64(planTasksWithHeader) / float64(planTasks)
+		}
+		r.PlanHeaders = ph
+	}
 	return r
 }
 

@@ -280,6 +280,9 @@ type statParams struct {
 	cached       bool
 	payloadBytes int
 	sessionID    string // raw id; hashed (salted) inside, never stored raw
+
+	tasksTotal      int
+	tasksWithHeader int
 }
 
 // recordStat maps a statParams into a stats.Event and records it.
@@ -291,18 +294,20 @@ func (h *handlers) recordStat(p statParams) {
 	}
 	sev, cat, total := stats.CountFindings(p.findings)
 	h.deps.Stats.Record(stats.Event{
-		Ts:             time.Now().UTC().Truncate(time.Second),
-		Tool:           p.tool,
-		Verdict:        p.verdict,
-		FindingsTotal:  total,
-		SeverityCounts: sev,
-		CategoryCounts: cat,
-		ReviewMS:       p.reviewMS,
-		Model:          p.modelUsed,
-		Cached:         p.cached,
-		Partial:        p.partial,
-		PayloadBytes:   p.payloadBytes,
-		SessionHash:    h.deps.Stats.HashSession(p.sessionID),
+		Ts:              time.Now().UTC().Truncate(time.Second),
+		Tool:            p.tool,
+		Verdict:         p.verdict,
+		FindingsTotal:   total,
+		SeverityCounts:  sev,
+		CategoryCounts:  cat,
+		ReviewMS:        p.reviewMS,
+		Model:           p.modelUsed,
+		Cached:          p.cached,
+		Partial:         p.partial,
+		PayloadBytes:    p.payloadBytes,
+		SessionHash:     h.deps.Stats.HashSession(p.sessionID),
+		TasksTotal:      p.tasksTotal,
+		TasksWithHeader: p.tasksWithHeader,
 	})
 }
 
@@ -1218,14 +1223,23 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
 	}
 	tasks, _ := planparser.SplitTasks(args.PlanText)
+	tasksTotal := len(tasks)
+	tasksWithHeader := 0
+	for _, rt := range tasks {
+		if rt.HasStructuredHeader {
+			tasksWithHeader++
+		}
+	}
 	if len(tasks) == 0 {
 		pr := prependPlanClamp(noHeadingsPlanResult(), clamp)
 		h.recordStat(statParams{
-			tool:         "validate_plan",
-			verdict:      string(pr.PlanVerdict),
-			findings:     planFindings(pr),
-			modelUsed:    h.deps.Cfg.PlanModel.String(),
-			payloadBytes: planBytes + pkBytes,
+			tool:            "validate_plan",
+			verdict:         string(pr.PlanVerdict),
+			findings:        planFindings(pr),
+			modelUsed:       h.deps.Cfg.PlanModel.String(),
+			payloadBytes:    planBytes + pkBytes,
+			tasksTotal:      tasksTotal,
+			tasksWithHeader: tasksWithHeader,
 		})
 		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
 	}
@@ -1257,14 +1271,16 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
 		h.recordStat(statParams{
-			tool:         "validate_plan",
-			verdict:      string(cached.PlanVerdict),
-			findings:     planFindings(cached),
-			modelUsed:    cachedModelUsed,
-			reviewMS:     0,
-			partial:      cached.Partial,
-			cached:       true,
-			payloadBytes: planBytes + pkBytes,
+			tool:            "validate_plan",
+			verdict:         string(cached.PlanVerdict),
+			findings:        planFindings(cached),
+			modelUsed:       cachedModelUsed,
+			reviewMS:        0,
+			partial:         cached.Partial,
+			cached:          true,
+			payloadBytes:    planBytes + pkBytes,
+			tasksTotal:      tasksTotal,
+			tasksWithHeader: tasksWithHeader,
 		})
 		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
 	}
@@ -1294,13 +1310,15 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}); handled {
 		if retErr == nil {
 			h.recordStat(statParams{
-				tool:         "validate_plan",
-				verdict:      string(p.PlanVerdict),
-				findings:     planFindings(p),
-				modelUsed:    model.String(),
-				reviewMS:     ms,
-				partial:      p.Partial,
-				payloadBytes: planBytes + pkBytes,
+				tool:            "validate_plan",
+				verdict:         string(p.PlanVerdict),
+				findings:        planFindings(p),
+				modelUsed:       model.String(),
+				reviewMS:        ms,
+				partial:         p.Partial,
+				payloadBytes:    planBytes + pkBytes,
+				tasksTotal:      tasksTotal,
+				tasksWithHeader: tasksWithHeader,
 			})
 		}
 		return r, p, retErr
@@ -1310,13 +1328,15 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	pr = finalizePlanResult(pr, modelUsed, ms)
 	h.planCache().store(cacheKey, pr, modelUsed)
 	h.recordStat(statParams{
-		tool:         "validate_plan",
-		verdict:      string(pr.PlanVerdict),
-		findings:     planFindings(pr),
-		modelUsed:    modelUsed,
-		reviewMS:     ms,
-		partial:      pr.Partial,
-		payloadBytes: planBytes + pkBytes,
+		tool:            "validate_plan",
+		verdict:         string(pr.PlanVerdict),
+		findings:        planFindings(pr),
+		modelUsed:       modelUsed,
+		reviewMS:        ms,
+		partial:         pr.Partial,
+		payloadBytes:    planBytes + pkBytes,
+		tasksTotal:      tasksTotal,
+		tasksWithHeader: tasksWithHeader,
 	})
 	return planEnvelopeResultFinalized(pr, modelUsed, ms)
 }

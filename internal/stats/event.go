@@ -29,6 +29,12 @@ type Event struct {
 	Partial        bool           `json:"partial,omitempty"`
 	PayloadBytes   int            `json:"payload_bytes,omitempty"`
 	SessionHash    string         `json:"session_hash,omitempty"`
+
+	// TasksTotal and TasksWithHeader are set only on validate_plan events:
+	// how many tasks the plan parsed into, and how many carried a structured
+	// Goal / Acceptance criteria header. Plan-header adoption telemetry.
+	TasksTotal      int `json:"tasks_total,omitempty"`
+	TasksWithHeader int `json:"tasks_with_header,omitempty"`
 }
 
 // CountFindings builds severity and category histograms (and the total) from a

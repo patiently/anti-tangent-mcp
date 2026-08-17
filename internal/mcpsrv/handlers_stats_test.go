@@ -133,6 +133,14 @@ func TestValidatePlanRecordsStats(t *testing.T) {
 	if ev.Verdict != string(pr.PlanVerdict) {
 		t.Errorf("event.Verdict = %q, want %q (plan verdict)", ev.Verdict, string(pr.PlanVerdict))
 	}
+	// buildPlanWithNTasks(1) emits one task with a structured Goal /
+	// Acceptance criteria header, so both counts must be 1.
+	if ev.TasksTotal != 1 {
+		t.Errorf("event.TasksTotal = %d, want 1", ev.TasksTotal)
+	}
+	if ev.TasksWithHeader != 1 {
+		t.Errorf("event.TasksWithHeader = %d, want 1", ev.TasksWithHeader)
+	}
 }
 
 // TestValidateTaskSpec_PartialRecoveryRecordsStat verifies that a
@@ -312,6 +320,15 @@ func TestValidatePlanNoHeadingsRecordsStat(t *testing.T) {
 	}
 	if ev.Verdict != "fail" {
 		t.Errorf("event.Verdict = %q, want %q", ev.Verdict, "fail")
+	}
+	// Zero headings really did parse to zero tasks; 0/0 here is accurate,
+	// not a lie (contrast with the pre-split guards, which must stay zero
+	// because nothing was parsed at all).
+	if ev.TasksTotal != 0 {
+		t.Errorf("event.TasksTotal = %d, want 0", ev.TasksTotal)
+	}
+	if ev.TasksWithHeader != 0 {
+		t.Errorf("event.TasksWithHeader = %d, want 0", ev.TasksWithHeader)
 	}
 }
 

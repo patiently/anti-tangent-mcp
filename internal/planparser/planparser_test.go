@@ -143,3 +143,25 @@ func TestSplitTasks_FencedTaskWordNotMatched(t *testing.T) {
 	assert.Contains(t, tasks[0].Body, "### Task 99: Inside fence")
 	assert.Contains(t, tasks[0].Body, "Body continues.")
 }
+
+func TestSplitTasks_HasStructuredHeader_CaseInsensitive(t *testing.T) {
+	// superpowers writing-plans emits a capital C and grep-enforces it.
+	plan := "### Task 1: t\n\n**Goal:** g\n\n**Acceptance Criteria:**\n- ac\n"
+	tasks, _ := SplitTasks(plan)
+	require.Len(t, tasks, 1)
+	assert.True(t, tasks[0].HasStructuredHeader, "capital C must match")
+}
+
+func TestSplitTasks_HasStructuredHeader_AllLowercase(t *testing.T) {
+	plan := "### Task 1: t\n\n**goal:** g\n\n**acceptance criteria:**\n- ac\n"
+	tasks, _ := SplitTasks(plan)
+	require.Len(t, tasks, 1)
+	assert.True(t, tasks[0].HasStructuredHeader)
+}
+
+func TestSplitTasks_HasStructuredHeader_RequiresBothMarkers(t *testing.T) {
+	plan := "### Task 1: t\n\n**Acceptance Criteria:**\n- ac\n"
+	tasks, _ := SplitTasks(plan)
+	require.Len(t, tasks, 1)
+	assert.False(t, tasks[0].HasStructuredHeader, "goal marker absent")
+}

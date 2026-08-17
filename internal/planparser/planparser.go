@@ -16,8 +16,9 @@ type RawTask struct {
 	// Body is the full task content including the task heading line at its source level (e.g. "### Task N: …").
 	Body string
 	// HasStructuredHeader is true iff the body contains both **Goal:** and
-	// **Acceptance criteria:** markers. Used for telemetry only; not sent to
-	// the reviewer.
+	// **Acceptance criteria:** markers, matched case-insensitively. Reported
+	// as plan-header adoption telemetry by validate_plan; never sent to the
+	// reviewer.
 	HasStructuredHeader bool
 }
 
@@ -101,6 +102,16 @@ func filterFencedMatches(planText string, matches [][]int) [][]int {
 	return filtered
 }
 
+// structuredGoalRE and structuredACRE match the two header markers
+// case-insensitively. Case matters here: superpowers' writing-plans skill —
+// the dominant plan generator — emits "**Acceptance Criteria:**" with a
+// capital C and grep-enforces it, so a case-sensitive match scored every
+// plan it produced as headerless.
+var (
+	structuredGoalRE = regexp.MustCompile(`(?i)\*\*Goal:\*\*`)
+	structuredACRE   = regexp.MustCompile(`(?i)\*\*Acceptance criteria:\*\*`)
+)
+
 func hasStructuredHeader(body string) bool {
-	return strings.Contains(body, "**Goal:**") && strings.Contains(body, "**Acceptance criteria:**")
+	return structuredGoalRE.MatchString(body) && structuredACRE.MatchString(body)
 }
