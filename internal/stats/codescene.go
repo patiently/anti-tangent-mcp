@@ -3,30 +3,25 @@ package stats
 import (
 	"math"
 	"time"
+
+	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 )
 
 const codesceneFile = "codescene-events.jsonl"
 
-// Verdicts is the per-file verdict tally from an analyze_change_set run.
-type Verdicts struct {
-	Improved int `json:"improved"`
-	Degraded int `json:"degraded"`
-	Stable   int `json:"stable"`
-}
+// Verdicts is re-exported so existing consumers of stats.Verdicts keep
+// compiling; the canonical definition lives in internal/codescene.
+type Verdicts = codescene.Verdicts
 
 // CodesceneEvent is the per-run record the hook appends (see
-// docs/team-setup/codescene-stats.md). anti-tangent only READS this file; it
-// never writes it. Counts + metadata only — no file paths. analyze_change_set is
-// categorical (verdicts / quality-gate / problem-points), not a 1-10 score.
+// docs/team-setup/codescene-stats.md). anti-tangent reads this file and, from
+// v0.15.0, may also receive the same shape in band as the validate_completion
+// `codescene` argument. Counts + metadata only — no file paths.
+// analyze_change_set is categorical (verdicts / quality-gate / problem-points),
+// not a 1-10 score.
 type CodesceneEvent struct {
-	Ts             time.Time      `json:"ts"`
-	Tool           string         `json:"tool"`
-	QualityGate    string         `json:"quality_gate"` // passed|failed
-	FilesAnalyzed  int            `json:"files_analyzed"`
-	Verdicts       Verdicts       `json:"verdicts"`
-	Trend          string         `json:"trend"` // improvement|regression|neutral
-	NetPP          float64        `json:"net_pp"`
-	CategoryCounts map[string]int `json:"category_counts,omitempty"`
+	Ts time.Time `json:"ts"`
+	codescene.Digest
 }
 
 // CodesceneRollup is the nested `codescene` block in rollup.json.

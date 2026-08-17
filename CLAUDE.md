@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (and other agents) when working with 
 
 ## Project Overview
 
-`anti-tangent-mcp` is an advisory MCP server (Go binary) that helps prevent implementing subagents from drifting away from their assigned tasks. It exposes four tools — a plan-level handoff gate (`validate_plan`) plus three per-task lifecycle hooks (`validate_task_spec`, `check_progress`, `validate_completion`) — that send the plan / task spec / code under review to a reviewer LLM and return structured findings.
+`anti-tangent-mcp` is an advisory MCP server (Go binary) that helps prevent implementing subagents from drifting away from their assigned tasks. It exposes seven tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec`, `check_progress`, `validate_completion`), two optional project-knowledge tools (`prime_project_knowledge`, `extract_project_knowledge`), and `plan_run_report` — a deterministic, reviewer-free per-task report over a finished plan run. The other six send the plan / task spec / code / knowledge-base context under review to a reviewer LLM and return structured findings.
 
 The reviewer LLM is intentionally a *different* model from the implementer, so reviews are not blind to the implementer's blind spots.
 
@@ -53,21 +53,27 @@ internal/
 
 Each package has one responsibility. `cmd/` only wires; logic lives in `internal/`.
 
-## Editing INTEGRATION.md
+## Editing the protocol
 
-`INTEGRATION.md` is the single source of truth for the integration protocol, and
-is bundled byte-for-byte into the `anti-tangent-protocol` plugin so Claude Code
-can load it on demand. Two invariants are CI-enforced:
+The protocol lives in `docs/protocol/` as five role-scoped parts; `INTEGRATION.md` is a router
+over them, and the parts are bundled into the `anti-tangent-protocol` plugin so Claude Code can
+load only what a given role needs. Three invariants are CI-enforced:
 
-- It must stay **under 40,000 bytes** (user-instructions context budget).
-- The bundled copy `plugin/anti-tangent-protocol/INTEGRATION.md` must be
-  **identical** to root.
+- Each part must stay **under 16,000 bytes**. The cost is a read per dispatched subagent, not a
+  resident context cost — so it is paid once per task on a multi-task plan.
+- `plugin/anti-tangent-protocol/protocol/` must be **identical** to `docs/protocol/`.
+- `INTEGRATION.md` itself must stay **under 2,000 bytes** — it stays an index over
+  `docs/protocol/`, never a place for protocol text.
 
-After editing `INTEGRATION.md`, resync the bundled copy in the same commit:
+After editing any part, resync the bundle in the same commit:
 
 ```bash
-cp INTEGRATION.md plugin/anti-tangent-protocol/INTEGRATION.md
+rm -f plugin/anti-tangent-protocol/protocol/*.md
+cp docs/protocol/*.md plugin/anti-tangent-protocol/protocol/
 ```
+
+Section numbers (§1, §3.x, §4.x, §5.x, §6) are stable across the split and are cited
+externally — do not renumber.
 
 ## Branch & Version Conventions
 

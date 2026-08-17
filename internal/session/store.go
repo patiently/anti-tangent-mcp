@@ -24,13 +24,14 @@ func NewStore(ttl time.Duration) *Store {
 
 func (s *Store) TTL() time.Duration { return s.ttl }
 
-func (s *Store) Create(spec TaskSpec) *Session {
+func (s *Store) Create(spec TaskSpec, planRunID string) *Session {
 	now := time.Now()
 	sess := &Session{
 		ID:           uuid.NewString(),
 		CreatedAt:    now,
 		LastAccessed: now,
 		Spec:         spec,
+		PlanRunID:    planRunID,
 	}
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess

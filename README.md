@@ -18,7 +18,7 @@ docker pull ghcr.io/patiently/anti-tangent-mcp:latest
 
 ### One-shot install via paste-in prompt
 
-If your host is Claude Code or opencode, you can paste the matching prompt below into a fresh session and the agent will fetch the latest release binary, register the MCP, and set up the protocol so it loads **on demand** (Claude Code installs the `anti-tangent-protocol` plugin; opencode wires a slim pointer). The full protocol document loads only when a task carries a Goal/Acceptance-criteria header — not on every call. The prompts resolve "latest" from the GitHub API, so they don't need to be edited each release.
+If your host is Claude Code or opencode, you can paste the matching prompt below into a fresh session and the agent will fetch the latest release binary, register the MCP, and set up the protocol so it loads **on demand** (Claude Code installs the `anti-tangent-protocol` plugin; opencode wires a slim pointer). Only `core.md` plus the part matching the agent's role loads — not on every call, and only when a task carries a Goal/Acceptance-criteria header, or a controller has just finished a multi-task plan run and needs to call `plan_run_report`. The prompts resolve "latest" from the GitHub API, so they don't need to be edited each release.
 
 These prompts target Linux and macOS. Windows users should follow the manual install above and adapt the steps to their host's MCP config format.
 
@@ -58,8 +58,9 @@ your reports — redact to `***` whenever a step would otherwise print one.
    subsequent report.
 7. Install the anti-tangent-protocol plugin — it carries the drift-protection
    protocol as an on-demand skill. Its one-line description is the only
-   always-loaded footprint; the full protocol loads only when a task has a
-   Goal/Acceptance-criteria header. This replaces the old always-inlined
+   always-loaded footprint; only `core.md` plus the part matching the agent's
+   role loads, and only when a task has a Goal/Acceptance-criteria header or a
+   controller has just finished a plan run. This replaces the old always-inlined
    INTEGRATION.md import (do NOT write INTEGRATION.md into ~/.claude/):
        claude plugin marketplace add patiently/anti-tangent-mcp
        claude plugin install anti-tangent-protocol@anti-tangent-mcp
@@ -134,10 +135,26 @@ reports — redact to `***` whenever a step would otherwise print one.
            }
          }
        }
-6. Download `INTEGRATION.md` for the installed version to
-   `~/.config/opencode/anti-tangent.md` (overwrite if present). This is the
-   FULL protocol, loaded ON DEMAND — it is NOT added to `instructions`:
-       https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}/INTEGRATION.md
+6. Download the protocol for the installed version — the router plus all
+   five role-scoped parts — into a single local directory. An agent reads
+   the router, then only the part its role needs. All of it is loaded ON
+   DEMAND — none of it is added to `instructions`:
+       mkdir -p ~/.config/opencode/anti-tangent-protocol
+       BASE=https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}
+       curl -fsSL $BASE/INTEGRATION.md \
+         -o ~/.config/opencode/anti-tangent-protocol/anti-tangent.md
+       for p in core authoring implementer controller project-knowledge; do
+         curl -fsSL $BASE/docs/protocol/$p.md \
+           -o ~/.config/opencode/anti-tangent-protocol/$p.md
+       done
+   (overwrite existing files if present.) Then rewrite the router's links so
+   they resolve locally: in
+   `~/.config/opencode/anti-tangent-protocol/anti-tangent.md`, replace every
+   occurrence of `docs/protocol/` with the absolute path to the directory
+   you just created, including the trailing slash — e.g.
+   `/home/you/.config/opencode/anti-tangent-protocol/` (substitute your
+   actual home directory; do not leave `~` unexpanded). Confirm by opening
+   the router and checking one link points at a file that exists.
 7. opencode has no skill mechanism, so wire only a SLIM POINTER into
    `instructions` (not the full file). Download the pointer template:
        https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}/examples/anti-tangent-pointer.md
@@ -210,12 +227,22 @@ ANTI_TANGENT_EXTRACT_MAX_TOKENS=8192     # output cap for extract_project_knowle
 #   codescene-events.jsonl — agent-appended CodeScene Code Health records;
 #                            read + aggregated by the server into rollup.json's
 #                            `codescene` block (NOT written by the server)
+#   plan-runs.jsonl        — one row per completed task, server-written, ONLY
+#                            when ANTI_TANGENT_PLAN_LEDGER=1 is also set; the
+#                            one file in this list that carries task titles
 ANTI_TANGENT_STATS_DIR=
 ANTI_TANGENT_STATS_MODEL=            # summarizer model; defaults to ANTI_TANGENT_MID_MODEL
 ANTI_TANGENT_STATS_SUMMARY_INTERVAL=24h
 ANTI_TANGENT_STATS_SUMMARY_THRESHOLD=50
 ANTI_TANGENT_STATS_RETENTION_DAYS=30
 ANTI_TANGENT_STATS_MAX_TOKENS=2048   # clamped by ANTI_TANGENT_MAX_TOKENS_CEILING
+
+# CodeScene adoption check. "" (default) = off; "required" makes a
+# validate_completion call with no `codescene` argument emit a finding.
+ANTI_TANGENT_CODESCENE=
+# Persist plan-run rows to plan-runs.jsonl (needs ANTI_TANGENT_STATS_DIR).
+# NOTE: unlike other stats files, this one contains task titles.
+ANTI_TANGENT_PLAN_LEDGER=0
 ```
 
 ### Picking a reviewer model
@@ -232,7 +259,7 @@ The mid-hook (`check_progress`) is called more often — a fast/cheap tier there
 
 ### Smoke test
 
-Launch your MCP host with debug logging on and confirm all six tools — `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`, `prime_project_knowledge`, `extract_project_knowledge` — appear in the discovered tool catalog. Server-side configuration errors print to stderr at startup.
+Launch your MCP host with debug logging on and confirm all seven tools — `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`, `prime_project_knowledge`, `extract_project_knowledge`, `plan_run_report` — appear in the discovered tool catalog. Server-side configuration errors print to stderr at startup.
 
 ### Large plans (chunking)
 
@@ -265,18 +292,20 @@ In addition to the existing `task_title` / `goal` / `acceptance_criteria` / `non
 
 ### Lightweight protocol mode (v0.3.1+)
 
-For trivial tasks (doc-only edits, mechanical relocations, dependency bumps), the full anti-tangent dispatch protocol is overhead-heavy. As of v0.3.1 the project ships a lightweight dispatch template at [`examples/lightweight-dispatch.md`](examples/lightweight-dispatch.md) that skips `validate_task_spec` and `check_progress`, keeping only `validate_completion` as a sanity gate. See `INTEGRATION.md`'s "Lightweight protocol mode" section for when to use it.
+For trivial tasks (doc-only edits, mechanical relocations, dependency bumps), the full anti-tangent dispatch protocol is overhead-heavy. As of v0.3.1 the project ships a lightweight dispatch template at [`examples/lightweight-dispatch.md`](examples/lightweight-dispatch.md) that skips `validate_task_spec` and `check_progress`, keeping only `validate_completion` as a sanity gate. See [`docs/protocol/implementer.md`](docs/protocol/implementer.md)'s "Lightweight protocol mode" section for when to use it.
 
 ### Companion tool: CodeScene MCP
 
-CodeScene is optional to adopt, but **once it is configured in your host, the companion calls are required** — see below. Anti-tangent's reviewer is intentionally text-only: it reasons over plan text and submitted evidence, not the codebase. That bounds what it can catch (see "Scope and limits" in INTEGRATION.md). For the codebase-grounded blind spot — Code Health regressions, complexity creep, low cohesion in actually-modified files — the companion is [CodeScene MCP](https://github.com/codescene-oss/codescene-mcp-server), open-sourced by CodeScene (https://codescene.com).
+CodeScene is optional to adopt, but **once it is configured in your host, the companion calls are required** — see below. Anti-tangent's reviewer is intentionally text-only: it reasons over plan text and submitted evidence, not the codebase. That bounds what it can catch (see "Scope and limits" in [`docs/protocol/core.md`](docs/protocol/core.md)). For the codebase-grounded blind spot — Code Health regressions, complexity creep, low cohesion in actually-modified files — the companion is [CodeScene MCP](https://github.com/codescene-oss/codescene-mcp-server), open-sourced by CodeScene (https://codescene.com).
 
 When CodeScene MCP is configured in your host alongside anti-tangent, these calls are **required** of dispatched implementers, and the DONE report must carry a one-line CodeScene status — the `analyze_change_set` delta, or that it was skipped and why. That line is how the controller sees the required check actually ran; a missing line reads as non-adoption:
 
 - `pre_commit_code_health_safeguard` mid-task — deterministic Code Health check on uncommitted/staged files. Fast, cheap, and complementary to anti-tangent's optional `check_progress`.
 - `analyze_change_set` before reporting DONE — full branch-vs-base Code Health analysis. Cite the delta (e.g. `CodeScene: Code Health 9.1 → 9.1, no regression`) and any findings in the DONE summary alongside anti-tangent's `summary_block`.
 
-The requirement is prompt-level: the pairing stays **advisory** on the anti-tangent side — anti-tangent never enforces CodeScene findings server-side, and the calls are skipped silently when CodeScene MCP isn't configured. See INTEGRATION.md's "CodeScene MCP companion" section for the dispatch-clause integration details.
+**In-band attribution (v0.15.0+).** Pass the `analyze_change_set` result to `validate_completion` as a structured `codescene` argument instead of (or alongside) the hook below: `{ran, skip_reason, tool, quality_gate, files_analyzed, verdicts: {improved, degraded, stable}, trend, net_pp, category_counts}`. Anti-tangent attributes it to the task in `plan_run_report`, rather than only the content-free aggregate the hook writes to `codescene-events.jsonl`. Set `ANTI_TANGENT_CODESCENE=required` to make the check observable server-side: a `validate_completion` call with no `codescene` argument emits a `major codescene_not_run` finding; `{"ran": false}` with no `skip_reason` also emits `codescene_not_run`; `{"ran": false, "skip_reason": "…"}` emits a `minor codescene_skipped` finding instead; `{"ran": true, ...}` emits nothing from the adoption check. Left unset (the default), the adoption check never fires. Independently of that setting, a submitted digest with `trend: "regression"` always surfaces as an advisory `minor` quality finding — surfaced deterministically server-side, and advisory only: anti-tangent never fails a verdict on a CodeScene finding.
+
+The requirement is prompt-level: the pairing stays **advisory** on the anti-tangent side — anti-tangent never enforces CodeScene findings server-side, and the calls are skipped silently when CodeScene MCP isn't configured. See [`docs/protocol/implementer.md`](docs/protocol/implementer.md)'s "CodeScene MCP companion" section for the dispatch-clause integration details.
 
 ## Use with Claude Code (`.mcp.json`)
 
@@ -344,16 +373,17 @@ The GPT-5.6 family (`gpt-5.6-sol` heavy, `gpt-5.6-terra` balanced, `gpt-5.6-luna
 
 Adding a new model is a one-line change in [`internal/providers/reviewer.go`](internal/providers/reviewer.go) — open a PR.
 
-## The 6 tools
+## The 7 tools
 
-- `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings.
-- `validate_task_spec` — call once before coding. Returns findings on missing goals, weak acceptance criteria, unstated assumptions. Returns a `session_id` you thread through the next two calls.
+- `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings and mints a `plan_run_id`.
+- `validate_task_spec` — call once before coding. Returns findings on missing goals, weak acceptance criteria, unstated assumptions. Returns a `session_id` you thread through the next two calls. Accepts the controller's `plan_run_id` (optional, best-effort) to tie the task to its plan run.
 - `check_progress` — call at checkpoints during implementation. Catches scope drift, untouched ACs, and unaddressed prior findings.
-- `validate_completion` — call before claiming done. Walks every AC and non-goal explicitly.
+- `validate_completion` — call before claiming done. Walks every AC and non-goal explicitly. Accepts an optional structured `codescene` argument (see "Companion tool: CodeScene MCP" above).
 - `prime_project_knowledge` (v0.6.0+, optional) — stateless. Given a task spec and a Basic-Memory-style `kb_index`, returns prioritized note picks for the implementer to read before starting. Emits paste-ready `bm_commands` when `ANTI_TANGENT_KB_STORE=basic-memory`.
 - `extract_project_knowledge` (v0.6.0+, optional) — stateless. Given one or more `validate_completion` envelopes, returns structured create/update/supersede proposals for the project knowledge base. Same env gate for `bm_commands`.
+- `plan_run_report` (v0.15.0+) — deterministic, no reviewer call, no cost. Call once after the last task in a plan run reports DONE, passing the `plan_run_id` from `validate_plan`. Returns a per-task table (anti-tangent verdict + CodeScene result side by side) plus a paste-ready `summary_block`. Its own `PlanRunReportResult` shape, not the shared envelope below.
 
-The latter three return the same envelope; `validate_plan` returns a richer `PlanResult` with per-task analysis (see [INTEGRATION.md](INTEGRATION.md) §5.5):
+The middle three (`validate_task_spec`, `check_progress`, `validate_completion`) return the same envelope; `validate_plan` returns a richer `PlanResult` with per-task analysis (see [`docs/protocol/controller.md`](docs/protocol/controller.md) §5.5):
 
 ```json
 {
@@ -385,7 +415,7 @@ The latter three return the same envelope; `validate_plan` returns a richer `Pla
 On epic-scale projects with multiple agents and authors, implementers drift away from decisions already taken and modules already shaped. v0.6.0 adds an optional knowledge-base loop alongside the review loop: `prime_project_knowledge` recommends notes to attach before a task starts, `extract_project_knowledge` proposes new notes from a completion envelope, and `validate_task_spec` / `validate_plan` accept an optional `project_knowledge` string the reviewer treats as authoritative grounding (same posture as `pinned_by`). The knowledge itself lives in [Basic Memory](https://github.com/basicmachines-co/basic-memory) (recommended) or any markdown-backed store — anti-tangent never reads or writes that store directly.
 
 - Design: [`docs/superpowers/specs/2026-05-18-project-knowledge-design.md`](docs/superpowers/specs/2026-05-18-project-knowledge-design.md)
-- Integration playbook: [INTEGRATION.md, "Project knowledge (optional)"](INTEGRATION.md#project-knowledge-optional)
+- Integration playbook: [`docs/protocol/project-knowledge.md`, "Project knowledge (optional)"](docs/protocol/project-knowledge.md#project-knowledge-optional)
 - Shared-VM or Docker-container setup: [`docs/team-setup/basic-memory-shared-vm.md`](docs/team-setup/basic-memory-shared-vm.md)
 - Note templates: [`examples/project-knowledge/`](examples/project-knowledge/)
 
@@ -424,9 +454,12 @@ bm-scribe is **advisory wrapper** over Basic Memory — it doesn't replace the `
 For wiring this MCP into your LLM-driven implementation workflow (superpowers, hone-ai, vanilla Claude Code, or any harness with MCP support), see [`INTEGRATION.md`](INTEGRATION.md).
 
 For Claude Code, the recommended install packages this playbook as the
-`anti-tangent-protocol` plugin, which loads `INTEGRATION.md` on demand only when
-a task carries a Goal/Acceptance-criteria header (see the one-shot install
-above). opencode loads it on demand via the slim pointer
+`anti-tangent-protocol` plugin, which reads `docs/protocol/core.md` plus the
+part matching the agent's role on demand — when a task carries a
+Goal/Acceptance-criteria header, or when a controller has just finished a
+multi-task plan run and needs `plan_run_report` (see the one-shot install
+above). opencode
+loads the on-demand document via the slim pointer
 (`examples/anti-tangent-pointer.md`).
 
 ## Design

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"text/template"
 
+	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -48,6 +49,7 @@ type PostInput struct {
 	ReferencedPathsMissingEvidence []string
 	ExitContracts                  []string
 	ExitContractsInferred          bool
+	Codescene                      *codescene.Digest
 }
 
 type PlanInput struct {

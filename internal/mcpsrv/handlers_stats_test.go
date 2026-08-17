@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
@@ -103,6 +104,7 @@ func TestValidatePlanRecordsStats(t *testing.T) {
 		Reviews:   providers.Registry{"anthropic": rv},
 		Stats:     rec,
 		planCache: newPlanPassCache(),
+		PlanRuns:  planrun.NewStore(cfg.SessionTTL),
 	}}
 
 	_, pr, callErr := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
@@ -132,6 +134,137 @@ func TestValidatePlanRecordsStats(t *testing.T) {
 	}
 	if ev.Verdict != string(pr.PlanVerdict) {
 		t.Errorf("event.Verdict = %q, want %q (plan verdict)", ev.Verdict, string(pr.PlanVerdict))
+	}
+	// buildPlanWithNTasks(1) emits one task with a structured Goal /
+	// Acceptance criteria header, so both counts must be 1.
+	if ev.TasksTotal != 1 {
+		t.Errorf("event.TasksTotal = %d, want 1", ev.TasksTotal)
+	}
+	if ev.TasksWithHeader != 1 {
+		t.Errorf("event.TasksWithHeader = %d, want 1", ev.TasksWithHeader)
+	}
+}
+
+// TestValidatePlan_CacheHitRecordsPlanHeaderCounts verifies that the
+// plan-pass-cache-hit recordStat call inside ValidatePlan (the "cached: true"
+// branch) also threads tasksTotal/tasksWithHeader, and that the threaded
+// counts match the original (reviewer) call's counts. Before this test, only
+// the final-success call site had any assertion on these fields, so a
+// regression at the cache-hit call site would have shipped silently.
+func TestValidatePlan_CacheHitRecordsPlanHeaderCounts(t *testing.T) {
+	dir := t.TempDir()
+	cfg := statsTestConfig(t)
+	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+	h := &handlers{deps: Deps{
+		Cfg:       cfg,
+		Sessions:  session.NewStore(cfg.SessionTTL),
+		Reviews:   providers.Registry{"anthropic": rv},
+		Stats:     newStatsRecorder(t, dir),
+		planCache: newPlanPassCache(),
+		PlanRuns:  planrun.NewStore(cfg.SessionTTL),
+	}}
+
+	// 3 headered tasks so the counts are unambiguously non-zero and not just
+	// coincidentally equal to some other field.
+	args := ValidatePlanArgs{PlanText: buildPlanWithNTasks(3)}
+
+	_, first, callErr := h.ValidatePlan(context.Background(), nil, args)
+	if callErr != nil {
+		t.Fatalf("ValidatePlan (first call): %v", callErr)
+	}
+	if string(first.PlanVerdict) != "pass" {
+		t.Fatalf("first call PlanVerdict = %q, want %q (only pass results are cached)", first.PlanVerdict, "pass")
+	}
+
+	_, _, callErr = h.ValidatePlan(context.Background(), nil, args)
+	if callErr != nil {
+		t.Fatalf("ValidatePlan (second call): %v", callErr)
+	}
+	if rv.Calls != 1 {
+		t.Fatalf("rv.Calls = %d, want 1; second ValidatePlan call must be a cache hit, not a fresh reviewer call", rv.Calls)
+	}
+
+	b, readErr := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if readErr != nil {
+		t.Fatalf("events.jsonl: %v", readErr)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected exactly 2 event lines (reviewer call + cache hit), got %d: %q", len(lines), string(b))
+	}
+
+	var firstEv, secondEv stats.Event
+	if err := json.Unmarshal([]byte(lines[0]), &firstEv); err != nil {
+		t.Fatalf("unmarshal first event: %v", err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &secondEv); err != nil {
+		t.Fatalf("unmarshal second event: %v", err)
+	}
+
+	if firstEv.Cached {
+		t.Error("first event.Cached = true, want false (this is the reviewer call, not the cache hit)")
+	}
+	if !secondEv.Cached {
+		t.Fatal("second event.Cached = false, want true; test setup did not produce a cache hit")
+	}
+	if firstEv.TasksTotal != 3 || firstEv.TasksWithHeader != 3 {
+		t.Fatalf("first (reviewer) event TasksTotal/TasksWithHeader = %d/%d, want 3/3", firstEv.TasksTotal, firstEv.TasksWithHeader)
+	}
+	if secondEv.TasksTotal != firstEv.TasksTotal || secondEv.TasksWithHeader != firstEv.TasksWithHeader {
+		t.Errorf("cache-hit event TasksTotal/TasksWithHeader = %d/%d, want %d/%d (must match the original reviewer call)",
+			secondEv.TasksTotal, secondEv.TasksWithHeader, firstEv.TasksTotal, firstEv.TasksWithHeader)
+	}
+}
+
+// TestValidatePlan_PartialRecoveryRecordsPlanHeaderCounts verifies that the
+// handlePlanReviewErr handled/partial-recovery recordStat call inside
+// ValidatePlan (the truncation-recovery branch, distinct from both the
+// cache-hit and final-success branches) also threads
+// tasksTotal/tasksWithHeader. Mirrors the existing
+// TestValidatePlan_PartialFindingsRecoveredOnTruncation scenario (task 1
+// complete, task 2 truncated mid-response) but with a headered plan so the
+// counts are non-zero and distinguishable from an unwired zero value.
+func TestValidatePlan_PartialRecoveryRecordsPlanHeaderCounts(t *testing.T) {
+	dir := t.TempDir()
+	cfg := statsTestConfig(t)
+
+	rawJSON := []byte(`{"plan_verdict":"warn","plan_findings":[],"tasks":[` +
+		`{"task_index":1,"task_title":"Task 1: t1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":2,"task_title":"Task 2: t2","verdict":"warn","find`)
+	rv := &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: rawJSON, Model: "claude-sonnet-4-6"},
+		err:  providers.ErrResponseTruncated,
+	}
+	h := &handlers{deps: Deps{
+		Cfg:       cfg,
+		Sessions:  session.NewStore(cfg.SessionTTL),
+		Reviews:   providers.Registry{"anthropic": rv},
+		Stats:     newStatsRecorder(t, dir),
+		planCache: newPlanPassCache(),
+	}}
+
+	plan := buildPlanWithNTasks(2) // both tasks headered
+	_, pr, callErr := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	if callErr != nil {
+		t.Fatalf("ValidatePlan: %v", callErr)
+	}
+	if !pr.Partial {
+		t.Fatal("expected pr.Partial=true on truncation recovery; test setup did not exercise the partial-recovery branch")
+	}
+
+	ev := readSingleEvent(t, dir)
+	if ev.Tool != "validate_plan" {
+		t.Errorf("event.Tool = %q, want %q", ev.Tool, "validate_plan")
+	}
+	if !ev.Partial {
+		t.Errorf("event.Partial = false, want true")
+	}
+	if ev.TasksTotal != 2 {
+		t.Errorf("event.TasksTotal = %d, want 2", ev.TasksTotal)
+	}
+	if ev.TasksWithHeader != 2 {
+		t.Errorf("event.TasksWithHeader = %d, want 2", ev.TasksWithHeader)
 	}
 }
 
@@ -313,6 +446,13 @@ func TestValidatePlanNoHeadingsRecordsStat(t *testing.T) {
 	if ev.Verdict != "fail" {
 		t.Errorf("event.Verdict = %q, want %q", ev.Verdict, "fail")
 	}
+	// No TasksTotal/TasksWithHeader assertion here on purpose: the no-headings
+	// scenario structurally always parses to zero tasks, so those fields read
+	// 0 via Go's zero value whether or not the no-headings call site threads
+	// them at all. An assertion here cannot fail and provides no regression
+	// signal — see TestValidatePlan_CacheHitRecordsPlanHeaderCounts and
+	// TestValidatePlan_PartialRecoveryRecordsPlanHeaderCounts for call sites
+	// that actually exercise non-zero counts.
 }
 
 // TestExtractEmptyEnvelopesRecordsStat pins that the empty-completion_envelopes

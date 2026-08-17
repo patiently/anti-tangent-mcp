@@ -12,8 +12,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -869,6 +871,9 @@ func TestValidatePlan_CachePassingResult(t *testing.T) {
 	assert.Equal(t, verdict.VerdictPass, second.PlanVerdict)
 	assert.Equal(t, 1, rv.Calls, "cache hit must not call reviewer")
 	assert.Equal(t, "[cached <=3m] Proceed with implementation.", second.NextAction)
+	assert.NotEmpty(t, first.PlanRunID, "a passing plan must mint a plan_run_id")
+	assert.Equal(t, first.PlanRunID, second.PlanRunID,
+		"cache hit must reuse the original call's plan_run_id, not mint a second run")
 	body := planEnvelopeBody(t, out)
 	assert.Equal(t, int64(0), body.ReviewMS)
 	assert.Contains(t, body.SummaryBlock, "review_ms:     0")
@@ -1233,4 +1238,144 @@ func TestValidatePlan_ProjectKnowledge_CacheKeySeparation(t *testing.T) {
 	assert.Equal(t, verdict.VerdictPass, second.PlanVerdict)
 	assert.NotContains(t, second.NextAction, "[cached <=3m]", "different project_knowledge must not hit the first call's cache entry")
 	assert.Equal(t, 2, rv.Calls, "different project_knowledge must dispatch a fresh reviewer call")
+}
+
+// ---------------------------------------------------------------------------
+// Task 8 — mint and thread plan_run_id
+// ---------------------------------------------------------------------------
+
+func TestValidatePlan_MintsPlanRunID(t *testing.T) {
+	h := newTestPlanHandlers(t) // existing helper
+	plan := "### Task 1: t\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n"
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	assert.Regexp(t, `^pr_[0-9a-f]{12}$`, pr.PlanRunID)
+	assert.Contains(t, pr.SummaryBlock, pr.PlanRunID)
+
+	run, ok := h.deps.PlanRuns.Get(pr.PlanRunID)
+	require.True(t, ok)
+	assert.Equal(t, 1, run.TaskCount)
+}
+
+func TestValidatePlan_SchemaHasNoPlanRunID(t *testing.T) {
+	assert.NotContains(t, string(verdict.PlanSchema()), "plan_run_id",
+		"plan_run_id is server-set; a reviewer must never be asked to emit it")
+}
+
+func TestValidateTaskSpec_UnknownPlanRunIDStillSucceeds(t *testing.T) {
+	h := newTestHandlers(t)
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "t", Goal: "g", PlanRunID: "pr_000000000000",
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, env.SessionID, "run bookkeeping must not block the review")
+}
+
+// TestValidateTaskSpec_ValidPlanRunID_AppendsRow pins that a validate_task_spec
+// call carrying a real plan_run_id appends a row to the run, carrying the task
+// title, the session id, and the pre-verdict.
+func TestValidateTaskSpec_ValidPlanRunID_AppendsRow(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{
+		passPlanResp("Proceed."),      // ValidatePlan
+		passResp("claude-sonnet-4-6"), // ValidateTaskSpec
+	}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	plan := "### Task 1: t\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.NotEmpty(t, pr.PlanRunID)
+
+	_, taskEnv, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "Task 1: t", Goal: "g", PlanRunID: pr.PlanRunID,
+	})
+	require.NoError(t, err)
+
+	run, ok := h.deps.PlanRuns.Snapshot(pr.PlanRunID)
+	require.True(t, ok)
+	require.Len(t, run.Rows, 1)
+	assert.Equal(t, "Task 1: t", run.Rows[0].TaskTitle)
+	assert.Equal(t, taskEnv.SessionID, run.Rows[0].SessionID)
+	assert.Equal(t, taskEnv.Verdict, run.Rows[0].PreVerdict)
+}
+
+// TestCheckProgress_ValidPlanRunID_IncrementsCheckpoints pins that a
+// check_progress call against a session created under a plan run increments
+// that run's row checkpoint count.
+func TestCheckProgress_ValidPlanRunID_IncrementsCheckpoints(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{
+		passPlanResp("Proceed."),      // ValidatePlan
+		passResp("claude-sonnet-4-6"), // ValidateTaskSpec
+		passResp("claude-sonnet-4-6"), // CheckProgress
+	}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	plan := "### Task 1: t\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+
+	_, taskEnv, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "Task 1: t", Goal: "g", PlanRunID: pr.PlanRunID,
+	})
+	require.NoError(t, err)
+
+	_, _, err = h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID: taskEnv.SessionID, WorkingOn: "writing code",
+	})
+	require.NoError(t, err)
+
+	run, ok := h.deps.PlanRuns.Snapshot(pr.PlanRunID)
+	require.True(t, ok)
+	require.Len(t, run.Rows, 1)
+	assert.Equal(t, 1, run.Rows[0].Checkpoints)
+}
+
+// TestValidateCompletion_ValidPlanRunID_UpdatesRow pins that a
+// validate_completion call against a session created under a plan run writes
+// the post verdict, severity counts, submission_defect_only flag, CodeScene
+// digest, and CodeScene state into that run's row.
+func TestValidateCompletion_ValidPlanRunID_UpdatesRow(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{
+		passPlanResp("Proceed."),      // ValidatePlan
+		passResp("claude-sonnet-4-6"), // ValidateTaskSpec
+		{
+			RawJSON: []byte(`{"verdict":"warn","findings":[{"severity":"major","category":"insufficient_evidence","criterion":"c","evidence":"e","suggestion":"s"}],"next_action":"n"}`),
+			Model:   "claude-sonnet-4-6",
+		}, // ValidateCompletion
+	}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	plan := "### Task 1: t\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+
+	_, taskEnv, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "Task 1: t", Goal: "g", PlanRunID: pr.PlanRunID,
+	})
+	require.NoError(t, err)
+
+	_, complEnv, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: taskEnv.SessionID,
+		Summary:   "did it",
+		FinalDiff: "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n",
+		Codescene: &codescene.Digest{Ran: true, QualityGate: "passed"},
+	})
+	require.NoError(t, err)
+	require.True(t, complEnv.SubmissionDefectOnly, "test setup must exercise the submission-defect-only path")
+
+	run, ok := h.deps.PlanRuns.Snapshot(pr.PlanRunID)
+	require.True(t, ok)
+	require.Len(t, run.Rows, 1)
+	row := run.Rows[0]
+	assert.Equal(t, "warn", row.PostVerdict)
+	assert.Equal(t, 1, row.Severity["major"])
+	assert.True(t, row.SubmissionOnly)
+	require.NotNil(t, row.Codescene)
+	assert.True(t, row.Codescene.Ran)
+	assert.Equal(t, planrun.StateRan, row.CodesceneState)
+	assert.False(t, row.CompletedAt.IsZero())
 }

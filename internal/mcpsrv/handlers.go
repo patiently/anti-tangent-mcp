@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -14,8 +15,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
@@ -35,6 +38,11 @@ type Envelope struct {
 	SessionExpiresAt           *time.Time        `json:"session_expires_at,omitempty"`
 	SessionTTLRemainingSeconds *int              `json:"session_ttl_remaining_seconds,omitempty"`
 	SummaryBlock               string            `json:"summary_block,omitempty"`
+	// SubmissionDefectOnly is set on validate_completion responses whose
+	// blocking findings are all about the submission rather than the code.
+	// The implementer should attach what is missing and re-submit; no rework
+	// is implied. Server-computed; see submission_defect.go.
+	SubmissionDefectOnly bool `json:"submission_defect_only,omitempty"`
 }
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
@@ -55,6 +63,9 @@ type ValidateTaskSpecArgs struct {
 	Phase                        string                            `json:"phase,omitempty"`
 	ModelOverride                string                            `json:"model_override,omitempty"`
 	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty"`
+	// PlanRunID ties this task to a plan run minted by validate_plan. Best
+	// effort: an unknown or expired id must not fail the review.
+	PlanRunID string `json:"plan_run_id,omitempty"`
 }
 
 type handlers struct {
@@ -152,7 +163,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 
 	// Create the session only after the review succeeds so failed reviews
 	// don't leave orphan sessions in the store waiting for TTL eviction.
-	sess := h.deps.Sessions.Create(spec)
+	sess := h.deps.Sessions.Create(spec, args.PlanRunID)
 	h.deps.Sessions.SetPreFindings(sess.ID, result.Findings)
 	// Re-fetch after SetPreFindings so LastAccessed reflects the final mutation.
 	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
@@ -169,6 +180,20 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		Partial:    result.Partial,
 	}
 	env = h.withSessionTTL(env, sess)
+
+	if args.PlanRunID != "" {
+		// Best-effort: an unknown or expired run must not fail the review.
+		if !h.deps.PlanRuns.AppendRow(args.PlanRunID, planrun.TaskRow{
+			SessionID:      sess.ID,
+			TaskTitle:      args.TaskTitle,
+			PreVerdict:     env.Verdict,
+			CodesceneState: planrun.StateMissing,
+		}) {
+			slog.Warn("plan run row append failed; run unknown or expired",
+				"plan_run_id", args.PlanRunID, "session_id", sess.ID)
+		}
+	}
+
 	h.recordStat(statParams{
 		tool:      "validate_task_spec",
 		verdict:   env.Verdict,
@@ -280,6 +305,9 @@ type statParams struct {
 	cached       bool
 	payloadBytes int
 	sessionID    string // raw id; hashed (salted) inside, never stored raw
+
+	tasksTotal      int
+	tasksWithHeader int
 }
 
 // recordStat maps a statParams into a stats.Event and records it.
@@ -291,18 +319,20 @@ func (h *handlers) recordStat(p statParams) {
 	}
 	sev, cat, total := stats.CountFindings(p.findings)
 	h.deps.Stats.Record(stats.Event{
-		Ts:             time.Now().UTC().Truncate(time.Second),
-		Tool:           p.tool,
-		Verdict:        p.verdict,
-		FindingsTotal:  total,
-		SeverityCounts: sev,
-		CategoryCounts: cat,
-		ReviewMS:       p.reviewMS,
-		Model:          p.modelUsed,
-		Cached:         p.cached,
-		Partial:        p.partial,
-		PayloadBytes:   p.payloadBytes,
-		SessionHash:    h.deps.Stats.HashSession(p.sessionID),
+		Ts:              time.Now().UTC().Truncate(time.Second),
+		Tool:            p.tool,
+		Verdict:         p.verdict,
+		FindingsTotal:   total,
+		SeverityCounts:  sev,
+		CategoryCounts:  cat,
+		ReviewMS:        p.reviewMS,
+		Model:           p.modelUsed,
+		Cached:          p.cached,
+		Partial:         p.partial,
+		PayloadBytes:    p.payloadBytes,
+		SessionHash:     h.deps.Stats.HashSession(p.sessionID),
+		TasksTotal:      p.tasksTotal,
+		TasksWithHeader: p.tasksWithHeader,
 	})
 }
 
@@ -442,6 +472,16 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		Verdict:   result.Verdict,
 		Findings:  result.Findings,
 	})
+
+	if sess.PlanRunID != "" {
+		if !h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
+			row.Checkpoints++
+		}) {
+			slog.Warn("plan run row update failed; run or row unknown",
+				"plan_run_id", sess.PlanRunID, "session_id", sess.ID)
+		}
+	}
+
 	// Re-fetch after AppendCheckpoint so LastAccessed reflects the final mutation.
 	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
 		sess = refreshed
@@ -765,15 +805,16 @@ func validateCompletionTool() *mcp.Tool {
 }
 
 type ValidateCompletionArgs struct {
-	SessionID             string    `json:"session_id"  jsonschema:"required"`
-	Summary               string    `json:"summary"     jsonschema:"required"`
-	FinalFiles            []FileArg `json:"final_files,omitempty"`
-	FinalDiff             string    `json:"final_diff,omitempty"`
-	TestEvidence          string    `json:"test_evidence,omitempty"`
-	ExitContracts         []string  `json:"exit_contracts,omitempty"`
-	ExitContractsInferred bool      `json:"exit_contracts_inferred,omitempty"`
-	ModelOverride         string    `json:"model_override,omitempty"`
-	MaxTokensOverride     int       `json:"max_tokens_override,omitempty"`
+	SessionID             string            `json:"session_id"  jsonschema:"required"`
+	Summary               string            `json:"summary"     jsonschema:"required"`
+	FinalFiles            []FileArg         `json:"final_files,omitempty"`
+	FinalDiff             string            `json:"final_diff,omitempty"`
+	TestEvidence          string            `json:"test_evidence,omitempty"`
+	ExitContracts         []string          `json:"exit_contracts,omitempty"`
+	ExitContractsInferred bool              `json:"exit_contracts_inferred,omitempty"`
+	ModelOverride         string            `json:"model_override,omitempty"`
+	MaxTokensOverride     int               `json:"max_tokens_override,omitempty"`
+	Codescene             *codescene.Digest `json:"codescene,omitempty"`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
@@ -1006,6 +1047,10 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty")
 	}
 
+	if args.Codescene != nil {
+		args.Codescene.Normalize()
+	}
+
 	// 3. lightweight marker.
 	lightweight := args.SessionID == ""
 
@@ -1116,6 +1161,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
 				ExitContracts:                  exitContracts,
 				ExitContractsInferred:          args.ExitContractsInferred,
+				Codescene:                      args.Codescene,
 			})
 		},
 		"render post prompt",
@@ -1165,6 +1211,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		sessID = sess.ID
 	}
 
+	if cs := codesceneFindings(h.deps.Cfg.Codescene, args.Codescene); len(cs) > 0 {
+		result.Findings = append(cs, result.Findings...)
+		result = verdict.FinalizeVerdict(result)
+	}
+
 	env := Envelope{
 		SessionID:  sessID,
 		Verdict:    string(result.Verdict),
@@ -1177,6 +1228,50 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if !lightweight {
 		env = h.withSessionTTL(env, sess)
 	}
+	if isSubmissionDefectOnly(env.Findings) {
+		env.SubmissionDefectOnly = true
+		env.NextAction = resubmitNextAction + env.NextAction
+	}
+
+	if !lightweight && sess.PlanRunID != "" {
+		sev, _, _ := stats.CountFindings(env.Findings)
+		state := planrun.StateMissing
+		if args.Codescene != nil {
+			if args.Codescene.Ran {
+				state = planrun.StateRan
+			} else {
+				state = planrun.StateSkipped
+			}
+		}
+		if !h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
+			row.PostVerdict = env.Verdict
+			row.Severity = sev
+			row.SubmissionOnly = env.SubmissionDefectOnly
+			row.Codescene = args.Codescene
+			row.CodesceneState = state
+			row.CompletedAt = time.Now().UTC()
+		}) {
+			slog.Warn("plan run row update failed; run or row unknown",
+				"plan_run_id", sess.PlanRunID, "session_id", sess.ID)
+		}
+
+		// Best-effort ledger append. Never lets a write failure change the
+		// result: logged and swallowed, not returned.
+		//
+		// Snapshot, not Get: this walks run.Rows after the lock is released,
+		// and concurrent subagents under the same plan run may be appending.
+		if run, ok := h.deps.PlanRuns.Snapshot(sess.PlanRunID); ok {
+			for _, row := range run.Rows {
+				if row.SessionID == sess.ID {
+					if err := h.deps.PlanLedger.Append(run, row); err != nil {
+						slog.Warn("plan ledger append failed", "err", err)
+					}
+					break
+				}
+			}
+		}
+	}
+
 	h.recordStat(statParams{
 		tool:         "validate_completion",
 		verdict:      env.Verdict,
@@ -1218,14 +1313,23 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
 	}
 	tasks, _ := planparser.SplitTasks(args.PlanText)
+	tasksTotal := len(tasks)
+	tasksWithHeader := 0
+	for _, rt := range tasks {
+		if rt.HasStructuredHeader {
+			tasksWithHeader++
+		}
+	}
 	if len(tasks) == 0 {
 		pr := prependPlanClamp(noHeadingsPlanResult(), clamp)
 		h.recordStat(statParams{
-			tool:         "validate_plan",
-			verdict:      string(pr.PlanVerdict),
-			findings:     planFindings(pr),
-			modelUsed:    h.deps.Cfg.PlanModel.String(),
-			payloadBytes: planBytes + pkBytes,
+			tool:            "validate_plan",
+			verdict:         string(pr.PlanVerdict),
+			findings:        planFindings(pr),
+			modelUsed:       h.deps.Cfg.PlanModel.String(),
+			payloadBytes:    planBytes + pkBytes,
+			tasksTotal:      tasksTotal,
+			tasksWithHeader: tasksWithHeader,
 		})
 		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
 	}
@@ -1257,14 +1361,16 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
 		h.recordStat(statParams{
-			tool:         "validate_plan",
-			verdict:      string(cached.PlanVerdict),
-			findings:     planFindings(cached),
-			modelUsed:    cachedModelUsed,
-			reviewMS:     0,
-			partial:      cached.Partial,
-			cached:       true,
-			payloadBytes: planBytes + pkBytes,
+			tool:            "validate_plan",
+			verdict:         string(cached.PlanVerdict),
+			findings:        planFindings(cached),
+			modelUsed:       cachedModelUsed,
+			reviewMS:        0,
+			partial:         cached.Partial,
+			cached:          true,
+			payloadBytes:    planBytes + pkBytes,
+			tasksTotal:      tasksTotal,
+			tasksWithHeader: tasksWithHeader,
 		})
 		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
 	}
@@ -1294,13 +1400,15 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}); handled {
 		if retErr == nil {
 			h.recordStat(statParams{
-				tool:         "validate_plan",
-				verdict:      string(p.PlanVerdict),
-				findings:     planFindings(p),
-				modelUsed:    model.String(),
-				reviewMS:     ms,
-				partial:      p.Partial,
-				payloadBytes: planBytes + pkBytes,
+				tool:            "validate_plan",
+				verdict:         string(p.PlanVerdict),
+				findings:        planFindings(p),
+				modelUsed:       model.String(),
+				reviewMS:        ms,
+				partial:         p.Partial,
+				payloadBytes:    planBytes + pkBytes,
+				tasksTotal:      tasksTotal,
+				tasksWithHeader: tasksWithHeader,
 			})
 		}
 		return r, p, retErr
@@ -1308,15 +1416,22 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	populateNormativeTestBodies(&pr, tasks)
 	pr = prependPlanClamp(pr, clamp)
 	pr = finalizePlanResult(pr, modelUsed, ms)
+	if pr.PlanRunID == "" {
+		run := h.deps.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
+		pr.PlanRunID = run.ID
+		pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
+	}
 	h.planCache().store(cacheKey, pr, modelUsed)
 	h.recordStat(statParams{
-		tool:         "validate_plan",
-		verdict:      string(pr.PlanVerdict),
-		findings:     planFindings(pr),
-		modelUsed:    modelUsed,
-		reviewMS:     ms,
-		partial:      pr.Partial,
-		payloadBytes: planBytes + pkBytes,
+		tool:            "validate_plan",
+		verdict:         string(pr.PlanVerdict),
+		findings:        planFindings(pr),
+		modelUsed:       modelUsed,
+		reviewMS:        ms,
+		partial:         pr.Partial,
+		payloadBytes:    planBytes + pkBytes,
+		tasksTotal:      tasksTotal,
+		tasksWithHeader: tasksWithHeader,
 	})
 	return planEnvelopeResultFinalized(pr, modelUsed, ms)
 }
@@ -1779,4 +1894,87 @@ func validateChunkIdentity(parsed verdict.TasksOnly, chunkTasks []planparser.Raw
 		}
 	}
 	return nil
+}
+
+// PlanRunReportArgs is the input schema for the plan-run report.
+type PlanRunReportArgs struct {
+	PlanRunID string `json:"plan_run_id" jsonschema:"required"`
+}
+
+// PlanRunReportResult is what plan_run_report returns. Deterministic: no
+// reviewer call, no provider round-trip, no cost.
+type PlanRunReportResult struct {
+	PlanRunID    string            `json:"plan_run_id"`
+	PlanVerdict  string            `json:"plan_verdict,omitempty"`
+	PlanQuality  string            `json:"plan_quality,omitempty"`
+	Tasks        []planrun.TaskRow `json:"tasks"`
+	Totals       planrun.RunTotals `json:"totals"`
+	Findings     []verdict.Finding `json:"findings,omitempty"`
+	SummaryBlock string            `json:"summary_block"`
+}
+
+func planRunReportTool() *mcp.Tool {
+	return &mcp.Tool{
+		Name: "plan_run_report",
+		Description: "Report the per-task outcome of a finished multi-task plan run: the anti-tangent verdict and the CodeScene result for each task. " +
+			"Call once after the last task reports DONE, with the plan_run_id returned by validate_plan. " +
+			"Deterministic and free — no reviewer model is called.",
+	}
+}
+
+func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args PlanRunReportArgs) (*mcp.CallToolResult, PlanRunReportResult, error) {
+	if args.PlanRunID == "" {
+		return nil, PlanRunReportResult{}, errors.New("plan_run_id is required")
+	}
+
+	// Snapshot, not Get: this walks run.Rows after the lock is released, and
+	// other subagents under the same plan run may be appending concurrently.
+	run, ok := h.deps.PlanRuns.Snapshot(args.PlanRunID)
+	if !ok {
+		// Fall back to the durable ledger (nil-safe: PlanLedger is nil unless
+		// both ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER are set).
+		// This is what lets a report survive a server restart.
+		run, ok = h.deps.PlanLedger.Load(args.PlanRunID)
+	}
+	if !ok {
+		res := PlanRunReportResult{
+			PlanRunID: args.PlanRunID,
+			Tasks:     []planrun.TaskRow{},
+			Findings: []verdict.Finding{{
+				Severity:  verdict.SeverityMajor,
+				Category:  verdict.CategorySessionMissing,
+				Criterion: "plan_run_id",
+				Evidence: fmt.Sprintf("No plan run %q is known to this server. Runs expire after %s, "+
+					"and in-memory state is lost on restart.", args.PlanRunID, h.deps.PlanRuns.TTL()),
+				Suggestion: "Nothing to recover — report from the per-task DONE envelopes instead. " +
+					"Set ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER=1 to persist future runs.",
+			}},
+			SummaryBlock: "anti-tangent plan run report\n  plan_run_id:  " + args.PlanRunID +
+				"\n  (unknown or expired — no rows)\n",
+		}
+		return planRunReportResult(res)
+	}
+
+	res := PlanRunReportResult{
+		PlanRunID:    run.ID,
+		PlanVerdict:  run.PlanVerdict,
+		PlanQuality:  run.PlanQuality,
+		Tasks:        run.Rows,
+		Totals:       planrun.Totals(run),
+		SummaryBlock: planrun.Render(run),
+	}
+	if res.Tasks == nil {
+		res.Tasks = []planrun.TaskRow{}
+	}
+	return planRunReportResult(res)
+}
+
+func planRunReportResult(res PlanRunReportResult) (*mcp.CallToolResult, PlanRunReportResult, error) {
+	body, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return nil, PlanRunReportResult{}, err
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
+	}, res, nil
 }

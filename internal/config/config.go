@@ -38,12 +38,23 @@ type Config struct {
 	StatsSummaryThreshold int
 	StatsRetentionDays    int
 	StatsMaxTokens        int
+	// PlanLedger enables the durable plan-run ledger. Requires StatsDir; on
+	// its own it does nothing. Separate from the stats opt-in because
+	// plan-runs.jsonl carries task titles, unlike every other stats artifact.
+	PlanLedger bool
 	// KBStore selects the optional knowledge-store integration used for
 	// output adaptation by the prime/extract tools. Empty string (the
 	// default) disables KB-specific output (e.g. paste-ready commands);
 	// "basic-memory" enables Basic Memory-shaped output. Any other value
 	// is rejected at startup.
 	KBStore string
+	// Codescene gates the validate_completion CodeScene adoption check.
+	// "" (default) disables it entirely — no findings, today's behaviour.
+	// "required" makes a missing `codescene` argument an observable
+	// non-adoption signal. Operator-declared rather than agent-declared:
+	// if absence were interpreted from the agent's own claim about its host,
+	// a forgetful agent and an unconfigured host would look identical.
+	Codescene string
 }
 
 type ModelRef struct {
@@ -150,6 +161,13 @@ func Load(env func(string) string) (Config, error) {
 		default:
 			return Config{}, fmt.Errorf("ANTI_TANGENT_KB_STORE: unknown value %q (allowed: \"\", \"basic-memory\")", v)
 		}
+	}
+
+	if v := env("ANTI_TANGENT_CODESCENE"); v != "" {
+		if v != "required" {
+			return Config{}, fmt.Errorf(`ANTI_TANGENT_CODESCENE: unknown value %q (allowed: "", "required")`, v)
+		}
+		cfg.Codescene = v
 	}
 
 	if v := env("ANTI_TANGENT_SESSION_TTL"); v != "" {
@@ -298,6 +316,10 @@ func Load(env func(string) string) (Config, error) {
 	}
 	if cfg.StatsMaxTokens > cfg.MaxTokensCeiling {
 		cfg.StatsMaxTokens = cfg.MaxTokensCeiling
+	}
+
+	if v := env("ANTI_TANGENT_PLAN_LEDGER"); v == "1" || strings.EqualFold(v, "true") {
+		cfg.PlanLedger = true
 	}
 
 	if v := env("ANTI_TANGENT_LOG_LEVEL"); v != "" {

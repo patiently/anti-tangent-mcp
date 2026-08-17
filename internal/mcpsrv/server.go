@@ -6,6 +6,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
@@ -20,6 +21,11 @@ type Deps struct {
 	// Stats is nil when ANTI_TANGENT_STATS_DIR is unset; all call sites are
 	// nil-safe no-ops in that case.
 	Stats *stats.Recorder
+	// PlanRuns tracks multi-task plan executions. Never nil; New() fills it in.
+	PlanRuns *planrun.Store
+	// PlanLedger is nil unless both ANTI_TANGENT_STATS_DIR and
+	// ANTI_TANGENT_PLAN_LEDGER are set. All calls are nil-safe.
+	PlanLedger *planrun.Ledger
 }
 
 // Version is the server version reported via the MCP Implementation block.
@@ -27,11 +33,15 @@ type Deps struct {
 var Version = "dev"
 
 // New creates and returns a configured MCP server with all registered tools:
-// validate_task_spec, check_progress, validate_completion, validate_plan, and
-// (v0.6.0) prime_project_knowledge, extract_project_knowledge.
+// validate_task_spec, check_progress, validate_completion, validate_plan,
+// (v0.6.0) prime_project_knowledge, extract_project_knowledge, and (v0.15.0)
+// plan_run_report — the seven registered tools.
 func New(d Deps) *mcp.Server {
 	if d.planCache == nil {
 		d.planCache = newPlanPassCache()
+	}
+	if d.PlanRuns == nil {
+		d.PlanRuns = planrun.NewStore(d.Cfg.SessionTTL)
 	}
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "anti-tangent-mcp",
@@ -45,6 +55,7 @@ func New(d Deps) *mcp.Server {
 	mcp.AddTool(srv, validatePlanTool(), h.ValidatePlan)
 	mcp.AddTool(srv, primeProjectKnowledgeTool(), h.PrimeProjectKnowledge)
 	mcp.AddTool(srv, extractProjectKnowledgeTool(), h.ExtractProjectKnowledge)
+	mcp.AddTool(srv, planRunReportTool(), h.PlanRunReport)
 
 	return srv
 }

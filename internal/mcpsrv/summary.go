@@ -28,6 +28,9 @@ func formatEnvelopeSummary(env Envelope) string {
 	if env.Partial {
 		b.WriteString("  partial:       true\n")
 	}
+	if env.SubmissionDefectOnly {
+		b.WriteString("  submission_defect_only: true — re-submit with the missing evidence; no code rework implied\n")
+	}
 	fmt.Fprintf(&b, "  model_used:    %s\n", env.ModelUsed)
 	fmt.Fprintf(&b, "  review_ms:     %d\n", env.ReviewMS)
 	if env.SessionTTLRemainingSeconds != nil {
@@ -49,6 +52,9 @@ func formatPlanSummary(pr verdict.PlanResult, modelUsed string, reviewMS int64) 
 	b.WriteString("anti-tangent envelope (validate_plan)\n")
 	fmt.Fprintf(&b, "  plan_verdict:  %s\n", pr.PlanVerdict)
 	fmt.Fprintf(&b, "  plan_quality:  %s\n", pr.PlanQuality)
+	if pr.PlanRunID != "" {
+		fmt.Fprintf(&b, "  plan_run_id:   %s\n", pr.PlanRunID)
+	}
 	if pr.Partial {
 		b.WriteString("  partial:       true\n")
 	}

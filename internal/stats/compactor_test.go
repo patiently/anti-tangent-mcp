@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 )
 
@@ -86,7 +87,7 @@ func TestCompactWritesRollupAndSummary(t *testing.T) {
 	// CodeScene block: present only when codescene events are passed.
 	csNow := now
 	c.Compact(csNow, sampleEvents(csNow), []CodesceneEvent{
-		{Ts: csNow, Tool: "analyze_change_set", QualityGate: "failed", NetPP: -0.3, Trend: "regression"},
+		{Ts: csNow, Digest: codescene.Digest{Tool: "analyze_change_set", QualityGate: "failed", NetPP: -0.3, Trend: "regression"}},
 	})
 	rb2, _ := os.ReadFile(filepath.Join(dir, rollupFile))
 	var r2 Rollup

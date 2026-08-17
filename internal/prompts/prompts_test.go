@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -138,6 +139,41 @@ func TestRenderPost(t *testing.T) {
 	})
 	require.NoError(t, err)
 	golden(t, "post_basic", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPost_WithCodescene(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:    sampleSpec(),
+		Summary: "Added Gin handler at /healthz returning \"ok\".",
+		Files: []File{{
+			Path:    "handlers/health.go",
+			Content: "package handlers\nfunc Health(c *gin.Context) { c.String(200, \"ok\") }\n",
+		}},
+		TestEvidence: "PASS: TestHealthReturns200",
+		Codescene: &codescene.Digest{
+			Ran: true, QualityGate: "failed", FilesAnalyzed: 6,
+			Verdicts: &codescene.Verdicts{Improved: 1, Degraded: 2, Stable: 3},
+			Trend:    codescene.TrendRegression, NetPP: 2.0,
+		},
+	})
+	require.NoError(t, err)
+	golden(t, "post_with_codescene", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPost_WithoutCodesceneOmitsSection(t *testing.T) {
+	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "No CodeScene digest."})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "## CodeScene change-set analysis")
+}
+
+func TestRenderPost_WithCodesceneNotRanOmitsSection(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:      sampleSpec(),
+		Summary:   "CodeScene was skipped.",
+		Codescene: &codescene.Digest{Ran: false, SkipReason: "docs-only task"},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "## CodeScene change-set analysis")
 }
 
 func TestRenderPost_WithMajorPreFindingsIncludesMitigationGuidance(t *testing.T) {
@@ -754,6 +790,30 @@ func TestRenderPre_CVRInstructionIncludesMultiSymbolExample(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out.User, "XService.findFoo at path/to/file.kt:L42")
 	require.Contains(t, out.User, "the path matches one of the claim's substrings")
+}
+
+func TestRenderPost_WithExitContracts_Golden(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:                  sampleSpec(),
+		Summary:               "Added Gin handler at /healthz returning \"ok\".",
+		FinalDiff:             "diff --git a/handlers/health.go b/handlers/health.go\n+func Health(c *gin.Context) { c.String(200, \"ok\") }\n",
+		ExitContracts:         []string{"Defines handlerName", "Exports DECLINE_NODE"},
+		ExitContractsInferred: false,
+	})
+	require.NoError(t, err)
+	golden(t, "post_with_exit_contracts", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPost_WithExitContractsInferred_Golden(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:                  sampleSpec(),
+		Summary:               "Added Gin handler at /healthz returning \"ok\".",
+		FinalDiff:             "diff --git a/handlers/health.go b/handlers/health.go\n+func Health(c *gin.Context) { c.String(200, \"ok\") }\n",
+		ExitContracts:         []string{"Exports DECLINE_NODE"},
+		ExitContractsInferred: true,
+	})
+	require.NoError(t, err)
+	golden(t, "post_with_exit_contracts_inferred", out.System+"\n---USER---\n"+out.User)
 }
 
 func TestRenderPost_WithExplicitExitContractsIncludesSection(t *testing.T) {

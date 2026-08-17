@@ -58,6 +58,10 @@ type PlanResult struct {
 	PlanQuality  PlanQuality      `json:"plan_quality"`
 	SummaryBlock string           `json:"summary_block,omitempty"`
 	Partial      bool             `json:"partial,omitempty"`
+	// PlanRunID is server-set, never reviewer-emitted: it is absent from
+	// plan_schema.json, exactly like SummaryBlock. Controllers thread it into
+	// each validate_task_spec call so plan_run_report can assemble the run.
+	PlanRunID string `json:"plan_run_id,omitempty"`
 }
 
 // PlanTaskResult is the per-task analysis carried inside PlanResult.Tasks.

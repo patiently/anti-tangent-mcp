@@ -14,6 +14,7 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/mcpsrv"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
@@ -74,9 +75,19 @@ func main() {
 	}
 
 	store := session.NewStore(cfg.SessionTTL)
+	planRuns := planrun.NewStore(cfg.SessionTTL)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go evictLoop(ctx, store, 5*time.Minute, logger)
+	go evictLoop(ctx, store, planRuns, 5*time.Minute, logger)
+
+	// The ledger is constructed before stats.Options so its retention pruning
+	// can be wired into the same Recorder that already prunes events.jsonl
+	// and codescene-events.jsonl (internal/stats.Recorder.LedgerPruner).
+	var ledger *planrun.Ledger
+	if cfg.StatsDir != "" && cfg.PlanLedger {
+		ledger = &planrun.Ledger{Dir: cfg.StatsDir}
+		logger.Info("plan ledger enabled", "dir", cfg.StatsDir)
+	}
 
 	var statsRec *stats.Recorder
 	if cfg.StatsDir != "" {
@@ -86,7 +97,7 @@ func main() {
 		// A missing API key for the stats provider disables only the summary
 		// step (reviewer == nil); recording + rollup still work.
 		statsReviewer := registry[cfg.StatsModel.Provider]
-		rec, err := stats.New(stats.Options{
+		opts := stats.Options{
 			Dir:              cfg.StatsDir,
 			Reviewer:         statsReviewer,
 			Model:            cfg.StatsModel.Model,
@@ -96,7 +107,18 @@ func main() {
 			SummaryThreshold: cfg.StatsSummaryThreshold,
 			RetentionDays:    cfg.StatsRetentionDays,
 			Logger:           logger,
-		})
+		}
+		// Guarded explicitly rather than assigning `ledger` unconditionally:
+		// ledger is a typed *planrun.Ledger that may be nil, and assigning a
+		// nil pointer straight into an interface-typed field produces a
+		// non-nil interface holding a nil pointer (Go's classic typed-nil
+		// gotcha) — relying on Prune's own nil-receiver safety to paper over
+		// that would work today but is a needless footgun for a future
+		// change to either side.
+		if ledger != nil {
+			opts.LedgerPruner = ledger
+		}
+		rec, err := stats.New(opts)
 		if err != nil {
 			logger.Warn("stats disabled", "err", err)
 		} else {
@@ -107,10 +129,12 @@ func main() {
 
 	mcpsrv.Version = version
 	srv := mcpsrv.New(mcpsrv.Deps{
-		Cfg:      cfg,
-		Sessions: store,
-		Reviews:  registry,
-		Stats:    statsRec,
+		Cfg:        cfg,
+		Sessions:   store,
+		Reviews:    registry,
+		Stats:      statsRec,
+		PlanRuns:   planRuns,
+		PlanLedger: ledger,
 	})
 
 	sigCh := make(chan os.Signal, 1)
@@ -131,7 +155,7 @@ func main() {
 	}
 }
 
-func evictLoop(ctx context.Context, store *session.Store, every time.Duration, logger *slog.Logger) {
+func evictLoop(ctx context.Context, store *session.Store, planRuns *planrun.Store, every time.Duration, logger *slog.Logger) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -139,11 +163,32 @@ func evictLoop(ctx context.Context, store *session.Store, every time.Duration, l
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			n := store.EvictExpired(time.Now())
-			if n > 0 {
-				logger.Info("evicted sessions", "count", n)
-			}
+			evictTick(store, planRuns, logger)
 		}
+	}
+}
+
+// evictTick runs one eviction pass, recovering from a panic so a single bad
+// tick can't take down the eviction goroutine. Mirrors
+// internal/stats/recorder.go's recover-and-warn pattern for its own
+// background goroutine. No realistic panic path exists today — both
+// EvictExpired bodies are pure mutex/map/time code — but this keeps the two
+// background loops consistent rather than one being hardened and the other
+// not.
+func evictTick(store *session.Store, planRuns *planrun.Store, logger *slog.Logger) {
+	defer func() {
+		if v := recover(); v != nil {
+			logger.Warn("evict tick panicked", "panic", v)
+		}
+	}()
+	now := time.Now()
+	n := store.EvictExpired(now)
+	if n > 0 {
+		logger.Info("evicted sessions", "count", n)
+	}
+	pn := planRuns.EvictExpired(now)
+	if pn > 0 {
+		logger.Info("evicted plan runs", "count", pn)
 	}
 }
 

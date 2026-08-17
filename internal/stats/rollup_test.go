@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestComputeRollup(t *testing.T) {
@@ -92,4 +95,35 @@ func TestRollupJSONContract(t *testing.T) {
 			t.Errorf("missing json key %q in marshaled Rollup", key)
 		}
 	}
+}
+
+func TestComputeRollup_PlanHeaders(t *testing.T) {
+	now := time.Now().UTC()
+	events := []Event{
+		{Ts: now, Tool: "validate_plan", TasksTotal: 10, TasksWithHeader: 8},
+		{Ts: now, Tool: "validate_plan", TasksTotal: 10, TasksWithHeader: 10},
+		{Ts: now, Tool: "validate_task_spec"},
+	}
+	r := computeRollup(events, now)
+	require.NotNil(t, r.PlanHeaders)
+	assert.Equal(t, 20, r.PlanHeaders.TasksTotal)
+	assert.Equal(t, 18, r.PlanHeaders.TasksWithHeader)
+	assert.InDelta(t, 0.9, r.PlanHeaders.Adoption, 0.0001)
+}
+
+func TestComputeRollup_PlanHeaders_AbsentWithoutPlanEvents(t *testing.T) {
+	now := time.Now().UTC()
+	r := computeRollup([]Event{{Ts: now, Tool: "validate_completion"}}, now)
+	assert.Nil(t, r.PlanHeaders, "absence must mean no plan events, not zero adoption")
+
+	b, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "plan_headers")
+}
+
+func TestComputeRollup_PlanHeaders_ZeroTasksNoDivideByZero(t *testing.T) {
+	now := time.Now().UTC()
+	r := computeRollup([]Event{{Ts: now, Tool: "validate_plan", TasksTotal: 0}}, now)
+	require.NotNil(t, r.PlanHeaders)
+	assert.Equal(t, 0.0, r.PlanHeaders.Adoption)
 }

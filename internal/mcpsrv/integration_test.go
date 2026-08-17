@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -413,4 +414,153 @@ func TestIntegration_ExtractProjectKnowledge(t *testing.T) {
 	// bm_commands MUST appear as an empty array even with KBStore="".
 	assert.NotNil(t, er.BMCommands)
 	assert.Len(t, er.BMCommands, 0)
+}
+
+// planRunReportFakeReviewer is switchingFakeReviewer's plan-branch response
+// scoped to exactly the two tasks TestIntegration_PlanRunReport dispatches,
+// so the minted plan_run_id's TaskCount matches len(Rows) and the rendered
+// report's "N of M completed" line is not misleading. Non-plan prompts
+// (validate_task_spec, validate_completion) get the same generic "pass"
+// fallback as switchingFakeReviewer.
+type planRunReportFakeReviewer struct{}
+
+func (planRunReportFakeReviewer) Name() string { return "anthropic" }
+
+func (planRunReportFakeReviewer) Review(_ context.Context, req providers.Request) (providers.Response, error) {
+	if strings.Contains(req.User, "## Plan under review") {
+		return providers.Response{
+			RawJSON: []byte(`{"plan_verdict":"pass","plan_quality":"rigorous","plan_findings":[],"tasks":[` +
+				`{"task_index":0,"task_title":"Task 1: Add /healthz endpoint","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+				`{"task_index":1,"task_title":"Task 2: Retry backoff","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}` +
+				`],"next_action":"go"}`),
+			Model:       "claude-sonnet-4-6",
+			InputTokens: 5, OutputTokens: 4,
+		}, nil
+	}
+	return providers.Response{
+		RawJSON:     []byte(`{"verdict":"pass","findings":[],"next_action":"go"}`),
+		Model:       "claude-sonnet-4-6",
+		InputTokens: 3, OutputTokens: 2,
+	}, nil
+}
+
+// TestIntegration_PlanRunReport drives the full chain end to end through the
+// MCP transport — validate_plan (mints plan_run_id) → two validate_task_spec
+// calls (both threading plan_run_id) → two validate_completion calls (one
+// with a ran:true CodeScene digest, one with none) → plan_run_report — rather
+// than constructing a *planrun.Run by hand, so the test actually exercises
+// AppendRow/UpdateRow/Snapshot wiring across the real handlers, not just
+// Render() in isolation.
+func TestIntegration_PlanRunReport(t *testing.T) {
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	require.NoError(t, err)
+
+	rv := planRunReportFakeReviewer{}
+	deps := Deps{
+		Cfg:      cfg,
+		Sessions: session.NewStore(1 * time.Hour),
+		Reviews:  providers.Registry{"anthropic": rv},
+		PlanRuns: planrun.NewStore(1 * time.Hour),
+	}
+	srv := New(deps)
+
+	st, ct := mcp.NewInMemoryTransports()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		if err := srv.Run(ctx, st); err != nil && ctx.Err() == nil {
+			t.Errorf("srv.Run: %v", err)
+		}
+	}()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+	cs, err := client.Connect(ctx, ct, nil)
+	require.NoError(t, err)
+	defer func() {
+		if err := cs.Close(); err != nil {
+			t.Errorf("cs.Close: %v", err)
+		}
+	}()
+
+	// 1. validate_plan mints the plan_run_id.
+	plan := "# Plan\n\n### Task 1: Add /healthz endpoint\n\nSome body.\n\n" +
+		"### Task 2: Retry backoff\n\nAnother body.\n"
+	planRes, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "validate_plan",
+		Arguments: map[string]any{"plan_text": plan},
+	})
+	require.NoError(t, err)
+	require.False(t, planRes.IsError, "validate_plan returned error: %v", planRes.Content)
+	require.Len(t, planRes.Content, 1)
+	planTC, ok := planRes.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+
+	var pr struct {
+		verdict.PlanResult
+	}
+	require.NoError(t, json.Unmarshal([]byte(planTC.Text), &pr))
+	require.NotEmpty(t, pr.PlanRunID)
+
+	// 2. two validate_task_spec calls, both threading plan_run_id.
+	task1 := callTool(t, ctx, cs, "validate_task_spec", map[string]any{
+		"task_title": "Add /healthz endpoint", "goal": "expose a health endpoint",
+		"acceptance_criteria": []string{"GET /healthz returns 200"},
+		"plan_run_id":         pr.PlanRunID,
+	})
+	require.NotEmpty(t, task1.SessionID)
+
+	task2 := callTool(t, ctx, cs, "validate_task_spec", map[string]any{
+		"task_title": "Retry backoff", "goal": "add exponential backoff to retries",
+		"acceptance_criteria": []string{"retries back off exponentially"},
+		"plan_run_id":         pr.PlanRunID,
+	})
+	require.NotEmpty(t, task2.SessionID)
+
+	// 3. two validate_completion calls: one with a ran:true CodeScene digest,
+	// one with none.
+	completion1 := callTool(t, ctx, cs, "validate_completion", map[string]any{
+		"session_id":  task1.SessionID,
+		"summary":     "added /healthz",
+		"final_files": []map[string]string{{"path": "healthz.go", "content": "package h\n"}},
+		"codescene": map[string]any{
+			"ran": true, "quality_gate": "passed", "net_pp": -1.0,
+		},
+	})
+	assert.Equal(t, "pass", completion1.Verdict)
+
+	completion2 := callTool(t, ctx, cs, "validate_completion", map[string]any{
+		"session_id":  task2.SessionID,
+		"summary":     "added backoff",
+		"final_files": []map[string]string{{"path": "retry.go", "content": "package r\n"}},
+	})
+	assert.Equal(t, "pass", completion2.Verdict)
+
+	// 4. plan_run_report renders the finished run.
+	reportRes, err := cs.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "plan_run_report",
+		Arguments: map[string]any{"plan_run_id": pr.PlanRunID},
+	})
+	require.NoError(t, err)
+	require.False(t, reportRes.IsError, "plan_run_report returned error: %v", reportRes.Content)
+	require.Len(t, reportRes.Content, 1)
+	reportTC, ok := reportRes.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+
+	var report PlanRunReportResult
+	require.NoError(t, json.Unmarshal([]byte(reportTC.Text), &report))
+
+	assert.Equal(t, pr.PlanRunID, report.PlanRunID)
+	require.Len(t, report.Tasks, 2)
+	assert.NotEmpty(t, report.SummaryBlock)
+	assert.Contains(t, report.SummaryBlock, "Add /healthz endpoint")
+	assert.Contains(t, report.SummaryBlock, "Retry backoff")
+	assert.Contains(t, report.SummaryBlock, "passed")  // the one ran:true CodeScene result
+	assert.Contains(t, report.SummaryBlock, "not run") // the one task with no digest
+
+	t.Logf("rendered plan_run_report summary_block:\n%s", report.SummaryBlock)
 }

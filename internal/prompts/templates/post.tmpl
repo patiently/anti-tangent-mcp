@@ -19,9 +19,9 @@ Pinned by:
 {{else}}Exit contracts (explicit — author-authored, must be satisfied):
 {{end}}{{range .ExitContracts}}- {{.}}
 {{end}}
-For each contract above, assess whether `final_files` / `final_diff` evidence satisfies it. On miss, emit a finding with `category: missing_acceptance_criterion`, `criterion: exit_contract`, `evidence` quoting the contract and the closest matching production-code surface, and `suggestion` naming the specific edit that would satisfy the contract.
+For each contract above, assess whether `final_files` / `final_diff` evidence satisfies it. On a hard miss — the supplied evidence affirmatively shows that a named symbol the contract references is absent — emit a finding with `category: missing_acceptance_criterion`, `criterion: exit_contract`, `evidence` quoting the contract and the closest matching production-code surface, and `suggestion` naming the specific edit that would satisfy the contract. Do not infer absence from an unchanged or partial diff. On a soft miss — the evidence suggests the contract is satisfied but cannot be verified from the supplied evidence — emit `category: insufficient_evidence` instead, still with `criterion: exit_contract`, `evidence` quoting the contract, and `suggestion` naming the evidence that would resolve the ambiguity.
 
-{{if .ExitContractsInferred}}These contracts were inferred from cross-task references rather than authored explicitly. On miss, cap at `severity: minor` unless the evidence is structurally inconsistent — e.g. the contract names a constant the diff explicitly leaves undefined — in which case `severity: major` is appropriate.{{else}}These contracts were authored explicitly by the plan. On miss, you may emit `severity: major` for hard mismatches (a named symbol the contract references is absent from the diff) and `severity: minor` for soft mismatches (evidence suggests the contract is satisfied but cannot be verified from the supplied evidence).{{end}}
+{{if .ExitContractsInferred}}These contracts were inferred from cross-task references rather than authored explicitly. On miss, cap at `severity: minor` unless the evidence is structurally inconsistent — e.g. the contract names a constant the diff explicitly leaves undefined — in which case `severity: major` is appropriate.{{else}}These contracts were authored explicitly by the plan. On miss, you may emit `severity: major` for hard mismatches (the supplied evidence affirmatively shows a named symbol the contract references is absent) and `severity: minor` for soft mismatches (evidence suggests the contract is satisfied but cannot be verified from the supplied evidence).{{end}}
 {{end}}{{if .Spec.NormativeTestBodies}}
 ## Normative test bodies (binding)
 
@@ -43,6 +43,14 @@ Check whether the implementer's summary, final evidence, or test evidence explic
   Evidence: {{.Evidence}}
   Suggestion: {{.Suggestion}}
 {{end}}
+{{end}}{{if and .Codescene .Codescene.Ran}}
+## CodeScene change-set analysis (caller-supplied)
+
+Quality gate: {{.Codescene.QualityGate}}
+{{if .Codescene.Verdicts}}Files analyzed: {{.Codescene.FilesAnalyzed}} — improved {{.Codescene.Verdicts.Improved}} / degraded {{.Codescene.Verdicts.Degraded}} / stable {{.Codescene.Verdicts.Stable}}
+{{end}}Trend: {{.Codescene.Trend}} (net problem points {{printf "%+.1f" .Codescene.NetPP}})
+
+Caller-supplied CodeScene output. anti-tangent does not run CodeScene and cannot verify this digest came from a real run — treat it as authoritative context, not as an independently established fact. If genuine it reflects deterministic Code Health analysis of the changed files, which is signal the text alone cannot give you. It does not by itself fail an acceptance criterion — weigh it alongside the evidence. anti-tangent surfaces a Code Health regression as its own finding automatically; do not emit a separate finding solely restating this block. Use it as context for judging whether the evidence is trustworthy.
 {{end}}
 ## What to evaluate
 
@@ -59,7 +67,9 @@ If test evidence was provided, cross-check it against the AC list — does it ac
 
 The `Context:` block in the task spec above is authoritative. If an AC reads one way literally but `Context:` explicitly anticipates or approves a deviation (for example, a framework constraint, an upstream design decision, or an in-flight refactor), treat `Context:` as the disambiguator. Do not emit a finding solely because an AC's literal phrasing conflicts with a deviation that `Context:` permits.
 
-Evidence for completion comes from `final_files` (full file contents), `final_diff` (a unified diff), and `test_evidence` (test command output). The `summary` is the implementer's description of what was done — cross-reference it against the evidence, but the summary on its own is not evidence; the request schema requires at least one of the three evidence fields to be non-empty. Grade whatever evidence is provided, in any combination. Do not emit a `missing_acceptance_criterion` finding solely because `final_files` is missing when `final_diff` or `test_evidence` already covers the same AC. Do emit one if (a) the evidence affirmatively contradicts an AC, (b) the evidence is internally inconsistent with the summary's claims, or (c) an AC is not addressed by any of the provided evidence.
+Evidence for completion comes from `final_files` (full file contents), `final_diff` (a unified diff), and `test_evidence` (test command output). The `summary` is the implementer's description of what was done — cross-reference it against the evidence, but the summary on its own is not evidence; the request schema requires at least one of the three evidence fields to be non-empty. Grade whatever evidence is provided, in any combination. Do not emit a `missing_acceptance_criterion` finding solely because `final_files` is missing when `final_diff` or `test_evidence` already covers the same AC. Do emit `missing_acceptance_criterion` if (a) the evidence affirmatively contradicts an AC, or (b) the evidence is internally inconsistent with the summary's claims. If (c) an AC is not addressed by any of the provided evidence, emit `insufficient_evidence` instead — see below.
+
+This distinction is load-bearing: `insufficient_evidence` tells the implementer to attach what is missing, while `missing_acceptance_criterion` tells them to change the code.
 
 ## Implementer's summary
 

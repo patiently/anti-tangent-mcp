@@ -13,7 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -56,6 +58,7 @@ func newDeps(t *testing.T, rv *fakeReviewer) Deps {
 		Sessions:  session.NewStore(1 * time.Hour),
 		Reviews:   providers.Registry{"anthropic": rv},
 		planCache: newPlanPassCache(),
+		PlanRuns:  planrun.NewStore(1 * time.Hour),
 	}
 }
 
@@ -177,7 +180,7 @@ func TestEnvelope_SessionTTLFieldsSerializeCorrectly(t *testing.T) {
 		// the computed expiry (LastAccessed + TTL) lies in the past, exercising
 		// the clamp branch inside withSessionTTL.
 		store := session.NewStore(1 * time.Hour)
-		sess := store.Create(session.TaskSpec{Title: "t", Goal: "g"})
+		sess := store.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 		sess.LastAccessed = time.Now().Add(-2 * time.Hour)
 
 		h := &handlers{deps: Deps{Sessions: store}}
@@ -2760,11 +2763,11 @@ func TestValidateTaskSpec_PayloadCap_PerContributorEvidence(t *testing.T) {
 	h := &handlers{deps: deps}
 
 	args := ValidateTaskSpecArgs{
-		TaskTitle:          "T",
-		Goal:               "G",
-		AcceptanceCriteria: []string{"AC1"}, // 3 bytes
-		Context:            "ctx",           // 3 bytes
-		ProjectKnowledge:   strings.Repeat("p", 500),
+		TaskTitle:           "T",
+		Goal:                "G",
+		AcceptanceCriteria:  []string{"AC1"}, // 3 bytes
+		Context:             "ctx",           // 3 bytes
+		ProjectKnowledge:    strings.Repeat("p", 500),
 		NormativeTestBodies: []string{"body"}, // 4 bytes
 	}
 	_, _, err := h.ValidateTaskSpec(context.Background(), nil, args)
@@ -2806,4 +2809,172 @@ func extractContributorBytes(t *testing.T, msg, label string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// --- v0.15.0 CodeScene in-band attribution -------------------------------
+
+func newTestHandlersWithCodescene(t *testing.T, mode string) *handlers {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
+	d := newDeps(t, rv)
+	d.Cfg.Codescene = mode
+	return &handlers{deps: d}
+}
+
+func hasCategory(fs []verdict.Finding, c verdict.Category) bool {
+	for _, f := range fs {
+		if f.Category == c {
+			return true
+		}
+	}
+	return false
+}
+
+func TestValidateCompletion_CodesceneRequired_MissingBlock(t *testing.T) {
+	h := newTestHandlersWithCodescene(t, "required")
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+	})
+	require.NoError(t, err)
+
+	var found *verdict.Finding
+	for i := range env.Findings {
+		if env.Findings[i].Category == verdict.CategoryCodesceneNotRun {
+			found = &env.Findings[i]
+		}
+	}
+	require.NotNil(t, found, "expected a codescene_not_run finding")
+	assert.Equal(t, verdict.SeverityMajor, found.Severity)
+	assert.True(t, env.SubmissionDefectOnly)
+}
+
+func TestValidateCompletion_CodesceneRequired_DeclaredSkip(t *testing.T) {
+	h := newTestHandlersWithCodescene(t, "required")
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+		Codescene: &codescene.Digest{Ran: false, SkipReason: "docs-only task"},
+	})
+	require.NoError(t, err)
+
+	for _, f := range env.Findings {
+		if f.Category == verdict.CategoryCodesceneSkipped {
+			assert.Equal(t, verdict.SeverityMinor, f.Severity)
+			assert.Contains(t, f.Evidence, "docs-only task")
+			return
+		}
+	}
+	t.Fatal("expected a codescene_skipped finding")
+}
+
+func TestValidateCompletion_CodesceneRequired_UndeclaredSkipIsNotRun(t *testing.T) {
+	h := newTestHandlersWithCodescene(t, "required")
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+		Codescene: &codescene.Digest{Ran: false},
+	})
+	require.NoError(t, err)
+	assert.True(t, hasCategory(env.Findings, verdict.CategoryCodesceneNotRun))
+}
+
+func TestValidateCompletion_CodesceneRequired_WhitespaceOnlySkipReasonIsNotRun(t *testing.T) {
+	// A skip_reason that is present but blank (whitespace-only) must be
+	// treated identically to an absent skip_reason: codescene_not_run at
+	// major, not codescene_skipped. Pins the strings.TrimSpace(d.SkipReason)
+	// == "" boundary in codesceneFindings — a naive d.SkipReason == "" check
+	// would let this slip through as a declared skip.
+	h := newTestHandlersWithCodescene(t, "required")
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+		Codescene: &codescene.Digest{Ran: false, SkipReason: "   "},
+	})
+	require.NoError(t, err)
+
+	var found *verdict.Finding
+	for i := range env.Findings {
+		if env.Findings[i].Category == verdict.CategoryCodesceneNotRun {
+			found = &env.Findings[i]
+		}
+	}
+	require.NotNil(t, found, "whitespace-only skip_reason must be treated as absent (codescene_not_run)")
+	assert.Equal(t, verdict.SeverityMajor, found.Severity)
+	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneSkipped))
+}
+
+func TestValidateCompletion_CodesceneOff_NoFinding(t *testing.T) {
+	h := newTestHandlersWithCodescene(t, "")
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+	})
+	require.NoError(t, err)
+	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneNotRun))
+	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneSkipped))
+}
+
+func TestValidateCompletion_CodesceneOff_DigestStillThreadedToReviewer(t *testing.T) {
+	// ANTI_TANGENT_CODESCENE unset must change nothing about the reviewer
+	// prompt: a caller-supplied digest is still threaded through so the
+	// text-only reviewer gets codebase-grounded input, even though the
+	// server-side adoption check is disabled.
+	h := newTestHandlersWithCodescene(t, "")
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
+
+	_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+		Codescene: &codescene.Digest{Ran: true, QualityGate: "passed", NetPP: -1.0},
+	})
+	require.NoError(t, err)
+
+	rv, ok := h.deps.Reviews["anthropic"].(*fakeReviewer)
+	require.True(t, ok)
+	assert.Contains(t, rv.LastRequest.User, "## CodeScene change-set analysis")
+}
+
+func TestValidateCompletion_CodesceneRegressionFinding(t *testing.T) {
+	h := newTestHandlersWithCodescene(t, "") // fires regardless of the switch
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+		Codescene: &codescene.Digest{
+			Ran: true, QualityGate: "failed", NetPP: 2.0,
+			CategoryCounts: map[string]int{"Complex Method": 2},
+		},
+	})
+	require.NoError(t, err)
+
+	for _, f := range env.Findings {
+		if f.Category == verdict.CategoryQuality && strings.Contains(f.Criterion, "code_health") {
+			assert.Equal(t, verdict.SeverityMinor, f.Severity)
+			assert.Contains(t, f.Evidence, "2")
+			return
+		}
+	}
+	t.Fatal("expected a minor code-health regression finding")
+}
+
+func TestValidateCompletion_CodesceneRequired_RanTrueNoAdoptionFinding(t *testing.T) {
+	// Row 4 of the behaviour table under enforcement: mode "required" with a
+	// ran:true digest must not emit codescene_not_run or codescene_skipped —
+	// the adoption requirement is satisfied. NetPP is negative so Normalize()
+	// resolves Trend to "improvement", keeping the regression finding out of
+	// scope too, isolating this test to the adoption-check switch alone.
+	h := newTestHandlersWithCodescene(t, "required")
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+		Codescene: &codescene.Digest{Ran: true, QualityGate: "passed", NetPP: -1.0},
+	})
+	require.NoError(t, err)
+	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneNotRun))
+	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneSkipped))
 }
