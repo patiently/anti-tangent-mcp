@@ -137,6 +137,40 @@ func TestSnapshot_DeepCopiesSeverityAndCodescene(t *testing.T) {
 	assert.InDelta(t, -1.5, snap.Rows[0].Codescene.NetPP, 0.0001, "snapshot must not observe an in-place Codescene mutation")
 }
 
+// TestSnapshot_DeepCopiesCodesceneNestedFields proves Snapshot's copy of
+// TaskRow.Codescene goes one level deeper than the Digest struct itself:
+// codescene.Digest.Verdicts (pointer) and .CategoryCounts (map) would
+// otherwise still alias the live row's values even after `d := *row.Codescene`
+// copies the struct by value. As with TestSnapshot_DeepCopiesSeverityAndCodescene,
+// mutating IN PLACE after the snapshot is taken — not reassigning the whole
+// field — is what discriminates a deep copy from a shallow one.
+func TestSnapshot_DeepCopiesCodesceneNestedFields(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.Create("pass", "rigorous", 1)
+	require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: "s1", TaskTitle: "first"}))
+	require.True(t, s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
+		row.Codescene = &codescene.Digest{
+			Ran:            true,
+			Verdicts:       &codescene.Verdicts{Improved: 1},
+			CategoryCounts: map[string]int{"complexity": 1},
+		}
+	}))
+
+	snap, ok := s.Snapshot(r.ID)
+	require.True(t, ok)
+	require.Len(t, snap.Rows, 1)
+
+	// Mutate the live run's nested Verdicts/CategoryCounts in place, not by
+	// reassigning the field.
+	s.mu.Lock()
+	s.runs[r.ID].Rows[0].Codescene.Verdicts.Improved = 99
+	s.runs[r.ID].Rows[0].Codescene.CategoryCounts["complexity"] = 99
+	s.mu.Unlock()
+
+	assert.Equal(t, 1, snap.Rows[0].Codescene.Verdicts.Improved, "snapshot must not observe an in-place Verdicts mutation")
+	assert.Equal(t, 1, snap.Rows[0].Codescene.CategoryCounts["complexity"], "snapshot must not observe an in-place CategoryCounts mutation")
+}
+
 // TestConcurrentSnapshotWhileUpdating is the race-detector counterpart to
 // TestSnapshot_IndependentOfLaterUpdate. It replaces a prior
 // TestConcurrentSnapshotWhileAppending, which raced Snapshot against

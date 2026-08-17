@@ -135,6 +135,17 @@ func (s *Store) Snapshot(id string) (*Run, bool) {
 		}
 		if row.Codescene != nil {
 			d := *row.Codescene
+			if d.Verdicts != nil {
+				v := *d.Verdicts
+				d.Verdicts = &v
+			}
+			if d.CategoryCounts != nil {
+				ccCopy := make(map[string]int, len(d.CategoryCounts))
+				for k, v := range d.CategoryCounts {
+					ccCopy[k] = v
+				}
+				d.CategoryCounts = ccCopy
+			}
 			row.Codescene = &d
 		}
 		cp.Rows[i] = row
