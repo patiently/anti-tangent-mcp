@@ -58,8 +58,9 @@ your reports — redact to `***` whenever a step would otherwise print one.
    subsequent report.
 7. Install the anti-tangent-protocol plugin — it carries the drift-protection
    protocol as an on-demand skill. Its one-line description is the only
-   always-loaded footprint; the full protocol loads only when a task has a
-   Goal/Acceptance-criteria header. This replaces the old always-inlined
+   always-loaded footprint; only `core.md` plus the part matching the agent's
+   role loads, and only when a task has a Goal/Acceptance-criteria header or a
+   controller has just finished a plan run. This replaces the old always-inlined
    INTEGRATION.md import (do NOT write INTEGRATION.md into ~/.claude/):
        claude plugin marketplace add patiently/anti-tangent-mcp
        claude plugin install anti-tangent-protocol@anti-tangent-mcp
@@ -454,8 +455,10 @@ For wiring this MCP into your LLM-driven implementation workflow (superpowers, h
 
 For Claude Code, the recommended install packages this playbook as the
 `anti-tangent-protocol` plugin, which reads `docs/protocol/core.md` plus the
-part matching the agent's role on demand, only when a task carries a
-Goal/Acceptance-criteria header (see the one-shot install above). opencode
+part matching the agent's role on demand — when a task carries a
+Goal/Acceptance-criteria header, or when a controller has just finished a
+multi-task plan run and needs `plan_run_report` (see the one-shot install
+above). opencode
 loads the on-demand document via the slim pointer
 (`examples/anti-tangent-pointer.md`).
 
