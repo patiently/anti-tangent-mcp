@@ -919,7 +919,12 @@ Expected: PASS
 - [ ] **Step 9: Verify the leaf-package constraint**
 
 ```bash
-go list -deps ./internal/codescene | grep patiently && echo "FAIL: not a leaf" || echo "leaf package confirmed"
+# `go list -deps` includes the target package itself, so it must be excluded —
+# without the second filter this reports "not a leaf" for a genuine leaf.
+go list -deps ./internal/codescene \
+  | grep patiently \
+  | grep -v '^github.com/patiently/anti-tangent-mcp/internal/codescene$' \
+  && echo "FAIL: not a leaf" || echo "leaf package confirmed"
 ```
 
 - [ ] **Step 10: Commit**
@@ -2372,7 +2377,9 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 		return nil, PlanRunReportResult{}, errors.New("plan_run_id is required")
 	}
 
-	run, ok := h.deps.PlanRuns.Get(args.PlanRunID)
+	// Snapshot, not Get: this walks run.Rows after the lock is released, and
+	// other subagents under the same plan run may be appending concurrently.
+	run, ok := h.deps.PlanRuns.Snapshot(args.PlanRunID)
 	if !ok {
 		res := PlanRunReportResult{
 			PlanRunID: args.PlanRunID,
@@ -2687,7 +2694,9 @@ In `cmd/anti-tangent-mcp/main.go`, where `Deps` is built:
 In `ValidateCompletion`'s row update (Task 8 Step 8), after `UpdateRow` succeeds:
 
 ```go
-		if run, ok := h.deps.PlanRuns.Get(sess.PlanRunID); ok {
+		// Snapshot, not Get: this walks run.Rows after the lock is released,
+		// and concurrent subagents under the same plan run may be appending.
+		if run, ok := h.deps.PlanRuns.Snapshot(sess.PlanRunID); ok {
 			for _, row := range run.Rows {
 				if row.SessionID == sess.ID {
 					if err := h.deps.PlanLedger.Append(run, row); err != nil {
@@ -2702,7 +2711,7 @@ In `ValidateCompletion`'s row update (Task 8 Step 8), after `UpdateRow` succeeds
 In `PlanRunReport`, before the unknown-id branch:
 
 ```go
-	run, ok := h.deps.PlanRuns.Get(args.PlanRunID)
+	run, ok := h.deps.PlanRuns.Snapshot(args.PlanRunID)
 	if !ok {
 		run, ok = h.deps.PlanLedger.Load(args.PlanRunID)
 	}
