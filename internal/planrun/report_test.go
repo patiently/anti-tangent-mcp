@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,6 +89,33 @@ func TestRender_IncompleteIsNotFail(t *testing.T) {
 	require.NotEmpty(t, row3, "expected a rendered row for Config plumbing")
 	assert.Contains(t, row3, "incomplete")
 	assert.NotContains(t, row3, "fail")
+}
+
+// TestRender_MultiByteTitleTruncatesOnRuneBoundary pins the fix for a
+// byte-based truncation bug: title lengths are compared and sliced in runes,
+// not bytes, so a title full of multi-byte UTF-8 characters (each "é" here is
+// 2 bytes) that crosses the 40-rune cap truncates cleanly instead of being
+// sliced mid-codepoint. A byte-based slice at width-1=39 bytes would land
+// inside the 20th "é" (39 is odd; every "é" starts on an even byte offset),
+// producing an invalid UTF-8 tail — utf8.ValidString on the byte-sliced
+// version fails; on the rune-sliced version it must pass.
+func TestRender_MultiByteTitleTruncatesOnRuneBoundary(t *testing.T) {
+	title := strings.Repeat("é", 50) // 50 runes, 100 bytes — exceeds the 40-rune cap
+	r := &Run{
+		ID: "pr_utf8", CreatedAt: time.Unix(0, 0).UTC(),
+		PlanVerdict: "pass", PlanQuality: "rigorous", TaskCount: 1,
+		Rows: []TaskRow{
+			{Index: 1, TaskTitle: title, PostVerdict: "pass"},
+		},
+	}
+	got := Render(r)
+	require.True(t, utf8.ValidString(got), "rendered report must be valid UTF-8, got: %q", got)
+	assert.Contains(t, got, "…")
+
+	// The truncated title cell must be exactly 39 "é" runes plus the ellipsis
+	// — width-1 runes, not width-1 bytes.
+	wantCell := strings.Repeat("é", 39) + "…"
+	assert.Contains(t, got, wantCell)
 }
 
 func TestTotals(t *testing.T) {

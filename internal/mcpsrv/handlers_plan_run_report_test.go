@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -14,6 +15,21 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
+
+// planRunReportWireText extracts the actual marshalled JSON text the tool
+// call would return over the wire. A Go-value nil-check on Tasks (e.g.
+// require.NotNil + assert.Len(..., 0)) does NOT pin this: Go marshals a nil
+// slice as `null` and a non-nil empty slice as `[]`, and this codebase's wire
+// contract requires the `[]` form. Only inspecting the actual marshalled text
+// catches a regression that reintroduces a nil Tasks slice.
+func planRunReportWireText(t *testing.T, out *mcp.CallToolResult) string {
+	t.Helper()
+	require.NotNil(t, out)
+	require.Len(t, out.Content, 1)
+	tc, ok := out.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	return tc.Text
+}
 
 func TestPlanRunReport_MissingID(t *testing.T) {
 	h := &handlers{deps: newDeps(t, &fakeReviewer{name: "anthropic", resp: passResp("m")})}
@@ -39,6 +55,33 @@ func TestPlanRunReport_UnknownID(t *testing.T) {
 	assert.Equal(t, verdict.CategorySessionMissing, res.Findings[0].Category)
 	assert.Equal(t, "plan_run_id", res.Findings[0].Criterion)
 	assert.NotEmpty(t, res.SummaryBlock)
+
+	// Wire-level: the Go-value checks above cannot tell null from [] on the
+	// actual marshalled JSON. Assert the wire text directly.
+	assert.Contains(t, planRunReportWireText(t, out), `"tasks": []`)
+}
+
+// TestPlanRunReport_FoundZeroRows_TasksWireEmptyArray covers the other branch
+// that can emit an empty Tasks list: a plan run that exists (validate_plan
+// minted it) but has had no validate_task_spec calls append a row yet. This
+// goes through the `run, ok := h.deps.PlanRuns.Snapshot(...)` success path
+// and the `if res.Tasks == nil { res.Tasks = []planrun.TaskRow{} }` guard,
+// which is distinct code from the not-found branch's inline
+// `Tasks: []planrun.TaskRow{}` literal that TestPlanRunReport_UnknownID
+// exercises.
+func TestPlanRunReport_FoundZeroRows_TasksWireEmptyArray(t *testing.T) {
+	h := &handlers{deps: newDeps(t, &fakeReviewer{name: "anthropic", resp: passResp("m")})}
+	run := h.deps.PlanRuns.Create("pass", "rigorous", 3) // minted; no rows appended yet
+
+	out, res, err := h.PlanRunReport(context.Background(), nil, PlanRunReportArgs{PlanRunID: run.ID})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, run.ID, res.PlanRunID)
+	require.NotNil(t, res.Tasks)
+	assert.Len(t, res.Tasks, 0)
+
+	assert.Contains(t, planRunReportWireText(t, out), `"tasks": []`)
 }
 
 // panicIfCalledReviewer is a Reviewer whose Review method panics

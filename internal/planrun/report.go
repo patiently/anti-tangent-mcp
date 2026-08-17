@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // RunTotals is the aggregate line of a plan-run report.
@@ -142,10 +143,14 @@ func Render(r *Run) string {
 	fmt.Fprintf(&b, "  tasks: %d of %d completed   pass %d | warn %d | fail %d\n\n",
 		t.Completed, t.Tasks, t.Pass, t.Warn, t.Fail)
 
+	// Width and truncation are computed in runes, not bytes: a byte-based
+	// slice would split a multi-byte UTF-8 title (an en-dash, an accented
+	// character, ...) mid-codepoint, producing garbled output. This mirrors
+	// the rune-based truncate() convention in internal/mcpsrv/summary.go.
 	width := 4
 	for _, row := range r.Rows {
-		if len(row.TaskTitle) > width {
-			width = len(row.TaskTitle)
+		if n := utf8.RuneCountInString(row.TaskTitle); n > width {
+			width = n
 		}
 	}
 	if width > 40 {
@@ -155,8 +160,9 @@ func Render(r *Run) string {
 	fmt.Fprintf(&b, "  #  %-*s  %-10s %s\n", width, "Task", "AT", "CodeScene")
 	for _, row := range r.Rows {
 		title := row.TaskTitle
-		if len(title) > width {
-			title = title[:width-1] + "…"
+		if n := utf8.RuneCountInString(title); n > width {
+			runes := []rune(title)
+			title = string(runes[:width-1]) + "…"
 		}
 		at := row.PostVerdict
 		if at == "" {
