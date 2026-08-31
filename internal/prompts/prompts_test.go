@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -978,4 +979,40 @@ func TestRenderExtract_Milestone(t *testing.T) {
 	out, err := RenderExtract(in)
 	require.NoError(t, err)
 	golden(t, "extract_milestone", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestPlanPromptSplit(t *testing.T) {
+	in := PlanInput{PlanText: "# Plan\n\n### Task 1: T\n\nbody\n", Mode: "thorough"}
+	tasks := []planparser.RawTask{{Title: "Task 1: T", Body: "### Task 1: T\n\nbody\n"}}
+
+	fo, err := RenderPlanFindingsOnly(in)
+	require.NoError(t, err)
+	ch, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText: in.PlanText, Mode: in.Mode, ChunkTasks: tasks,
+	})
+	require.NoError(t, err)
+
+	t.Run("prefix is shared byte-for-byte", func(t *testing.T) {
+		require.NotEmpty(t, fo.UserPrefix)
+		assert.Equal(t, fo.UserPrefix, ch.UserPrefix,
+			"the cache prefix must be identical or no cache read ever happens")
+	})
+
+	t.Run("prefix carries the plan, suffix carries the instructions", func(t *testing.T) {
+		assert.Contains(t, fo.UserPrefix, "### Task 1: T")
+		assert.NotContains(t, fo.UserPrefix, "## What to evaluate")
+		assert.True(t, strings.HasPrefix(strings.TrimLeft(fo.UserSuffix, "\n"), "## What to evaluate"))
+	})
+
+	t.Run("User is the concatenation", func(t *testing.T) {
+		assert.Equal(t, fo.UserPrefix+fo.UserSuffix, fo.User)
+		assert.Equal(t, ch.UserPrefix+ch.UserSuffix, ch.User)
+	})
+
+	t.Run("single-call renderer does not split", func(t *testing.T) {
+		single, err := RenderPlan(in)
+		require.NoError(t, err)
+		assert.Empty(t, single.UserPrefix, "single call must not get a breakpoint")
+		assert.Equal(t, single.User, single.UserSuffix)
+	})
 }

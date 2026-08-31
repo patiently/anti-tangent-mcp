@@ -19,6 +19,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
+	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -1609,4 +1610,41 @@ func TestValidatePlanProvenanceOnCacheHit(t *testing.T) {
 	assert.Contains(t, second.SummaryBlock, "[cached", "identical content hits the cache")
 	assert.Contains(t, second.SummaryBlock, dirB, "echoes the CURRENT call's path")
 	assert.NotContains(t, second.SummaryBlock, dirA, "must not echo the cached entry's path")
+}
+
+// TestPlanPassCacheKey_CoversBothHalves is the regression test for the
+// requirement that planPassCacheKey covers the FULL rendered prompt —
+// UserPrefix and UserSuffix — not just the shared prefix. If either half
+// dropped out of the key, a template edit confined to that half would be
+// invisible to the cache and could serve stale cached "pass" results for up
+// to planPassCacheTTL.
+func TestPlanPassCacheKey_CoversBothHalves(t *testing.T) {
+	build := func(prefix, suffix string) renderedPlanReview {
+		return renderedPlanReview{
+			FindingsOnly: &prompts.Output{System: "sys", UserPrefix: prefix, UserSuffix: suffix},
+			Chunks: []renderedPlanChunk{
+				{Prompt: prompts.Output{System: "sys", UserPrefix: prefix, UserSuffix: "chunk-body"}},
+			},
+		}
+	}
+	keyOf := func(r renderedPlanReview) [32]byte {
+		return planPassCacheKey("plan", "pk", "mode", "model", 100, 0, r)
+	}
+
+	base := keyOf(build("shared-prefix", "suffix-v1"))
+
+	t.Run("suffix-only edit changes the key", func(t *testing.T) {
+		edited := keyOf(build("shared-prefix", "suffix-v2"))
+		assert.NotEqual(t, base, edited, "a per-call suffix template edit must change the cache key")
+	})
+
+	t.Run("prefix-only edit changes the key", func(t *testing.T) {
+		edited := keyOf(build("shared-prefix-edited", "suffix-v1"))
+		assert.NotEqual(t, base, edited, "a shared-prefix template edit must change the cache key")
+	})
+
+	t.Run("identical inputs produce identical keys", func(t *testing.T) {
+		again := keyOf(build("shared-prefix", "suffix-v1"))
+		assert.Equal(t, base, again)
+	})
 }

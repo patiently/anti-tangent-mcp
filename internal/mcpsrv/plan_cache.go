@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	planPassCacheVersion    = "plan-pass-cache-v1"
+	planPassCacheVersion    = "plan-pass-cache-v2"
 	planPassCacheTTL        = 3 * time.Minute
 	planPassCacheMaxEntries = 128
 )
@@ -31,8 +31,9 @@ func newPlanPassCache() *planPassCache {
 }
 
 type planCachePrompt struct {
-	System string `json:"system"`
-	User   string `json:"user"`
+	System     string `json:"system"`
+	UserPrefix string `json:"user_prefix"`
+	UserSuffix string `json:"user_suffix"`
 }
 
 func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens, maxTokensOverride int, rendered renderedPlanReview) [32]byte {

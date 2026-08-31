@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"strings"
 	"text/template"
 
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
@@ -18,7 +19,40 @@ var templatesFS embed.FS
 
 type Output struct {
 	System string
-	User   string
+	// User is the full user prompt — always UserPrefix + UserSuffix.
+	User string
+	// UserPrefix is the cacheable shared head (reviewer ground rules, project
+	// knowledge, and the plan itself), populated only for the chunked
+	// validate_plan templates where several calls share it byte-for-byte.
+	// Empty everywhere else, which is what keeps single-call renders from
+	// paying a cache-write premium against zero reads.
+	UserPrefix string
+	// UserSuffix is the per-call remainder. Equal to User when UserPrefix is
+	// empty.
+	UserSuffix string
+}
+
+// planSuffixMarker is the first line of the per-call section in both chunked
+// plan templates. Everything before it — ground rules, project knowledge, and
+// the plan under review — is byte-identical across the findings-only call and
+// every chunk call, which is exactly the prefix worth caching.
+const planSuffixMarker = "## What to evaluate"
+
+// splitPlanPrompt divides a rendered chunked-plan prompt at planSuffixMarker.
+// If the marker is absent the whole body becomes the suffix, so a template
+// edit that removes it degrades to today's uncached behavior rather than
+// silently caching the wrong span.
+func splitPlanPrompt(body string) Output {
+	idx := strings.Index(body, planSuffixMarker)
+	if idx < 0 {
+		return Output{System: systemPrompt, User: body, UserSuffix: body}
+	}
+	return Output{
+		System:     systemPrompt,
+		User:       body,
+		UserPrefix: body[:idx],
+		UserSuffix: body[idx:],
+	}
 }
 
 type File struct {
@@ -111,7 +145,7 @@ func RenderPre(in PreInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func RenderMid(in MidInput) (Output, error) {
@@ -119,7 +153,7 @@ func RenderMid(in MidInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func RenderPost(in PostInput) (Output, error) {
@@ -127,7 +161,7 @@ func RenderPost(in PostInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func RenderPlan(in PlanInput) (Output, error) {
@@ -135,7 +169,7 @@ func RenderPlan(in PlanInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 // PlanChunkInput is the input for one per-task chunk in chunked validate_plan.
@@ -156,7 +190,7 @@ func RenderPlanTasksChunk(in PlanChunkInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return splitPlanPrompt(body), nil
 }
 
 // RenderPlanFindingsOnly produces the Pass-1 prompt for the chunked validate_plan
@@ -166,7 +200,7 @@ func RenderPlanFindingsOnly(in PlanInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return splitPlanPrompt(body), nil
 }
 
 func RenderPrime(in PrimeInput) (Output, error) {
@@ -174,7 +208,7 @@ func RenderPrime(in PrimeInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func RenderExtract(in ExtractInput) (Output, error) {
@@ -182,7 +216,7 @@ func RenderExtract(in ExtractInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func render(name string, data any) (string, error) {

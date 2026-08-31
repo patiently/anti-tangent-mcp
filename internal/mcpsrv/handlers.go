@@ -1653,17 +1653,20 @@ type renderedPlanReview struct {
 }
 
 func (r renderedPlanReview) cachePrompts() []planCachePrompt {
-	if r.Single != nil {
-		return []planCachePrompt{{System: r.Single.System, User: r.Single.User}}
+	toPrompt := func(o prompts.Output) planCachePrompt {
+		return planCachePrompt{System: o.System, UserPrefix: o.UserPrefix, UserSuffix: o.UserSuffix}
 	}
-	prompts := make([]planCachePrompt, 0, 1+len(r.Chunks))
+	if r.Single != nil {
+		return []planCachePrompt{toPrompt(*r.Single)}
+	}
+	out := make([]planCachePrompt, 0, 1+len(r.Chunks))
 	if r.FindingsOnly != nil {
-		prompts = append(prompts, planCachePrompt{System: r.FindingsOnly.System, User: r.FindingsOnly.User})
+		out = append(out, toPrompt(*r.FindingsOnly))
 	}
 	for _, chunk := range r.Chunks {
-		prompts = append(prompts, planCachePrompt{System: chunk.Prompt.System, User: chunk.Prompt.User})
+		out = append(out, toPrompt(chunk.Prompt))
 	}
-	return prompts
+	return out
 }
 
 // renderPlanReviewInputs bundles the inputs to renderPlanReview. Carrying
