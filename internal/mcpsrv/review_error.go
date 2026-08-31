@@ -95,6 +95,10 @@ type planReviewErrInputs struct {
 	// point (for the chunked path: Pass-1 plan_findings plus complete chunks).
 	// See recoverPartialPlanFindings for the merge semantics.
 	Prior verdict.PlanResult
+	// Source is the caller's pre-rendered provenance string (planSrc.String()),
+	// empty when plan_text was used. Threaded through so the recovery envelope's
+	// summary carries the same source line a successful review would have.
+	Source string
 }
 
 // handlePlanReviewErr is the ValidatePlan analog of handlePerTaskReviewErr.
@@ -126,7 +130,7 @@ func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolRes
 	if modelUsed == "" {
 		modelUsed = in.Model.String()
 	}
-	r, p, err := planEnvelopeResult(pr, modelUsed, in.ReviewMS)
+	r, p, err := planEnvelopeResult(pr, planSummaryMeta{ModelUsed: modelUsed, ReviewMS: in.ReviewMS, Source: in.Source})
 	return r, p, true, err
 }
 

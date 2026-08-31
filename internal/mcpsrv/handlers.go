@@ -1343,7 +1343,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 				modelUsed:    h.deps.Cfg.PlanModel.String(),
 				payloadBytes: total,
 			})
-			return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
+			return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
 		}
 		if rerr != nil {
 			return nil, verdict.PlanResult{}, rerr
@@ -1362,7 +1362,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			modelUsed:    h.deps.Cfg.PlanModel.String(),
 			payloadBytes: total,
 		})
-		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
+		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
 	}
 	tasks, _ := planparser.SplitTasks(planText)
 	tasksTotal := len(tasks)
@@ -1384,7 +1384,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			tasksTotal:      tasksTotal,
 			tasksWithHeader: tasksWithHeader,
 		})
-		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
+		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
 	}
 
 	// Adaptive plan budget: apply only when no override was supplied. The
@@ -1410,17 +1410,20 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return nil, verdict.PlanResult{}, err
 	}
 	cacheKey := planPassCacheKey(planText, projectKnowledge, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
-	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey); ok {
+	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey, planSrc.String()); ok {
 		// Deprecation is a property of THIS call's input (plan_text vs.
 		// plan_path), not of the cached plan content, so it is applied here
 		// rather than stored on the entry — a plan_path call must not
 		// inherit a deprecation finding left by an earlier plan_text call
 		// (or vice versa) that happened to produce the same cache key.
-		// lookup() already recomputed SummaryBlock without the finding;
-		// recompute it again now that the finding may have been added, so
-		// SummaryBlock's count/list stays consistent with PlanFindings.
+		// lookup() already recomputed SummaryBlock (with THIS call's
+		// provenance, never the stored entry's) without the deprecation
+		// finding; recompute it again now that the finding may have been
+		// added, so SummaryBlock's count/list stays consistent with
+		// PlanFindings.
 		cached = prependPlanDeprecation(cached, args.PlanText != "")
-		cached.SummaryBlock = formatPlanSummary(cached, cachedModelUsed, 0)
+		cachedMeta := planSummaryMeta{ModelUsed: cachedModelUsed, ReviewMS: 0, Source: planSrc.String()}
+		cached.SummaryBlock = formatPlanSummary(cached, cachedMeta)
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
 		h.recordStat(statParams{
@@ -1435,7 +1438,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			tasksTotal:      tasksTotal,
 			tasksWithHeader: tasksWithHeader,
 		})
-		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
+		return planEnvelopeResultFinalized(cached, cachedMeta)
 	}
 
 	var pr verdict.PlanResult
@@ -1460,6 +1463,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		PartialRaw: partialRaw,
 		Clamp:      clamp,
 		Prior:      pr,
+		Source:     planSrc.String(),
 	}); handled {
 		if retErr == nil {
 			h.recordStat(statParams{
@@ -1478,21 +1482,24 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}
 	populateNormativeTestBodies(&pr, tasks)
 	pr = prependPlanClamp(pr, clamp)
-	pr = finalizePlanResult(pr, modelUsed, ms)
-	// Deprecation is added AFTER finalizePlanResult, not before: it is a
-	// minor CategoryOther finding, and finalizePlanResult's severity ladder
-	// (verdict.FinalizeVerdict) treats a 3rd minor finding as a
-	// noise_cluster trigger that lifts the verdict to warn. Feeding it
-	// through the ladder would violate "the deprecation finding MUST NOT
-	// change any verdict" for any plan_text caller that already had two
-	// other minor findings. The two early-exit envelopes below are safe to
-	// prepend before their own finalizePlanResult call because they always
-	// carry a critical finding, which already forces fail regardless of
-	// minor count.
+	// finalizePlanVerdict (not finalizePlanResult) here: it runs the
+	// normalize/calibrate/FinalizePlanVerdict ladder without touching
+	// SummaryBlock, so the PlanRunID assignment and deprecation prepend
+	// below can both land before SummaryBlock is computed — once,
+	// authoritatively — rather than three times across this path.
+	finalizePlanVerdict(&pr)
+	// Deprecation is added AFTER the ladder, not before: it is a minor
+	// CategoryOther finding, and the ladder (verdict.FinalizeVerdict) treats
+	// a 3rd minor finding as a noise_cluster trigger that lifts the verdict
+	// to warn. Feeding it through the ladder would violate "the deprecation
+	// finding MUST NOT change any verdict" for any plan_text caller that
+	// already had two other minor findings. The two early-exit envelopes
+	// below are safe to prepend before their own finalizePlanResult call
+	// because they always carry a critical finding, which already forces
+	// fail regardless of minor count.
 	if pr.PlanRunID == "" {
 		run := h.deps.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
 		pr.PlanRunID = run.ID
-		pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
 	}
 	// Cache the result WITHOUT the deprecation finding: the finding is a
 	// property of which argument THIS call used, not of the plan content,
@@ -1503,11 +1510,12 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// cache-hit branch above.
 	h.planCache().store(cacheKey, pr, modelUsed)
 	pr = prependPlanDeprecation(pr, args.PlanText != "")
-	// SummaryBlock's finding count/list must reflect the deprecation
-	// finding when present, so recompute it after the prepend — the
-	// pre-deprecation recompute above (inside the PlanRunID block) is not
-	// enough on its own.
-	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
+	// Single authoritative SummaryBlock computation for this path: it runs
+	// after both the PlanRunID assignment and the deprecation prepend, so
+	// the summary's plan_run_id line, provenance, and findings count/list
+	// all reflect the final state exactly once.
+	meta := planSummaryMeta{ModelUsed: modelUsed, ReviewMS: ms, Source: planSrc.String()}
+	pr.SummaryBlock = formatPlanSummary(pr, meta)
 	h.recordStat(statParams{
 		tool:            "validate_plan",
 		verdict:         string(pr.PlanVerdict),
@@ -1519,7 +1527,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		tasksTotal:      tasksTotal,
 		tasksWithHeader: tasksWithHeader,
 	})
-	return planEnvelopeResultFinalized(pr, modelUsed, ms)
+	return planEnvelopeResultFinalized(pr, meta)
 }
 
 type renderedPlanChunk struct {
@@ -1722,34 +1730,46 @@ func tooLargePlanResult(total, planBytes, pkBytes, limit int) verdict.PlanResult
 //     unverifiable-only calibration, and FinalizePlanVerdict (per-task +
 //     plan-level severity ladder + noise_cluster + plan-quality sanity).
 //  2. SummaryBlock is populated with the rendered paste-ready text block.
-func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
-	return planEnvelopeResultFinalized(finalizePlanResult(pr, modelUsed, ms), modelUsed, ms)
+func planEnvelopeResult(pr verdict.PlanResult, meta planSummaryMeta) (*mcp.CallToolResult, verdict.PlanResult, error) {
+	return planEnvelopeResultFinalized(finalizePlanResult(pr, meta), meta)
 }
 
-func finalizePlanResult(pr verdict.PlanResult, modelUsed string, ms int64) verdict.PlanResult {
-	// Order is load-bearing:
-	//   1. rollup unverifiable-codebase-claim findings (else calibration sees
-	//      noise);
-	//   2. calibrate verdict for the unverifiable-only case (preserves the
-	//      v0.4.0 verdict→quality mapping for plans whose only findings are
-	//      unverifiable claims);
-	//   3. FinalizePlanVerdict (per-task + plan-level severity ladder +
-	//      noise_cluster + ApplyPlanQualitySanity rerun).
-	// FinalizePlanVerdict's ApplyPlanQualitySanity rerun replaces the
-	// stand-alone call this function previously made.
-	normalizePlanUnverifiableFindings(&pr)
-	calibratePlanVerdictForUnverifiableOnly(&pr)
-	verdict.FinalizePlanVerdict(&pr)
-	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
+// finalizePlanVerdict runs the shared normalize/calibrate/FinalizePlanVerdict
+// ladder without touching SummaryBlock. Split out of finalizePlanResult so
+// ValidatePlan's fresh-review happy path can run the ladder before the final
+// PlanRunID / deprecation-finding state is known, then compute
+// formatPlanSummary exactly once after those are settled, instead of the
+// three redundant computations this used to produce.
+//
+// Order is load-bearing:
+//  1. rollup unverifiable-codebase-claim findings (else calibration sees
+//     noise);
+//  2. calibrate verdict for the unverifiable-only case (preserves the
+//     v0.4.0 verdict→quality mapping for plans whose only findings are
+//     unverifiable claims);
+//  3. FinalizePlanVerdict (per-task + plan-level severity ladder +
+//     noise_cluster + ApplyPlanQualitySanity rerun).
+//
+// FinalizePlanVerdict's ApplyPlanQualitySanity rerun replaces the
+// stand-alone call this function previously made.
+func finalizePlanVerdict(pr *verdict.PlanResult) {
+	normalizePlanUnverifiableFindings(pr)
+	calibratePlanVerdictForUnverifiableOnly(pr)
+	verdict.FinalizePlanVerdict(pr)
+}
+
+func finalizePlanResult(pr verdict.PlanResult, meta planSummaryMeta) verdict.PlanResult {
+	finalizePlanVerdict(&pr)
+	pr.SummaryBlock = formatPlanSummary(pr, meta)
 	return pr
 }
 
-func planEnvelopeResultFinalized(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
+func planEnvelopeResultFinalized(pr verdict.PlanResult, meta planSummaryMeta) (*mcp.CallToolResult, verdict.PlanResult, error) {
 	body, err := json.MarshalIndent(struct {
 		verdict.PlanResult
 		ModelUsed string `json:"model_used"`
 		ReviewMS  int64  `json:"review_ms"`
-	}{pr, modelUsed, ms}, "", "  ")
+	}{pr, meta.ModelUsed, meta.ReviewMS}, "", "  ")
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}

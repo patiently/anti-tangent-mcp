@@ -1021,7 +1021,7 @@ func TestPlanPassCache_EvictsOldestExpiryWhenFull(t *testing.T) {
 		cache.store(key, verdict.PlanResult{PlanVerdict: verdict.VerdictPass, NextAction: strconv.Itoa(i)}, "claude-sonnet-4-6")
 	}
 	assert.Equal(t, planPassCacheMaxEntries, cache.entryCountForTest())
-	_, _, ok := cache.lookup([32]byte{1})
+	_, _, ok := cache.lookup([32]byte{1}, "")
 	assert.False(t, ok, "oldest entry should be evicted when cache reaches max size")
 }
 
@@ -1080,12 +1080,12 @@ func TestPlanPassCache_LookupReturnsIndependentSlices(t *testing.T) {
 		NextAction: "Proceed.",
 	}, "claude-sonnet-4-6")
 
-	first, _, ok := cache.lookup(key)
+	first, _, ok := cache.lookup(key, "")
 	require.True(t, ok)
 	first.PlanFindings[0].Evidence = "mutated plan evidence"
 	first.Tasks[0].Findings[0].Evidence = "mutated task evidence"
 
-	second, _, ok := cache.lookup(key)
+	second, _, ok := cache.lookup(key, "")
 	require.True(t, ok)
 	assert.Equal(t, "cached plan evidence", second.PlanFindings[0].Evidence)
 	assert.Equal(t, "cached task evidence", second.Tasks[0].Findings[0].Evidence)
@@ -1584,4 +1584,29 @@ func TestValidatePlan_DeprecationNotCachedAcrossInputMethods(t *testing.T) {
 			"plan_path call must not inherit the plan_text call's deprecation finding")
 		assertPlanSummaryMatchesFindings(t, second)
 	})
+}
+
+// TestValidatePlanProvenanceOnCacheHit is the regression test for the
+// provenance requirement that a cache hit must render the CURRENT call's
+// source, never the stored entry's. planPassCacheKey hashes content, so two
+// different paths holding byte-identical plans share one cache entry;
+// echoing the stored path would name an earlier caller's file.
+func TestValidatePlanProvenanceOnCacheHit(t *testing.T) {
+	planMD := "# P\n\n### Task 1: T\n\n**Goal:** g\n\n**Acceptance criteria:**\n- [ ] a\n"
+	dirA, dirB := t.TempDir(), t.TempDir()
+	pa := filepath.Join(dirA, "plan.md")
+	pb := filepath.Join(dirB, "plan.md")
+	require.NoError(t, os.WriteFile(pa, []byte(planMD), 0o644))
+	require.NoError(t, os.WriteFile(pb, []byte(planMD), 0o644)) // identical content
+
+	h := newTestPlanHandlers(t)
+	_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: pa})
+	require.NoError(t, err)
+	require.Equal(t, verdict.VerdictPass, first.PlanVerdict, "must pass so it is cached")
+
+	_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: pb})
+	require.NoError(t, err)
+	assert.Contains(t, second.SummaryBlock, "[cached", "identical content hits the cache")
+	assert.Contains(t, second.SummaryBlock, dirB, "echoes the CURRENT call's path")
+	assert.NotContains(t, second.SummaryBlock, dirA, "must not echo the cached entry's path")
 }

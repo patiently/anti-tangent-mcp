@@ -41,13 +41,29 @@ func formatEnvelopeSummary(env Envelope) string {
 	return b.String()
 }
 
+// planSummaryMeta bundles the non-PlanResult inputs to formatPlanSummary.
+// Carried on a struct rather than as scalars so the signature stays narrow
+// (1 arg vs. 4) and matches CodeScene's "max arguments = 4" threshold; mirrors
+// the renderPlanReviewInputs / planReviewErrInputs pattern.
+//
+// Source is the pre-rendered provenance string, empty when plan_text was used.
+// It is passed per-call rather than stored on the cache entry: planPassCacheKey
+// hashes content, so two different paths holding identical plans share an
+// entry, and echoing the stored path would name an earlier caller's file.
+type planSummaryMeta struct {
+	ModelUsed string
+	ReviewMS  int64
+	Source    string
+}
+
 // formatPlanSummary renders a deterministic, paste-ready text block for a
 // PlanResult (validate_plan). It includes the plan verdict, plan_quality,
-// partial flag (when set), model + review timing, plan-level findings counts
-// and lines, then a per-task block with verdict/findings counts and lines.
-// Mirrors formatEnvelopeSummary's conventions so consumers can build a single
+// provenance (when the plan was read from a file), partial flag (when set),
+// model + review timing, plan-level findings counts and lines, then a
+// per-task block with verdict/findings counts and lines. Mirrors
+// formatEnvelopeSummary's conventions so consumers can build a single
 // renderer for both shapes if desired.
-func formatPlanSummary(pr verdict.PlanResult, modelUsed string, reviewMS int64) string {
+func formatPlanSummary(pr verdict.PlanResult, meta planSummaryMeta) string {
 	var b strings.Builder
 	b.WriteString("anti-tangent envelope (validate_plan)\n")
 	fmt.Fprintf(&b, "  plan_verdict:  %s\n", pr.PlanVerdict)
@@ -55,11 +71,14 @@ func formatPlanSummary(pr verdict.PlanResult, modelUsed string, reviewMS int64) 
 	if pr.PlanRunID != "" {
 		fmt.Fprintf(&b, "  plan_run_id:   %s\n", pr.PlanRunID)
 	}
+	if meta.Source != "" {
+		fmt.Fprintf(&b, "  source:        %s\n", meta.Source)
+	}
 	if pr.Partial {
 		b.WriteString("  partial:       true\n")
 	}
-	fmt.Fprintf(&b, "  model_used:    %s\n", modelUsed)
-	fmt.Fprintf(&b, "  review_ms:     %d\n", reviewMS)
+	fmt.Fprintf(&b, "  model_used:    %s\n", meta.ModelUsed)
+	fmt.Fprintf(&b, "  review_ms:     %d\n", meta.ReviewMS)
 	crit, maj, min := countSeverities(pr.PlanFindings)
 	fmt.Fprintf(&b, "  plan_findings: %d (%d/%d/%d)\n", len(pr.PlanFindings), crit, maj, min)
 	for _, f := range pr.PlanFindings {

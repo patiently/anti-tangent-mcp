@@ -61,7 +61,11 @@ func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens,
 	return sha256.Sum256(keyJSON)
 }
 
-func (c *planPassCache) lookup(key [32]byte) (verdict.PlanResult, string, bool) {
+// lookup returns the cached result for key, if present and unexpired.
+// source is the CURRENT call's provenance (empty for plan_text) — never the
+// stored entry's — since planPassCacheKey hashes content and two different
+// paths holding identical plans can share one entry.
+func (c *planPassCache) lookup(key [32]byte, source string) (verdict.PlanResult, string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -75,7 +79,11 @@ func (c *planPassCache) lookup(key [32]byte) (verdict.PlanResult, string, bool) 
 	}
 	pr := clonePlanResult(entry.result)
 	pr.NextAction = "[cached <=3m] " + pr.NextAction
-	pr.SummaryBlock = formatPlanSummary(pr, entry.modelUsed, 0)
+	pr.SummaryBlock = formatPlanSummary(pr, planSummaryMeta{
+		ModelUsed: entry.modelUsed,
+		ReviewMS:  0,
+		Source:    source,
+	})
 	return pr, entry.modelUsed, true
 }
 

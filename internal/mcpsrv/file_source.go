@@ -25,6 +25,19 @@ type fileSource struct {
 	SHA256 string
 }
 
+// String renders the summary provenance line's value. Empty for a zero
+// fileSource, so plan_text callers get no source line at all.
+func (s fileSource) String() string {
+	if s.Path == "" {
+		return ""
+	}
+	short := s.SHA256
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return fmt.Sprintf("%s (%d B, sha256 %s…)", s.Path, s.Bytes, short)
+}
+
 // errTooLarge signals the file exceeded the caller's cap. Callers map it to
 // their own too-large envelope rather than surfacing a transport error, so the
 // response shape matches an oversized inline payload.
