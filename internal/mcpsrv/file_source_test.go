@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -99,6 +100,74 @@ func TestResolveFileInput(t *testing.T) {
 		root := filepath.VolumeName(real) + string(filepath.Separator)
 		_, _, err := resolveFileInput(real, []string{root}, 1024)
 		require.NoError(t, err, `root "/" must authorize everything beneath it`)
+	})
+
+	// FIX 4 regression: the final path component must not be followed if it
+	// is a symlink at open time, even though it passed EvalSymlinks +
+	// withinRoots a moment earlier as a plain file. This simulates the swap
+	// by pointing resolveFileInput directly at a symlink that itself escapes
+	// the allowed root — i.e. exercising openNoFollow's refusal rather than
+	// the earlier EvalSymlinks-based check (which a real TOCTOU race would
+	// have already passed before the swap).
+	t.Run("open refuses to follow a symlink at the final component", func(t *testing.T) {
+		outside := t.TempDir()
+		secret := filepath.Join(outside, "secret.md")
+		require.NoError(t, os.WriteFile(secret, []byte("secret"), 0o644))
+
+		swapDir := t.TempDir()
+		swapDirResolved, err := filepath.EvalSymlinks(swapDir)
+		require.NoError(t, err)
+		link := filepath.Join(swapDir, "swapped.md")
+		require.NoError(t, os.Symlink(secret, link))
+
+		f, err := openNoFollow(link)
+		if err == nil {
+			f.Close()
+			t.Fatal("openNoFollow followed a symlink at the final component")
+		}
+
+		// resolveFileInput itself still rejects this shape too, via the
+		// existing EvalSymlinks+withinRoots check — confirming the two
+		// layers agree rather than one silently overriding the other.
+		_, _, err = resolveFileInput(link, []string{swapDirResolved}, 1024)
+		require.Error(t, err)
+	})
+
+	t.Run("read is capped even when the pre-read stat would have allowed it", func(t *testing.T) {
+		// Exercises the wiring end-to-end: a file within the cap at the
+		// pre-read stat still round-trips through resolveFileInput normally.
+		// readCapped's own boundary behavior (independent of any stat) is
+		// covered directly by TestReadCapped below.
+		small := filepath.Join(dir, "small.md")
+		require.NoError(t, os.WriteFile(small, bytes.Repeat([]byte("y"), 4), 0o644))
+		content, src, err := resolveFileInput(small, nil, 4)
+		require.NoError(t, err)
+		assert.Equal(t, "yyyy", content)
+		assert.Equal(t, 4, src.Bytes)
+	})
+}
+
+// TestReadCapped unit-tests the cap-at-read boundary in isolation from any
+// filesystem stat — this is the FIX 4 defense against a file growing past
+// its cap between os.Stat and the read: readCapped enforces the cap purely
+// from what it actually reads, so it holds even when a stat taken moments
+// earlier said the file was small enough.
+func TestReadCapped(t *testing.T) {
+	t.Run("at cap passes", func(t *testing.T) {
+		b, err := readCapped(strings.NewReader("abcd"), 4)
+		require.NoError(t, err)
+		assert.Equal(t, "abcd", string(b))
+	})
+
+	t.Run("one byte over cap is rejected regardless of what a prior stat claimed", func(t *testing.T) {
+		_, err := readCapped(strings.NewReader("abcde"), 4)
+		require.ErrorIs(t, err, errTooLarge)
+	})
+
+	t.Run("well under cap passes", func(t *testing.T) {
+		b, err := readCapped(strings.NewReader("a"), 4)
+		require.NoError(t, err)
+		assert.Equal(t, "a", string(b))
 	})
 }
 

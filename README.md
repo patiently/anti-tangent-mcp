@@ -323,9 +323,15 @@ mounts, and uid, and the calling agent already has unrestricted file read. The s
 acquires no capability the caller lacks. If you want it narrower anyway, set
 `ANTI_TANGENT_PLAN_ROOTS` to a list of absolute directories, joined with the OS path-list
 separator (`:` on Unix, `;` on Windows — i.e. `filepath.SplitList`'s convention, the same one
-`PATH` uses); paths outside them are refused. Symlinks are resolved before the check, both for
-the candidate path and for each configured root itself (so a symlinked root, e.g. macOS's `/tmp`
-→ `/private/tmp`, still matches legitimate paths beneath it) — a link cannot escape a root.
+`PATH` uses); paths outside them are refused. Symlinks are resolved before the containment check,
+both for the candidate path and for each configured root itself (so a symlinked root, e.g.
+macOS's `/tmp` → `/private/tmp`, still matches legitimate paths beneath it), and the resolved path
+is then opened without following a symlink at the final component (`O_NOFOLLOW`, on Unix targets;
+plain open on Windows) as defense in depth against the path being swapped out from under the check.
+This narrows the window but does not eliminate it, and it is defense in depth rather than the
+primary guarantee either way: the trust model above already assumes the calling agent has its own
+unrestricted filesystem access, so `ANTI_TANGENT_PLAN_ROOTS` is about narrowing what the server
+reads on the caller's behalf, not sandboxing an untrusted caller.
 
 `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` defaults to `max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES)`,
 computed once at startup after `ANTI_TANGENT_MAX_PAYLOAD_BYTES` is read — so raising the shared

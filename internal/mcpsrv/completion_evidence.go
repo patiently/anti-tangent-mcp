@@ -3,7 +3,6 @@
 package mcpsrv
 
 import (
-	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -76,7 +75,19 @@ func pathPresentInEvidence(path string, files []FileArg, finalDiff string) bool 
 // relationship between the two. Requiring a separator immediately before
 // the matched tail closes that gap while still accepting the legitimate
 // absolute-vs-relative case.
+//
+// Both sides are normalized to forward slashes before comparing, and the
+// separator check accepts either byte after that — NOT filepath.Separator,
+// which is a single OS-specific byte ('/' when this server itself runs on
+// Unix). final_files paths are the implementer's own filesystem paths, which
+// on a Windows implementer are backslash-separated (e.g. `C:\repo\docs\foo.md`)
+// regardless of what OS this server happens to run on; comparing against
+// filepath.Separator alone made this advisory fire spuriously on every doc
+// deliverable from a Windows caller — the exact false positive this function
+// exists to avoid, just triggered from the other side.
 func pathTailMatches(candidate, tail string) bool {
+	candidate = strings.ReplaceAll(candidate, `\`, "/")
+	tail = strings.ReplaceAll(tail, `\`, "/")
 	if candidate == tail {
 		return true
 	}
@@ -84,5 +95,5 @@ func pathTailMatches(candidate, tail string) bool {
 		return false
 	}
 	i := len(candidate) - len(tail)
-	return candidate[i-1] == filepath.Separator
+	return candidate[i-1] == '/'
 }

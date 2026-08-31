@@ -1156,6 +1156,57 @@ func malformedEvidenceEnvelope(sessionID, reason, modelUsed string) Envelope {
 	}
 }
 
+// resolvedEvidenceEmpty re-runs the at-least-one-evidence guard against
+// RESOLVED inputs (post resolveCompletionInputs), catching the case the
+// pre-resolution check at step 2b cannot see: a final_diff_path or
+// final_files[i].path whose STRING is non-empty but whose file on disk is
+// empty. Left unchecked, checkEvidenceShape sees an empty diff and no files
+// to walk, and the call proceeds to a full reviewer call with no evidence
+// at all.
+//
+// A final_files[i] entry whose Content was an EXPLICIT "" (never nil — see
+// CompletionFileArg's doc comment) is a deliberate deletion marker, not a
+// resolution accident, so it is not treated as "empty evidence" here even
+// when it is the only final_files entry present; only content that this
+// function can tell was actually read from disk and came back empty counts.
+// A whitespace-only Path is left for checkEvidenceShape's own dedicated
+// empty-path check downstream, which produces a clearer reason string for
+// that specific case.
+//
+// test_evidence alone, or any non-empty final_diff/final_files content,
+// still satisfies the guard, matching step 2b's semantics.
+//
+// Returns "" when the guard is satisfied; otherwise a reason string naming
+// the offending field, suitable for the malformed_evidence envelope's
+// Evidence field.
+func resolvedEvidenceEmpty(args *ValidateCompletionArgs, resolvedFiles []FileArg) string {
+	if args.TestEvidence != "" || args.FinalDiff != "" {
+		return ""
+	}
+	diskEmptyIdx := -1
+	for i, f := range resolvedFiles {
+		if f.Content != "" {
+			return ""
+		}
+		if strings.TrimSpace(f.Path) == "" {
+			continue
+		}
+		if diskEmptyIdx == -1 && i < len(args.FinalFiles) && args.FinalFiles[i].Content == nil {
+			diskEmptyIdx = i
+		}
+	}
+	switch {
+	case args.FinalDiffPath != "":
+		return fmt.Sprintf("final_diff_path resolved to 0 bytes: %s", args.FinalDiffPath)
+	case diskEmptyIdx != -1:
+		return fmt.Sprintf("final_files[%d].path resolved to 0 bytes: %s", diskEmptyIdx, args.FinalFiles[diskEmptyIdx].Path)
+	default:
+		// Every remaining source is either absent or an explicit ""
+		// deletion marker — not a resolution accident, so let it through.
+		return ""
+	}
+}
+
 func majorFindings(findings []verdict.Finding) []verdict.Finding {
 	var major []verdict.Finding
 	for _, finding := range findings {
@@ -1184,6 +1235,12 @@ func majorFindings(findings []verdict.Finding) []verdict.Finding {
 //     every other resolve failure (missing file, non-regular file, outside
 //     ANTI_TANGENT_PLAN_ROOTS) stays a plain transport error, matching how
 //     validate_plan's plan_path treats those cases.
+//     2e. resolved-evidence-emptiness re-check — 2b only sees path STRINGS,
+//     so a final_diff_path or final_files[i].path that resolves to an empty
+//     file on disk sails past it. This re-runs the same "at least one
+//     non-empty" guard against the RESOLVED bytes and rejects with a
+//     structured malformed_evidence envelope naming the offending field
+//     instead of proceeding to a paid reviewer call with nothing to review.
 //  3. lightweight marker (empty session_id + non-empty evidence)
 //  5. payload-cap check
 //  6. evidence-shape guard (with rejection cache) — runs BEFORE session lookup
@@ -1250,6 +1307,23 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			return envelopeResult(env)
 		}
 		return nil, Envelope{}, err
+	}
+
+	// 2e. Re-run the at-least-one-evidence guard against the RESOLVED
+	// content. See resolvedEvidenceEmpty's doc comment for why this can't
+	// just reuse the 2b check verbatim.
+	if reason := resolvedEvidenceEmpty(&args, resolvedFiles); reason != "" {
+		env := malformedEvidenceEnvelope(args.SessionID, reason, h.deps.Cfg.PostModel.String())
+		clamped := prependClamp(env, clamp)
+		h.recordStat(statParams{
+			tool:         "validate_completion",
+			verdict:      clamped.Verdict,
+			findings:     clamped.Findings,
+			modelUsed:    clamped.ModelUsed,
+			sessionID:    clamped.SessionID,
+			payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
+		})
+		return envelopeResult(clamped)
 	}
 
 	if args.Codescene != nil {

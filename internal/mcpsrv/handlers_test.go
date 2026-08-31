@@ -1811,6 +1811,25 @@ func TestReferencedPathsMissingEvidence_SuffixMatchRequiresSeparatorBoundary(t *
 		"myfoo.md must not satisfy a mention of the unrelated foo.md without a path-separator boundary")
 }
 
+// TestPathTailMatches_WindowsShapedAbsolutePath is the regression test for
+// FIX 5: a backslash-separated final_files path (what a Windows implementer
+// actually passes per docs/protocol/implementer.md's ABSOLUTE-path
+// convention) must satisfy a forward-slash relative mention in Summary
+// regardless of the OS this server itself runs on — comparing the boundary
+// byte against filepath.Separator alone made this fail whenever the server
+// runs on Unix, firing the "referenced path missing evidence" advisory
+// spuriously on every Windows doc deliverable submitted the documented way.
+func TestPathTailMatches_WindowsShapedAbsolutePath(t *testing.T) {
+	assert.True(t, pathTailMatches(`C:\repo\docs\foo.md`, "docs/foo.md"),
+		"a Windows-shaped absolute path must satisfy a relative forward-slash mention of its tail")
+
+	// The separator-boundary property must survive normalization too:
+	// "myfoo.md" must not satisfy "foo.md" just because backslashes became
+	// slashes.
+	assert.False(t, pathTailMatches(`C:\repo\myfoo.md`, "foo.md"),
+		"myfoo.md must not satisfy foo.md even in the backslash-normalized form")
+}
+
 func TestValidateCompletion_RendersReferencedPathEvidenceNote(t *testing.T) {
 	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
 	d := newDeps(t, &cap.fakeReviewer)
@@ -3096,6 +3115,98 @@ func TestValidateCompletionPathInputs(t *testing.T) {
 			Summary: "s", FinalDiffPath: p,
 		})
 		require.NoError(t, err, "must not trip the at-least-one-evidence guard")
+	})
+
+	// FIX 1 regression: an empty final_diff_path file passes the
+	// pre-resolution at-least-one-evidence check (the path STRING is
+	// non-empty) but must not sail through to a reviewer call with no
+	// actual evidence. It must come back as a structured malformed_evidence
+	// rejection, not a pass.
+	t.Run("empty final_diff_path file is rejected with a structured envelope, not a pass", func(t *testing.T) {
+		cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+		d := newDeps(t, &cap.fakeReviewer)
+		d.Reviews = providers.Registry{"anthropic": cap}
+		h := &handlers{deps: d}
+
+		p := filepath.Join(dir, "empty.diff")
+		require.NoError(t, os.WriteFile(p, []byte(""), 0o644))
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:       "did the thing",
+			FinalDiffPath: p,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
+		require.True(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryMalformedEvidence {
+				assert.Contains(t, f.Evidence, "final_diff_path")
+				assert.Contains(t, f.Evidence, p)
+			}
+		}
+		assert.Empty(t, cap.LastRequest.User, "reviewer must not have been called")
+	})
+
+	// Same bug, via final_files: a path-only entry (content omitted, so it
+	// is read from disk) whose file is empty must be rejected the same way
+	// as an empty final_diff_path.
+	t.Run("final_files entry pointing at an empty file is rejected the same way", func(t *testing.T) {
+		cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+		d := newDeps(t, &cap.fakeReviewer)
+		d.Reviews = providers.Registry{"anthropic": cap}
+		h := &handlers{deps: d}
+
+		p := filepath.Join(dir, "empty.go")
+		require.NoError(t, os.WriteFile(p, []byte(""), 0o644))
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "did the thing",
+			FinalFiles: []CompletionFileArg{{Path: p}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
+		require.True(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryMalformedEvidence {
+				assert.Contains(t, f.Evidence, "final_files[0]")
+				assert.Contains(t, f.Evidence, p)
+			}
+		}
+		assert.Empty(t, cap.LastRequest.User, "reviewer must not have been called")
+	})
+
+	// An EXPLICIT final_files content of "" (CompletionFileArg's documented
+	// deletion-notification convention — Content is a non-nil pointer to an
+	// empty string, never triggering a disk read) is a deliberate marker,
+	// not a resolution accident, and must not be caught by the new FIX 1
+	// guard even when it is the only evidence submitted.
+	t.Run("explicit empty final_files content (deletion marker) is not treated as a resolution accident", func(t *testing.T) {
+		h := newTestHandlers(t)
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "removed dead_code.go",
+			FinalFiles: []CompletionFileArg{{Path: "dead_code.go", Content: strPtr("")}},
+		})
+		require.NoError(t, err)
+		assert.False(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence),
+			"an explicit empty-content deletion marker must not be rejected as empty evidence")
+	})
+
+	// test_evidence alone still legitimately satisfies the guard: an empty
+	// diff file plus real test_evidence must NOT be rejected.
+	t.Run("empty diff file but non-empty test_evidence is still accepted", func(t *testing.T) {
+		p := filepath.Join(dir, "empty2.diff")
+		require.NoError(t, os.WriteFile(p, []byte(""), 0o644))
+
+		h := newTestHandlers(t)
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:       "did the thing",
+			FinalDiffPath: p,
+			TestEvidence:  "go test ./... -race: ok, 42 passed",
+		})
+		require.NoError(t, err)
+		assert.NotEqual(t, string(verdict.VerdictFail), env.Verdict,
+			"real test_evidence must satisfy the guard even though the diff resolved to nothing")
+		assert.False(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
 	})
 
 	// The regression that matters most: a path must not become a way around

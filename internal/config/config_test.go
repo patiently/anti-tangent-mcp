@@ -392,6 +392,27 @@ func TestPlanPayloadCapAndRoots(t *testing.T) {
 		assert.Contains(t, err.Error(), "absolute")
 	})
 
+	// Regression test: ANTI_TANGENT_PLAN_ROOTS is a security-narrowing
+	// setting. A set-but-empty-after-parsing value (a bare separator, or
+	// whitespace-only entries) used to leave cfg.PlanRoots nil with no
+	// error — which withinRoots treats as "allow everything", the exact
+	// opposite of what an operator setting this variable intends. It must
+	// fail closed at startup instead.
+	t.Run("set but zero usable entries fails closed", func(t *testing.T) {
+		for name, v := range map[string]string{
+			"bare separator":      string(os.PathListSeparator),
+			"whitespace only":     "   ",
+			"whitespace and seps": " " + string(os.PathListSeparator) + " ",
+		} {
+			t.Run(name, func(t *testing.T) {
+				m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": v}
+				_, err := Load(envFrom(m))
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+			})
+		}
+	})
+
 	// Regression test for the Windows unusability bug: parsing used to
 	// hardcode ":" as the separator, so a Windows value like `C:\plans` split
 	// into ["C", "\plans"] and failed the absolute-path check — no value of

@@ -86,6 +86,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hardcoded `:`, printing a value a Windows operator could not have typed (and that
   `filepath.SplitList` would reject if pasted back). Now joined with
   `os.PathListSeparator`, matching the parser.
+- **`validate_completion` could pass with literally no evidence.** The at-least-one-evidence
+  guard only checked that `final_diff_path` or a `final_files[].path` STRING was non-empty,
+  before those paths were resolved from disk. A `final_diff_path` (or path-only `final_files`
+  entry) pointing at a genuinely empty file therefore passed the guard, resolved to an empty
+  string, and reached the reviewer with nothing to review — returning `pass` with zero findings
+  instead of the rejection the README documents for evidence-poor submissions. The guard now
+  re-runs against the resolved content and rejects with a structured `malformed_evidence`
+  envelope naming the offending field (e.g. `final_diff_path resolved to 0 bytes: <path>`) instead
+  of proceeding to a reviewer call. `test_evidence` alone, and an explicit `final_files[].content:
+  ""` deletion marker, still satisfy the guard as before.
+- **`ANTI_TANGENT_PLAN_ROOTS` could fail open on a malformed value.** A value that was set but
+  parsed down to zero usable entries (e.g. a bare path-list separator, or all-whitespace entries)
+  left `PlanRoots` `nil` with no startup error — and `nil` roots means "unrestricted" — so an
+  operator who believed they had narrowed the server's file access had not. Setting the variable
+  to such a value is now a startup error naming `ANTI_TANGENT_PLAN_ROOTS`.
 
 ### Deprecated
 - **`plan_text` on `validate_plan`.** Still fully functional, now reporting one `minor` finding

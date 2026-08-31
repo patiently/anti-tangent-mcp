@@ -294,6 +294,14 @@ func Load(env func(string) string) (Config, error) {
 			}
 			cfg.PlanRoots = append(cfg.PlanRoots, resolvePlanRoot(p))
 		}
+		// ANTI_TANGENT_PLAN_ROOTS is a security-narrowing setting: nil
+		// PlanRoots means "no restriction" (see withinRoots), so a value
+		// that is set but yields zero usable entries (e.g. ":" alone, or a
+		// string that TrimSpaces to nothing per entry) would silently leave
+		// file access wide open instead of narrowed — fail closed instead.
+		if len(cfg.PlanRoots) == 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_ROOTS: set but contains no usable path entries: %q", v)
+		}
 	}
 	if v := env("ANTI_TANGENT_MAX_TOKENS_CEILING"); v != "" {
 		n, err := strconv.Atoi(v)
