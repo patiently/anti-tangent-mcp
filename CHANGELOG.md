@@ -32,6 +32,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When `plan_path` is used, the summary block gains a `source:` line naming the resolved path,
   byte count, and a short hash, so a controller can show which document cleared the gate.
 
+### Fixed
+- **`content` stayed required on `check_progress` and `extract_project_knowledge`.** Adding path
+  support to `validate_completion` gave the shared `FileArg.content` field `omitempty` so a
+  `final_files` entry could omit it and be read from disk. `check_progress`'s `changed_files` and
+  `extract_project_knowledge`'s completion-envelope `final_files` reuse the same `FileArg` type
+  but neither resolves a path — so `content` had silently become optional there too, and a caller
+  following the new "prefer paths" convention on those two tools would ship empty file bodies to
+  the reviewer with no error. `validate_completion` now has its own `CompletionFileArg` (a
+  nilable `content`); `FileArg.content` is required again, matching 0.15.0's schema exactly, and
+  `check_progress` / `extract_project_knowledge` are unchanged in schema and behaviour.
+- **`validate_completion`'s `final_files[].content: ""` is no longer treated as omitted.** An
+  explicit empty string used to be indistinguishable from "not supplied" and always triggered a
+  filesystem read of `path` — breaking a deleted-file entry submitted as `{"path": "...",
+  "content": ""}` (`EvalSymlinks` on a path that no longer exists, losing the whole call to a
+  transport error) and any relative `path` paired with empty content (a `path must be absolute`
+  error, even though this codebase's own convention is relative repo paths). `content` is now a
+  pointer on the wire: omitted/`null` reads `path` from disk, an explicit `""` is taken literally
+  as "this file is genuinely empty."
+- `ANTI_TANGENT_PLAN_ROOTS` entries are now symlink-resolved at server start (falling back to the
+  cleaned path when a root doesn't exist yet), matching the symlink-resolved candidate paths
+  `resolveFileInput` checks them against. Previously a root under a symlinked ancestor (e.g.
+  macOS's `/tmp` → `/private/tmp`) refused every legitimate path beneath it.
+- A `validate_plan` `plan_text` call whose reviewer response truncates now still carries the
+  `plan_text` deprecation notice; it previously skipped that recovery/partial path only.
+- `validate_completion`'s "referenced paths missing evidence" advisory now matches an absolute
+  `final_files` path against a relative path named in `summary` (e.g. `/repo/docs/foo.md`
+  satisfies a `summary` mention of `docs/foo.md`), instead of only exact string equality — the
+  advisory used to false-fire on every doc deliverable submitted the documented absolute-path way.
+
 ### Deprecated
 - **`plan_text` on `validate_plan`.** Still fully functional, now reporting one `minor` finding
   pointing at `plan_path`. It will be removed in 1.0.0.

@@ -55,19 +55,27 @@ func splitPlanPrompt(body string) Output {
 	}
 }
 
-// planSuffixIndex returns the byte offset of planSuffixMarker where it
-// begins a LINE, not any mid-line occurrence. PlanText — arbitrary
-// user-supplied markdown — is interpolated into the shared region before
-// the real "## What to evaluate" heading, so an unanchored substring search
-// would match a plan that merely discusses that heading text inside a
-// paragraph and silently shrink the cacheable prefix. Returns -1 if the
-// marker never starts a line.
+// planSuffixIndex returns the byte offset of the LAST occurrence of
+// planSuffixMarker that begins a LINE, not any mid-line occurrence. PlanText
+// — arbitrary user-supplied markdown — is interpolated into the shared
+// region before the real "## What to evaluate" heading, so an unanchored
+// substring search would match a plan that merely discusses that heading
+// text inside a paragraph and silently shrink the cacheable prefix.
+// Line-anchoring alone only rejects a MID-LINE hit, though: a plan that
+// itself contains a "## What to evaluate" heading at the START of a line
+// (plausible for a plan about prompt templates, this repo's own included)
+// would still split at that embedded heading instead of the real one.
+// Both chunked plan templates (plan_findings_only.tmpl, plan_tasks_chunk.tmpl)
+// contain exactly one occurrence of the marker, and the interpolated plan
+// text always precedes it, so the real heading is always the LAST line-start
+// occurrence in the body — hence LastIndex here, not Index. Returns -1 if
+// the marker never starts a line.
 func planSuffixIndex(body string) int {
+	if i := strings.LastIndex(body, "\n"+planSuffixMarker); i >= 0 {
+		return i + 1 // skip the newline itself; suffix starts at "##..."
+	}
 	if strings.HasPrefix(body, planSuffixMarker) {
 		return 0
-	}
-	if i := strings.Index(body, "\n"+planSuffixMarker); i >= 0 {
-		return i + 1 // skip the newline itself; suffix starts at "##..."
 	}
 	return -1
 }

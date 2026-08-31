@@ -282,7 +282,7 @@ func Load(env func(string) string) (Config, error) {
 			if !filepath.IsAbs(p) {
 				return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_ROOTS: %q is not an absolute path", p)
 			}
-			cfg.PlanRoots = append(cfg.PlanRoots, filepath.Clean(p))
+			cfg.PlanRoots = append(cfg.PlanRoots, resolvePlanRoot(p))
 		}
 	}
 	if v := env("ANTI_TANGENT_MAX_TOKENS_CEILING"); v != "" {
@@ -373,4 +373,21 @@ func Load(env func(string) string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// resolvePlanRoot symlink-resolves an ANTI_TANGENT_PLAN_ROOTS entry so it
+// compares like-for-like against the candidate paths withinRoots checks it
+// against: resolveFileInput (internal/mcpsrv/file_source.go) EvalSymlinks the
+// candidate path BEFORE checking root membership, so a root left merely
+// Cleaned — rather than resolved — refuses every legitimate path under it
+// whenever an ANCESTOR of the root is itself a symlink (e.g. macOS's
+// /tmp -> /private/tmp). Falls back to the Cleaned value when the root does
+// not exist yet at server-start time: a root created later must not be a
+// startup error.
+func resolvePlanRoot(root string) string {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return filepath.Clean(root)
+	}
+	return resolved
 }

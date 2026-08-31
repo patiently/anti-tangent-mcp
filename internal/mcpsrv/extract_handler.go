@@ -276,11 +276,9 @@ func classifyEnvelopes(envs []CompletionEnvelopeArg) ([]verdict.Finding, bool) {
 			bareCount++
 			continue
 		}
-		// (b) Diff/files shape check. Build a synthetic ValidateCompletionArgs
-		// (no TestEvidence — checkEvidenceShape doesn't inspect it) and run
-		// the existing guard.
-		synth := ValidateCompletionArgs{FinalDiff: e.FinalDiff, FinalFiles: e.FinalFiles}
-		reason := checkEvidenceShape(synth)
+		// (b) Diff/files shape check against the existing guard. checkEvidenceShape
+		// takes the diff/files pair directly (not TestEvidence — it doesn't inspect it).
+		reason := checkEvidenceShape(e.FinalDiff, e.FinalFiles)
 		if reason == "" {
 			continue
 		}

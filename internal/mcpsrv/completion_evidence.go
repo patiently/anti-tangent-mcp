@@ -3,6 +3,7 @@
 package mcpsrv
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -16,14 +17,14 @@ import (
 var referencedEvidencePathRE = regexp.MustCompile(`[A-Za-z0-9_./-]+\.(?:md|txt|json|ya?ml)\b`)
 
 // referencedPathsMissingEvidence returns the deduplicated set of doc/artifact
-// paths named in args.Summary that are NOT present in either args.FinalFiles
-// (exact Path match) or args.FinalDiff (substring match). The result is used
-// by ValidateCompletion to render an advisory note in the post-review prompt
-// — it never mutates findings, never rejects the request, and never affects
-// the verdict. It only nudges the reviewer to require full evidence if a
-// listed path is a deliverable.
-func referencedPathsMissingEvidence(args ValidateCompletionArgs) []string {
-	candidates := referencedEvidencePathRE.FindAllString(args.Summary, -1)
+// paths named in summary that are NOT present in either files (path-suffix
+// match — see pathTailMatches) or finalDiff (substring match). The result is
+// used by ValidateCompletion to render an advisory note in the post-review
+// prompt — it never mutates findings, never rejects the request, and never
+// affects the verdict. It only nudges the reviewer to require full evidence
+// if a listed path is a deliverable.
+func referencedPathsMissingEvidence(summary string, files []FileArg, finalDiff string) []string {
+	candidates := referencedEvidencePathRE.FindAllString(summary, -1)
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -34,7 +35,7 @@ func referencedPathsMissingEvidence(args ValidateCompletionArgs) []string {
 			continue
 		}
 		seen[path] = struct{}{}
-		if pathPresentInEvidence(path, args) {
+		if pathPresentInEvidence(path, files, finalDiff) {
 			continue
 		}
 		missing = append(missing, path)
@@ -46,15 +47,42 @@ func referencedPathsMissingEvidence(args ValidateCompletionArgs) []string {
 }
 
 // pathPresentInEvidence reports whether path appears as a final_files entry
-// (exact Path equality) or anywhere in the final_diff text (substring). The
-// final_diff substring match is intentionally permissive — diff headers,
-// rename old/new paths, and contextual filename mentions all count as
-// "evidence was provided."
-func pathPresentInEvidence(path string, args ValidateCompletionArgs) bool {
-	for _, f := range args.FinalFiles {
-		if f.Path == path {
+// (path-suffix match — see pathTailMatches) or anywhere in the final_diff
+// text (substring). The final_diff substring match is intentionally
+// permissive — diff headers, rename old/new paths, and contextual filename
+// mentions all count as "evidence was provided."
+func pathPresentInEvidence(path string, files []FileArg, finalDiff string) bool {
+	for _, f := range files {
+		if pathTailMatches(f.Path, path) {
 			return true
 		}
 	}
-	return strings.Contains(args.FinalDiff, path)
+	return strings.Contains(finalDiff, path)
+}
+
+// pathTailMatches reports whether tail names the same file as candidate:
+// either the two are identical, or candidate ends with tail immediately
+// after a path separator.
+//
+// docs/protocol/implementer.md tells implementers to pass ABSOLUTE
+// final_files paths, while args.Summary is scanned for the RELATIVE paths
+// implementers actually write in prose (e.g. "docs/foo.md") — so exact
+// equality alone would never match and this advisory would fire spuriously
+// on every doc deliverable submitted the documented way. Comparing by
+// suffix fixes that (an absolute f.Path ending in the relative summary
+// mention counts as present), but a bare suffix check on its own is too
+// loose: "myfoo.md" would satisfy a reference to "foo.md" purely because
+// the characters happen to line up at the tail, with no real path
+// relationship between the two. Requiring a separator immediately before
+// the matched tail closes that gap while still accepting the legitimate
+// absolute-vs-relative case.
+func pathTailMatches(candidate, tail string) bool {
+	if candidate == tail {
+		return true
+	}
+	if tail == "" || !strings.HasSuffix(candidate, tail) {
+		return false
+	}
+	i := len(candidate) - len(tail)
+	return candidate[i-1] == filepath.Separator
 }

@@ -322,7 +322,18 @@ provider. It is stdio-only — the host spawns it as a child process, so it shar
 mounts, and uid, and the calling agent already has unrestricted file read. The server therefore
 acquires no capability the caller lacks. If you want it narrower anyway, set
 `ANTI_TANGENT_PLAN_ROOTS` to a colon-separated list of absolute directories; paths outside them
-are refused. Symlinks are resolved before the check, so a link cannot escape a root.
+are refused. Symlinks are resolved before the check, both for the candidate path and for each
+configured root itself (so a symlinked root, e.g. macOS's `/tmp` → `/private/tmp`, still matches
+legitimate paths beneath it) — a link cannot escape a root.
+
+The 1MB default for `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` is not itself a hard ceiling — the real
+limit is whatever context window `ANTI_TANGENT_PLAN_MODEL` has, since the chunked `validate_plan` path
+resends the full plan text on every Pass-1 and per-chunk reviewer call. That is comfortably true
+for the two Anthropic models this project defaults to (`claude-sonnet-4-6` and `claude-opus-4-7`,
+both 1M-token context), but not for `claude-haiku-4-5-20251001` (200K context) or for most of the
+allowlisted OpenAI/Google models — check that model's context window before pointing a fast/cheap
+tier at plans anywhere near the 1MB cap, and prefer `claude-sonnet-4-6` / `claude-opus-4-7` for
+those.
 
 ## Use with Claude Code (`.mcp.json`)
 

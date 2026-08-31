@@ -73,7 +73,7 @@ func driveOneTaskToCompletion(t *testing.T, h *handlers, runID, title string) En
 	_, compEnv, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  taskEnv.SessionID,
 		Summary:    "implemented " + title,
-		FinalFiles: []FileArg{{Path: "x.go", Content: "package x\n"}},
+		FinalFiles: []CompletionFileArg{{Path: "x.go", Content: strPtr("package x\n")}},
 	})
 	require.NoError(t, err)
 	return compEnv
@@ -210,7 +210,7 @@ func TestValidateCompletion_ResubmitDedupesLedgerRow(t *testing.T) {
 	completionArgs := ValidateCompletionArgs{
 		SessionID:  taskEnv.SessionID,
 		Summary:    "attempt",
-		FinalFiles: []FileArg{{Path: "x.go", Content: "package x\n"}},
+		FinalFiles: []CompletionFileArg{{Path: "x.go", Content: strPtr("package x\n")}},
 	}
 
 	// First call: warn — in the real flow, isSubmissionDefectOnly/
@@ -285,7 +285,7 @@ func TestPlanRunReport_LedgerRecovery_MultiTaskOrderMatchesDispatch(t *testing.T
 	complete := func(sessID, title string) {
 		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 			SessionID: sessID, Summary: "done " + title,
-			FinalFiles: []FileArg{{Path: "x.go", Content: "package x\n"}},
+			FinalFiles: []CompletionFileArg{{Path: "x.go", Content: strPtr("package x\n")}},
 		})
 		require.NoError(t, err)
 		require.Equal(t, "pass", env.Verdict)

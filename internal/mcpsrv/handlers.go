@@ -366,9 +366,37 @@ func checkProgressTool() *mcp.Tool {
 	}
 }
 
+// FileArg is the shared file-entry shape for check_progress's changed_files
+// and extract_project_knowledge's completion-envelope final_files. Content
+// is REQUIRED (matches 0.15.0's schema exactly): jsonschema-go derives
+// `required` from the absence of `omitempty`/`omitzero`, so dropping this
+// tag would silently make content optional on both of those tools too —
+// neither resolves a bare path from disk, so an omitted content would ship
+// an empty file body to the reviewer with no error. validate_completion does
+// NOT use this type for final_files; it has its own CompletionFileArg, whose
+// pointer Content field can distinguish "omitted" from "explicitly empty".
 type FileArg struct {
 	Path    string `json:"path"`
-	Content string `json:"content,omitempty"` // omitted -> server reads Path
+	Content string `json:"content"`
+}
+
+// CompletionFileArg is validate_completion's final_files entry — the only
+// tool whose file entries may omit content to have the server read Path from
+// disk. Content is a *pointer* so an omitted field (nil) is distinguishable
+// from an explicit empty string (""), which Go's JSON unmarshal cannot
+// otherwise tell apart: nil means "read Path from disk"; "" means "this file
+// is genuinely empty" (e.g. a deletion) and must NOT trigger a read — a read
+// would either fail EvalSymlinks on a path that no longer exists, or (for a
+// caller using this codebase's own relative-path convention) fail the
+// path-must-be-absolute check, either way losing the whole call to a
+// transport error instead of a structured envelope.
+//
+// If both Path and a non-nil Content are supplied, Content wins and Path is
+// never read — this is the pre-0.16.0 always-inline behaviour, kept for
+// backward compatibility rather than treated as an error.
+type CompletionFileArg struct {
+	Path    string  `json:"path"`
+	Content *string `json:"content,omitempty"`
 }
 
 type CheckProgressArgs struct {
@@ -825,17 +853,17 @@ func validateCompletionTool() *mcp.Tool {
 }
 
 type ValidateCompletionArgs struct {
-	SessionID             string            `json:"session_id"  jsonschema:"required"`
-	Summary               string            `json:"summary"     jsonschema:"required"`
-	FinalFiles            []FileArg         `json:"final_files,omitempty"`
-	FinalDiff             string            `json:"final_diff,omitempty"`
-	FinalDiffPath         string            `json:"final_diff_path,omitempty"`
-	TestEvidence          string            `json:"test_evidence,omitempty"`
-	ExitContracts         []string          `json:"exit_contracts,omitempty"`
-	ExitContractsInferred bool              `json:"exit_contracts_inferred,omitempty"`
-	ModelOverride         string            `json:"model_override,omitempty"`
-	MaxTokensOverride     int               `json:"max_tokens_override,omitempty"`
-	Codescene             *codescene.Digest `json:"codescene,omitempty"`
+	SessionID             string              `json:"session_id"  jsonschema:"required"`
+	Summary               string              `json:"summary"     jsonschema:"required"`
+	FinalFiles            []CompletionFileArg `json:"final_files,omitempty"`
+	FinalDiff             string              `json:"final_diff,omitempty"`
+	FinalDiffPath         string              `json:"final_diff_path,omitempty"`
+	TestEvidence          string              `json:"test_evidence,omitempty"`
+	ExitContracts         []string            `json:"exit_contracts,omitempty"`
+	ExitContractsInferred bool                `json:"exit_contracts_inferred,omitempty"`
+	ModelOverride         string              `json:"model_override,omitempty"`
+	MaxTokensOverride     int                 `json:"max_tokens_override,omitempty"`
+	Codescene             *codescene.Digest   `json:"codescene,omitempty"`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
@@ -900,34 +928,40 @@ var evidenceTruncationPatterns = []string{
 // surrounding whitespace). The (?m) flag anchors ^/$ to line boundaries.
 var evidenceEllipsisLine = regexp.MustCompile(`(?m)^\s*\.\.\.\s*$`)
 
-// checkEvidenceShape inspects args for malformed evidence shapes. Returns a
-// non-empty human-readable reason string when a rule fires; empty string when
-// the evidence looks structurally sound. The reason is what populates the
-// rejection finding's Evidence field.
+// checkEvidenceShape inspects finalDiff/files for malformed evidence shapes.
+// Returns a non-empty human-readable reason string when a rule fires; empty
+// string when the evidence looks structurally sound. The reason is what
+// populates the rejection finding's Evidence field.
+//
+// Decoupled from ValidateCompletionArgs (rather than taking the whole args
+// struct) so it works identically for validate_completion's resolved
+// []FileArg AND for extract_project_knowledge's per-envelope
+// CompletionEnvelopeArg{FinalDiff, FinalFiles []FileArg} — both just pass
+// their diff string and file slice directly.
 //
 // Order of checks (fail-fast on the first hit so the reason points at the
 // most-likely cause):
 //  1. final_diff substring + ellipsis-line scan
 //  2. final_files empty Path
 //  3. final_files content substring + ellipsis-line scan
-func checkEvidenceShape(args ValidateCompletionArgs) string {
-	if args.FinalDiff != "" {
-		lower := strings.ToLower(args.FinalDiff)
+func checkEvidenceShape(finalDiff string, files []FileArg) string {
+	if finalDiff != "" {
+		lower := strings.ToLower(finalDiff)
 		for _, p := range evidenceTruncationPatterns {
 			if idx := strings.Index(lower, p); idx >= 0 {
 				return fmt.Sprintf("final_diff contains truncation marker %q at offset %d", p, idx)
 			}
 		}
-		if loc := evidenceEllipsisLine.FindStringIndex(args.FinalDiff); loc != nil {
+		if loc := evidenceEllipsisLine.FindStringIndex(finalDiff); loc != nil {
 			return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", loc[0])
 		}
 	}
-	for i, f := range args.FinalFiles {
+	for i, f := range files {
 		if strings.TrimSpace(f.Path) == "" {
 			return fmt.Sprintf("final_files[%d].path is empty", i)
 		}
 	}
-	for i, f := range args.FinalFiles {
+	for i, f := range files {
 		lower := strings.ToLower(f.Content)
 		for _, p := range evidenceTruncationPatterns {
 			if idx := strings.Index(lower, p); idx >= 0 {
@@ -960,42 +994,66 @@ func (e *completionInputTooLargeError) Error() string {
 
 func (e *completionInputTooLargeError) Unwrap() error { return e.err }
 
-// resolveCompletionInputs fills in FinalDiff and each FinalFiles[].Content
-// from disk for entries that supplied only a path. Mutates args in place so
-// every later stage — payload cap, evidence-shape guard, evidence cache key,
-// prompt render — sees fully materialized evidence.
+// resolveCompletionInputs fills in args.FinalDiff from disk when
+// final_diff_path was supplied, and returns args.FinalFiles converted to
+// plain []FileArg with Content resolved from disk for every entry whose
+// Content was omitted (nil).
+//
+// Content is resolved ONLY when nil — see CompletionFileArg: an explicit ""
+// means "this file is genuinely empty" (e.g. a deletion) and must NOT
+// trigger a read, unlike pre-0.16.0's string-based Content, whose empty
+// string was indistinguishable from omitted and always triggered one
+// (breaking a deleted-file entry, whose read would fail EvalSymlinks, and
+// any relative path, which would fail the path-must-be-absolute check).
+//
+// Returns the resolved slice rather than mutating args.FinalFiles in place,
+// since ValidateCompletionArgs.FinalFiles is wire-typed []CompletionFileArg
+// (path + nilable content) while every downstream consumer —
+// totalCompletionBytes, checkEvidenceShape, evidenceCacheKey, toPromptFiles,
+// referencedPathsMissingEvidence — needs plain []FileArg with Content always
+// populated. Every later stage — payload cap, evidence-shape guard, evidence
+// cache key, prompt render — must read this resolved slice, never
+// args.FinalFiles directly.
 //
 // Uses the shared MaxPayloadBytes, never PlanMaxPayloadBytes: completion
 // evidence did not gain the headroom validate_plan did.
-func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) error {
+func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) ([]FileArg, error) {
 	maxBytes := h.deps.Cfg.MaxPayloadBytes
 	roots := h.deps.Cfg.PlanRoots
 
 	if args.FinalDiffPath != "" {
 		content, src, err := resolveFileInput(args.FinalDiffPath, roots, maxBytes)
 		if errors.Is(err, errTooLarge) {
-			return &completionInputTooLargeError{field: "final_diff_path", bytes: src.Bytes, err: err}
+			return nil, &completionInputTooLargeError{field: "final_diff_path", bytes: src.Bytes, err: err}
 		}
 		if err != nil {
-			return fmt.Errorf("final_diff_path: %w", err)
+			return nil, fmt.Errorf("final_diff_path: %w", err)
 		}
 		args.FinalDiff = content
 	}
-	for i := range args.FinalFiles {
-		f := &args.FinalFiles[i]
-		if f.Path == "" || f.Content != "" {
+	files := make([]FileArg, len(args.FinalFiles))
+	for i, f := range args.FinalFiles {
+		files[i] = FileArg{Path: f.Path}
+		// Content wins over Path when both are supplied — see
+		// CompletionFileArg's doc comment. Only a nil Content (never an
+		// explicit "") triggers a disk read.
+		if f.Content != nil {
+			files[i].Content = *f.Content
+			continue
+		}
+		if f.Path == "" {
 			continue
 		}
 		content, src, err := resolveFileInput(f.Path, roots, maxBytes)
 		if errors.Is(err, errTooLarge) {
-			return &completionInputTooLargeError{field: fmt.Sprintf("final_files[%d].path", i), bytes: src.Bytes, err: err}
+			return nil, &completionInputTooLargeError{field: fmt.Sprintf("final_files[%d].path", i), bytes: src.Bytes, err: err}
 		}
 		if err != nil {
-			return fmt.Errorf("final_files[%d].path: %w", i, err)
+			return nil, fmt.Errorf("final_files[%d].path: %w", i, err)
 		}
-		f.Content = content
+		files[i].Content = content
 	}
-	return nil
+	return files, nil
 }
 
 // rejectionCacheEntry is one cached rejection envelope keyed by canonical
@@ -1017,13 +1075,14 @@ var (
 const rejectionCacheTTL = 5 * time.Minute
 
 // evidenceCacheKey returns a deterministic SHA-256 over a canonical JSON
-// encoding of the rejection-relevant args. final_files is pre-sorted by Path
-// so that an order-only difference between two otherwise-identical submissions
-// still hits the cache. Plain string concatenation would risk collisions
-// (e.g. SessionID="a" + FinalDiff="bc" vs SessionID="ab" + FinalDiff="c");
+// encoding of the rejection-relevant inputs. files is the RESOLVED slice
+// (see resolveCompletionInputs), pre-sorted here by Path so that an
+// order-only difference between two otherwise-identical submissions still
+// hits the cache. Plain string concatenation would risk collisions (e.g.
+// sessionID="a" + finalDiff="bc" vs sessionID="ab" + finalDiff="c");
 // JSON-encoded boundaries make those distinct.
-func evidenceCacheKey(args ValidateCompletionArgs) [32]byte {
-	sortedFiles := append([]FileArg(nil), args.FinalFiles...)
+func evidenceCacheKey(sessionID, finalDiff string, files []FileArg, testEvidence string) [32]byte {
+	sortedFiles := append([]FileArg(nil), files...)
 	sort.Slice(sortedFiles, func(i, j int) bool { return sortedFiles[i].Path < sortedFiles[j].Path })
 	keyInput := struct {
 		SessionID    string    `json:"session_id"`
@@ -1031,10 +1090,10 @@ func evidenceCacheKey(args ValidateCompletionArgs) [32]byte {
 		FinalFiles   []FileArg `json:"final_files"`
 		TestEvidence string    `json:"test_evidence"`
 	}{
-		SessionID:    args.SessionID,
-		FinalDiff:    args.FinalDiff,
+		SessionID:    sessionID,
+		FinalDiff:    finalDiff,
 		FinalFiles:   sortedFiles,
-		TestEvidence: args.TestEvidence,
+		TestEvidence: testEvidence,
 	}
 	keyJSON, _ := json.Marshal(keyInput)
 	return sha256.Sum256(keyJSON)
@@ -1106,19 +1165,19 @@ func majorFindings(findings []verdict.Finding) []verdict.Finding {
 //
 //  1. summary required check
 //  2. final_diff / final_diff_path mutual-exclusivity check
-//  2b. at-least-one-evidence check (final_diff_path counts, pre-resolution)
-//  2c. effectiveMaxTokens + clampFinding — computed here (moved ahead of its
-//      old step-4 slot) so a too-large PATH input, detected next, can render
-//      through the same clamped tooLargeEnvelope shape as the inline
-//      payload-cap check below. Independent of evidence, so reordering it
-//      changes nothing else.
-//  2d. resolveCompletionInputs — materializes final_diff_path and any
-//      final_files[].path entries BEFORE the payload cap, evidence-shape
-//      guard, and evidence cache key see them. An oversized path input
-//      returns the SAME tooLargeEnvelope an oversized inline payload would;
-//      every other resolve failure (missing file, non-regular file, outside
-//      ANTI_TANGENT_PLAN_ROOTS) stays a plain transport error, matching how
-//      validate_plan's plan_path treats those cases.
+//     2b. at-least-one-evidence check (final_diff_path counts, pre-resolution)
+//     2c. effectiveMaxTokens + clampFinding — computed here (moved ahead of its
+//     old step-4 slot) so a too-large PATH input, detected next, can render
+//     through the same clamped tooLargeEnvelope shape as the inline
+//     payload-cap check below. Independent of evidence, so reordering it
+//     changes nothing else.
+//     2d. resolveCompletionInputs — materializes final_diff_path and any
+//     final_files[].path entries BEFORE the payload cap, evidence-shape
+//     guard, and evidence cache key see them. An oversized path input
+//     returns the SAME tooLargeEnvelope an oversized inline payload would;
+//     every other resolve failure (missing file, non-regular file, outside
+//     ANTI_TANGENT_PLAN_ROOTS) stays a plain transport error, matching how
+//     validate_plan's plan_path treats those cases.
 //  3. lightweight marker (empty session_id + non-empty evidence)
 //  5. payload-cap check
 //  6. evidence-shape guard (with rejection cache) — runs BEFORE session lookup
@@ -1143,7 +1202,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// regardless of whether session_id is set. final_diff_path counts as
 	// evidence even before it is resolved.
 	if len(args.FinalFiles) == 0 && args.FinalDiff == "" && args.FinalDiffPath == "" && args.TestEvidence == "" {
-		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty")
+		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, final_diff_path, or test_evidence must be non-empty")
 	}
 
 	// 2c. max-tokens override + clamp finding. Computed before resolution so
@@ -1167,7 +1226,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// not a size problem, and stays a plain transport error — consistent
 	// with validate_plan's plan_path (see the errors.Is(rerr, errTooLarge)
 	// branch there).
-	if err := h.resolveCompletionInputs(&args); err != nil {
+	resolvedFiles, err := h.resolveCompletionInputs(&args)
+	if err != nil {
 		var tooLarge *completionInputTooLargeError
 		if errors.As(err, &tooLarge) {
 			env := prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes,
@@ -1195,7 +1255,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 
 	// 5. payload-cap check. In lightweight mode the surfaced session_id stays
 	// empty; otherwise we don't have the session yet, so use args.SessionID.
-	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
+	if size := totalCompletionBytes(resolvedFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
 		env := prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
 			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp)
 		h.recordStat(statParams{
@@ -1220,7 +1280,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// 6. evidence-shape guard. Runs BEFORE session lookup so a broken payload
 	// rejects fast regardless of session state. Cache hit → return the same
 	// envelope without re-running the guard or hitting the reviewer.
-	cacheKey := evidenceCacheKey(args)
+	cacheKey := evidenceCacheKey(args.SessionID, args.FinalDiff, resolvedFiles, args.TestEvidence)
 	if cached, ok := lookupCachedRejection(cacheKey); ok {
 		c := prependClamp(cached, clamp)
 		h.recordStat(statParams{
@@ -1230,11 +1290,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			modelUsed:    c.ModelUsed,
 			sessionID:    c.SessionID,
 			cached:       true,
-			payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+			payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 		})
 		return envelopeResult(c)
 	}
-	if reason := checkEvidenceShape(args); reason != "" {
+	if reason := checkEvidenceShape(args.FinalDiff, resolvedFiles); reason != "" {
 		env := malformedEvidenceEnvelope(args.SessionID, reason, h.deps.Cfg.PostModel.String())
 		storeRejection(cacheKey, env)
 		clamped := prependClamp(env, clamp)
@@ -1244,7 +1304,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			findings:     clamped.Findings,
 			modelUsed:    clamped.ModelUsed,
 			sessionID:    clamped.SessionID,
-			payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+			payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 		})
 		return envelopeResult(clamped)
 	}
@@ -1271,7 +1331,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				findings:     env.Findings,
 				modelUsed:    env.ModelUsed,
 				sessionID:    env.SessionID,
-				payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+				payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 			})
 			return envelopeResult(env)
 		}
@@ -1287,11 +1347,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			return prompts.RenderPost(prompts.PostInput{
 				Spec:                           spec,
 				Summary:                        args.Summary,
-				Files:                          toPromptFiles(args.FinalFiles),
+				Files:                          toPromptFiles(resolvedFiles),
 				FinalDiff:                      args.FinalDiff,
 				TestEvidence:                   args.TestEvidence,
 				MajorPreFindings:               majorPreFindings,
-				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
+				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args.Summary, resolvedFiles, args.FinalDiff),
 				ExitContracts:                  exitContracts,
 				ExitContractsInferred:          args.ExitContractsInferred,
 				Codescene:                      args.Codescene,
@@ -1324,7 +1384,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				reviewMS:     env.ReviewMS,
 				partial:      env.Partial,
 				sessionID:    env.SessionID,
-				payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+				payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 			})
 		}
 		return r, env, retErr
@@ -1413,7 +1473,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		reviewMS:     env.ReviewMS,
 		partial:      env.Partial,
 		sessionID:    env.SessionID,
-		payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+		payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 	})
 	return envelopeResult(env)
 }
@@ -1567,14 +1627,15 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// `prior` ensures those aren't dropped if the truncating chunk's bytes
 	// yield further recovery.
 	if r, p, handled, retErr := h.handlePlanReviewErr(planReviewErrInputs{
-		Err:        err,
-		Model:      model,
-		ModelUsed:  modelUsed,
-		ReviewMS:   ms,
-		PartialRaw: partialRaw,
-		Clamp:      clamp,
-		Prior:      pr,
-		Source:     planSrc.String(),
+		Err:          err,
+		Model:        model,
+		ModelUsed:    modelUsed,
+		ReviewMS:     ms,
+		PartialRaw:   partialRaw,
+		Clamp:        clamp,
+		Prior:        pr,
+		Source:       planSrc.String(),
+		UsedPlanText: args.PlanText != "",
 	}); handled {
 		if retErr == nil {
 			h.recordStat(statParams{

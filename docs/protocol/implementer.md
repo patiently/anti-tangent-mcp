@@ -61,8 +61,13 @@ about what you submitted, not about your code. Attach the missing evidence
 and re-submit; no rework is implied.**
 - Prefer paths over inline content: omit a `final_files` entry's `content` and the server reads
   its absolute `path`, and pass `final_diff_path` instead of `final_diff` (write it first with
-  `git diff > /tmp/change.diff`). Truncation checks still apply to the resolved content — a file
-  containing `// snip` or a bare `...` line is rejected exactly as inline evidence would be.
+  `git diff > "$PWD/.git/anti-tangent-change.diff"` — a repo-local scratch path, guaranteed
+  writable and never tracked by git — then pass that same absolute path as `final_diff_path`).
+  Truncation checks still apply to the resolved content — a file containing `// snip` or a bare
+  `...` line is rejected exactly as inline evidence would be. If your host sets
+  `ANTI_TANGENT_PLAN_ROOTS`, whatever scratch location you use must fall inside one of those
+  roots or the server refuses the path — a bare `/tmp` path will NOT satisfy a roots list scoped
+  to your project directories.
 
 **3b. CodeScene pre-DONE check (REQUIRED when codescene-mcp is
 configured in your host).** Call `analyze_change_set` for the full

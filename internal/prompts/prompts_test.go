@@ -694,12 +694,12 @@ func TestRenderPre_WithoutNormativeTestBodiesOmitsSection(t *testing.T) {
 }
 
 const (
-	anchorExitContractsInstruction          = "exit_contracts"
-	anchorExitContractsInferredFlag         = "exit_contracts_inferred"
-	anchorExitContractsExplicitHeader       = "**Exit contracts:**"
-	anchorExitContractsMaxGuidance          = "at most 20 contracts"
-	anchorNormativeServerSideInstruction    = "populated server-side"
-	anchorNormativeDoNotEmitInstruction     = "Do NOT emit `normative_test_bodies`"
+	anchorExitContractsInstruction       = "exit_contracts"
+	anchorExitContractsInferredFlag      = "exit_contracts_inferred"
+	anchorExitContractsExplicitHeader    = "**Exit contracts:**"
+	anchorExitContractsMaxGuidance       = "at most 20 contracts"
+	anchorNormativeServerSideInstruction = "populated server-side"
+	anchorNormativeDoNotEmitInstruction  = "Do NOT emit `normative_test_bodies`"
 )
 
 func TestRenderPlan_ExitContractsInstructionPresent(t *testing.T) {
@@ -970,8 +970,8 @@ func TestRenderExtract_Milestone(t *testing.T) {
 			{Permalink: "monorepo/stories/ABC-101/main", Type: "story", Title: "Story for the network-probe healthcheck", Summary: "Single PR (PR #42); subtask: write the python socket probe", Tags: []string{"story"}},
 		},
 		CurrentKBExcerpts: map[string]string{
-			"monorepo/epics/ABC-100/main":    "## Stories\n\n| Story | Status | Deployment | Tracker |\n|---|---|---|---|\n| [ABC-101](monorepo/stories/ABC-101/main) — Story title | in_progress | none | [ABC-101](https://example.com/ABC-101) |\n",
-			"monorepo/stories/ABC-101/main":  "## PRs\n\n| PR | State | Branch | Relationship | Merged into | Deployed |\n|---|---|---|---|---|---|\n| #42 | review | story/probe | initial | — | none |\n",
+			"monorepo/epics/ABC-100/main":   "## Stories\n\n| Story | Status | Deployment | Tracker |\n|---|---|---|---|\n| [ABC-101](monorepo/stories/ABC-101/main) — Story title | in_progress | none | [ABC-101](https://example.com/ABC-101) |\n",
+			"monorepo/stories/ABC-101/main": "## PRs\n\n| PR | State | Branch | Relationship | Merged into | Deployed |\n|---|---|---|---|---|---|\n| #42 | review | story/probe | initial | — | none |\n",
 		},
 		EpicPermalink:        "monorepo/epics/ABC-100/main",
 		KBStoreIsBasicMemory: true,
@@ -1051,6 +1051,14 @@ func TestPlanPromptSplit(t *testing.T) {
 // a plan that happens to discuss "## What to evaluate" in prose does not
 // get mistaken for the real per-call section boundary.
 func TestPlanSuffixIndex(t *testing.T) {
+	// embeddedThenReal simulates a plan-about-prompt-templates whose OWN
+	// content contains a line-start "## What to evaluate" heading before the
+	// template's real per-call marker. The real heading — the one the
+	// template itself appends — is always the LAST line-start occurrence;
+	// see the doc comment on planSuffixIndex for why that invariant holds.
+	embeddedPrefix := "ground rules\n\n## What to evaluate\nis a heading this plan itself discusses\n\n"
+	embeddedThenReal := embeddedPrefix + "## What to evaluate\nreal per-call instructions"
+
 	tests := []struct {
 		name string
 		body string
@@ -1075,6 +1083,11 @@ func TestPlanSuffixIndex(t *testing.T) {
 			name: "marker absent entirely",
 			body: "nothing to see here",
 			want: -1,
+		},
+		{
+			name: "a plan-embedded line-start marker does not shadow the real trailing heading",
+			body: embeddedThenReal,
+			want: len(embeddedPrefix),
 		},
 	}
 	for _, tc := range tests {

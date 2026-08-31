@@ -99,6 +99,10 @@ type planReviewErrInputs struct {
 	// empty when plan_text was used. Threaded through so the recovery envelope's
 	// summary carries the same source line a successful review would have.
 	Source string
+	// UsedPlanText is args.PlanText != "" from the ValidatePlan call. Threaded
+	// through so the truncation-recovery envelope gets the plan_text
+	// deprecation notice too — see prependPlanDeprecation's doc comment.
+	UsedPlanText bool
 }
 
 // handlePlanReviewErr is the ValidatePlan analog of handlePerTaskReviewErr.
@@ -130,7 +134,21 @@ func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolRes
 	if modelUsed == "" {
 		modelUsed = in.Model.String()
 	}
-	r, p, err := planEnvelopeResult(pr, planSummaryMeta{ModelUsed: modelUsed, ReviewMS: in.ReviewMS, Source: in.Source})
+	meta := planSummaryMeta{ModelUsed: modelUsed, ReviewMS: in.ReviewMS, Source: in.Source}
+	// Mirrors ValidatePlan's fresh-review path (handlers.go): run the
+	// ladder BEFORE the deprecation prepend, not after — prependPlanDeprecation
+	// is a minor CategoryOther finding, and the ladder's noise_cluster
+	// (3rd-minor) trigger must never fire BECAUSE of the deprecation notice.
+	// Feeding it through the ladder first would let a plan_text caller whose
+	// truncation-recovery already carries two other minor findings get
+	// bumped to warn by the deprecation notice alone. finalizePlanVerdict
+	// runs the ladder without touching SummaryBlock, so the deprecation
+	// prepend and the one authoritative formatPlanSummary call can both land
+	// after it, exactly as the non-truncation path does.
+	finalizePlanVerdict(&pr)
+	pr = prependPlanDeprecation(pr, in.UsedPlanText)
+	pr.SummaryBlock = formatPlanSummary(pr, meta)
+	r, p, err := planEnvelopeResultFinalized(pr, meta)
 	return r, p, true, err
 }
 

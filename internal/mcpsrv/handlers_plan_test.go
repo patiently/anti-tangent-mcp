@@ -583,11 +583,14 @@ func TestValidatePlan_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 	require.Len(t, pr.Tasks, 2)
 	assert.Equal(t, "Task 1: First", pr.Tasks[0].TaskTitle)
 	assert.Equal(t, "Task 2: Second", pr.Tasks[1].TaskTitle)
-	// plan_findings has the original major finding plus the minor truncation marker.
-	require.Len(t, pr.PlanFindings, 2)
-	assert.Equal(t, "pf1", pr.PlanFindings[0].Criterion)
-	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[1].Severity)
-	assert.Contains(t, pr.PlanFindings[1].Suggestion, "max_tokens_override")
+	// plan_findings has the plan_text deprecation notice (leading — see
+	// prependPlanDeprecation), the original major finding, and the minor
+	// truncation marker.
+	require.Len(t, pr.PlanFindings, 3)
+	assert.Equal(t, "input", pr.PlanFindings[0].Criterion, "plan_text deprecation notice must lead")
+	assert.Equal(t, "pf1", pr.PlanFindings[1].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[2].Severity)
+	assert.Contains(t, pr.PlanFindings[2].Suggestion, "max_tokens_override")
 }
 
 // TestReviewPlanChunked_Pass2Truncation_PreservesPass1Findings exercises the
@@ -641,11 +644,15 @@ func TestReviewPlanChunked_Pass2Truncation_PreservesPass1Findings(t *testing.T) 
 	require.NoError(t, err)
 	assert.True(t, pr.Partial, "envelope must be marked partial after Pass-2 truncation")
 
-	// Pass-1 plan finding must survive the truncation recovery.
-	require.GreaterOrEqual(t, len(pr.PlanFindings), 2,
-		"expected at least Pass-1 finding + truncation marker; got %d", len(pr.PlanFindings))
-	assert.Equal(t, "pass1_pf", pr.PlanFindings[0].Criterion,
-		"Pass-1 plan finding must be the first PlanFinding")
+	// Pass-1 plan finding must survive the truncation recovery. PlanFindings[0]
+	// is the plan_text deprecation notice (this test uses PlanText), which
+	// must also survive the truncation-recovery path — see
+	// TestValidatePlan_TruncatedResponseSurfacesWarn.
+	require.GreaterOrEqual(t, len(pr.PlanFindings), 3,
+		"expected at least deprecation notice + Pass-1 finding + truncation marker; got %d", len(pr.PlanFindings))
+	assert.Equal(t, "input", pr.PlanFindings[0].Criterion, "plan_text deprecation notice must lead")
+	assert.Equal(t, "pass1_pf", pr.PlanFindings[1].Criterion,
+		"Pass-1 plan finding must be the second PlanFinding, right after the deprecation notice")
 	// Last finding must be the minor truncation marker.
 	last := pr.PlanFindings[len(pr.PlanFindings)-1]
 	assert.Equal(t, verdict.SeverityMinor, last.Severity)

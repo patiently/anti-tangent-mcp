@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -353,7 +355,32 @@ func TestPlanPayloadCapAndRoots(t *testing.T) {
 		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": "/home/a/:/srv/b: "}
 		cfg, err := Load(envFrom(m))
 		require.NoError(t, err)
+		// Neither /home/a nor /srv/b exists in the test sandbox, so this also
+		// pins the not-yet-created-root fallback: EvalSymlinks fails and the
+		// Cleaned value is kept rather than erroring at startup.
 		assert.Equal(t, []string{"/home/a", "/srv/b"}, cfg.PlanRoots)
+	})
+
+	// TestPlanPayloadCapAndRoots/"roots are symlink-resolved" is the regression
+	// test for the withinRoots mismatch: internal/mcpsrv/file_source.go's
+	// resolveFileInput EvalSymlinks the candidate path before checking root
+	// membership, so a root that is only Cleaned (not resolved) refuses every
+	// legitimate path under it whenever an ancestor of the root is itself a
+	// symlink — exactly the shape of macOS's /tmp -> /private/tmp, which is
+	// also what docs/protocol/implementer.md told implementers to use.
+	t.Run("roots are symlink-resolved", func(t *testing.T) {
+		real := t.TempDir()
+		realResolved, err := filepath.EvalSymlinks(real)
+		require.NoError(t, err)
+		linkParent := t.TempDir()
+		link := filepath.Join(linkParent, "link-root")
+		require.NoError(t, os.Symlink(real, link))
+
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": link}
+		cfg, err := Load(envFrom(m))
+		require.NoError(t, err)
+		assert.Equal(t, []string{realResolved}, cfg.PlanRoots,
+			"a symlinked root must resolve to the real path so it matches resolveFileInput's resolved candidate")
 	})
 
 	t.Run("relative root rejected", func(t *testing.T) {
