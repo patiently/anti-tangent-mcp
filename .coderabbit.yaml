@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit configuration. Only the keys below are set; everything else stays
+# on CodeRabbit's defaults.
+
+reviews:
+  # Make CodeRabbit's verdict an actual GitHub review state.
+  #
+  # Without this, CodeRabbit resolves threads and reports
+  #   "Approve command performed: Comments resolved.
+  #    Approval skipped: request-changes workflow disabled"
+  # in its check, but never posts an APPROVED review — so `reviewDecision`
+  # stays empty and there is no machine-readable signal that CodeRabbit is
+  # satisfied. With it enabled, CodeRabbit posts APPROVED / REQUEST_CHANGES
+  # and `gh pr view --json reviewDecision` can be read directly instead of
+  # grepping the review body for "Actionable comments posted: 0".
+  #
+  # Safe to enable here because approvals are not enforced on this repo: it
+  # has no rulesets, and no open PR reports reviewDecision=REVIEW_REQUIRED.
+  # A CodeRabbit REQUEST_CHANGES therefore sets a badge; it does not block
+  # the merge button. Re-check that before assuming the same elsewhere.
+  #
+  # Residual hazard: CodeRabbit is incremental and does not always re-review
+  # after a push. With this enabled, a REQUEST_CHANGES can go stale with no
+  # reliable way to force a re-review, and has to be dismissed by hand. Flip
+  # back to false if that turns out to be common.
+  #
+  # CodeRabbit reads this file from the PR HEAD, not from the base branch, so
+  # the change takes effect on the PR that introduces it.
+  request_changes_workflow: true
