@@ -319,3 +319,48 @@ func TestLoad_Codescene(t *testing.T) {
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_CODESCENE")
 	assert.Contains(t, err.Error(), `allowed: "", "required"`)
 }
+
+func TestPlanPayloadCapAndRoots(t *testing.T) {
+	base := map[string]string{"ANTHROPIC_API_KEY": "k"}
+	envFrom := func(m map[string]string) func(string) string {
+		return func(k string) string { return m[k] }
+	}
+
+	t.Run("defaults", func(t *testing.T) {
+		cfg, err := Load(envFrom(base))
+		require.NoError(t, err)
+		assert.Equal(t, 1048576, cfg.PlanMaxPayloadBytes)
+		assert.Equal(t, 204800, cfg.MaxPayloadBytes)
+		assert.Empty(t, cfg.PlanRoots)
+	})
+
+	t.Run("plan cap override", func(t *testing.T) {
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES": "4096"}
+		cfg, err := Load(envFrom(m))
+		require.NoError(t, err)
+		assert.Equal(t, 4096, cfg.PlanMaxPayloadBytes)
+		assert.Equal(t, 204800, cfg.MaxPayloadBytes, "shared cap untouched")
+	})
+
+	t.Run("plan cap rejects non-positive", func(t *testing.T) {
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES": "0"}
+		_, err := Load(envFrom(m))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES")
+	})
+
+	t.Run("roots parsed and cleaned", func(t *testing.T) {
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": "/home/a/:/srv/b: "}
+		cfg, err := Load(envFrom(m))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"/home/a", "/srv/b"}, cfg.PlanRoots)
+	})
+
+	t.Run("relative root rejected", func(t *testing.T) {
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": "relative/path"}
+		_, err := Load(envFrom(m))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+		assert.Contains(t, err.Error(), "absolute")
+	})
+}
