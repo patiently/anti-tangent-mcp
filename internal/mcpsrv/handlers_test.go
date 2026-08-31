@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -3064,5 +3065,86 @@ func TestValidateCompletionPathInputs(t *testing.T) {
 					"truncated evidence via a path must be rejected exactly as inline would be")
 			})
 		}
+	})
+}
+
+// TestValidateCompletionPathInputs_TooLarge covers fix-round-1 for Task 5: an
+// oversized PATH input (final_diff_path or a final_files[i].path-only entry)
+// must render through the SAME tooLargeEnvelope shape an oversized INLINE
+// payload gets from the check at handlers.go's step 5 — not a bare Go
+// transport error. Every other resolve failure (missing file, outside
+// ANTI_TANGENT_PLAN_ROOTS) must stay a plain transport error, unchanged.
+func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
+	t.Run("oversized final_diff_path returns a structured too-large envelope, not an error", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "big.diff")
+		body := strings.Repeat("x", 100)
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+
+		h := newTestHandlers(t)
+		h.deps.Cfg.MaxPayloadBytes = 10 // smaller than the fixture; no need for a 200KB file
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:       "s",
+			FinalDiffPath: p,
+		})
+		require.NoError(t, err, "an oversized path must not surface as a transport error")
+		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
+		require.True(t, hasCategory(env.Findings, verdict.CategoryTooLarge), "expected a payload_too_large finding")
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryTooLarge {
+				assert.Contains(t, f.Evidence, fmt.Sprintf("%d", len(body)), "evidence must name the true byte count")
+			}
+		}
+	})
+
+	t.Run("oversized final_files path-only entry returns a structured too-large envelope, not an error", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "big.go")
+		body := strings.Repeat("y", 100)
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+
+		h := newTestHandlers(t)
+		h.deps.Cfg.MaxPayloadBytes = 10
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "s",
+			FinalFiles: []FileArg{{Path: p}},
+		})
+		require.NoError(t, err, "an oversized path must not surface as a transport error")
+		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
+		require.True(t, hasCategory(env.Findings, verdict.CategoryTooLarge), "expected a payload_too_large finding")
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryTooLarge {
+				assert.Contains(t, f.Evidence, fmt.Sprintf("%d", len(body)), "evidence must name the true byte count")
+			}
+		}
+	})
+
+	t.Run("path outside ANTI_TANGENT_PLAN_ROOTS stays a plain transport error", func(t *testing.T) {
+		allowedRoot := t.TempDir()
+		outside := t.TempDir()
+		p := filepath.Join(outside, "evidence.diff")
+		require.NoError(t, os.WriteFile(p, []byte("diff --git a/x b/x\n+ok\n"), 0o644))
+
+		h := newTestHandlers(t)
+		h.deps.Cfg.PlanRoots = []string{allowedRoot}
+
+		_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:       "s",
+			FinalDiffPath: p,
+		})
+		require.Error(t, err, "outside-roots must stay a transport error, not an envelope")
+		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+	})
+
+	t.Run("missing file stays a plain transport error", func(t *testing.T) {
+		h := newTestHandlers(t)
+
+		_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "s",
+			FinalFiles: []FileArg{{Path: filepath.Join(t.TempDir(), "does-not-exist.go")}},
+		})
+		require.Error(t, err, "a missing file must stay a transport error, not an envelope")
 	})
 }

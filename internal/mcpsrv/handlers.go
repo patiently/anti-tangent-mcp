@@ -941,6 +941,25 @@ func checkEvidenceShape(args ValidateCompletionArgs) string {
 	return ""
 }
 
+// completionInputTooLargeError distinguishes an oversized final_diff_path or
+// final_files[i].path from every other resolveCompletionInputs failure. Only
+// this case gets mapped to the tooLargeEnvelope shape in ValidateCompletion;
+// every other error (missing file, non-regular file, outside
+// ANTI_TANGENT_PLAN_ROOTS) stays a plain transport error. bytes is the
+// file's TRUE size (from fileSource.Bytes, populated even on the errTooLarge
+// return — see resolveFileInput), not the configured cap.
+type completionInputTooLargeError struct {
+	field string // e.g. "final_diff_path" or "final_files[2].path"
+	bytes int
+	err   error // wraps errTooLarge
+}
+
+func (e *completionInputTooLargeError) Error() string {
+	return fmt.Sprintf("%s: %s", e.field, e.err)
+}
+
+func (e *completionInputTooLargeError) Unwrap() error { return e.err }
+
 // resolveCompletionInputs fills in FinalDiff and each FinalFiles[].Content
 // from disk for entries that supplied only a path. Mutates args in place so
 // every later stage — payload cap, evidence-shape guard, evidence cache key,
@@ -949,11 +968,14 @@ func checkEvidenceShape(args ValidateCompletionArgs) string {
 // Uses the shared MaxPayloadBytes, never PlanMaxPayloadBytes: completion
 // evidence did not gain the headroom validate_plan did.
 func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) error {
-	cap := h.deps.Cfg.MaxPayloadBytes
+	maxBytes := h.deps.Cfg.MaxPayloadBytes
 	roots := h.deps.Cfg.PlanRoots
 
 	if args.FinalDiffPath != "" {
-		content, _, err := resolveFileInput(args.FinalDiffPath, roots, cap)
+		content, src, err := resolveFileInput(args.FinalDiffPath, roots, maxBytes)
+		if errors.Is(err, errTooLarge) {
+			return &completionInputTooLargeError{field: "final_diff_path", bytes: src.Bytes, err: err}
+		}
 		if err != nil {
 			return fmt.Errorf("final_diff_path: %w", err)
 		}
@@ -964,7 +986,10 @@ func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) error {
 		if f.Path == "" || f.Content != "" {
 			continue
 		}
-		content, _, err := resolveFileInput(f.Path, roots, cap)
+		content, src, err := resolveFileInput(f.Path, roots, maxBytes)
+		if errors.Is(err, errTooLarge) {
+			return &completionInputTooLargeError{field: fmt.Sprintf("final_files[%d].path", i), bytes: src.Bytes, err: err}
+		}
 		if err != nil {
 			return fmt.Errorf("final_files[%d].path: %w", i, err)
 		}
@@ -1082,11 +1107,19 @@ func majorFindings(findings []verdict.Finding) []verdict.Finding {
 //  1. summary required check
 //  2. final_diff / final_diff_path mutual-exclusivity check
 //  2b. at-least-one-evidence check (final_diff_path counts, pre-resolution)
-//  2c. resolveCompletionInputs — materializes final_diff_path and any
+//  2c. effectiveMaxTokens + clampFinding — computed here (moved ahead of its
+//      old step-4 slot) so a too-large PATH input, detected next, can render
+//      through the same clamped tooLargeEnvelope shape as the inline
+//      payload-cap check below. Independent of evidence, so reordering it
+//      changes nothing else.
+//  2d. resolveCompletionInputs — materializes final_diff_path and any
 //      final_files[].path entries BEFORE the payload cap, evidence-shape
-//      guard, and evidence cache key see them
+//      guard, and evidence cache key see them. An oversized path input
+//      returns the SAME tooLargeEnvelope an oversized inline payload would;
+//      every other resolve failure (missing file, non-regular file, outside
+//      ANTI_TANGENT_PLAN_ROOTS) stays a plain transport error, matching how
+//      validate_plan's plan_path treats those cases.
 //  3. lightweight marker (empty session_id + non-empty evidence)
-//  4. effectiveMaxTokens + clampFinding
 //  5. payload-cap check
 //  6. evidence-shape guard (with rejection cache) — runs BEFORE session lookup
 //  7. session lookup (skipped in lightweight mode)
@@ -1113,11 +1146,43 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty")
 	}
 
-	// 2c. Resolve path inputs BEFORE the payload cap, the evidence-shape
+	// 2c. max-tokens override + clamp finding. Computed before resolution so
+	// an oversized path input (below) can be rendered through the same
+	// clamped tooLargeEnvelope shape the inline payload-cap check uses.
+	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PerTaskMaxTokens, h.deps.Cfg.MaxTokensCeiling)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+
+	// 2d. Resolve path inputs BEFORE the payload cap, the evidence-shape
 	// guard, and the evidence cache key. checkEvidenceShape must see resolved
 	// content: otherwise a caller could bypass the truncation guard entirely
 	// by passing a path to a file full of elided content. See design §2.1.
+	//
+	// An oversized path input surfaces as the SAME tooLargeEnvelope shape an
+	// oversized inline payload gets from the check at step 5 below — a
+	// caller shouldn't get useful structured guidance one way and a bare
+	// transport error the other. Every other resolve failure (missing file,
+	// non-regular file, outside ANTI_TANGENT_PLAN_ROOTS) is a caller mistake,
+	// not a size problem, and stays a plain transport error — consistent
+	// with validate_plan's plan_path (see the errors.Is(rerr, errTooLarge)
+	// branch there).
 	if err := h.resolveCompletionInputs(&args); err != nil {
+		var tooLarge *completionInputTooLargeError
+		if errors.As(err, &tooLarge) {
+			env := prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes,
+				fmt.Sprintf("%s is %d bytes, over the %d-byte cap; shrink it or split the evidence into smaller chunks.",
+					tooLarge.field, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes)), clamp)
+			h.recordStat(statParams{
+				tool:         "validate_completion",
+				verdict:      env.Verdict,
+				findings:     env.Findings,
+				modelUsed:    env.ModelUsed,
+				sessionID:    env.SessionID,
+				payloadBytes: tooLarge.bytes,
+			})
+			return envelopeResult(env)
+		}
 		return nil, Envelope{}, err
 	}
 
@@ -1127,12 +1192,6 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 
 	// 3. lightweight marker.
 	lightweight := args.SessionID == ""
-
-	// 4. max-tokens override + clamp finding.
-	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PerTaskMaxTokens, h.deps.Cfg.MaxTokensCeiling)
-	if err != nil {
-		return nil, Envelope{}, err
-	}
 
 	// 5. payload-cap check. In lightweight mode the surfaced session_id stays
 	// empty; otherwise we don't have the session yet, so use args.SessionID.
