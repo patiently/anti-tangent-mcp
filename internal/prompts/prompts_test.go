@@ -982,37 +982,134 @@ func TestRenderExtract_Milestone(t *testing.T) {
 }
 
 func TestPlanPromptSplit(t *testing.T) {
-	in := PlanInput{PlanText: "# Plan\n\n### Task 1: T\n\nbody\n", Mode: "thorough"}
+	planText := "# Plan\n\n### Task 1: T\n\nbody\n"
 	tasks := []planparser.RawTask{{Title: "Task 1: T", Body: "### Task 1: T\n\nbody\n"}}
 
-	fo, err := RenderPlanFindingsOnly(in)
-	require.NoError(t, err)
-	ch, err := RenderPlanTasksChunk(PlanChunkInput{
-		PlanText: in.PlanText, Mode: in.Mode, ChunkTasks: tasks,
-	})
-	require.NoError(t, err)
+	// Table-driven over ProjectKnowledge presence: both templates render
+	// ProjectKnowledge inside the shared region via a conditional block, and
+	// that conditional is duplicated across the two templates — exactly the
+	// place they are most likely to drift apart. A drift there would leave
+	// prefix-equality holding in the empty case while silently breaking it
+	// in the (more common, in practice) non-empty case, so both must be
+	// exercised.
+	cases := []struct {
+		name             string
+		projectKnowledge string
+	}{
+		{name: "no project knowledge", projectKnowledge: ""},
+		{name: "with project knowledge", projectKnowledge: "Decision 0042: cache pass reviews for 3 minutes."},
+	}
 
-	t.Run("prefix is shared byte-for-byte", func(t *testing.T) {
-		require.NotEmpty(t, fo.UserPrefix)
-		assert.Equal(t, fo.UserPrefix, ch.UserPrefix,
-			"the cache prefix must be identical or no cache read ever happens")
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := PlanInput{PlanText: planText, ProjectKnowledge: tc.projectKnowledge, Mode: "thorough"}
 
-	t.Run("prefix carries the plan, suffix carries the instructions", func(t *testing.T) {
-		assert.Contains(t, fo.UserPrefix, "### Task 1: T")
-		assert.NotContains(t, fo.UserPrefix, "## What to evaluate")
-		assert.True(t, strings.HasPrefix(strings.TrimLeft(fo.UserSuffix, "\n"), "## What to evaluate"))
-	})
+			fo, err := RenderPlanFindingsOnly(in)
+			require.NoError(t, err)
+			ch, err := RenderPlanTasksChunk(PlanChunkInput{
+				PlanText: planText, ProjectKnowledge: tc.projectKnowledge, Mode: in.Mode, ChunkTasks: tasks,
+			})
+			require.NoError(t, err)
 
-	t.Run("User is the concatenation", func(t *testing.T) {
-		assert.Equal(t, fo.UserPrefix+fo.UserSuffix, fo.User)
-		assert.Equal(t, ch.UserPrefix+ch.UserSuffix, ch.User)
-	})
+			t.Run("prefix is shared byte-for-byte", func(t *testing.T) {
+				require.NotEmpty(t, fo.UserPrefix)
+				assert.Equal(t, fo.UserPrefix, ch.UserPrefix,
+					"the cache prefix must be identical or no cache read ever happens")
+			})
+
+			t.Run("prefix carries the plan, suffix carries the instructions", func(t *testing.T) {
+				assert.Contains(t, fo.UserPrefix, "### Task 1: T")
+				assert.NotContains(t, fo.UserPrefix, "## What to evaluate")
+				assert.True(t, strings.HasPrefix(strings.TrimLeft(fo.UserSuffix, "\n"), "## What to evaluate"))
+			})
+
+			if tc.projectKnowledge != "" {
+				t.Run("prefix contains the project knowledge text", func(t *testing.T) {
+					assert.Contains(t, fo.UserPrefix, tc.projectKnowledge,
+						"project knowledge must stay in the shared/cacheable region, not move into the per-call suffix")
+					assert.Contains(t, ch.UserPrefix, tc.projectKnowledge)
+				})
+			}
+
+			t.Run("User is the concatenation", func(t *testing.T) {
+				assert.Equal(t, fo.UserPrefix+fo.UserSuffix, fo.User)
+				assert.Equal(t, ch.UserPrefix+ch.UserSuffix, ch.User)
+			})
+		})
+	}
 
 	t.Run("single-call renderer does not split", func(t *testing.T) {
-		single, err := RenderPlan(in)
+		single, err := RenderPlan(PlanInput{PlanText: planText, Mode: "thorough"})
 		require.NoError(t, err)
 		assert.Empty(t, single.UserPrefix, "single call must not get a breakpoint")
 		assert.Equal(t, single.User, single.UserSuffix)
 	})
+}
+
+// TestPlanSuffixIndex unit-tests the anchoring logic directly: the marker
+// must only match when it begins a line, never as a mid-line substring, so
+// a plan that happens to discuss "## What to evaluate" in prose does not
+// get mistaken for the real per-call section boundary.
+func TestPlanSuffixIndex(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{
+			name: "marker at the very start of the body",
+			body: "## What to evaluate\nrest",
+			want: 0,
+		},
+		{
+			name: "marker after a newline",
+			body: "prefix text\n## What to evaluate\nrest",
+			want: len("prefix text\n"),
+		},
+		{
+			name: "marker text embedded mid-line is not a match",
+			body: "the ## What to evaluate section is neat\nno real heading here",
+			want: -1,
+		},
+		{
+			name: "marker absent entirely",
+			body: "nothing to see here",
+			want: -1,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, planSuffixIndex(tc.body))
+		})
+	}
+}
+
+// TestSplitPlanPrompt_NoMarker_DegradesToWholeBodyAsSuffix is the missing
+// degradation-branch test: with no marker at all, the whole body must fall
+// through to UserSuffix and UserPrefix must stay empty, rather than caching
+// a wrong (or partial) span.
+func TestSplitPlanPrompt_NoMarker_DegradesToWholeBodyAsSuffix(t *testing.T) {
+	body := "no marker anywhere in this body\n"
+	out := splitPlanPrompt(body)
+	assert.Empty(t, out.UserPrefix)
+	assert.Equal(t, body, out.UserSuffix)
+}
+
+// TestRenderPlanFindingsOnly_MarkerMidParagraphInPlanText_SplitsAtRealHeading
+// is the full-render regression test for the anchoring fix: PlanText is
+// caller-supplied markdown interpolated into the shared region BEFORE the
+// real "## What to evaluate" heading, so a plan that merely discusses that
+// heading text inline (not at the start of a line) must not truncate the
+// cacheable prefix early. Prior to anchoring the marker to a line start,
+// this would have split inside the plan text instead of at the real
+// section boundary.
+func TestRenderPlanFindingsOnly_MarkerMidParagraphInPlanText_SplitsAtRealHeading(t *testing.T) {
+	planText := "# Plan\n\nThis plan explains what reviewers check for the ## What to evaluate section informally.\n\n### Task 1: T\n\nbody\n"
+	out, err := RenderPlanFindingsOnly(PlanInput{PlanText: planText, Mode: "thorough"})
+	require.NoError(t, err)
+
+	assert.Contains(t, out.UserPrefix, "informally",
+		"plan text discussing the marker mid-paragraph must stay entirely in the prefix")
+	assert.True(t, strings.HasPrefix(strings.TrimLeft(out.UserSuffix, "\n"), "## What to evaluate"),
+		"the suffix must still start at the real section heading, not the mid-paragraph mention")
 }

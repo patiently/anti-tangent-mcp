@@ -43,7 +43,7 @@ const planSuffixMarker = "## What to evaluate"
 // edit that removes it degrades to today's uncached behavior rather than
 // silently caching the wrong span.
 func splitPlanPrompt(body string) Output {
-	idx := strings.Index(body, planSuffixMarker)
+	idx := planSuffixIndex(body)
 	if idx < 0 {
 		return Output{System: systemPrompt, User: body, UserSuffix: body}
 	}
@@ -53,6 +53,23 @@ func splitPlanPrompt(body string) Output {
 		UserPrefix: body[:idx],
 		UserSuffix: body[idx:],
 	}
+}
+
+// planSuffixIndex returns the byte offset of planSuffixMarker where it
+// begins a LINE, not any mid-line occurrence. PlanText — arbitrary
+// user-supplied markdown — is interpolated into the shared region before
+// the real "## What to evaluate" heading, so an unanchored substring search
+// would match a plan that merely discusses that heading text inside a
+// paragraph and silently shrink the cacheable prefix. Returns -1 if the
+// marker never starts a line.
+func planSuffixIndex(body string) int {
+	if strings.HasPrefix(body, planSuffixMarker) {
+		return 0
+	}
+	if i := strings.Index(body, "\n"+planSuffixMarker); i >= 0 {
+		return i + 1 // skip the newline itself; suffix starts at "##..."
+	}
+	return -1
 }
 
 type File struct {
