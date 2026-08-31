@@ -353,17 +353,23 @@ func TestPlanPayloadCapAndRoots(t *testing.T) {
 	})
 
 	t.Run("roots parsed and cleaned", func(t *testing.T) {
-		// Built with the OS path-list separator (filepath.SplitList's convention)
-		// rather than a literal ":" so this subtest is correct on Windows too,
-		// where the separator is ";".
-		rootsEnv := strings.Join([]string{"/home/a/", "/srv/b", " "}, string(os.PathListSeparator))
+		// Built from t.TempDir() + filepath.Join so both entries are absolute
+		// and platform-native on Windows too (not just Unix-shaped literals),
+		// joined with the OS path-list separator (filepath.SplitList's
+		// convention) rather than a literal ":". base itself exists (created
+		// by t.TempDir()) but its two joined children do not.
+		base := t.TempDir()
+		rootA := filepath.Join(base, "does-not-exist-a")
+		rootB := filepath.Join(base, "does-not-exist-b")
+		rootsEnv := strings.Join([]string{rootA + string(filepath.Separator), rootB, " "},
+			string(os.PathListSeparator))
 		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": rootsEnv}
 		cfg, err := Load(envFrom(m))
 		require.NoError(t, err)
-		// Neither /home/a nor /srv/b exists in the test sandbox, so this also
-		// pins the not-yet-created-root fallback: EvalSymlinks fails and the
-		// Cleaned value is kept rather than erroring at startup.
-		assert.Equal(t, []string{"/home/a", "/srv/b"}, cfg.PlanRoots)
+		// Neither rootA nor rootB exists on disk, so this also pins the
+		// not-yet-created-root fallback: EvalSymlinks fails and the Cleaned
+		// value is kept rather than erroring at startup.
+		assert.Equal(t, []string{rootA, rootB}, cfg.PlanRoots)
 	})
 
 	// TestPlanPayloadCapAndRoots/"roots are symlink-resolved" is the regression
