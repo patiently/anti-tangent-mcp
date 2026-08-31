@@ -11,11 +11,15 @@ Controllers (superpowers' `subagent-driven-development`, hone-ai's equivalent, o
 
 ### 5.1 Plan-handoff gate (REQUIRED before any dispatch)
 
-Before executing a multi-task plan — whether you implement it yourself or dispatch to subagents — **call `validate_plan` once with the full plan markdown** first.
+Before executing a multi-task plan — whether you implement it yourself or dispatch to
+subagents — **call `validate_plan` once, passing `plan_path` with the absolute path to the
+plan file**. The server reads it, so plan size costs you no output tokens and the reviewer is
+guaranteed to see the same document your subagents will. Use `plan_text` only when the plan is
+not on disk; it is deprecated and will be removed in 1.0.0.
 
 **Procedure:**
 
-1. Call `validate_plan` with the full plan markdown. Capture the `PlanResult`.
+1. Call `validate_plan` with `plan_path`. Capture the `PlanResult`.
 2. **Surface results to the user.** Show `plan_verdict`, plan-level findings, and per-task verdicts/findings. For any task whose `suggested_header_block` is non-empty, show the proposed header and ask the human to adopt or revise. If task results include `lightweight_eligible` / `lightweight_reason`, treat them as advisory hints.
 3. **Apply the proposed header blocks** (the controller may apply automatically when verdicts are `pass`/`warn` and the human approves; defer to the human for `fail`).
 4. If anything material changed, call `validate_plan` again. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified).

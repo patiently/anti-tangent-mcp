@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-08-31
+
+### Added
+- **`plan_path` on `validate_plan`.** Pass an absolute path and the server reads the plan itself.
+  A plan large enough to exceed the caller's max-output-tokens setting was previously
+  unsubmittable at any token budget, because `plan_text` had to be emitted as part of the
+  calling model's own tool-call output. Reading from disk also guarantees the reviewer sees the
+  same document the implementing subagents will.
+- **Path inputs on `validate_completion`.** Omit a `final_files` entry's `content` to have the
+  server read its `path`, or pass `final_diff_path` instead of `final_diff`. Truncation checks
+  run on the resolved content, so a path is not a way around the evidence-shape guard.
+- **`ANTI_TANGENT_PLAN_ROOTS`** — colon-separated absolute directories that file-path inputs may
+  be read from. Empty (the default) is unrestricted.
+- **`ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES`** (default 1MB) — payload cap for `validate_plan` only.
+  The other tools keep the shared 200KB `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
+- **Reviewer-side prompt caching on the chunked plan path.** The findings-only call and every
+  chunk call share a byte-identical prefix through the plan text, now marked as an Anthropic
+  cache breakpoint. Cuts input tokens on a chunked round by roughly half. Single-call plans are
+  deliberately not cached — a breakpoint there is a write premium against zero reads.
+
+### Changed
+- The `validate_plan` too-large finding reports `plan:` rather than `plan_text:`, since the
+  content may have arrived via `plan_path`.
+- When `plan_path` is used, the summary block gains a `source:` line naming the resolved path,
+  byte count, and a short hash, so a controller can show which document cleared the gate.
+
+### Deprecated
+- **`plan_text` on `validate_plan`.** Still fully functional, now reporting one `minor` finding
+  pointing at `plan_path`. It will be removed in 1.0.0.
+
 ## [0.15.0] - 2026-08-17
 
 ### Added

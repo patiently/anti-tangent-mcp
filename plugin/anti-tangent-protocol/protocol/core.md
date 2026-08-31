@@ -45,7 +45,9 @@ When the reviewer encounters a plan claim it cannot verify text-only, as of v0.3
 - Use `pinned_by` to name existing tests/docs/commands that pin "unchanged behavior" ACs.
 - Use `controller_verified_references` for specific paths, symbols, line anchors, commands, or adjacent patterns the controller already verified before dispatch.
 - Do not paste self-review claims like "all file references were verified" into the plan text — the reviewer cannot confirm such claims and will flag them as `unverifiable_codebase_claim`.
-- State commit-policy carve-outs literally in the plan text. The reviewer reads only `plan_text`, not repo-level policy files.
+- State commit-policy carve-outs literally in the plan content. The reviewer sees only the plan
+  content you provide — via `plan_text` or `plan_path` — never repo-level policy files like
+  `CLAUDE.md` / `AGENTS.md`.
 - For doc deliverables, submit full content via `final_files`; diffs or prose summaries are often insufficient evidence.
 
 ### Choosing `pinned_by`, `context`, and `controller_verified_references`

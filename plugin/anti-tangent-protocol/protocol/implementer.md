@@ -59,6 +59,10 @@ not report DONE — fix the findings and re-validate. **Exception: when the
 response carries `submission_defect_only: true`, every blocking finding is
 about what you submitted, not about your code. Attach the missing evidence
 and re-submit; no rework is implied.**
+- Prefer paths over inline content: omit a `final_files` entry's `content` and the server reads
+  its absolute `path`, and pass `final_diff_path` instead of `final_diff` (write it first with
+  `git diff > /tmp/change.diff`). Truncation checks still apply to the resolved content — a file
+  containing `// snip` or a bare `...` line is rejected exactly as inline evidence would be.
 
 **3b. CodeScene pre-DONE check (REQUIRED when codescene-mcp is
 configured in your host).** Call `analyze_change_set` for the full
