@@ -94,6 +94,30 @@ func TestResolveFileInput(t *testing.T) {
 		_, _, err := resolveFileInput(real, nil, 1024)
 		require.NoError(t, err)
 	})
+
+	t.Run("filesystem root as root allows a nested path", func(t *testing.T) {
+		_, _, err := resolveFileInput(real, []string{string(filepath.Separator)}, 1024)
+		require.NoError(t, err, `root "/" must authorize everything beneath it`)
+	})
+}
+
+func TestWithinRoots(t *testing.T) {
+	sep := string(filepath.Separator)
+
+	t.Run("filesystem root matches everything beneath it", func(t *testing.T) {
+		assert.True(t, withinRoots(sep+filepath.Join("home", "x", "plan.md"), []string{sep}))
+	})
+
+	t.Run("root does not authorize a sibling with a shared prefix", func(t *testing.T) {
+		root := sep + filepath.Join("home", "foo")
+		victim := sep + filepath.Join("home", "foobar")
+		assert.False(t, withinRoots(victim, []string{root}), "/home/foo must not authorize /home/foobar")
+	})
+
+	t.Run("exact match root is contained", func(t *testing.T) {
+		root := sep + filepath.Join("home", "foo")
+		assert.True(t, withinRoots(root, []string{root}))
+	})
 }
 
 func TestFileSourceString(t *testing.T) {

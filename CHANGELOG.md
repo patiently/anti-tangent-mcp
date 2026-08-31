@@ -72,6 +72,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their side and an error that never named the new variable. It now defaults to
   `max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES)`; an explicit
   `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` still overrides in either direction.
+- **`implementer.md`'s `final_diff_path` recipe used `git rev-parse --git-dir`, which is relative
+  in a normal checkout.** A subagent following the recipe verbatim there passed a relative
+  `.git/anti-tangent-change.diff`, which `resolveFileInput` rejects as `path must be absolute` —
+  losing the whole `validate_completion` call. Switched to `git rev-parse --absolute-git-dir`,
+  which is absolute in both a normal checkout and a worktree.
+- **`ANTI_TANGENT_PLAN_ROOTS=/` (or a Windows drive root) matched nothing.** `withinRoots`'s
+  prefix test degenerated to requiring the literal string `//` when a root was the filesystem
+  root, so a root meant to allow every path refused all of them. Containment is now decided with
+  `filepath.Rel`, which handles a root-of-`/` correctly while still enforcing the
+  separator-boundary property (`/home/foo` still does not authorize `/home/foobar`).
+- The "outside `ANTI_TANGENT_PLAN_ROOTS`" error message joined the configured roots with a
+  hardcoded `:`, printing a value a Windows operator could not have typed (and that
+  `filepath.SplitList` would reject if pasted back). Now joined with
+  `os.PathListSeparator`, matching the parser.
 
 ### Deprecated
 - **`plan_text` on `validate_plan`.** Still fully functional, now reporting one `minor` finding

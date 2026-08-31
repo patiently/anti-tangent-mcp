@@ -67,7 +67,7 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 	}
 	if !withinRoots(resolved, roots) {
 		return "", fileSource{}, fmt.Errorf(
-			"%q is outside ANTI_TANGENT_PLAN_ROOTS (%s)", resolved, strings.Join(roots, ":"))
+			"%q is outside ANTI_TANGENT_PLAN_ROOTS (%s)", resolved, strings.Join(roots, string(os.PathListSeparator)))
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
@@ -92,8 +92,12 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 }
 
 // withinRoots reports whether p sits inside any root. Empty roots means
-// unrestricted. Matching requires a separator boundary so /home/foo does not
-// authorize /home/foobar.
+// unrestricted. Containment is decided via filepath.Rel rather than a raw
+// string-prefix test: a root of "/" (or a Windows drive root like "C:\") is
+// its own filesystem root, so a naive r+separator prefix test degenerates to
+// requiring the literal string "//" and matches nothing beneath it.
+// filepath.Rel handles that case correctly while still requiring a separator
+// boundary, so /home/foo does not authorize /home/foobar.
 func withinRoots(p string, roots []string) bool {
 	if len(roots) == 0 {
 		return true
@@ -101,7 +105,14 @@ func withinRoots(p string, roots []string) bool {
 	p = filepath.Clean(p)
 	for _, r := range roots {
 		r = filepath.Clean(r)
-		if p == r || strings.HasPrefix(p, r+string(filepath.Separator)) {
+		rel, err := filepath.Rel(r, p)
+		if err != nil {
+			continue
+		}
+		if rel == "." {
+			return true
+		}
+		if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return true
 		}
 	}
