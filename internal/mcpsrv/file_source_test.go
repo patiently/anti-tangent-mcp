@@ -96,7 +96,8 @@ func TestResolveFileInput(t *testing.T) {
 	})
 
 	t.Run("filesystem root as root allows a nested path", func(t *testing.T) {
-		_, _, err := resolveFileInput(real, []string{string(filepath.Separator)}, 1024)
+		root := filepath.VolumeName(real) + string(filepath.Separator)
+		_, _, err := resolveFileInput(real, []string{root}, 1024)
 		require.NoError(t, err, `root "/" must authorize everything beneath it`)
 	})
 }
