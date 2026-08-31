@@ -1492,3 +1492,96 @@ func TestValidatePlanPathInput(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Task 3 fix round 1 (v0.16.0) — deprecation must not leak across the shared
+// plan-pass cache entry when plan_text and plan_path supply identical content
+// ---------------------------------------------------------------------------
+
+// countPlanDeprecationFindings counts how many findings in the slice are the
+// plan_text deprecation notice (see prependPlanDeprecation). Unlike
+// stripPlanDeprecationFinding, this does not mutate/copy — it's used purely
+// for assertions on finding count.
+func countPlanDeprecationFindings(findings []verdict.Finding) int {
+	n := 0
+	for _, f := range findings {
+		if f.Category == verdict.CategoryOther && f.Criterion == "input" {
+			n++
+		}
+	}
+	return n
+}
+
+// assertPlanSummaryMatchesFindings checks that SummaryBlock's
+// `plan_findings: N (...)` count matches len(pr.PlanFindings), so the two
+// never drift when the deprecation finding is added/omitted after
+// SummaryBlock was first computed.
+func assertPlanSummaryMatchesFindings(t *testing.T, pr verdict.PlanResult) {
+	t.Helper()
+	want := "plan_findings: " + strconv.Itoa(len(pr.PlanFindings)) + " ("
+	assert.Contains(t, pr.SummaryBlock, want,
+		"SummaryBlock's plan_findings count must match len(PlanFindings)")
+}
+
+// TestValidatePlan_DeprecationNotCachedAcrossInputMethods is the regression
+// test for the review finding that planPassCacheKey keys only on plan
+// content/model/mode, not on which argument (plan_text or plan_path)
+// supplied it. Two calls with byte-identical plan content share one cache
+// entry within the pass cache's TTL; the deprecation finding must therefore
+// be applied per-call from the shared entry, never stored on it — otherwise
+// whichever call populates the entry first would decide whether the OTHER
+// call's response carries the deprecation notice, independent of what that
+// second call actually passed.
+func TestValidatePlan_DeprecationNotCachedAcrossInputMethods(t *testing.T) {
+	planMD := buildPlanWithNTasks(1)
+
+	t.Run("plan_path then plan_text: cache hit gains the deprecation finding", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "plan.md")
+		require.NoError(t, os.WriteFile(p, []byte(planMD), 0o644))
+
+		rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+		h := &handlers{deps: newDeps(t, rv)}
+
+		_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: p})
+		require.NoError(t, err)
+		require.Equal(t, verdict.VerdictPass, first.PlanVerdict, "only pass results are cached")
+		assert.Equal(t, 0, countPlanDeprecationFindings(first.PlanFindings),
+			"plan_path call must not carry the deprecation finding")
+		assertPlanSummaryMatchesFindings(t, first)
+		require.Equal(t, 1, rv.Calls)
+
+		_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planMD})
+		require.NoError(t, err)
+		assert.Equal(t, 1, rv.Calls, "second call must be a cache hit, not a fresh reviewer call")
+		assert.Contains(t, second.NextAction, "[cached",
+			"second call must be served from the shared cache entry, proving this exercises the cache-hit path")
+		assert.Equal(t, 1, countPlanDeprecationFindings(second.PlanFindings),
+			"plan_text call must carry exactly one deprecation finding, even on a cache hit")
+		assertPlanSummaryMatchesFindings(t, second)
+	})
+
+	t.Run("plan_text then plan_path: cache hit does not inherit the deprecation finding", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "plan.md")
+		require.NoError(t, os.WriteFile(p, []byte(planMD), 0o644))
+
+		rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+		h := &handlers{deps: newDeps(t, rv)}
+
+		_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planMD})
+		require.NoError(t, err)
+		require.Equal(t, verdict.VerdictPass, first.PlanVerdict, "only pass results are cached")
+		assert.Equal(t, 1, countPlanDeprecationFindings(first.PlanFindings),
+			"plan_text call must carry exactly one deprecation finding")
+		assertPlanSummaryMatchesFindings(t, first)
+		require.Equal(t, 1, rv.Calls)
+
+		_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: p})
+		require.NoError(t, err)
+		assert.Equal(t, 1, rv.Calls, "second call must be a cache hit, not a fresh reviewer call")
+		assert.Contains(t, second.NextAction, "[cached",
+			"second call must be served from the shared cache entry, proving this exercises the cache-hit path")
+		assert.Equal(t, 0, countPlanDeprecationFindings(second.PlanFindings),
+			"plan_path call must not inherit the plan_text call's deprecation finding")
+		assertPlanSummaryMatchesFindings(t, second)
+	})
+}

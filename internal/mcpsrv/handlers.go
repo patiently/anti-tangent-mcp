@@ -1411,6 +1411,16 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}
 	cacheKey := planPassCacheKey(planText, projectKnowledge, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
 	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey); ok {
+		// Deprecation is a property of THIS call's input (plan_text vs.
+		// plan_path), not of the cached plan content, so it is applied here
+		// rather than stored on the entry — a plan_path call must not
+		// inherit a deprecation finding left by an earlier plan_text call
+		// (or vice versa) that happened to produce the same cache key.
+		// lookup() already recomputed SummaryBlock without the finding;
+		// recompute it again now that the finding may have been added, so
+		// SummaryBlock's count/list stays consistent with PlanFindings.
+		cached = prependPlanDeprecation(cached, args.PlanText != "")
+		cached.SummaryBlock = formatPlanSummary(cached, cachedModelUsed, 0)
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
 		h.recordStat(statParams{
@@ -1479,13 +1489,25 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// prepend before their own finalizePlanResult call because they always
 	// carry a critical finding, which already forces fail regardless of
 	// minor count.
-	pr = prependPlanDeprecation(pr, args.PlanText != "")
 	if pr.PlanRunID == "" {
 		run := h.deps.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
 		pr.PlanRunID = run.ID
 		pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
 	}
+	// Cache the result WITHOUT the deprecation finding: the finding is a
+	// property of which argument THIS call used, not of the plan content,
+	// so a plan_text call and a plan_path call with byte-identical content
+	// correctly share one cache entry. Keying on "which input arg" would
+	// split the cache in two for no benefit. Deprecation is applied per-call
+	// below, after the entry is stored — see the mirrored comment on the
+	// cache-hit branch above.
 	h.planCache().store(cacheKey, pr, modelUsed)
+	pr = prependPlanDeprecation(pr, args.PlanText != "")
+	// SummaryBlock's finding count/list must reflect the deprecation
+	// finding when present, so recompute it after the prepend — the
+	// pre-deprecation recompute above (inside the PlanRunID block) is not
+	// enough on its own.
+	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
 	h.recordStat(statParams{
 		tool:            "validate_plan",
 		verdict:         string(pr.PlanVerdict),
