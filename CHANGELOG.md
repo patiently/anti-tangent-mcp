@@ -10,9 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **`plan_path` on `validate_plan`.** Pass an absolute path and the server reads the plan itself.
   A plan large enough to exceed the caller's max-output-tokens setting was previously
-  unsubmittable at any token budget, because `plan_text` had to be emitted as part of the
-  calling model's own tool-call output. Reading from disk also guarantees the reviewer sees the
-  same document the implementing subagents will.
+  unsubmittable under the caller's output-token limit, because `plan_text` had to be emitted as
+  part of the calling model's own tool-call output. Reading from disk also guarantees the
+  reviewer sees the same document the implementing subagents will.
 - **Path inputs on `validate_completion`.** Omit a `final_files` entry's `content` to have the
   server read its `path`, or pass `final_diff_path` instead of `final_diff`. Truncation checks
   run on the resolved content, so a path is not a way around the evidence-shape guard.

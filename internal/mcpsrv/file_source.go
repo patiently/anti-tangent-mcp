@@ -108,7 +108,7 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 	if err != nil {
 		return "", fileSource{}, fmt.Errorf("open %q: %w", resolved, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Re-stat from the open handle rather than trusting the path-based check
 	// that would have run between the roots check and here — this is the

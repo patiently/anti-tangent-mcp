@@ -884,7 +884,7 @@ func validatePlanTool() *mcp.Tool {
 			"Call this once at plan-handoff time; the per-task `validate_task_spec` is still called by each implementing subagent at task start. " +
 			"Pass plan_path with the ABSOLUTE path to the plan file — the server reads it, so a large plan costs the caller no output tokens. " +
 			"plan_text is deprecated and will be removed in 1.0.0. Exactly one of the two must be set. " +
-			"If repo policy has carve-outs such as docs-only commit exceptions, state them literally in plan_text — the reviewer cannot read external CLAUDE.md policy.",
+			"If repo policy has carve-outs such as docs-only commit exceptions, state them literally in the plan — the reviewer cannot read external CLAUDE.md policy.",
 	}
 }
 

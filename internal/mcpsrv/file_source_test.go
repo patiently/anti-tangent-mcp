@@ -122,7 +122,7 @@ func TestResolveFileInput(t *testing.T) {
 
 		f, err := openNoFollow(link)
 		if err == nil {
-			f.Close()
+			_ = f.Close()
 			t.Fatal("openNoFollow followed a symlink at the final component")
 		}
 

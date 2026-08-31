@@ -61,20 +61,24 @@ about what you submitted, not about your code. Attach the missing evidence
 and re-submit; no rework is implied.**
 - Prefer paths over inline content: omit a `final_files` entry's `content` and the server reads
   its absolute `path`, and pass `final_diff_path` instead of `final_diff` (write it first with
-  `git diff HEAD > "$(git rev-parse --absolute-git-dir)/anti-tangent-change.diff"` — a repo-local
-  scratch path, guaranteed writable and never tracked by git — then pass that same absolute path
-  as `final_diff_path`; use `--absolute-git-dir`, not `--git-dir`, which prints a relative `.git`
-  in a normal checkout and would make `final_diff_path` fail the server's absolute-path check —
-  `--absolute-git-dir` resolves correctly in both a normal checkout and a worktree, where `.git`
-  is a regular file rather than a directory and `"$PWD/.git/..."` dies with `Not a directory`).
-  Use `git diff HEAD`, not bare `git diff` — bare `git diff` shows unstaged changes only and is
-  empty once you've staged or committed, which is the normal state by the time you call
+  `git add -A && git diff HEAD > "$(git rev-parse --absolute-git-dir)/anti-tangent-change.diff"` —
+  a repo-local scratch path, guaranteed writable and never tracked by git — then pass that same
+  absolute path as `final_diff_path`; use `--absolute-git-dir`, not `--git-dir`, which prints a
+  relative `.git` in a normal checkout and would make `final_diff_path` fail the server's
+  absolute-path check — `--absolute-git-dir` resolves correctly in both a normal checkout and a
+  worktree, where `.git` is a regular file rather than a directory and `"$PWD/.git/..."` dies with
+  `Not a directory`). **The `git add -A` is required, not optional**: bare `git diff HEAD` omits
+  untracked files entirely, so a task that creates a new source or test file produces a non-empty
+  but incomplete diff and the reviewer silently never sees the new file. If you'd rather not stage
+  everything, pass new files individually as `final_files[].path` entries instead. Use `git diff
+  HEAD`, not bare `git diff` — bare `git diff` shows unstaged changes only and is empty once
+  you've staged or committed, which is the normal state by the time you call
   `validate_completion`. If your task's work is already committed, diff from the commit the task
-  started at instead (`git diff <task-base-commit>`), since `git diff HEAD` is empty too once
-  there is nothing left uncommitted. An empty diff file is rejected with a structured error, not
-  a silent pass, so a wrong recipe surfaces immediately instead of shipping a no-evidence review.
-  Truncation checks still apply to the resolved content — a file containing `// snip` or a bare
-  `...` line is rejected exactly as inline evidence would be. If your host sets
+  started at instead (`git add -A && git diff <task-base-commit>`), since `git diff HEAD` is empty
+  too once there is nothing left uncommitted. An empty diff file is rejected with a structured
+  error, not a silent pass, so a wrong recipe surfaces immediately instead of shipping a
+  no-evidence review. Truncation checks still apply to the resolved content — a file containing
+  `// snip` or a bare `...` line is rejected exactly as inline evidence would be. If your host sets
   `ANTI_TANGENT_PLAN_ROOTS`, whatever scratch location you use must fall inside one of those
   roots or the server refuses the path — a bare `/tmp` path will NOT satisfy a roots list scoped
   to your project directories, and neither will `git rev-parse --absolute-git-dir`'s worktree

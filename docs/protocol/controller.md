@@ -19,7 +19,7 @@ not on disk; it is deprecated and will be removed in 1.0.0.
 
 **Procedure:**
 
-1. Call `validate_plan` with `plan_path`. Capture the `PlanResult`.
+1. Call `validate_plan`, passing `plan_path` when the plan is on disk, otherwise `plan_text`. Capture the `PlanResult`.
 2. **Surface results to the user.** Show `plan_verdict`, plan-level findings, and per-task verdicts/findings. For any task whose `suggested_header_block` is non-empty, show the proposed header and ask the human to adopt or revise. If task results include `lightweight_eligible` / `lightweight_reason`, treat them as advisory hints.
 3. **Apply the proposed header blocks** (the controller may apply automatically when verdicts are `pass`/`warn` and the human approves; defer to the human for `fail`).
 4. If anything material changed, call `validate_plan` again. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified).

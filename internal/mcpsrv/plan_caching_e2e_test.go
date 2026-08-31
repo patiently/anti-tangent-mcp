@@ -137,6 +137,9 @@ func TestPlanCachingReadsPrefixE2E(t *testing.T) {
 
 	cfg, err := config.Load(os.Getenv)
 	require.NoError(t, err)
+	if cfg.PlanModel.Provider != "anthropic" {
+		t.Skipf("prompt-prefix caching is Anthropic-specific; resolved plan model provider is %q, not anthropic", cfg.PlanModel.Provider)
+	}
 	cfg.PlanTasksPerChunk = 8
 
 	d := Deps{

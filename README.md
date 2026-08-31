@@ -331,7 +331,10 @@ plain open on Windows) as defense in depth against the path being swapped out fr
 This narrows the window but does not eliminate it, and it is defense in depth rather than the
 primary guarantee either way: the trust model above already assumes the calling agent has its own
 unrestricted filesystem access, so `ANTI_TANGENT_PLAN_ROOTS` is about narrowing what the server
-reads on the caller's behalf, not sandboxing an untrusted caller.
+reads on the caller's behalf, not sandboxing an untrusted caller. On Windows specifically, the
+final-component symlink-swap window is not closed at all — Go's syscall package exposes no
+`O_NOFOLLOW` equivalent there, so `ANTI_TANGENT_PLAN_ROOTS` on that platform is advisory against
+caller mistakes rather than enforced against a race.
 
 `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` defaults to `max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES)`,
 computed once at startup after `ANTI_TANGENT_MAX_PAYLOAD_BYTES` is read — so raising the shared
@@ -451,7 +454,7 @@ The middle three (`validate_task_spec`, `check_progress`, `validate_completion`)
 
 `validate_completion` (v0.2.0+) accepts `final_diff` as an alternative or supplement to `final_files`. Pass a unified diff when the changed files are too large to inline. At least one of `final_files`, `final_diff`, or `test_evidence` must be non-empty — summary-only requests are rejected. Timeout errors (default 180s, configurable via `ANTI_TANGENT_REQUEST_TIMEOUT`) include the configured timeout value and the env-var name for self-diagnosis.
 
-`validate_completion` (v0.16.0+) also accepts `final_diff_path` instead of `final_diff`, and a `final_files` entry may omit `content` and set `path` instead — the server reads the file itself, so evidence costs no output tokens. Truncation checks (`// snip`, a bare `...` line, `(truncated)`) run on the resolved content, so a path is not a way around the evidence-shape guard; oversized path evidence returns the same structured too-large envelope as oversized inline evidence.
+`validate_completion` (v0.16.0+) also accepts `final_diff_path` (an absolute path) instead of `final_diff`, and a `final_files` entry may omit `content` and set `path` (also an absolute path) instead — the server reads the file itself, so evidence costs no output tokens. Both paths must be absolute, which `resolveFileInput` enforces; a relative path is rejected. Truncation checks (`// snip`, a bare `...` line, `(truncated)`) run on the resolved content, so a path is not a way around the evidence-shape guard; oversized path evidence returns the same structured too-large envelope as oversized inline evidence.
 
 ## Project knowledge (optional)
 

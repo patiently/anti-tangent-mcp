@@ -353,7 +353,11 @@ func TestPlanPayloadCapAndRoots(t *testing.T) {
 	})
 
 	t.Run("roots parsed and cleaned", func(t *testing.T) {
-		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": "/home/a/:/srv/b: "}
+		// Built with the OS path-list separator (filepath.SplitList's convention)
+		// rather than a literal ":" so this subtest is correct on Windows too,
+		// where the separator is ";".
+		rootsEnv := strings.Join([]string{"/home/a/", "/srv/b", " "}, string(os.PathListSeparator))
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": rootsEnv}
 		cfg, err := Load(envFrom(m))
 		require.NoError(t, err)
 		// Neither /home/a nor /srv/b exists in the test sandbox, so this also
