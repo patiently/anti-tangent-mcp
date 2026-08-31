@@ -54,6 +54,71 @@ func TestReviewPlanChunked_9Tasks_2Chunks(t *testing.T) {
 	}
 }
 
+// TestReviewPlanChunked_CachePrefixWiring pins the wiring between
+// prompts.Output.UserPrefix and providers.Request.CachePrefix at the handler
+// level, where nothing else in the default suite asserts it. Without this,
+// a regression such as `User: rendered.User` on a chunk request (sending the
+// prefix duplicated into the body instead of the suffix alone) — or
+// resurrecting a CachePrefix on the Pass-1 request — would pass every other
+// test, which is exactly how the bug this fix wave addresses reached final
+// review.
+func TestReviewPlanChunked_CachePrefixWiring(t *testing.T) {
+	plan := buildPlanWithNTasks(9)
+	sr := &scriptedReviewer{
+		responses: []providers.Response{
+			passOneResp(),                   // call 1: Pass1
+			chunkResp(t, titlesRange(1, 8)), // call 2: tasks 1-8
+			chunkResp(t, titlesRange(9, 9)), // call 3: task 9
+		},
+	}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.Len(t, sr.requests, 3, "Pass1 + 2 chunks = 3 requests")
+
+	pass1Req, chunk1Req, chunk2Req := sr.requests[0], sr.requests[1], sr.requests[2]
+
+	assert.Empty(t, pass1Req.CachePrefix,
+		"Pass 1 must send an EMPTY CachePrefix: its tools block (PlanFindingsOnlySchema) "+
+			"differs from the chunk calls' (TasksOnlySchema), so a cache entry it wrote "+
+			"could never be read back — a breakpoint there is pure write premium")
+
+	require.NotEmpty(t, chunk1Req.CachePrefix, "chunk 1's request must carry a non-empty CachePrefix")
+	require.NotEmpty(t, chunk2Req.CachePrefix, "chunk 2's request must carry a non-empty CachePrefix")
+	assert.Equal(t, chunk1Req.CachePrefix, chunk2Req.CachePrefix,
+		"all chunk requests must share the identical CachePrefix value so Anthropic can match the cache entry across chunks")
+
+	// Independently re-render what reviewPlanChunked itself would have
+	// rendered for this plan, and check the captured requests against it
+	// directly rather than against each other only.
+	tasks, _ := planparser.SplitTasks(plan)
+	require.Len(t, tasks, 9)
+	rendered, err := renderPlanReview(renderPlanReviewInputs{
+		PlanText:  plan,
+		Tasks:     tasks,
+		ChunkSize: 8,
+	})
+	require.NoError(t, err)
+	require.Len(t, rendered.Chunks, 2, "9 tasks at chunk size 8 renders 2 chunks")
+	wantPrefix := rendered.Chunks[0].Prompt.UserPrefix
+	require.NotEmpty(t, wantPrefix)
+	assert.Equal(t, wantPrefix, chunk1Req.CachePrefix, "chunk 1's CachePrefix must equal the rendered UserPrefix")
+	assert.Equal(t, wantPrefix, chunk2Req.CachePrefix, "chunk 2's CachePrefix must equal the rendered UserPrefix")
+
+	// Each chunk's User must be the SUFFIX only. A regression that instead
+	// sends the full rendered.User (prefix+suffix) would still "work"
+	// functionally, but would duplicate the prefix into the body and the
+	// cache would never match — so assert the negative directly.
+	assert.Equal(t, rendered.Chunks[0].Prompt.UserSuffix, chunk1Req.User, "chunk 1's User must be exactly the rendered suffix")
+	assert.Equal(t, rendered.Chunks[1].Prompt.UserSuffix, chunk2Req.User, "chunk 2's User must be exactly the rendered suffix")
+	assert.False(t, strings.HasPrefix(chunk1Req.User, chunk1Req.CachePrefix),
+		"chunk 1's User must NOT start with its own CachePrefix — that would mean the full body was sent instead of the suffix")
+	assert.False(t, strings.HasPrefix(chunk2Req.User, chunk2Req.CachePrefix),
+		"chunk 2's User must NOT start with its own CachePrefix — that would mean the full body was sent instead of the suffix")
+}
+
 // TestReviewPlanChunked_16Tasks_2Chunks verifies that a 16-task plan with
 // chunkSize=8 produces exactly 3 reviewer calls: Pass1 + chunk(8) + chunk(8).
 func TestReviewPlanChunked_16Tasks_2Chunks(t *testing.T) {

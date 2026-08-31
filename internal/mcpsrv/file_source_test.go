@@ -95,3 +95,23 @@ func TestResolveFileInput(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func TestFileSourceString(t *testing.T) {
+	t.Run("zero value renders empty", func(t *testing.T) {
+		assert.Equal(t, "", fileSource{}.String())
+	})
+
+	t.Run("with hash", func(t *testing.T) {
+		s := fileSource{Path: "/abs/plan.md", Bytes: 170158, SHA256: "4f2a9c1eabcdef0123456789"}
+		assert.Equal(t, "/abs/plan.md (170158 B, sha256 4f2a9c1e…)", s.String())
+	})
+
+	t.Run("empty hash omits the sha256 fragment", func(t *testing.T) {
+		// This is the too-large early exit's shape: resolveFileInput returns
+		// before hashing, so SHA256 is empty. The line must not render as
+		// "sha256 …" with zero hex digits.
+		s := fileSource{Path: "/abs/path.md", Bytes: 5000}
+		assert.Equal(t, "/abs/path.md (5000 B)", s.String())
+		assert.NotContains(t, s.String(), "sha256")
+	})
+}

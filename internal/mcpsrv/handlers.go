@@ -1922,16 +1922,23 @@ func (h *handlers) reviewPlanChunked(
 	var modelUsed string
 
 	// ----- Pass 1: plan-findings only -----
-	// CachePrefix writes the shared cacheable head here so the per-chunk
-	// calls below (reviewOnePlanChunk) can read it back at ~0.1x input price
-	// instead of re-billing the whole plan on every chunk.
+	// Deliberately NO CachePrefix here. Anthropic keys a cache entry on the
+	// full request prefix — tools, then system, then the cached message
+	// content — and this call's tools block is verdict.PlanFindingsOnlySchema(),
+	// while every chunk call below sends verdict.TasksOnlySchema(). Those
+	// differ, so an entry Pass 1 wrote could never be read by a chunk call:
+	// it would just pay the ~1.25x cache-write premium for zero reads.
+	// Sending the full rendered.FindingsOnly.User as plain text costs the
+	// same 1.0x as before this feature existed. Chunk 1 (reviewOnePlanChunk)
+	// is the one that actually writes the shared prefix; chunks 2+ read it.
+	// Do not add CachePrefix back here without re-deriving the economics in
+	// the design doc — see docs/superpowers/specs (0.16.0 caching section).
 	req := providers.Request{
-		Model:       model.Model,
-		System:      rendered.FindingsOnly.System,
-		CachePrefix: rendered.FindingsOnly.UserPrefix,
-		User:        rendered.FindingsOnly.UserSuffix,
-		MaxTokens:   maxTokens,
-		JSONSchema:  verdict.PlanFindingsOnlySchema(),
+		Model:      model.Model,
+		System:     rendered.FindingsOnly.System,
+		User:       rendered.FindingsOnly.User,
+		MaxTokens:  maxTokens,
+		JSONSchema: verdict.PlanFindingsOnlySchema(),
 	}
 	start := time.Now()
 	resp, err := rv.Review(ctx, req)
@@ -1943,7 +1950,7 @@ func (h *handlers) reviewPlanChunked(
 	}
 	pf, err := verdict.ParsePlanFindingsOnly(resp.RawJSON)
 	if err != nil {
-		req.User = rendered.FindingsOnly.UserSuffix + "\n\n" + verdict.RetryHint()
+		req.User = rendered.FindingsOnly.User + "\n\n" + verdict.RetryHint()
 		resp, err = rv.Review(ctx, req)
 		if err != nil {
 			if errors.Is(err, providers.ErrResponseTruncated) {
@@ -2018,12 +2025,15 @@ func (h *handlers) reviewOnePlanChunk(
 	chunkTasks []planparser.RawTask,
 	maxTokens int,
 ) (verdict.TasksOnly, int64, []byte, error) {
-	// CachePrefix is set once here, outside the attempt closure below: it is
-	// the shared head Pass 1 (reviewPlanChunked) already wrote to the cache,
-	// so this chunk call reads it back at ~0.1x input price instead of
-	// re-billing the whole plan. The values passed to attempt() are the
-	// SUFFIX only — never the full rendered.User — or the prefix would be
-	// duplicated into the body and the cache would never match.
+	// CachePrefix is set once here, outside the attempt closure below. Pass 1
+	// (reviewPlanChunked) deliberately sends no breakpoint of its own — its
+	// tools block differs from this one, so its entry could never be read
+	// here — which makes THIS the first call to actually write the shared
+	// head to the cache: chunk 1 pays the ~1.25x write, chunks 2+ read it
+	// back at ~0.1x input price instead of re-billing the whole plan. The
+	// values passed to attempt() are the SUFFIX only — never the full
+	// rendered.User — or the prefix would be duplicated into the body and
+	// the cache would never match.
 	req := providers.Request{
 		Model:       model.Model,
 		System:      rendered.System,

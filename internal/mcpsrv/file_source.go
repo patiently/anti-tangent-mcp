@@ -26,10 +26,16 @@ type fileSource struct {
 }
 
 // String renders the summary provenance line's value. Empty for a zero
-// fileSource, so plan_text callers get no source line at all.
+// fileSource, so plan_text callers get no source line at all. SHA256 is
+// empty on the too-large early exit (resolveFileInput returns before
+// hashing), so the "sha256 …" fragment is omitted entirely rather than
+// rendering as zero hex digits.
 func (s fileSource) String() string {
 	if s.Path == "" {
 		return ""
+	}
+	if s.SHA256 == "" {
+		return fmt.Sprintf("%s (%d B)", s.Path, s.Bytes)
 	}
 	short := s.SHA256
 	if len(short) > 8 {

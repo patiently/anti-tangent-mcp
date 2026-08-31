@@ -13,16 +13,21 @@ import (
 
 // scriptedReviewer returns canned responses in order. Each Review() call
 // pops the next response. Useful for testing the chunked path's exact
-// call sequence.
+// call sequence. It also records every providers.Request it receives, in
+// call order, so a test can assert on exactly what was wired onto the wire
+// (e.g. CachePrefix) without needing a live provider — see
+// TestReviewPlanChunked_CachePrefixWiring.
 type scriptedReviewer struct {
 	responses []providers.Response
 	errors    []error // optional parallel slice; entry at index i applies to call i
 	calls     int
+	requests  []providers.Request
 }
 
 func (s *scriptedReviewer) Name() string { return "anthropic" }
 
-func (s *scriptedReviewer) Review(_ context.Context, _ providers.Request) (providers.Response, error) {
+func (s *scriptedReviewer) Review(_ context.Context, req providers.Request) (providers.Response, error) {
+	s.requests = append(s.requests, req)
 	if s.calls >= len(s.responses) {
 		return providers.Response{}, fmt.Errorf("scriptedReviewer: unexpected call #%d", s.calls+1)
 	}

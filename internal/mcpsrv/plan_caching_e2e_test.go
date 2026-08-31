@@ -160,8 +160,22 @@ func TestPlanCachingReadsPrefixE2E(t *testing.T) {
 
 	_, _, err = h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(rec.usages), 2, "chunked path makes >= 2 calls")
+	// 80 tasks / PlanTasksPerChunk=8 = 10 chunks, so usages is
+	// [pass1, chunk1, chunk2, ..., chunk10] — at least 3 calls.
+	require.GreaterOrEqual(t, len(rec.usages), 3, "chunked path makes pass1 + at least 2 chunk calls")
 
-	assert.Greater(t, rec.usages[0].CacheCreationInputTokens, 0, "first call writes the prefix")
-	assert.Greater(t, rec.usages[1].CacheReadInputTokens, 0, "second call reads it back")
+	// usages[0] is Pass 1 (plan-findings-only). It deliberately sends no
+	// CachePrefix at all — see reviewPlanChunked — so it neither writes nor
+	// reads the cache; asserting on it here would be asserting on a call
+	// that was never supposed to touch the cache.
+	//
+	// usages[1] is chunk 1, the FIRST call carrying the chunk schema
+	// (verdict.TasksOnlySchema()). Because Pass 1's tools block differs from
+	// the chunk calls' tools block, Anthropic can never match a cache entry
+	// written under Pass 1 against a chunk call — so chunk 1, not Pass 1, is
+	// the true cache writer: it reports a cache write and zero cache read.
+	// usages[2] is chunk 2, the first call that can actually read back what
+	// chunk 1 wrote.
+	assert.Greater(t, rec.usages[1].CacheCreationInputTokens, 0, "chunk 1 (usages[1]) is the true cache writer, since Pass 1 sends no breakpoint")
+	assert.Greater(t, rec.usages[2].CacheReadInputTokens, 0, "chunk 2 (usages[2]) reads back the prefix chunk 1 wrote")
 }

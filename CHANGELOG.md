@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The other tools keep the shared 200KB `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
 - **Reviewer-side prompt caching on the chunked plan path.** The findings-only call and every
   chunk call share a byte-identical prefix through the plan text, now marked as an Anthropic
-  cache breakpoint. Cuts input tokens on a chunked round by roughly half. Single-call plans are
-  deliberately not cached — a breakpoint there is a write premium against zero reads.
+  cache breakpoint. Cuts input tokens on a chunked round, increasingly so as the chunk count
+  grows. Single-call plans are deliberately not cached — a breakpoint there is a write premium
+  against zero reads.
 
 ### Changed
 - The `validate_plan` too-large finding reports `plan:` rather than `plan_text:`, since the
