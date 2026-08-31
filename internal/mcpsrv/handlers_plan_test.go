@@ -1,9 +1,12 @@
 package mcpsrv
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -614,7 +617,26 @@ func runValidatePlanWithReviewerJSON(t *testing.T, raw []byte, taskCount int) (v
 	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
 		PlanText: buildPlanWithNTasks(taskCount),
 	})
+	// Every caller of this helper uses plan_text and predates the plan_path
+	// deprecation notice; strip it here rather than rework each caller's
+	// unrelated rollup/calibration assertions to account for an extra,
+	// orthogonal finding. See TestValidatePlanPathInput for deprecation
+	// coverage.
+	pr.PlanFindings = stripPlanDeprecationFinding(pr.PlanFindings)
 	return pr, err
+}
+
+// stripPlanDeprecationFinding removes the plan_text deprecation notice (see
+// prependPlanDeprecation) from a findings slice, if present.
+func stripPlanDeprecationFinding(findings []verdict.Finding) []verdict.Finding {
+	out := make([]verdict.Finding, 0, len(findings))
+	for _, f := range findings {
+		if f.Category == verdict.CategoryOther && f.Criterion == "input" {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 func TestValidatePlan_RollsUpTaskUnverifiableFindings(t *testing.T) {
@@ -738,6 +760,7 @@ func TestValidatePlan_ChunkedUnverifiableFindingsRollUp(t *testing.T) {
 
 	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(9)})
 	require.NoError(t, err)
+	pr.PlanFindings = stripPlanDeprecationFinding(pr.PlanFindings)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, "codebase_reference_checklist", pr.PlanFindings[0].Criterion)
 	assert.Contains(t, pr.PlanFindings[0].Evidence, "Task 1")
@@ -1014,8 +1037,11 @@ func TestValidatePlan_CacheKeyIncludesClampState(t *testing.T) {
 		MaxTokensOverride: 32000,
 	})
 	require.NoError(t, err)
-	require.NotEmpty(t, first.PlanFindings)
-	assert.Equal(t, "max_tokens_override", first.PlanFindings[0].Criterion)
+	require.Len(t, first.PlanFindings, 2)
+	// The plan_text deprecation notice is prepended after the ladder runs,
+	// landing ahead of the clamp finding.
+	assert.Equal(t, "input", first.PlanFindings[0].Criterion)
+	assert.Equal(t, "max_tokens_override", first.PlanFindings[1].Criterion)
 	assert.Equal(t, 1, rv.Calls)
 
 	_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
@@ -1159,13 +1185,13 @@ func TestValidatePlan_PopulatesNormativeTestBodies_ZeroBasedTaskIndex(t *testing
 // ---------------------------------------------------------------------------
 
 // TestValidatePlan_ProjectKnowledge_OverCap exercises the cumulative payload
-// guard: when plan_text + project_knowledge exceeds MaxPayloadBytes, the
+// guard: when plan_text + project_knowledge exceeds PlanMaxPayloadBytes, the
 // synthetic payload_too_large finding's evidence must name both contributors
 // so the caller can tell which to shrink.
 func TestValidatePlan_ProjectKnowledge_OverCap(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed.")}
 	d := newDeps(t, rv)
-	d.Cfg.MaxPayloadBytes = 20
+	d.Cfg.PlanMaxPayloadBytes = 20
 	h := &handlers{deps: d}
 
 	planText := buildPlanWithNTasks(1) // > 20 bytes
@@ -1177,10 +1203,14 @@ func TestValidatePlan_ProjectKnowledge_OverCap(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
 	assert.Equal(t, 0, rv.Calls, "over-cap rejection must short-circuit the reviewer")
-	require.NotEmpty(t, pr.PlanFindings)
-	require.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
-	evidence := pr.PlanFindings[0].Evidence
-	assert.Contains(t, evidence, "plan_text:")
+	// 2 findings: the plan_text deprecation notice (prepended ahead of the
+	// too-large envelope, safe because the critical too-large finding
+	// already forces fail) plus the too-large finding itself.
+	require.Len(t, pr.PlanFindings, 2)
+	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
+	require.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[1].Category)
+	evidence := pr.PlanFindings[1].Evidence
+	assert.Contains(t, evidence, "plan:")
 	assert.Contains(t, evidence, "project_knowledge:")
 	assert.Contains(t, evidence, strconv.Itoa(len(planText)), "evidence reports plan_text byte count")
 	assert.Contains(t, evidence, strconv.Itoa(len(pk)), "evidence reports project_knowledge byte count")
@@ -1378,4 +1408,87 @@ func TestValidateCompletion_ValidPlanRunID_UpdatesRow(t *testing.T) {
 	assert.True(t, row.Codescene.Ran)
 	assert.Equal(t, planrun.StateRan, row.CodesceneState)
 	assert.False(t, row.CompletedAt.IsZero())
+}
+
+// ---------------------------------------------------------------------------
+// Task 3 (v0.16.0) — validate_plan plan_path input, plan_text deprecation
+// ---------------------------------------------------------------------------
+
+func TestValidatePlanPathInput(t *testing.T) {
+	planMD := "# P\n\n### Task 1: Do a thing\n\n**Goal:** g\n\n**Acceptance criteria:**\n- [ ] a\n"
+
+	t.Run("neither input", func(t *testing.T) {
+		h := newTestPlanHandlers(t)
+		_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "plan_text or plan_path is required")
+	})
+
+	t.Run("both inputs", func(t *testing.T) {
+		h := newTestPlanHandlers(t)
+		_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+			PlanText: planMD, PlanPath: "/tmp/x.md",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+
+	t.Run("plan_path matches plan_text", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "plan.md")
+		require.NoError(t, os.WriteFile(p, []byte(planMD), 0o644))
+
+		h := newTestPlanHandlers(t)
+		_, viaPath, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: p})
+		require.NoError(t, err)
+
+		h2 := newTestPlanHandlers(t)
+		_, viaText, err := h2.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planMD})
+		require.NoError(t, err)
+
+		assert.Equal(t, len(viaPath.Tasks), len(viaText.Tasks))
+		assert.Equal(t, viaPath.PlanVerdict, viaText.PlanVerdict)
+	})
+
+	t.Run("plan_text emits one deprecation finding", func(t *testing.T) {
+		h := newTestPlanHandlers(t)
+		_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planMD})
+		require.NoError(t, err)
+
+		var dep []verdict.Finding
+		for _, f := range pr.PlanFindings {
+			if f.Criterion == "input" {
+				dep = append(dep, f)
+			}
+		}
+		require.Len(t, dep, 1)
+		assert.Equal(t, verdict.SeverityMinor, dep[0].Severity)
+		assert.Equal(t, verdict.CategoryOther, dep[0].Category)
+		assert.Contains(t, dep[0].Suggestion, "plan_path")
+	})
+
+	t.Run("plan_path over plan cap returns envelope", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "big.md")
+		require.NoError(t, os.WriteFile(p, bytes.Repeat([]byte("x"), 5000), 0o644))
+
+		h := newTestPlanHandlers(t)
+		h.deps.Cfg.PlanMaxPayloadBytes = 1024
+		_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: p})
+		require.NoError(t, err, "too-large is an envelope, not a transport error")
+		require.NotEmpty(t, pr.PlanFindings)
+		assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
+		assert.Contains(t, pr.PlanFindings[0].Evidence, "5000", "true file size")
+		assert.Contains(t, pr.PlanFindings[0].Evidence, "plan:")
+		assert.NotContains(t, pr.PlanFindings[0].Evidence, "plan_text:")
+	})
+
+	t.Run("plan cap is independent of shared cap", func(t *testing.T) {
+		h := newTestPlanHandlers(t)
+		h.deps.Cfg.MaxPayloadBytes = 10 // would reject if the plan path used it
+		h.deps.Cfg.PlanMaxPayloadBytes = 1 << 20
+		_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planMD})
+		require.NoError(t, err)
+		for _, f := range pr.PlanFindings {
+			assert.NotEqual(t, verdict.CategoryTooLarge, f.Category)
+		}
+	})
 }

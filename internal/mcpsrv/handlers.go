@@ -625,6 +625,25 @@ func prependPlanClamp(pr verdict.PlanResult, clamp verdict.Finding) verdict.Plan
 	return pr
 }
 
+// prependPlanDeprecation prepends the plan_text deprecation notice. Minor
+// severity so it never changes a verdict — the server is advisory, and a
+// deprecated input is not a plan defect. Mirrors prependPlanClamp so it
+// survives every early-exit path.
+func prependPlanDeprecation(pr verdict.PlanResult, usedPlanText bool) verdict.PlanResult {
+	if !usedPlanText {
+		return pr
+	}
+	f := verdict.Finding{
+		Severity:   verdict.SeverityMinor,
+		Category:   verdict.CategoryOther,
+		Criterion:  "input",
+		Evidence:   "plan_text was supplied; it is deprecated and will be removed in 1.0.0",
+		Suggestion: "pass plan_path with the absolute path to the plan file instead",
+	}
+	pr.PlanFindings = append([]verdict.Finding{f}, pr.PlanFindings...)
+	return pr
+}
+
 // recoverPartialFindings attempts to extract complete findings from a
 // truncated reviewer response. Returns (result, true) when at least one
 // finding was recovered; (zero, false) when the caller should fall back to
@@ -819,7 +838,8 @@ type ValidateCompletionArgs struct {
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
 type ValidatePlanArgs struct {
-	PlanText          string `json:"plan_text"      jsonschema:"required"`
+	PlanText          string `json:"plan_text,omitempty"`
+	PlanPath          string `json:"plan_path,omitempty"`
 	ProjectKnowledge  string `json:"project_knowledge,omitempty"`
 	ModelOverride     string `json:"model_override,omitempty"`
 	MaxTokensOverride int    `json:"max_tokens_override,omitempty"`
@@ -832,6 +852,8 @@ func validatePlanTool() *mcp.Tool {
 		Description: "Validate an implementation plan as a whole BEFORE dispatching subagents to implement individual tasks. " +
 			"Returns per-task findings and ready-to-paste structured headers (Goal / Acceptance criteria / Non-goals / Context) for tasks that lack them. " +
 			"Call this once at plan-handoff time; the per-task `validate_task_spec` is still called by each implementing subagent at task start. " +
+			"Pass plan_path with the ABSOLUTE path to the plan file — the server reads it, so a large plan costs the caller no output tokens. " +
+			"plan_text is deprecated and will be removed in 1.0.0. Exactly one of the two must be set. " +
 			"If repo policy has carve-outs such as docs-only commit exceptions, state them literally in plan_text — the reviewer cannot read external CLAUDE.md policy.",
 	}
 }
@@ -1286,8 +1308,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 }
 
 func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, args ValidatePlanArgs) (*mcp.CallToolResult, verdict.PlanResult, error) {
-	if args.PlanText == "" {
-		return nil, verdict.PlanResult{}, errors.New("plan_text is required")
+	if args.PlanText == "" && args.PlanPath == "" {
+		return nil, verdict.PlanResult{}, errors.New("plan_text or plan_path is required")
+	}
+	if args.PlanText != "" && args.PlanPath != "" {
+		return nil, verdict.PlanResult{}, errors.New("plan_text and plan_path are mutually exclusive")
 	}
 	if args.Mode != "" && args.Mode != "quick" && args.Mode != "thorough" {
 		return nil, verdict.PlanResult{}, errors.New(`mode must be "quick" or "thorough"`)
@@ -1299,10 +1324,37 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}
 
 	projectKnowledge := strings.TrimSpace(args.ProjectKnowledge)
-	planBytes := len(args.PlanText)
 	pkBytes := len(projectKnowledge)
-	if total := planBytes + pkBytes; total > h.deps.Cfg.MaxPayloadBytes {
-		pr := prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, h.deps.Cfg.MaxPayloadBytes), clamp)
+
+	planText := args.PlanText
+	var planSrc fileSource
+	if args.PlanPath != "" {
+		var rerr error
+		planText, planSrc, rerr = resolveFileInput(
+			args.PlanPath, h.deps.Cfg.PlanRoots, h.deps.Cfg.PlanMaxPayloadBytes)
+		if errors.Is(rerr, errTooLarge) {
+			total := planSrc.Bytes + pkBytes
+			pr := prependPlanClamp(
+				tooLargePlanResult(total, planSrc.Bytes, pkBytes, h.deps.Cfg.PlanMaxPayloadBytes), clamp)
+			h.recordStat(statParams{
+				tool:         "validate_plan",
+				verdict:      string(pr.PlanVerdict),
+				findings:     planFindings(pr),
+				modelUsed:    h.deps.Cfg.PlanModel.String(),
+				payloadBytes: total,
+			})
+			return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
+		}
+		if rerr != nil {
+			return nil, verdict.PlanResult{}, rerr
+		}
+	}
+
+	planBytes := len(planText)
+	if total := planBytes + pkBytes; total > h.deps.Cfg.PlanMaxPayloadBytes {
+		pr := prependPlanDeprecation(
+			prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, h.deps.Cfg.PlanMaxPayloadBytes), clamp),
+			args.PlanText != "")
 		h.recordStat(statParams{
 			tool:         "validate_plan",
 			verdict:      string(pr.PlanVerdict),
@@ -1312,7 +1364,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		})
 		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
 	}
-	tasks, _ := planparser.SplitTasks(args.PlanText)
+	tasks, _ := planparser.SplitTasks(planText)
 	tasksTotal := len(tasks)
 	tasksWithHeader := 0
 	for _, rt := range tasks {
@@ -1321,7 +1373,8 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		}
 	}
 	if len(tasks) == 0 {
-		pr := prependPlanClamp(noHeadingsPlanResult(), clamp)
+		pr := prependPlanDeprecation(
+			prependPlanClamp(noHeadingsPlanResult(), clamp), args.PlanText != "")
 		h.recordStat(statParams{
 			tool:            "validate_plan",
 			verdict:         string(pr.PlanVerdict),
@@ -1347,7 +1400,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return nil, verdict.PlanResult{}, err
 	}
 	rendered, err := renderPlanReview(renderPlanReviewInputs{
-		PlanText:         args.PlanText,
+		PlanText:         planText,
 		ProjectKnowledge: projectKnowledge,
 		Tasks:            tasks,
 		ChunkSize:        h.deps.Cfg.PlanTasksPerChunk,
@@ -1356,7 +1409,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}
-	cacheKey := planPassCacheKey(args.PlanText, projectKnowledge, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
+	cacheKey := planPassCacheKey(planText, projectKnowledge, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
 	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey); ok {
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
@@ -1416,6 +1469,17 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	populateNormativeTestBodies(&pr, tasks)
 	pr = prependPlanClamp(pr, clamp)
 	pr = finalizePlanResult(pr, modelUsed, ms)
+	// Deprecation is added AFTER finalizePlanResult, not before: it is a
+	// minor CategoryOther finding, and finalizePlanResult's severity ladder
+	// (verdict.FinalizeVerdict) treats a 3rd minor finding as a
+	// noise_cluster trigger that lifts the verdict to warn. Feeding it
+	// through the ladder would violate "the deprecation finding MUST NOT
+	// change any verdict" for any plan_text caller that already had two
+	// other minor findings. The two early-exit envelopes below are safe to
+	// prepend before their own finalizePlanResult call because they always
+	// carry a critical finding, which already forces fail regardless of
+	// minor count.
+	pr = prependPlanDeprecation(pr, args.PlanText != "")
 	if pr.PlanRunID == "" {
 		run := h.deps.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
 		pr.PlanRunID = run.ID
@@ -1607,10 +1671,10 @@ func noHeadingsPlanResult() verdict.PlanResult {
 }
 
 // tooLargePlanResult builds the rejection PlanResult for a cumulative
-// payload-too-large hit on (plan_text + project_knowledge). The evidence
-// names both contributors so the caller can tell which input to shrink.
-// Critical so the ladder derives fail from one critical, matching the
-// explicit Verdict: fail.
+// payload-too-large hit on (plan content, from either plan_text or plan_path,
+// + project_knowledge). The evidence names both contributors so the caller
+// can tell which input to shrink. Critical so the ladder derives fail from
+// one critical, matching the explicit Verdict: fail.
 func tooLargePlanResult(total, planBytes, pkBytes, limit int) verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictFail,
@@ -1618,11 +1682,11 @@ func tooLargePlanResult(total, planBytes, pkBytes, limit int) verdict.PlanResult
 			Severity:   verdict.SeverityCritical,
 			Category:   verdict.CategoryTooLarge,
 			Criterion:  "payload",
-			Evidence:   fmt.Sprintf("payload %d bytes > cap %d (plan_text: %d, project_knowledge: %d)", total, limit, planBytes, pkBytes),
+			Evidence:   fmt.Sprintf("payload %d bytes > cap %d (plan: %d, project_knowledge: %d)", total, limit, planBytes, pkBytes),
 			Suggestion: "Split the plan into smaller chunks or pass a unified diff.",
 		}},
 		Tasks:      []verdict.PlanTaskResult{},
-		NextAction: "Reduce plan_text size and retry.",
+		NextAction: "Reduce plan size and retry.",
 	}
 }
 

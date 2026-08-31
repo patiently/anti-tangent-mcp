@@ -789,15 +789,21 @@ func TestValidatePlan_NoTaskHeadings(t *testing.T) {
 	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: "Not a plan, no headings."})
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
-	require.Len(t, pr.PlanFindings, 1)
+	// 2 findings: the plan_text deprecation notice (prepended ahead of the
+	// no-headings envelope, safe because the critical no-headings finding
+	// already forces fail) plus the no-headings finding itself.
+	require.Len(t, pr.PlanFindings, 2)
 	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
+	assert.Equal(t, "input", pr.PlanFindings[0].Criterion)
+	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[1].Category)
+	assert.Equal(t, "structure", pr.PlanFindings[1].Criterion)
 	assert.Equal(t, 0, rv.Calls, "no provider call should be made")
 }
 
 func TestValidatePlan_PayloadTooLarge(t *testing.T) {
 	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
 	d := newDeps(t, rv)
-	d.Cfg.MaxPayloadBytes = 10
+	d.Cfg.PlanMaxPayloadBytes = 10
 	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
 	d.Reviews = providers.Registry{"openai": rv}
 	h := &handlers{deps: d}
@@ -805,9 +811,14 @@ func TestValidatePlan_PayloadTooLarge(t *testing.T) {
 	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: "this plan text is far too large for the configured cap of 10 bytes; it should be rejected"})
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
-	require.Len(t, pr.PlanFindings, 1)
-	assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
-	assert.Equal(t, verdict.SeverityCritical, pr.PlanFindings[0].Severity)
+	// 2 findings: the plan_text deprecation notice (safe to prepend ahead of
+	// the too-large envelope's own finalizePlanResult call because the
+	// critical too-large finding already forces fail) plus the too-large
+	// finding itself.
+	require.Len(t, pr.PlanFindings, 2)
+	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
+	assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[1].Category)
+	assert.Equal(t, verdict.SeverityCritical, pr.PlanFindings[1].Severity)
 	assert.Equal(t, 0, rv.Calls)
 }
 
@@ -1135,7 +1146,10 @@ func TestMaxTokensOverride_ValidatePlan(t *testing.T) {
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantSent, cap.LastRequest.MaxTokens)
-			assertClampFinding(t, pr.PlanFindings, tc.wantClamp)
+			// PlanText always carries the deprecation notice ahead of any
+			// clamp finding; strip it so assertClampFinding's head-of-list
+			// check still pins the clamp finding itself.
+			assertClampFinding(t, stripPlanDeprecationFinding(pr.PlanFindings), tc.wantClamp)
 		})
 	}
 }
@@ -1357,19 +1371,23 @@ func TestMaxTokensOverride_ClampSurvivesEarlyExits(t *testing.T) {
 			MaxTokensOverride: 32000,
 		})
 		require.NoError(t, err)
-		require.Len(t, pr.PlanFindings, 2, "clamp + no-headings finding")
-		assert.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion)
-		assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[0].Severity)
+		// deprecation + clamp + no-headings finding. Deprecation lands first
+		// (safe here: the critical no-headings finding already forces fail
+		// regardless of the extra minor).
+		require.Len(t, pr.PlanFindings, 3, "deprecation + clamp + no-headings finding")
+		assert.Equal(t, "input", pr.PlanFindings[0].Criterion)
+		assert.Equal(t, "max_tokens_override", pr.PlanFindings[1].Criterion)
+		assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[1].Severity)
 		// Original no-headings finding is preserved.
-		assert.Equal(t, "structure", pr.PlanFindings[1].Criterion)
-		assert.Contains(t, pr.PlanFindings[1].Evidence, "no `### Task N:` headings")
+		assert.Equal(t, "structure", pr.PlanFindings[2].Criterion)
+		assert.Contains(t, pr.PlanFindings[2].Evidence, "no `### Task N:` headings")
 	})
 
 	t.Run("ValidatePlan plan_text too large", func(t *testing.T) {
 		d := newDeps(t, &fakeReviewer{name: "anthropic"})
 		d.Cfg.PlanMaxTokens = 4096
 		d.Cfg.MaxTokensCeiling = 16384
-		d.Cfg.MaxPayloadBytes = 10
+		d.Cfg.PlanMaxPayloadBytes = 10
 		d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
 		d.Reviews["openai"] = &fakeReviewer{name: "openai"}
 		h := &handlers{deps: d}
@@ -1380,9 +1398,13 @@ func TestMaxTokensOverride_ClampSurvivesEarlyExits(t *testing.T) {
 			MaxTokensOverride: 32000,
 		})
 		require.NoError(t, err)
-		require.Len(t, pr.PlanFindings, 2, "clamp + payload_too_large finding")
-		assert.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion)
-		assert.Equal(t, "payload_too_large", string(pr.PlanFindings[1].Category))
+		// deprecation + clamp + payload_too_large finding. Deprecation lands
+		// first (safe here: the critical too-large finding already forces
+		// fail regardless of the extra minor).
+		require.Len(t, pr.PlanFindings, 3, "deprecation + clamp + payload_too_large finding")
+		assert.Equal(t, "input", pr.PlanFindings[0].Criterion)
+		assert.Equal(t, "max_tokens_override", pr.PlanFindings[1].Criterion)
+		assert.Equal(t, "payload_too_large", string(pr.PlanFindings[2].Category))
 	})
 }
 
@@ -2350,7 +2372,11 @@ func TestValidatePlan_FinalizePlanVerdict_ClampParticipatesInLadder(t *testing.T
 		}
 	}
 	require.True(t, hasNoise, "plan-level noise_cluster appended")
-	require.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion, "clamp at PlanFindings[0]")
+	// The plan_text deprecation notice is prepended AFTER the ladder runs (so
+	// it never itself contributes to the minor-finding count that triggers
+	// noise_cluster), landing at index 0 ahead of the clamp finding.
+	require.Equal(t, "input", pr.PlanFindings[0].Criterion, "deprecation at PlanFindings[0]")
+	require.Equal(t, "max_tokens_override", pr.PlanFindings[1].Criterion, "clamp at PlanFindings[1]")
 }
 
 func TestTruncatedPlanResult_SeverityIsMajor(t *testing.T) {
