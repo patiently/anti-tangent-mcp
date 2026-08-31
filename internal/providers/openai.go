@@ -42,7 +42,7 @@ func (r *openaiReviewer) Review(ctx context.Context, req Request) (Response, err
 		"model": req.Model,
 		"messages": []map[string]string{
 			{"role": "system", "content": req.System},
-			{"role": "user", "content": req.User},
+			{"role": "user", "content": req.CachePrefix + req.User},
 		},
 		"max_completion_tokens": req.MaxTokens,
 		"response_format": map[string]any{

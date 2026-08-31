@@ -131,3 +131,38 @@ func TestGoogle_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_REQUEST_TIMEOUT")
 	assert.True(t, errors.Is(err, context.DeadlineExceeded))
 }
+
+func TestGoogle_CachePrefix(t *testing.T) {
+	capture := func(t *testing.T, req Request) map[string]any {
+		t.Helper()
+		var got map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			require.NoError(t, json.Unmarshal(body, &got))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"candidates": [{
+					"content": {"parts": [{"text": "{\"ok\":true}"}]}
+				}],
+				"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 4},
+				"modelVersion": "gemini-2.5-pro"
+			}`))
+		}))
+		defer srv.Close()
+		_, err := NewGoogle("test-key", srv.URL, 5*time.Second).Review(context.Background(), req)
+		require.NoError(t, err)
+		return got
+	}
+
+	base := Request{Model: "gemini-2.5-pro", System: "sys", User: "tail", MaxTokens: 1024, JSONSchema: []byte(`{"type":"object"}`)}
+
+	t.Run("cache prefix is concatenated, not blocked", func(t *testing.T) {
+		req := base
+		req.CachePrefix = "head"
+		got := capture(t, req)
+
+		contents := got["contents"].([]any)
+		parts := contents[len(contents)-1].(map[string]any)["parts"].([]any)
+		assert.Equal(t, "headtail", parts[0].(map[string]any)["text"])
+	})
+}

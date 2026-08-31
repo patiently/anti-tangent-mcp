@@ -45,7 +45,7 @@ func (r *googleReviewer) Review(ctx context.Context, req Request) (Response, err
 		},
 		"contents": []map[string]any{{
 			"role":  "user",
-			"parts": []map[string]string{{"text": req.User}},
+			"parts": []map[string]string{{"text": req.CachePrefix + req.User}},
 		}},
 		"generationConfig": map[string]any{
 			"maxOutputTokens":    req.MaxTokens,

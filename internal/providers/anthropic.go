@@ -38,12 +38,24 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 		return Response{}, fmt.Errorf("anthropic: invalid schema: %w", err)
 	}
 
+	var userContent any = req.User
+	if req.CachePrefix != "" {
+		userContent = []map[string]any{
+			{
+				"type":          "text",
+				"text":          req.CachePrefix,
+				"cache_control": map[string]any{"type": "ephemeral"},
+			},
+			{"type": "text", "text": req.User},
+		}
+	}
+
 	body := map[string]any{
 		"model":      req.Model,
 		"max_tokens": req.MaxTokens,
 		"system":     req.System,
 		"messages": []map[string]any{
-			{"role": "user", "content": req.User},
+			{"role": "user", "content": userContent},
 		},
 		"tools": []map[string]any{{
 			"name":         "submit_review",
@@ -90,8 +102,10 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 			Input json.RawMessage `json:"input"`
 		} `json:"content"`
 		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(respBytes, &parsed); err != nil {
@@ -116,10 +130,12 @@ func (r *anthropicReviewer) Review(ctx context.Context, req Request) (Response, 
 	}
 
 	out := Response{
-		RawJSON:      []byte(raw),
-		Model:        parsed.Model,
-		InputTokens:  parsed.Usage.InputTokens,
-		OutputTokens: parsed.Usage.OutputTokens,
+		RawJSON:                  []byte(raw),
+		Model:                    parsed.Model,
+		InputTokens:              parsed.Usage.InputTokens,
+		OutputTokens:             parsed.Usage.OutputTokens,
+		CacheReadInputTokens:     parsed.Usage.CacheReadInputTokens,
+		CacheCreationInputTokens: parsed.Usage.CacheCreationInputTokens,
 	}
 	if parsed.StopReason == "max_tokens" {
 		return out, fmt.Errorf("anthropic: %w", ErrResponseTruncated)

@@ -1922,12 +1922,16 @@ func (h *handlers) reviewPlanChunked(
 	var modelUsed string
 
 	// ----- Pass 1: plan-findings only -----
+	// CachePrefix writes the shared cacheable head here so the per-chunk
+	// calls below (reviewOnePlanChunk) can read it back at ~0.1x input price
+	// instead of re-billing the whole plan on every chunk.
 	req := providers.Request{
-		Model:      model.Model,
-		System:     rendered.FindingsOnly.System,
-		User:       rendered.FindingsOnly.User,
-		MaxTokens:  maxTokens,
-		JSONSchema: verdict.PlanFindingsOnlySchema(),
+		Model:       model.Model,
+		System:      rendered.FindingsOnly.System,
+		CachePrefix: rendered.FindingsOnly.UserPrefix,
+		User:        rendered.FindingsOnly.UserSuffix,
+		MaxTokens:   maxTokens,
+		JSONSchema:  verdict.PlanFindingsOnlySchema(),
 	}
 	start := time.Now()
 	resp, err := rv.Review(ctx, req)
@@ -1939,7 +1943,7 @@ func (h *handlers) reviewPlanChunked(
 	}
 	pf, err := verdict.ParsePlanFindingsOnly(resp.RawJSON)
 	if err != nil {
-		req.User = rendered.FindingsOnly.User + "\n\n" + verdict.RetryHint()
+		req.User = rendered.FindingsOnly.UserSuffix + "\n\n" + verdict.RetryHint()
 		resp, err = rv.Review(ctx, req)
 		if err != nil {
 			if errors.Is(err, providers.ErrResponseTruncated) {
@@ -2014,12 +2018,18 @@ func (h *handlers) reviewOnePlanChunk(
 	chunkTasks []planparser.RawTask,
 	maxTokens int,
 ) (verdict.TasksOnly, int64, []byte, error) {
+	// CachePrefix is set once here, outside the attempt closure below: it is
+	// the shared head Pass 1 (reviewPlanChunked) already wrote to the cache,
+	// so this chunk call reads it back at ~0.1x input price instead of
+	// re-billing the whole plan. The values passed to attempt() are the
+	// SUFFIX only — never the full rendered.User — or the prefix would be
+	// duplicated into the body and the cache would never match.
 	req := providers.Request{
-		Model:      model.Model,
-		System:     rendered.System,
-		User:       rendered.User,
-		MaxTokens:  maxTokens,
-		JSONSchema: verdict.TasksOnlySchema(),
+		Model:       model.Model,
+		System:      rendered.System,
+		CachePrefix: rendered.UserPrefix,
+		MaxTokens:   maxTokens,
+		JSONSchema:  verdict.TasksOnlySchema(),
 	}
 
 	// attempt mutates req.User in place; each call overwrites it before
@@ -2046,7 +2056,7 @@ func (h *handlers) reviewOnePlanChunk(
 		return parsed, ms, nil, nil
 	}
 
-	parsed, ms, partialRaw, err := attempt(rendered.User)
+	parsed, ms, partialRaw, err := attempt(rendered.UserSuffix)
 	if err == nil {
 		return parsed, ms, nil, nil
 	}
@@ -2056,7 +2066,7 @@ func (h *handlers) reviewOnePlanChunk(
 		return verdict.TasksOnly{}, ms, partialRaw, err
 	}
 	// Schema or identity failure → retry once with hint.
-	parsed2, ms2, partialRaw2, err2 := attempt(rendered.User + "\n\n" + verdict.RetryHint())
+	parsed2, ms2, partialRaw2, err2 := attempt(rendered.UserSuffix + "\n\n" + verdict.RetryHint())
 	if err2 != nil {
 		if errors.Is(err2, providers.ErrResponseTruncated) {
 			return verdict.TasksOnly{}, ms + ms2, partialRaw2, err2
