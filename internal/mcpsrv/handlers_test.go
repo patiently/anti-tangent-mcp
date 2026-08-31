@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -3003,4 +3005,64 @@ func TestValidateCompletion_CodesceneRequired_RanTrueNoAdoptionFinding(t *testin
 	require.NoError(t, err)
 	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneNotRun))
 	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneSkipped))
+}
+
+func TestValidateCompletionPathInputs(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("final_files without content is read from disk", func(t *testing.T) {
+		p := filepath.Join(dir, "impl.go")
+		require.NoError(t, os.WriteFile(p, []byte("package x\n\nfunc F() int { return 1 }\n"), 0o644))
+
+		h := newTestHandlers(t)
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "did the thing",
+			FinalFiles: []FileArg{{Path: p}},
+		})
+		require.NoError(t, err)
+		assert.NotEqual(t, verdict.VerdictFail, verdict.Verdict(env.Verdict))
+	})
+
+	t.Run("mutually exclusive diff inputs", func(t *testing.T) {
+		h := newTestHandlers(t)
+		_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary: "s", FinalDiff: "diff --git a b", FinalDiffPath: "/tmp/x.diff",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+
+	t.Run("final_diff_path counts as evidence", func(t *testing.T) {
+		p := filepath.Join(dir, "change.diff")
+		require.NoError(t, os.WriteFile(p, []byte("diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n"), 0o644))
+
+		h := newTestHandlers(t)
+		_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary: "s", FinalDiffPath: p,
+		})
+		require.NoError(t, err, "must not trip the at-least-one-evidence guard")
+	})
+
+	// The regression that matters most: a path must not become a way around
+	// the truncation guard.
+	t.Run("evidence shape guard runs on resolved content", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"snip":     "package x\n// snip\nfunc F() {}\n",
+			"ellipsis": "package x\n...\nfunc F() {}\n",
+		} {
+			t.Run(name, func(t *testing.T) {
+				p := filepath.Join(t.TempDir(), "trunc.go")
+				require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+
+				h := newTestHandlers(t)
+				_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+					Summary:    "s",
+					FinalFiles: []FileArg{{Path: p}},
+				})
+				require.NoError(t, err)
+				assert.Equal(t, string(verdict.VerdictFail), env.Verdict,
+					"truncated evidence via a path must be rejected exactly as inline would be")
+			})
+		}
+	})
 }

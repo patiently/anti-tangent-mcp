@@ -368,7 +368,7 @@ func checkProgressTool() *mcp.Tool {
 
 type FileArg struct {
 	Path    string `json:"path"`
-	Content string `json:"content"`
+	Content string `json:"content,omitempty"` // omitted -> server reads Path
 }
 
 type CheckProgressArgs struct {
@@ -819,7 +819,8 @@ func validateCompletionTool() *mcp.Tool {
 		Name: "validate_completion",
 		Description: "Final validation before declaring a task complete. " +
 			"The reviewer checks the full implementation against every acceptance criterion " +
-			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done.",
+			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done. " +
+			"Omit a final_files entry's content to have the server read its absolute path, and pass final_diff_path instead of final_diff, to avoid emitting large evidence as output tokens.",
 	}
 }
 
@@ -828,6 +829,7 @@ type ValidateCompletionArgs struct {
 	Summary               string            `json:"summary"     jsonschema:"required"`
 	FinalFiles            []FileArg         `json:"final_files,omitempty"`
 	FinalDiff             string            `json:"final_diff,omitempty"`
+	FinalDiffPath         string            `json:"final_diff_path,omitempty"`
 	TestEvidence          string            `json:"test_evidence,omitempty"`
 	ExitContracts         []string          `json:"exit_contracts,omitempty"`
 	ExitContractsInferred bool              `json:"exit_contracts_inferred,omitempty"`
@@ -939,6 +941,38 @@ func checkEvidenceShape(args ValidateCompletionArgs) string {
 	return ""
 }
 
+// resolveCompletionInputs fills in FinalDiff and each FinalFiles[].Content
+// from disk for entries that supplied only a path. Mutates args in place so
+// every later stage — payload cap, evidence-shape guard, evidence cache key,
+// prompt render — sees fully materialized evidence.
+//
+// Uses the shared MaxPayloadBytes, never PlanMaxPayloadBytes: completion
+// evidence did not gain the headroom validate_plan did.
+func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) error {
+	cap := h.deps.Cfg.MaxPayloadBytes
+	roots := h.deps.Cfg.PlanRoots
+
+	if args.FinalDiffPath != "" {
+		content, _, err := resolveFileInput(args.FinalDiffPath, roots, cap)
+		if err != nil {
+			return fmt.Errorf("final_diff_path: %w", err)
+		}
+		args.FinalDiff = content
+	}
+	for i := range args.FinalFiles {
+		f := &args.FinalFiles[i]
+		if f.Path == "" || f.Content != "" {
+			continue
+		}
+		content, _, err := resolveFileInput(f.Path, roots, cap)
+		if err != nil {
+			return fmt.Errorf("final_files[%d].path: %w", i, err)
+		}
+		f.Content = content
+	}
+	return nil
+}
+
 // rejectionCacheEntry is one cached rejection envelope keyed by canonical
 // content hash. The envelope's ReviewMS field is preserved so cache-hit
 // rejections look identical to the original rejection from the caller's POV.
@@ -1046,7 +1080,11 @@ func majorFindings(findings []verdict.Finding) []verdict.Finding {
 // ordering (preserved here to keep the AC-mapping legible):
 //
 //  1. summary required check
-//  2. at-least-one-evidence check
+//  2. final_diff / final_diff_path mutual-exclusivity check
+//  2b. at-least-one-evidence check (final_diff_path counts, pre-resolution)
+//  2c. resolveCompletionInputs — materializes final_diff_path and any
+//      final_files[].path entries BEFORE the payload cap, evidence-shape
+//      guard, and evidence cache key see them
 //  3. lightweight marker (empty session_id + non-empty evidence)
 //  4. effectiveMaxTokens + clampFinding
 //  5. payload-cap check
@@ -1063,10 +1101,24 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, errors.New("summary is required")
 	}
 
-	// 2. at-least-one-evidence: rejects the "totally empty call" case
-	// regardless of whether session_id is set.
-	if len(args.FinalFiles) == 0 && args.FinalDiff == "" && args.TestEvidence == "" {
+	// 2. final_diff / final_diff_path are mutually exclusive.
+	if args.FinalDiff != "" && args.FinalDiffPath != "" {
+		return nil, Envelope{}, errors.New("final_diff and final_diff_path are mutually exclusive")
+	}
+
+	// 2b. at-least-one-evidence: rejects the "totally empty call" case
+	// regardless of whether session_id is set. final_diff_path counts as
+	// evidence even before it is resolved.
+	if len(args.FinalFiles) == 0 && args.FinalDiff == "" && args.FinalDiffPath == "" && args.TestEvidence == "" {
 		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty")
+	}
+
+	// 2c. Resolve path inputs BEFORE the payload cap, the evidence-shape
+	// guard, and the evidence cache key. checkEvidenceShape must see resolved
+	// content: otherwise a caller could bypass the truncation guard entirely
+	// by passing a path to a file full of elided content. See design §2.1.
+	if err := h.resolveCompletionInputs(&args); err != nil {
+		return nil, Envelope{}, err
 	}
 
 	if args.Codescene != nil {
