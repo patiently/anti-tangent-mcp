@@ -92,10 +92,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entry) pointing at a genuinely empty file therefore passed the guard, resolved to an empty
   string, and reached the reviewer with nothing to review — returning `pass` with zero findings
   instead of the rejection the README documents for evidence-poor submissions. The guard now
-  re-runs against the resolved content and rejects with a structured `malformed_evidence`
-  envelope naming the offending field (e.g. `final_diff_path resolved to 0 bytes: <path>`) instead
-  of proceeding to a reviewer call. `test_evidence` alone, and an explicit `final_files[].content:
-  ""` deletion marker, still satisfy the guard as before.
+  re-runs against the resolved content: when the empty path is the ONLY evidence on the call, it
+  is a structured `malformed_evidence` rejection naming the offending field (e.g.
+  `final_diff_path resolved to 0 bytes: <path>`), same as before, with no reviewer call. When
+  other real evidence is also present — non-empty `test_evidence`, or another non-empty
+  `final_files` entry — the documented "diff plus test evidence" flow, which is exactly the
+  shape `docs/protocol/implementer.md` recommends — the call now proceeds and carries an
+  `insufficient_evidence` finding naming the empty path instead of silently reviewing only the
+  other evidence. `test_evidence` alone with no path inputs supplied at all still satisfies the
+  guard with no finding, and an explicit `final_files[].content: ""` deletion marker is still
+  never treated as a resolution accident.
+- **A leftover named pipe (FIFO) at `plan_path` or `final_diff_path` hung the tool call
+  forever.** Reading a file input first opens it with `O_NOFOLLOW` to refuse a symlink swapped in
+  at the final path component between the roots check and the read — but opening a FIFO
+  `O_RDONLY` blocks until a writer connects, and that open ran before the regular-file check that
+  would have rejected it. `resolveFileInput` takes no `context.Context`, so neither
+  `ANTI_TANGENT_REQUEST_TIMEOUT` nor MCP request cancellation could unblock it — the goroutine and
+  its file descriptor leaked for the process lifetime. The open now also sets `O_NONBLOCK` (a
+  no-op for regular files), so a FIFO open returns immediately and is rejected as not a regular
+  file instead of hanging.
 - **`ANTI_TANGENT_PLAN_ROOTS` could fail open on a malformed value.** A value that was set but
   parsed down to zero usable entries (e.g. a bare path-list separator, or all-whitespace entries)
   left `PlanRoots` `nil` with no startup error — and `nil` roots means "unrestricted" — so an

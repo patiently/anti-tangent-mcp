@@ -1017,9 +1017,30 @@ func (e *completionInputTooLargeError) Unwrap() error { return e.err }
 //
 // Uses the shared MaxPayloadBytes, never PlanMaxPayloadBytes: completion
 // evidence did not gain the headroom validate_plan did.
+//
+// FIX 4: `diskTotal` tracks the running total of bytes actually READ FROM
+// DISK during this call, and bails as soon as it crosses maxBytes. Before
+// this, the aggregate was only checked AFTER every input had been fully
+// resolved (the caller's step 5) — each of e.g. 500 final_files[].path
+// entries at ~200KB passes THIS function's per-file resolveFileInput cap
+// individually, so all ~100MB gets read into memory before the aggregate
+// check downstream ever runs. Bailing here, the moment the running total
+// crosses maxBytes, keeps peak memory bounded by the cap regardless of how
+// many path entries remain unresolved.
+//
+// diskTotal deliberately does NOT count inline final_diff / final_files
+// content (an explicit Content, or final_diff supplied directly rather
+// than via final_diff_path): that content arrives already fully resident
+// in memory in this one request (bounded by the client's own output
+// ceiling, same as before this release — see the doc comment above), so
+// there is no peak-memory reason to bail on it mid-loop, and doing so would
+// only replace step 5's existing, more specific tooLargeEnvelope guidance
+// with this function's generic one. It is still caught by the aggregate
+// check at step 5 exactly as before.
 func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) ([]FileArg, error) {
 	maxBytes := h.deps.Cfg.MaxPayloadBytes
 	roots := h.deps.Cfg.PlanRoots
+	diskTotal := 0
 
 	if args.FinalDiffPath != "" {
 		content, src, err := resolveFileInput(args.FinalDiffPath, roots, maxBytes)
@@ -1030,7 +1051,9 @@ func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) ([]File
 			return nil, fmt.Errorf("final_diff_path: %w", err)
 		}
 		args.FinalDiff = content
+		diskTotal += len(content)
 	}
+
 	files := make([]FileArg, len(args.FinalFiles))
 	for i, f := range args.FinalFiles {
 		files[i] = FileArg{Path: f.Path}
@@ -1039,7 +1062,7 @@ func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) ([]File
 		// explicit "") triggers a disk read.
 		if f.Content != nil {
 			files[i].Content = *f.Content
-			continue
+			continue // inline — not a disk read, not counted in diskTotal
 		}
 		// Matches checkEvidenceShape's own strings.TrimSpace(f.Path) == ""
 		// check on the empty-Path guard below (see its case 2 comment). A
@@ -1058,6 +1081,18 @@ func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) ([]File
 			return nil, fmt.Errorf("final_files[%d].path: %w", i, err)
 		}
 		files[i].Content = content
+		diskTotal += len(content)
+		if diskTotal > maxBytes {
+			// The aggregate of what's been READ FROM DISK so far crossed
+			// the cap on this entry's read, even though it individually
+			// passed resolveFileInput's own per-file cap above — bail now
+			// rather than reading every remaining path entry into memory
+			// first. bytes carries the cumulative total (not just this
+			// entry's size) so the resulting tooLargeEnvelope's "payload N
+			// bytes exceeds cap" evidence line is accurate.
+			return nil, &completionInputTooLargeError{
+				field: fmt.Sprintf("final_files[%d].path (combined disk-read payload)", i), bytes: diskTotal, err: errTooLarge}
+		}
 	}
 	return files, nil
 }
@@ -1156,55 +1191,76 @@ func malformedEvidenceEnvelope(sessionID, reason, modelUsed string) Envelope {
 	}
 }
 
-// resolvedEvidenceEmpty re-runs the at-least-one-evidence guard against
-// RESOLVED inputs (post resolveCompletionInputs), catching the case the
-// pre-resolution check at step 2b cannot see: a final_diff_path or
-// final_files[i].path whose STRING is non-empty but whose file on disk is
-// empty. Left unchecked, checkEvidenceShape sees an empty diff and no files
-// to walk, and the call proceeds to a full reviewer call with no evidence
-// at all.
+// resolvedEmptyPathInputs identifies every SUPPLIED path input —
+// final_diff_path, or a final_files[i] entry whose content was read from
+// disk rather than given inline — that resolved to 0 bytes. This catches
+// the case the pre-resolution check at step 2b cannot see: a
+// final_diff_path or final_files[i].path whose STRING is non-empty but
+// whose file on disk is empty.
+//
+// This is FIX 2: a caller who supplied a path plainly intended to send that
+// file, so a 0-byte resolution is always worth surfacing — regardless of
+// what other evidence the call also carries. What differs by case is
+// whether that surfacing is a hard rejection or a finding on an otherwise-
+// proceeding call; see the two call sites in ValidateCompletion's step 2e.
 //
 // A final_files[i] entry whose Content was an EXPLICIT "" (never nil — see
 // CompletionFileArg's doc comment) is a deliberate deletion marker, not a
-// resolution accident, so it is not treated as "empty evidence" here even
-// when it is the only final_files entry present; only content that this
-// function can tell was actually read from disk and came back empty counts.
-// A whitespace-only Path is left for checkEvidenceShape's own dedicated
-// empty-path check downstream, which produces a clearer reason string for
-// that specific case.
+// resolution accident, so it is never included here even when it is the
+// only final_files entry present; only content this function can tell was
+// actually read from disk and came back empty counts. A whitespace-only
+// Path is left for checkEvidenceShape's own dedicated empty-path check
+// downstream, which produces a clearer reason string for that specific
+// case.
 //
-// test_evidence alone, or any non-empty final_diff/final_files content,
-// still satisfies the guard, matching step 2b's semantics.
-//
-// Returns "" when the guard is satisfied; otherwise a reason string naming
-// the offending field, suitable for the malformed_evidence envelope's
-// Evidence field.
-func resolvedEvidenceEmpty(args *ValidateCompletionArgs, resolvedFiles []FileArg) string {
-	if args.TestEvidence != "" || args.FinalDiff != "" {
-		return ""
+// Returns nil when no supplied path input resolved empty. Otherwise one
+// reason string per offending field, each suitable for either the
+// malformed_evidence envelope's Evidence field (hard-reject case) or an
+// insufficient_evidence finding's Evidence field (soft case) — see
+// ValidateCompletion.
+func resolvedEmptyPathInputs(args *ValidateCompletionArgs, resolvedFiles []FileArg) []string {
+	var reasons []string
+	if args.FinalDiffPath != "" && args.FinalDiff == "" {
+		reasons = append(reasons, fmt.Sprintf("final_diff_path resolved to 0 bytes: %s", args.FinalDiffPath))
 	}
-	diskEmptyIdx := -1
 	for i, f := range resolvedFiles {
 		if f.Content != "" {
-			return ""
+			continue
 		}
 		if strings.TrimSpace(f.Path) == "" {
 			continue
 		}
-		if diskEmptyIdx == -1 && i < len(args.FinalFiles) && args.FinalFiles[i].Content == nil {
-			diskEmptyIdx = i
+		if i >= len(args.FinalFiles) || args.FinalFiles[i].Content != nil {
+			// Not a disk-resolved entry: either out of range (shouldn't
+			// happen — resolvedFiles is built 1:1 from args.FinalFiles) or
+			// an explicit "" deletion marker, not a resolution accident.
+			continue
+		}
+		reasons = append(reasons, fmt.Sprintf("final_files[%d].path resolved to 0 bytes: %s", i, args.FinalFiles[i].Path))
+	}
+	return reasons
+}
+
+// hasNonEmptyEvidence reports whether args/resolvedFiles carry any evidence
+// content BESIDES path inputs that resolved to empty: non-empty
+// test_evidence, a non-empty final_diff (which is already "" when
+// final_diff_path resolved to nothing — see resolveCompletionInputs), or at
+// least one final_files entry (disk-resolved or explicit) with non-empty
+// content. An explicit "" deletion marker never counts as evidence here,
+// same as it never counts as an "empty path input mistake" in
+// resolvedEmptyPathInputs — it is simply absent from consideration either
+// way, matching step 2b's original at-least-one-evidence semantics for that
+// case.
+func hasNonEmptyEvidence(args *ValidateCompletionArgs, resolvedFiles []FileArg) bool {
+	if args.TestEvidence != "" || args.FinalDiff != "" {
+		return true
+	}
+	for _, f := range resolvedFiles {
+		if f.Content != "" {
+			return true
 		}
 	}
-	switch {
-	case args.FinalDiffPath != "":
-		return fmt.Sprintf("final_diff_path resolved to 0 bytes: %s", args.FinalDiffPath)
-	case diskEmptyIdx != -1:
-		return fmt.Sprintf("final_files[%d].path resolved to 0 bytes: %s", diskEmptyIdx, args.FinalFiles[diskEmptyIdx].Path)
-	default:
-		// Every remaining source is either absent or an explicit ""
-		// deletion marker — not a resolution accident, so let it through.
-		return ""
-	}
+	return false
 }
 
 func majorFindings(findings []verdict.Finding) []verdict.Finding {
@@ -1235,12 +1291,18 @@ func majorFindings(findings []verdict.Finding) []verdict.Finding {
 //     every other resolve failure (missing file, non-regular file, outside
 //     ANTI_TANGENT_PLAN_ROOTS) stays a plain transport error, matching how
 //     validate_plan's plan_path treats those cases.
-//     2e. resolved-evidence-emptiness re-check — 2b only sees path STRINGS,
-//     so a final_diff_path or final_files[i].path that resolves to an empty
-//     file on disk sails past it. This re-runs the same "at least one
-//     non-empty" guard against the RESOLVED bytes and rejects with a
-//     structured malformed_evidence envelope naming the offending field
-//     instead of proceeding to a paid reviewer call with nothing to review.
+//     2e. resolved-empty-path check — 2b only sees path STRINGS, so a
+//     final_diff_path or final_files[i].path that resolves to an empty file
+//     on disk sails past it. A path input resolving to 0 bytes is always a
+//     caller mistake worth surfacing (they plainly intended to send that
+//     file). When it is the ONLY evidence, this is a hard structured
+//     malformed_evidence rejection, same as before — no paid reviewer call
+//     with nothing to review. When other real evidence exists (non-empty
+//     test_evidence, or another non-empty file), the call proceeds and
+//     carries an insufficient_evidence finding naming the empty path
+//     instead, so the gap is visible rather than silently reviewed around.
+//     test_evidence alone with no path inputs supplied is unaffected either
+//     way — see resolvedEmptyPathInputs / hasNonEmptyEvidence.
 //  3. lightweight marker (empty session_id + non-empty evidence)
 //  5. payload-cap check
 //  6. evidence-shape guard (with rejection cache) — runs BEFORE session lookup
@@ -1309,21 +1371,42 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, err
 	}
 
-	// 2e. Re-run the at-least-one-evidence guard against the RESOLVED
-	// content. See resolvedEvidenceEmpty's doc comment for why this can't
-	// just reuse the 2b check verbatim.
-	if reason := resolvedEvidenceEmpty(&args, resolvedFiles); reason != "" {
-		env := malformedEvidenceEnvelope(args.SessionID, reason, h.deps.Cfg.PostModel.String())
-		clamped := prependClamp(env, clamp)
-		h.recordStat(statParams{
-			tool:         "validate_completion",
-			verdict:      clamped.Verdict,
-			findings:     clamped.Findings,
-			modelUsed:    clamped.ModelUsed,
-			sessionID:    clamped.SessionID,
-			payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
-		})
-		return envelopeResult(clamped)
+	// 2e. Check the RESOLVED content for path inputs that came back empty.
+	// See resolvedEmptyPathInputs' doc comment for why this can't just
+	// reuse the 2b check verbatim.
+	var emptyPathFindings []verdict.Finding
+	if emptyPathReasons := resolvedEmptyPathInputs(&args, resolvedFiles); len(emptyPathReasons) > 0 {
+		if !hasNonEmptyEvidence(&args, resolvedFiles) {
+			// The empty-resolved path is the ONLY evidence on the call:
+			// hard reject, exactly as before FIX 2 — no paid reviewer call
+			// with nothing to review.
+			env := malformedEvidenceEnvelope(args.SessionID, emptyPathReasons[0], h.deps.Cfg.PostModel.String())
+			clamped := prependClamp(env, clamp)
+			h.recordStat(statParams{
+				tool:         "validate_completion",
+				verdict:      clamped.Verdict,
+				findings:     clamped.Findings,
+				modelUsed:    clamped.ModelUsed,
+				sessionID:    clamped.SessionID,
+				payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
+			})
+			return envelopeResult(clamped)
+		}
+		// Other real evidence exists (non-empty test_evidence, or another
+		// non-empty file): FIX 2 — do not reject the call, but don't let
+		// the gap go unremarked either. Merged into result.Findings once
+		// the reviewer call returns (alongside clamp/codescene findings
+		// below), so both the caller and whoever reads the envelope see
+		// exactly which path came back empty.
+		for _, reason := range emptyPathReasons {
+			emptyPathFindings = append(emptyPathFindings, verdict.Finding{
+				Severity:   verdict.SeverityMajor,
+				Category:   verdict.CategoryInsufficientEvidence,
+				Criterion:  "evidence_shape",
+				Evidence:   reason,
+				Suggestion: "Re-submit with non-empty content for this path, or drop the field if it was included by mistake.",
+			})
+		}
 	}
 
 	if args.Codescene != nil {
@@ -1472,6 +1555,13 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 
 	if clamp.Severity != "" {
 		result.Findings = append([]verdict.Finding{clamp}, result.Findings...)
+	}
+	if len(emptyPathFindings) > 0 {
+		// FIX 2's soft case: merged in here (same pattern as clamp/
+		// codescene below) rather than sent through to the reviewer
+		// prompt, so this stays a server-computed finding independent of
+		// what the reviewer LLM says.
+		result.Findings = append(emptyPathFindings, result.Findings...)
 	}
 	result = verdict.FinalizeVerdict(result)
 

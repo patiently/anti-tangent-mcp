@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -153,14 +154,26 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 // requiring the literal string "//" and matches nothing beneath it.
 // filepath.Rel handles that case correctly while still requiring a separator
 // boundary, so /home/foo does not authorize /home/foobar.
+//
+// FIX 3: both sides are passed through withinRootsFold first, which is a
+// no-op everywhere except a real Windows build (runtime.GOOS ==
+// "windows"), where it lower-cases both strings before filepath.Rel ever
+// sees them. Windows filesystems are case-insensitive, so an operator
+// writing ANTI_TANGENT_PLAN_ROOTS=C:\Repo while EvalSymlinks returns the
+// on-disk casing (c:\repo\...) would otherwise see filepath.Rel treat the
+// volume names / path elements as distinct and refuse every legitimate
+// path. Unix stays byte-for-byte case-sensitive deliberately: folding case
+// there would WIDEN the roots allowlist — a security setting — rather than
+// merely tolerate a cosmetic difference.
 func withinRoots(p string, roots []string) bool {
 	if len(roots) == 0 {
 		return true
 	}
 	p = filepath.Clean(p)
+	pFold := withinRootsFold(p, runtime.GOOS)
 	for _, r := range roots {
 		r = filepath.Clean(r)
-		rel, err := filepath.Rel(r, p)
+		rel, err := filepath.Rel(withinRootsFold(r, runtime.GOOS), pFold)
 		if err != nil {
 			continue
 		}
@@ -172,4 +185,22 @@ func withinRoots(p string, roots []string) bool {
 		}
 	}
 	return false
+}
+
+// withinRootsFold returns s unchanged unless goos is "windows", in which
+// case it is lower-cased for a case-insensitive comparison. goos is a
+// parameter — rather than this function reading runtime.GOOS itself —
+// purely so the Windows-shaped folding decision is unit-testable on any
+// host (including this project's Linux CI) without requiring an actual
+// Windows build: path/filepath's own volume-name and separator handling is
+// selected at Go's build time per GOOS, so a runtime-only "pretend we're on
+// Windows" flag could never exercise filepath.Rel's real Windows behavior
+// from a non-Windows test binary anyway. What CAN be verified everywhere is
+// this folding decision itself, which is exactly what TestWithinRootsFold
+// does.
+func withinRootsFold(s, goos string) string {
+	if goos != "windows" {
+		return s
+	}
+	return strings.ToLower(s)
 }

@@ -3191,13 +3191,21 @@ func TestValidateCompletionPathInputs(t *testing.T) {
 			"an explicit empty-content deletion marker must not be rejected as empty evidence")
 	})
 
-	// test_evidence alone still legitimately satisfies the guard: an empty
-	// diff file plus real test_evidence must NOT be rejected.
-	t.Run("empty diff file but non-empty test_evidence is still accepted", func(t *testing.T) {
+	// FIX 2: test_evidence alone still legitimately satisfies the guard, but
+	// the empty diff path is still a caller mistake worth surfacing — it
+	// must no longer be silently swallowed. An empty diff file plus real
+	// test_evidence must NOT be hard-rejected, but the call must carry an
+	// insufficient_evidence finding naming the empty path, and must still
+	// reach the reviewer (unlike the hard-reject case below).
+	t.Run("empty diff file but non-empty test_evidence proceeds with a finding naming the path", func(t *testing.T) {
 		p := filepath.Join(dir, "empty2.diff")
 		require.NoError(t, os.WriteFile(p, []byte(""), 0o644))
 
-		h := newTestHandlers(t)
+		cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+		d := newDeps(t, &cap.fakeReviewer)
+		d.Reviews = providers.Registry{"anthropic": cap}
+		h := &handlers{deps: d}
+
 		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 			Summary:       "did the thing",
 			FinalDiffPath: p,
@@ -3206,7 +3214,62 @@ func TestValidateCompletionPathInputs(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotEqual(t, string(verdict.VerdictFail), env.Verdict,
 			"real test_evidence must satisfy the guard even though the diff resolved to nothing")
+		assert.False(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence),
+			"other real evidence exists, so this must not be the hard-reject shape")
+		require.True(t, hasCategory(env.Findings, verdict.CategoryInsufficientEvidence),
+			"the empty resolved path must still be surfaced as a finding")
+		found := false
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryInsufficientEvidence {
+				assert.Contains(t, f.Evidence, "final_diff_path")
+				assert.Contains(t, f.Evidence, p)
+				found = true
+			}
+		}
+		assert.True(t, found)
+		assert.NotEmpty(t, cap.LastRequest.User, "unlike the hard-reject case, the reviewer must still have been called")
+	})
+
+	// Companion to the above: an empty final_files path alongside another,
+	// non-empty final_files entry must proceed with a finding naming only
+	// the empty one.
+	t.Run("empty final_files path alongside a non-empty one proceeds with a finding naming the empty one", func(t *testing.T) {
+		emptyPath := filepath.Join(dir, "empty3.go")
+		require.NoError(t, os.WriteFile(emptyPath, []byte(""), 0o644))
+
+		h := newTestHandlers(t)
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary: "did the thing",
+			FinalFiles: []CompletionFileArg{
+				{Path: emptyPath},
+				{Path: "real.go", Content: strPtr("package x\n")},
+			},
+		})
+		require.NoError(t, err)
+		assert.False(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence),
+			"other real evidence exists, so this must not be the hard-reject shape")
+		require.True(t, hasCategory(env.Findings, verdict.CategoryInsufficientEvidence))
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryInsufficientEvidence {
+				assert.Contains(t, f.Evidence, "final_files[0]")
+				assert.Contains(t, f.Evidence, emptyPath)
+			}
+		}
+	})
+
+	// test_evidence alone with NO path inputs supplied at all is the
+	// genuinely legitimate case FIX 2 must keep working exactly as before:
+	// no path resolved empty (none was even supplied), so no finding.
+	t.Run("test_evidence alone with no path inputs is accepted with no new finding", func(t *testing.T) {
+		h := newTestHandlers(t)
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:      "did the thing",
+			TestEvidence: "go test ./... -race: ok, 42 passed",
+		})
+		require.NoError(t, err)
 		assert.False(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
+		assert.False(t, hasCategory(env.Findings, verdict.CategoryInsufficientEvidence),
+			"no path input was supplied at all, so there is nothing to flag")
 	})
 
 	// The regression that matters most: a path must not become a way around
@@ -3311,5 +3374,55 @@ func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
 			FinalFiles: []CompletionFileArg{{Path: filepath.Join(t.TempDir(), "does-not-exist.go")}},
 		})
 		require.Error(t, err, "a missing file must stay a transport error, not an envelope")
+	})
+}
+
+// TestResolveCompletionInputs_AggregateCapDuringResolution is the FIX 4
+// regression test: several final_files[].path entries, each individually
+// well under MaxPayloadBytes, must not all be read from disk before the
+// aggregate is checked. Before this fix the aggregate check only ran at
+// ValidateCompletion's step 5, AFTER every path had already been resolved
+// into memory — unbounded peak memory for enough small entries.
+func TestResolveCompletionInputs_AggregateCapDuringResolution(t *testing.T) {
+	dir := t.TempDir()
+	// 5 files at 10 bytes each == 50 bytes total, against a deliberately
+	// tiny 25-byte cap: the aggregate crosses the cap partway through the
+	// loop (after the 3rd file, at 30 bytes), well before all 5 are read.
+	const perFile = 10
+	const numFiles = 5
+	var files []CompletionFileArg
+	for i := 0; i < numFiles; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("f%d.go", i))
+		require.NoError(t, os.WriteFile(p, []byte(strings.Repeat("x", perFile)), 0o644))
+		files = append(files, CompletionFileArg{Path: p})
+	}
+
+	t.Run("bails partway through the loop rather than resolving every entry first", func(t *testing.T) {
+		h := newTestHandlers(t)
+		h.deps.Cfg.MaxPayloadBytes = 25
+
+		_, err := h.resolveCompletionInputs(&ValidateCompletionArgs{Summary: "s", FinalFiles: files})
+		require.Error(t, err)
+		var tooLarge *completionInputTooLargeError
+		require.ErrorAs(t, err, &tooLarge)
+		// The cumulative total at the point of rejection must be well
+		// short of the full 50-byte sum — proof the loop stopped reading
+		// instead of resolving every entry and checking only afterward.
+		assert.Less(t, tooLarge.bytes, perFile*numFiles, "must bail before reading every entry")
+		assert.Greater(t, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes)
+		assert.Contains(t, tooLarge.field, "final_files")
+	})
+
+	t.Run("surfaces the same structured too-large envelope as a single oversized file", func(t *testing.T) {
+		h := newTestHandlers(t)
+		h.deps.Cfg.MaxPayloadBytes = 25
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "s",
+			FinalFiles: files,
+		})
+		require.NoError(t, err, "an aggregate overflow must not surface as a transport error")
+		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
+		require.True(t, hasCategory(env.Findings, verdict.CategoryTooLarge), "expected a payload_too_large finding")
 	})
 }

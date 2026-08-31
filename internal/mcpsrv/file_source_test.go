@@ -190,6 +190,33 @@ func TestWithinRoots(t *testing.T) {
 	})
 }
 
+// TestWithinRootsFold is the FIX 3 regression test: ANTI_TANGENT_PLAN_ROOTS
+// containment must be case-insensitive on Windows (operator-written
+// casing vs. EvalSymlinks' on-disk casing must still match) and must stay
+// byte-for-byte case-sensitive everywhere else, since folding case on Unix
+// would widen the roots allowlist rather than merely tolerate a cosmetic
+// difference. This exercises the fold decision directly — see
+// withinRootsFold's doc comment for why the real filepath.Rel Windows
+// behavior can't be exercised from a non-Windows test binary, and why
+// testing the fold decision in isolation is what "runs everywhere" here.
+func TestWithinRootsFold(t *testing.T) {
+	t.Run("windows folds differently-cased volume and path elements to the same key", func(t *testing.T) {
+		assert.Equal(t,
+			withinRootsFold(`C:\Repo\plan.md`, "windows"),
+			withinRootsFold(`c:\repo\plan.md`, "windows"),
+			"a Windows build must treat these as the same path for containment purposes")
+	})
+
+	t.Run("non-windows leaves case untouched", func(t *testing.T) {
+		s := "/Home/Foo/Plan.md"
+		assert.Equal(t, s, withinRootsFold(s, "linux"), "unix must not fold case at all")
+		assert.NotEqual(t,
+			withinRootsFold("/Home/Foo", "darwin"),
+			withinRootsFold("/home/foo", "darwin"),
+			"non-windows GOOS values must stay case-sensitive — folding here would widen the roots allowlist")
+	})
+}
+
 func TestFileSourceString(t *testing.T) {
 	t.Run("zero value renders empty", func(t *testing.T) {
 		assert.Equal(t, "", fileSource{}.String())
