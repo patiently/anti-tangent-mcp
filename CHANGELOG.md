@@ -16,8 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Path inputs on `validate_completion`.** Omit a `final_files` entry's `content` to have the
   server read its `path`, or pass `final_diff_path` instead of `final_diff`. Truncation checks
   run on the resolved content, so a path is not a way around the evidence-shape guard.
-- **`ANTI_TANGENT_PLAN_ROOTS`** — colon-separated absolute directories that file-path inputs may
-  be read from. Empty (the default) is unrestricted.
+- **`ANTI_TANGENT_PLAN_ROOTS`** — a list of absolute directories, joined with the OS path-list
+  separator (`:` on Unix, `;` on Windows), that file-path inputs may be read from. Empty (the
+  default) is unrestricted.
 - **`ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES`** (default 1MB) — payload cap for `validate_plan` only.
   The other tools keep the shared 200KB `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
 - **Reviewer-side prompt caching on the chunked plan path.** The findings-only call and every
@@ -60,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `final_files` path against a relative path named in `summary` (e.g. `/repo/docs/foo.md`
   satisfies a `summary` mention of `docs/foo.md`), instead of only exact string equality — the
   advisory used to false-fire on every doc deliverable submitted the documented absolute-path way.
+- **`ANTI_TANGENT_PLAN_ROOTS` was unusable on Windows.** It was split on a hardcoded `:`, so a
+  Windows value like `C:\plans` parsed as `["C", "\plans"]` and the second segment's
+  not-absolute check failed `Load` at startup — no value of the variable worked on that platform.
+  Parsing now uses `filepath.SplitList` (`os.PathListSeparator`: `:` on Unix, `;` on Windows).
+- **`validate_plan`'s new payload cap silently regressed hosts that had already raised the shared
+  cap.** `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` defaulted to a flat 1MB regardless of
+  `ANTI_TANGENT_MAX_PAYLOAD_BYTES`, so an operator running the shared cap above 1MB saw
+  `validate_plan` start rejecting plans it accepted before this version, with no config change on
+  their side and an error that never named the new variable. It now defaults to
+  `max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES)`; an explicit
+  `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` still overrides in either direction.
 
 ### Deprecated
 - **`plan_text` on `validate_plan`.** Still fully functional, now reporting one `minor` finding

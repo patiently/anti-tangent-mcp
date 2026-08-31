@@ -205,8 +205,8 @@ ANTI_TANGENT_REQUEST_TIMEOUT=180s
 ANTI_TANGENT_LOG_LEVEL=info
 
 # validate_plan file-path input (design 2026-08-31)
-ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES=1048576   # plan content cap; other tools keep MAX_PAYLOAD_BYTES
-ANTI_TANGENT_PLAN_ROOTS=                      # colon-separated absolute roots; empty = unrestricted
+ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES=1048576   # plan content cap; defaults to max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES); set explicitly to override either way
+ANTI_TANGENT_PLAN_ROOTS=                      # OS path-list separator (":" on Unix, ";" on Windows) list of absolute roots; empty = unrestricted
 
 # Output budgets + chunking (v0.1.4+):
 ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion); raise if a stateful hook returns a truncation finding
@@ -321,10 +321,17 @@ This means the server reads files on your filesystem and sends their contents to
 provider. It is stdio-only — the host spawns it as a child process, so it shares your container,
 mounts, and uid, and the calling agent already has unrestricted file read. The server therefore
 acquires no capability the caller lacks. If you want it narrower anyway, set
-`ANTI_TANGENT_PLAN_ROOTS` to a colon-separated list of absolute directories; paths outside them
-are refused. Symlinks are resolved before the check, both for the candidate path and for each
-configured root itself (so a symlinked root, e.g. macOS's `/tmp` → `/private/tmp`, still matches
-legitimate paths beneath it) — a link cannot escape a root.
+`ANTI_TANGENT_PLAN_ROOTS` to a list of absolute directories, joined with the OS path-list
+separator (`:` on Unix, `;` on Windows — i.e. `filepath.SplitList`'s convention, the same one
+`PATH` uses); paths outside them are refused. Symlinks are resolved before the check, both for
+the candidate path and for each configured root itself (so a symlinked root, e.g. macOS's `/tmp`
+→ `/private/tmp`, still matches legitimate paths beneath it) — a link cannot escape a root.
+
+`ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` defaults to `max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES)`,
+computed once at startup after `ANTI_TANGENT_MAX_PAYLOAD_BYTES` is read — so raising the shared
+cap above 1MB raises the plan cap along with it, and an operator who already runs with a higher
+shared cap sees no regression on upgrade. Setting `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` itself
+always wins over that default, even to a value lower than `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
 
 The 1MB default for `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` is not itself a hard ceiling — the real
 limit is whatever context window `ANTI_TANGENT_PLAN_MODEL` has, since the chunked `validate_plan` path

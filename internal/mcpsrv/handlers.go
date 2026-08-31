@@ -1041,7 +1041,13 @@ func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) ([]File
 			files[i].Content = *f.Content
 			continue
 		}
-		if f.Path == "" {
+		// Matches checkEvidenceShape's own strings.TrimSpace(f.Path) == ""
+		// check on the empty-Path guard below (see its case 2 comment). A
+		// bare f.Path == "" check here let a whitespace-only path (content
+		// omitted) fall through to resolveFileInput, whose own TrimSpace
+		// guard then returned a bare transport error instead of routing back
+		// to the malformed_evidence envelope checkEvidenceShape produces.
+		if strings.TrimSpace(f.Path) == "" {
 			continue
 		}
 		content, src, err := resolveFileInput(f.Path, roots, maxBytes)

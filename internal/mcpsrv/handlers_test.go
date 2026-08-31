@@ -1619,6 +1619,43 @@ func TestValidateCompletion_EvidenceGuard_RejectsEmptyFilePath(t *testing.T) {
 	}
 }
 
+// TestValidateCompletion_EvidenceGuard_RejectsWhitespaceOnlyFilePath is the
+// regression test for the mismatch between resolveCompletionInputs' skip
+// guard (f.Path == "") and checkEvidenceShape's own guard
+// (strings.TrimSpace(f.Path) == ""): a whitespace-only path with content
+// omitted used to fall through resolveCompletionInputs unskipped, reach
+// resolveFileInput, and fail its own TrimSpace check with a bare transport
+// error instead of routing back to the malformed_evidence envelope.
+func TestValidateCompletion_EvidenceGuard_RejectsWhitespaceOnlyFilePath(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	initialCalls := rv.Calls
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []CompletionFileArg{{Path: " "}},
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != string(verdict.VerdictFail) {
+		t.Errorf("verdict = %s, want fail", env.Verdict)
+	}
+	if len(env.Findings) == 0 || env.Findings[0].Category != verdict.CategoryMalformedEvidence {
+		t.Errorf("expected malformed_evidence finding, got: %+v", env.Findings)
+	}
+	if rv.Calls != initialCalls {
+		t.Errorf("reviewer was called (%d -> %d); guard should have rejected before reviewer", initialCalls, rv.Calls)
+	}
+}
+
 func TestValidateCompletion_EvidenceGuard_CompleteDiffPassesThrough(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
 	d := newDeps(t, rv)

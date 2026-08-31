@@ -203,6 +203,16 @@ func Load(env func(string) string) (Config, error) {
 		}
 		cfg.MaxPayloadBytes = n
 	}
+	// PlanMaxPayloadBytes tracks the shared cap when an operator raises it: a
+	// host that already raised ANTI_TANGENT_MAX_PAYLOAD_BYTES above the 1MB
+	// plan default must not regress to rejecting plans it accepted before
+	// validate_plan gained its own cap. cfg.PlanMaxPayloadBytes is still
+	// initialized to 1048576 above, so this is exactly max(1048576,
+	// cfg.MaxPayloadBytes). The explicit ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES
+	// override below always wins over this default, even if lower.
+	if cfg.MaxPayloadBytes > cfg.PlanMaxPayloadBytes {
+		cfg.PlanMaxPayloadBytes = cfg.MaxPayloadBytes
+	}
 	if v := env("ANTI_TANGENT_REQUEST_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -274,7 +284,7 @@ func Load(env func(string) string) (Config, error) {
 		cfg.PlanMaxPayloadBytes = n
 	}
 	if v := env("ANTI_TANGENT_PLAN_ROOTS"); v != "" {
-		for _, p := range strings.Split(v, ":") {
+		for _, p := range filepath.SplitList(v) {
 			p = strings.TrimSpace(p)
 			if p == "" {
 				continue
