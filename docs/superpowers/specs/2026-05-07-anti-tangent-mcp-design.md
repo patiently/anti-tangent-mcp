@@ -162,8 +162,9 @@ The mid-hook prompt explicitly instructs the reviewer **not** to critique code s
 {
   "session_id": "string, required",
   "summary": "string, required — what you implemented, in your own words",
+  "final_diff_path": "string, optional — absolute path to a diff file; alternative to final_files",
   "final_files": [
-    { "path": "src/foo.go", "content": "full file content" }
+    { "path": "src/foo.go", "content": "full file content, optional — omitting it makes the server read `path` instead" }
   ],
   "test_evidence": "string, optional — output of test runs, build logs, etc.",
   "model_override": "string, optional"

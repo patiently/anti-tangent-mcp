@@ -205,7 +205,7 @@ ANTI_TANGENT_REQUEST_TIMEOUT=180s
 ANTI_TANGENT_LOG_LEVEL=info
 
 # validate_plan file-path input (design 2026-08-31)
-ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES=1048576   # plan content cap; defaults to max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES); set explicitly to override either way
+# ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES=1048576 # optional override; unset falls back to max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES) — raising the shared cap above raises this too; setting this always wins, even below the shared cap
 ANTI_TANGENT_PLAN_ROOTS=                      # OS path-list separator (":" on Unix, ";" on Windows) list of absolute roots; empty = unrestricted
 
 # Output budgets + chunking (v0.1.4+):

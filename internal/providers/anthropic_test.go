@@ -162,7 +162,11 @@ func TestAnthropicCachePrefix(t *testing.T) {
 		t.Helper()
 		var got map[string]any
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Errorf("decode request body: %v", err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"model":"m","stop_reason":"tool_use",
 				"content":[{"type":"tool_use","input":{"ok":true}}],

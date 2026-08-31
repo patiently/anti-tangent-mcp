@@ -136,7 +136,11 @@ func TestOpenAI_CachePrefix(t *testing.T) {
 		var got map[string]any
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(r.Body)
-			require.NoError(t, json.Unmarshal(body, &got))
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Errorf("decode request body: %v", err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"model": "gpt-5",

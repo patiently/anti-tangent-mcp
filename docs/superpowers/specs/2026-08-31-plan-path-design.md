@@ -14,7 +14,7 @@ literal string, so the calling agent must **emit** the entire plan markdown insi
 tool-call arguments. Once the plan exceeds the caller's max-output-tokens setting, the call
 fails before it ever reaches the server:
 
-```
+```text
 API Error: Claude's response exceeded the 64000 output token maximum.
 ```
 
@@ -261,7 +261,7 @@ helper signature narrow (1 arg vs. 5) and matches CodeScene's max arguments = 4 
 
 One line lands in `SummaryBlock`, after `plan_run_id`, only when `plan_path` was used:
 
-```
+```text
   source:        /abs/path/plan.md (170158 B, sha256 4f2a9c1e…)
 ```
 

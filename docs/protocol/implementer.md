@@ -61,21 +61,24 @@ about what you submitted, not about your code. Attach the missing evidence
 and re-submit; no rework is implied.**
 - Prefer paths over inline content: omit a `final_files` entry's `content` and the server reads
   its absolute `path`, and pass `final_diff_path` instead of `final_diff` (write it first with
-  `git add -A && git diff HEAD > "$(git rev-parse --absolute-git-dir)/anti-tangent-change.diff"` —
+  `git add -- <task paths> && git diff HEAD -- <task paths> > "$(git rev-parse --absolute-git-dir)/anti-tangent-change.diff"` —
   a repo-local scratch path, guaranteed writable and never tracked by git — then pass that same
   absolute path as `final_diff_path`; use `--absolute-git-dir`, not `--git-dir`, which prints a
   relative `.git` in a normal checkout and would make `final_diff_path` fail the server's
   absolute-path check — `--absolute-git-dir` resolves correctly in both a normal checkout and a
   worktree, where `.git` is a regular file rather than a directory and `"$PWD/.git/..."` dies with
-  `Not a directory`). **The `git add -A` is required, not optional**: bare `git diff HEAD` omits
-  untracked files entirely, so a task that creates a new source or test file produces a non-empty
-  but incomplete diff and the reviewer silently never sees the new file. If you'd rather not stage
-  everything, pass new files individually as `final_files[].path` entries instead. Use `git diff
-  HEAD`, not bare `git diff` — bare `git diff` shows unstaged changes only and is empty once
-  you've staged or committed, which is the normal state by the time you call
-  `validate_completion`. If your task's work is already committed, diff from the commit the task
-  started at instead (`git add -A && git diff <task-base-commit>`), since `git diff HEAD` is empty
-  too once there is nothing left uncommitted. An empty diff file is rejected with a structured
+  `Not a directory`). **Scope both the `git add` and the `git diff` to your task's own paths —
+  never `git add -A` or bare `git diff HEAD`.** Everything in the diff is sent to a third-party
+  reviewer LLM, so an unscoped `git add -A` stages, and an unscoped diff then discloses, every
+  non-ignored change in the worktree — unrelated tracked edits, scratch files, another task's
+  half-finished work. The task's `**Files:**` list is already the set this task is expected to
+  touch, so use it as the pathspec: `git add -- <task paths> && git diff HEAD -- <task paths>`. A
+  new file must fall inside that same pathspec — `git add -- <new-file-path>` stages it before the
+  scoped diff is generated — or be passed individually as a `final_files[].path` entry; either way,
+  don't fall back to staging the whole worktree just to catch new files. If your task's work is
+  already committed, diff the same pathspec from the commit the task started at instead (`git add
+  -- <task paths> && git diff <task-base-commit> -- <task paths>`), since `git diff HEAD -- <task
+  paths>` is empty too once there is nothing left uncommitted. An empty diff file is rejected with a structured
   error, not a silent pass, so a wrong recipe surfaces immediately instead of shipping a
   no-evidence review. Truncation checks still apply to the resolved content — a file containing
   `// snip` or a bare `...` line is rejected exactly as inline evidence would be. If your host sets

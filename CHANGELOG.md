@@ -118,6 +118,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operator who believed they had narrowed the server's file access had not. Setting the variable
   to such a value is now a startup error naming `ANTI_TANGENT_PLAN_ROOTS`.
 
+### Security
+- **`docs/protocol/implementer.md`'s `final_diff_path` recipe over-captured.** It told
+  implementers to run `git add -A && git diff HEAD`, which stages and diffs every non-ignored
+  change in the worktree — unrelated tracked edits, scratch files, another task's half-finished
+  work — and everything in that diff is sent to a third-party reviewer LLM via `final_diff_path`.
+  The recipe now scopes both the `git add` and the `git diff` to the task's own paths (the task's
+  `**Files:**` list, used as a pathspec), with new files either covered by that same pathspec or
+  passed individually as `final_files[].path` entries, so completeness no longer requires
+  disclosing unrelated work.
+
 ### Deprecated
 - **`plan_text` on `validate_plan`.** Still fully functional, now reporting one `minor` finding
   pointing at `plan_path`. It will be removed in 1.0.0.
