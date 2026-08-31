@@ -146,7 +146,7 @@ Add `"path/filepath"` to the import block, then insert after the `ANTI_TANGENT_P
 		cfg.PlanMaxPayloadBytes = n
 	}
 	if v := env("ANTI_TANGENT_PLAN_ROOTS"); v != "" {
-		for _, p := range strings.Split(v, ":") {
+		for _, p := range filepath.SplitList(v) {
 			p = strings.TrimSpace(p)
 			if p == "" {
 				continue

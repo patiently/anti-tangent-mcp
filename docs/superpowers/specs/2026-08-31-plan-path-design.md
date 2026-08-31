@@ -189,7 +189,8 @@ Failure mapping:
 
 ### 3.1 `ANTI_TANGENT_PLAN_ROOTS`
 
-Colon-separated absolute paths. **Empty (the default) means unrestricted.** Prefix matching is
+Absolute paths joined with the OS path-list separator (`filepath.SplitList`: `:` on Unix, `;` on
+Windows). **Empty (the default) means unrestricted.** Prefix matching is
 on cleaned, symlink-resolved paths with a separator boundary, so `/home/foo` does not authorize
 `/home/foobar`.
 

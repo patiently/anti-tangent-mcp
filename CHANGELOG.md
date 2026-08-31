@@ -21,11 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default) is unrestricted.
 - **`ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES`** (default 1MB) — payload cap for `validate_plan` only.
   The other tools keep the shared 200KB `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
-- **Reviewer-side prompt caching on the chunked plan path.** The findings-only call and every
-  chunk call share a byte-identical prefix through the plan text, now marked as an Anthropic
-  cache breakpoint. Cuts input tokens on a chunked round, increasingly so as the chunk count
-  grows. Single-call plans are deliberately not cached — a breakpoint there is a write premium
-  against zero reads.
+- **Reviewer-side prompt caching on the chunked plan path.** The first chunk call marks its
+  byte-identical plan-text prefix as an Anthropic cache breakpoint; every later chunk call reads
+  it back. Cuts input tokens on a chunked round, increasingly so as the chunk count grows. The
+  findings-only Pass 1 call sends a differing `tools` block, so it can neither write nor read
+  that cache and carries no breakpoint of its own. Single-call plans are deliberately not
+  cached, for the same reason — a breakpoint there is a write premium against zero reads.
 
 ### Changed
 - The `validate_plan` too-large finding reports `plan:` rather than `plan_text:`, since the

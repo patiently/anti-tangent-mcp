@@ -1,12 +1,21 @@
 //go:build !windows
 
-// Package mcpsrv: FIX 1 regression coverage. Split into its own
-// build-tagged file (rather than living in file_source_test.go, which
-// compiles on every GOOS) because syscall.Mkfifo has no Windows
-// counterpart — referencing it at all would break `GOOS=windows go build`.
+// Package mcpsrv: Unix-only regression coverage that would either hang or
+// assert the wrong thing on Windows. Split into its own build-tagged file
+// (rather than living in file_source_test.go, which compiles on every GOOS)
+// because:
+//   - FIX 1 (TestResolveFileInput_FIFODoesNotHang): syscall.Mkfifo has no
+//     Windows counterpart — referencing it at all would break
+//     `GOOS=windows go build`.
+//   - FIX 4 (TestOpenNoFollow_RejectsSymlinkAtFinalComponent): openNoFollow
+//     only refuses to follow a final-component symlink on Unix, via
+//     O_NOFOLLOW (see file_source_unix.go); on Windows it is a plain
+//     os.Open and follows the symlink, which is correct behavior there,
+//     not a regression — so the rejection assertion only holds on Unix.
 package mcpsrv
 
 import (
+	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -45,5 +54,38 @@ func TestResolveFileInput_FIFODoesNotHang(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("resolveFileInput hung opening a FIFO — O_NONBLOCK regression (FIX 1); " +
 			"the fd and this goroutine now leak for the process lifetime")
+	}
+}
+
+// TestOpenNoFollow_RejectsSymlinkAtFinalComponent is the FIX 4 regression
+// test: the final path component must not be followed if it is a symlink
+// at open time, even though it passed EvalSymlinks + withinRoots a moment
+// earlier as a plain file. This simulates the swap by pointing
+// resolveFileInput directly at a symlink that itself escapes the allowed
+// root — i.e. exercising openNoFollow's refusal rather than the earlier
+// EvalSymlinks-based check (which a real TOCTOU race would have already
+// passed before the swap).
+//
+// Unix-only: openNoFollow's O_NOFOLLOW open is what rejects this on Unix
+// (file_source_unix.go). On Windows, openNoFollow is a plain os.Open
+// (file_source_windows.go) and follows the symlink instead — correct
+// behavior for that platform, not a regression — so this assertion would
+// fail against correct code there. The separate EvalSymlinks+withinRoots
+// layer that also rejects a symlink escaping the root is platform-neutral
+// and already covered by TestResolveFileInput's "symlink escaping root
+// rejected" subtest in file_source_test.go.
+func TestOpenNoFollow_RejectsSymlinkAtFinalComponent(t *testing.T) {
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.md")
+	require.NoError(t, os.WriteFile(secret, []byte("secret"), 0o644))
+
+	swapDir := t.TempDir()
+	link := filepath.Join(swapDir, "swapped.md")
+	require.NoError(t, os.Symlink(secret, link))
+
+	f, err := openNoFollow(link)
+	if err == nil {
+		_ = f.Close()
+		t.Fatal("openNoFollow followed a symlink at the final component")
 	}
 }

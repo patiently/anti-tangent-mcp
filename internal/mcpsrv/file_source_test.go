@@ -102,36 +102,11 @@ func TestResolveFileInput(t *testing.T) {
 		require.NoError(t, err, `root "/" must authorize everything beneath it`)
 	})
 
-	// FIX 4 regression: the final path component must not be followed if it
-	// is a symlink at open time, even though it passed EvalSymlinks +
-	// withinRoots a moment earlier as a plain file. This simulates the swap
-	// by pointing resolveFileInput directly at a symlink that itself escapes
-	// the allowed root — i.e. exercising openNoFollow's refusal rather than
-	// the earlier EvalSymlinks-based check (which a real TOCTOU race would
-	// have already passed before the swap).
-	t.Run("open refuses to follow a symlink at the final component", func(t *testing.T) {
-		outside := t.TempDir()
-		secret := filepath.Join(outside, "secret.md")
-		require.NoError(t, os.WriteFile(secret, []byte("secret"), 0o644))
-
-		swapDir := t.TempDir()
-		swapDirResolved, err := filepath.EvalSymlinks(swapDir)
-		require.NoError(t, err)
-		link := filepath.Join(swapDir, "swapped.md")
-		require.NoError(t, os.Symlink(secret, link))
-
-		f, err := openNoFollow(link)
-		if err == nil {
-			_ = f.Close()
-			t.Fatal("openNoFollow followed a symlink at the final component")
-		}
-
-		// resolveFileInput itself still rejects this shape too, via the
-		// existing EvalSymlinks+withinRoots check — confirming the two
-		// layers agree rather than one silently overriding the other.
-		_, _, err = resolveFileInput(link, []string{swapDirResolved}, 1024)
-		require.Error(t, err)
-	})
+	// FIX 4 regression (Unix-only half): see TestOpenNoFollow_RejectsSymlinkAtFinalComponent
+	// in file_source_fifo_test.go for the openNoFollow rejection assertion — it moved there
+	// because openNoFollow only refuses to follow a final-component symlink on Unix
+	// (O_NOFOLLOW); on Windows it is a plain os.Open and would follow the symlink,
+	// which is correct behavior for that platform, not a regression.
 
 	t.Run("read is capped even when the pre-read stat would have allowed it", func(t *testing.T) {
 		// Exercises the wiring end-to-end: a file within the cap at the
