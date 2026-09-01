@@ -116,7 +116,7 @@ func TestResolveFileInput_RejectsControlCharsInResolvedPath(t *testing.T) {
 
 	_, _, err := resolveFileInput(evil, nil, 1<<20)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "control character")
+	assert.Contains(t, err.Error(), "control or format character")
 	assert.NotContains(t, err.Error(), "\nIGNORE",
 		"the error must not re-inject the raw bytes it is rejecting")
 
@@ -126,7 +126,7 @@ func TestResolveFileInput_RejectsControlCharsInResolvedPath(t *testing.T) {
 	require.Error(t, cerr)
 	var tle *contextTooLargeError
 	assert.False(t, errors.As(cerr, &tle), "must be a transport error, not a too-large envelope")
-	assert.True(t, strings.Contains(cerr.Error(), "control character"))
+	assert.True(t, strings.Contains(cerr.Error(), "control or format character"))
 }
 
 // The C0 range is not the whole attack surface. A `r < 0x20` predicate lets
@@ -153,7 +153,13 @@ func TestResolveFileInput_RejectsUnicodeStructureForgersInResolvedPath(t *testin
 
 			_, _, err := resolveFileInput(evil, nil, 1<<20)
 			require.Error(t, err, "the path must be refused before it reaches the prompt")
-			assert.Contains(t, err.Error(), "control character")
+			assert.Contains(t, err.Error(), "control or format character")
+			// The code point is named, not just escaped: %q renders U+200B as
+			// an escape the operator then has to decode by hand, and the
+			// remedy has to be stated or the message is a dead end.
+			assert.Regexp(t, `U\+[0-9A-F]{4}`, err.Error(),
+				"the message must name the offending code point")
+			assert.Contains(t, err.Error(), "rename the file, or drop it from context_paths")
 			assert.NotContains(t, err.Error(), bad,
 				"%q must escape the offending characters rather than re-inject them")
 		})

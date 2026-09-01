@@ -172,6 +172,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
+- The attachment ground rules read more carefully. "For those files, and only those files" had
+  drifted to the wrong nearest antecedent once the paragraph above it was rewritten to end on
+  "treat that path as UNATTACHED"; it now names the enumerated attached list explicitly. And the
+  suffix-binding example no longer invents a plausible-looking absolute root (`/abs/repo/...`) two
+  paragraphs after telling the reviewer to distrust official-looking strings, in a prompt whose
+  attached-files list carries the caller's real root — it states the rule in repo-relative terms
+  instead. No behavioural change for a call without `context_paths`.
+- **The control-character path rejection now names the code point and the remedy.** "Control
+  character" was a misnomer once the predicate grew to cover all of `unicode.Cf` — a soft hyphen
+  is a format character, not a control one — and `%q` alone left the operator decoding an escape
+  by hand. The message now says "disallowed control or format character U+XXXX" and names the fix
+  (rename the file, or drop it from `context_paths`). README documents the refusal.
 - **`docs/protocol/core.md` no longer promises `contradicted_codebase_claim` is unconditionally
   unfloored.** Since the server started demoting a contradiction the attached set does not back,
   the category IS floored, rolled up and force-passable in that case. core.md said otherwise

@@ -366,6 +366,12 @@ those.
 `context_paths` and `repo_root` are governed by the same `ANTI_TANGENT_PLAN_ROOTS` allowlist as
 `plan_path` — restricting one restricts all three.
 
+A file whose resolved path contains a control or Unicode format character (an embedded newline, a
+right-to-left override, a zero-width space, a soft hyphen) is **refused**, not attached: the path
+is rendered into the reviewer's ground rules and into the summary block's `context:` list, both of
+which a reader treats as server output. The error names the offending code point as `U+XXXX`;
+rename the file, or drop it from `context_paths`.
+
 **Attachments are almost never cached.** Only the Anthropic client sends an explicit cache
 breakpoint, and only on the chunked path (plans above `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK`
 tasks, default 8) — `reviewPlanSingle` sets no `CachePrefix`,

@@ -1873,7 +1873,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// promise repo_root "enables the disk tier". resolveDirInput also
 	// rejects a plain relative path — an ordinary caller bug — and that was
 	// swallowed too. The reason is therefore captured here and surfaced
-	// in-band as a finding (repoRootUnusableFinding), not just on stderr:
+	// in-band as a finding (prependRepoRootUnusable), not just on stderr:
 	// findings are what callers parse.
 	if args.RepoRoot != "" {
 		resolved, rerr := resolveDirInput(args.RepoRoot, h.deps.Cfg.PlanRoots)
@@ -1982,6 +1982,15 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// break. Only the paths below that actually render a review use this;
 	// the too-large / no-headings early exits never chose a chunking, so
 	// they keep the plain figure.
+	//
+	// KNOWN INACCURACY, deliberately not fixed: this bills the PLANNED number
+	// of reviewer calls. A round that truncates on Pass 1 made one call, not
+	// three, so its stats row over-reports attachment traffic. Correcting it
+	// needs an actual-calls count threaded out of reviewPlanSingle,
+	// reviewPlanChunked AND reviewOnePlanChunk — three signatures and every
+	// return statement in them, including the schema-retry attempts — which
+	// is more API distortion than an opt-in stats edge case is worth. Rows
+	// with partial=true should be read as an upper bound on attachment bytes.
 	contextPayloadBytes := contextBytes * rendered.reviewerCalls()
 	cacheKey := planPassCacheKey(planText, projectKnowledge, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered, repoRoot)
 	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey, planSrc.String()); ok {

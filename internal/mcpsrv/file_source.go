@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // fileSource is the provenance of one resolved file input. Path is the
@@ -197,12 +198,18 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 // region, and the error names the path so the operator can rename it.
 //
 // %q escapes the offending bytes, so naming the path in the error cannot
-// re-inject them into whatever reads the error.
+// re-inject them into whatever reads the error. The code point is also named
+// as U+XXXX: %q renders U+200B as an escape the operator then has to decode,
+// and "control character" was a misnomer once the predicate grew to cover all
+// of unicode.Cf — a soft hyphen is a FORMAT character, not a control one, and
+// an operator searching their filenames for "a control character" would not
+// find it.
 func rejectControlChars(resolved string) error {
 	if i := strings.IndexFunc(resolved, forgesPromptStructure); i >= 0 {
+		r, _ := utf8.DecodeRuneInString(resolved[i:])
 		return fmt.Errorf(
-			"resolved path %q contains a control character at byte %d; refusing to render it into the reviewer prompt",
-			resolved, i)
+			"resolved path %q contains a disallowed control or format character U+%04X at byte %d; refusing to render it into the reviewer prompt (rename the file, or drop it from context_paths)",
+			resolved, r, i)
 	}
 	return nil
 }

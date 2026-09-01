@@ -609,7 +609,9 @@ func TestParseTasksOnly_RejectsEmptyFindingStrings(t *testing.T) {
 
 // contradictionResult builds a PlanResult carrying one
 // contradicted_codebase_claim at plan level and one on a task, both at
-// `severity` with the supplied evidence strings.
+// SeverityCritical, with the supplied evidence strings. Critical is
+// deliberate: the category carries no severity floor while it is backed, so
+// a demotion is visible as a drop to minor rather than as a no-op.
 func contradictionResult(planEvidence, taskEvidence string) PlanResult {
 	f := func(evidence string) Finding {
 		return Finding{
