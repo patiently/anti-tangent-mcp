@@ -1,8 +1,12 @@
 package prompts
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
+	"fmt"
 	"os"
+	"regexp"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1129,13 +1133,39 @@ func TestRenderPlanFindingsOnly_MarkerMidParagraphInPlanText_SplitsAtRealHeading
 
 // testContextNonce pins ContextFilesNonce for tests that assert on the exact
 // delimiter text, so the render is deterministic instead of picking a fresh
-// random token every run (see NewContextFilesNonce).
-const testContextNonce = "abc123"
+// random token every run (see NewContextFilesNonce). It is contextNonceHexLen
+// hex digits wide, like every nonce the server actually produces — a shorter
+// stand-in would let a golden pin a shape production never renders.
+const testContextNonce = "abc123ef"
+
+// ctxFile builds a ContextFile whose Bytes and SHA256Short are DERIVED from
+// Content, exactly as mcpsrv.toPromptContextFiles derives them from the bytes
+// it read off disk. Hand-written values are how a golden ends up pinning a
+// prompt the server can never render: the previous fixture advertised "42
+// bytes" for 57 bytes of content and an invented hash, so the golden proved
+// only that the template interpolated whatever it was handed.
+func ctxFile(path, content string) ContextFile {
+	sum := sha256.Sum256([]byte(content))
+	return ContextFile{
+		Path:        path,
+		Bytes:       len(content),
+		SHA256Short: hex.EncodeToString(sum[:])[:8],
+		Content:     content,
+	}
+}
+
+// ctxBeginLine renders the exact BEGIN-FILE delimiter the template must
+// produce for f, derived from f rather than hand-written — so an assertion
+// cannot go on passing against a byte count or hash the server would never
+// emit.
+func ctxBeginLine(nonce string, f ContextFile) string {
+	return fmt.Sprintf("--- BEGIN FILE %s: %s (%d bytes, sha256 %s…) ---", nonce, f.Path, f.Bytes, f.SHA256Short)
+}
 
 func ctxFiles() []ContextFile {
 	return []ContextFile{
-		{Path: "/repo/internal/config/config.go", Bytes: 42, SHA256Short: "9f2ab41c", Content: "package config\n\ntype Config struct{ PlanRoots []string }\n"},
-		{Path: "/repo/internal/verdict/verdict.go", Bytes: 21, SHA256Short: "3c1af09b", Content: "package verdict\n"},
+		ctxFile("/repo/internal/config/config.go", "package config\n\ntype Config struct{ PlanRoots []string }\n"),
+		ctxFile("/repo/internal/verdict/verdict.go", "package verdict\n"),
 	}
 }
 
@@ -1149,12 +1179,68 @@ func TestRenderPlan_WithContextFiles_Golden(t *testing.T) {
 	golden(t, "plan_basic_with_context_files", out.System+"\n---USER---\n"+out.User)
 }
 
+// TestRenderPlan_WithProjectKnowledgeAndContextFiles_Golden covers the
+// combination no other golden did: plan_rules.tmpl has independent
+// {{if .ProjectKnowledge}} and {{if .ContextFiles}} branches that interleave,
+// and their whitespace and ordering are only pinned when both are set.
+func TestRenderPlan_WithProjectKnowledgeAndContextFiles_Golden(t *testing.T) {
+	out, err := RenderPlan(PlanInput{
+		PlanText:          "# Plan\n\n### Task 1: t1\n\n**Goal:** g1\n",
+		ProjectKnowledge:  "- decision: PlanRoots is an allowlist, empty means unrestricted.\n",
+		ContextFiles:      ctxFiles(),
+		ContextFilesNonce: testContextNonce,
+	})
+	require.NoError(t, err)
+	golden(t, "plan_basic_with_project_knowledge_and_context_files", out.System+"\n---USER---\n"+out.User)
+}
+
+// The production render path never sets ContextFilesNonce — it derives one
+// (DeriveContextFilesNonce). Every other attachment test pins the nonce for a
+// stable golden, so nothing exercised the shape the SERVER actually emits:
+// this asserts the derived nonce is contextNonceHexLen hex digits (a shorter
+// or non-hex token would mean the derivation changed shape unnoticed) and
+// that Bytes/SHA256Short render the fixture's TRUE values. The golden shipped
+// with 0.17.0 pinned "42 bytes" for 57 bytes of content, an invented hash,
+// and a 6-char nonce — which is precisely why a broken render could ship
+// green.
+func TestRenderPlan_DerivedNonceAndTrueByteCounts(t *testing.T) {
+	files := ctxFiles()
+	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: files})
+	require.NoError(t, err)
+
+	re := regexp.MustCompile(`--- BEGIN FILE ([0-9a-f]+): `)
+	m := re.FindStringSubmatch(out.User)
+	require.NotNil(t, m, "no BEGIN FILE delimiter rendered")
+	assert.Len(t, m[1], contextNonceHexLen, "derived nonce must be contextNonceHexLen hex digits")
+
+	derived, err := DeriveContextFilesNonce(files)
+	require.NoError(t, err)
+	assert.Equal(t, derived, m[1])
+
+	for _, f := range files {
+		assert.Equal(t, len(f.Content), f.Bytes, "fixture must carry the true byte count")
+		assert.Contains(t, out.User, ctxBeginLine(derived, f))
+	}
+}
+
+// A single attachment must not read "these 1 source files".
+func TestRenderPlan_ContextFileCountIsPluralisedCorrectly(t *testing.T) {
+	one, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles()[:1], ContextFilesNonce: testContextNonce})
+	require.NoError(t, err)
+	assert.Contains(t, one.User, "the COMPLETE contents of this 1 source file, read from disk")
+	assert.NotContains(t, one.User, "these 1 source file")
+
+	two, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles(), ContextFilesNonce: testContextNonce})
+	require.NoError(t, err)
+	assert.Contains(t, two.User, "the COMPLETE contents of these 2 source files, read from disk")
+}
+
 func TestRenderPlan_WithContextFiles_Structure(t *testing.T) {
 	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles(), ContextFilesNonce: testContextNonce})
 	require.NoError(t, err)
 
 	assert.Contains(t, out.User, "## Attached source files")
-	assert.Contains(t, out.User, "--- BEGIN FILE "+testContextNonce+": /repo/internal/config/config.go (42 bytes, sha256 9f2ab41c…) ---")
+	assert.Contains(t, out.User, ctxBeginLine(testContextNonce, ctxFiles()[0]))
 	assert.Contains(t, out.User, "--- END FILE "+testContextNonce+": /repo/internal/config/config.go ---")
 
 	// Posture: both directions of the guard must be present.
@@ -1258,7 +1344,7 @@ func TestRenderPlanFindingsOnly_WithContextFiles_Structure(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, out.User, "## Attached source files")
-	assert.Contains(t, out.User, "--- BEGIN FILE "+testContextNonce+": /repo/internal/config/config.go (42 bytes, sha256 9f2ab41c…) ---")
+	assert.Contains(t, out.User, ctxBeginLine(testContextNonce, ctxFiles()[0]))
 	assert.Contains(t, out.User, "--- END FILE "+testContextNonce+": /repo/internal/config/config.go ---")
 
 	// Posture: both directions of the guard must be present.
