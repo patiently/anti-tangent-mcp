@@ -39,11 +39,19 @@ func (s fileSource) String() string {
 	if s.SHA256 == "" {
 		return fmt.Sprintf("%s (%d B)", s.Path, s.Bytes)
 	}
-	short := s.SHA256
-	if len(short) > 8 {
-		short = short[:8]
+	return fmt.Sprintf("%s (%d B, sha256 %s…)", s.Path, s.Bytes, shortHash(s.SHA256))
+}
+
+// shortHash is the 8-hex-digit display prefix of a sha256. One helper rather
+// than two copies, so the summary block's provenance line and the reviewer
+// prompt's BEGIN FILE delimiter can never drift to different widths and name
+// the same file by two different identities. A hash shorter than 8 digits
+// (only the empty string in practice) is returned unchanged.
+func shortHash(sum string) string {
+	if len(sum) > 8 {
+		return sum[:8]
 	}
-	return fmt.Sprintf("%s (%d B, sha256 %s…)", s.Path, s.Bytes, short)
+	return sum
 }
 
 // errTooLarge signals the file exceeded the caller's cap. Callers map it to

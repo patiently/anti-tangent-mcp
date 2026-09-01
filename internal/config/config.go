@@ -315,6 +315,18 @@ func Load(env func(string) string) (Config, error) {
 		}
 		cfg.ContextMaxPayloadBytes = n
 	}
+	// Cross-check, after BOTH have been read: a per-file cap above the
+	// whole-set cap is unreachable configuration. Every file that passes the
+	// per-file check would then trip the set check, so raising
+	// ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES to "allow a big file" silently
+	// achieves nothing — the operator's intent is defeated by a limit they
+	// did not think to raise. Fail at startup naming both variables rather
+	// than at review time naming only one.
+	if cfg.ContextMaxFileBytes > cfg.ContextMaxPayloadBytes {
+		return Config{}, fmt.Errorf(
+			"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES (%d) must be <= ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES (%d): a per-file cap above the whole-set cap can never be reached",
+			cfg.ContextMaxFileBytes, cfg.ContextMaxPayloadBytes)
+	}
 	if v := env("ANTI_TANGENT_PLAN_ROOTS"); v != "" {
 		for _, p := range filepath.SplitList(v) {
 			p = strings.TrimSpace(p)

@@ -54,6 +54,39 @@ func ParsePlan(raw []byte) (PlanResult, error) {
 	return r, nil
 }
 
+// DemoteUnattachedContradictions rewrites every contradicted_codebase_claim
+// in pr into an unverifiable_codebase_claim, floored to minor.
+//
+// Call it on a validate_plan result produced with NO attached context files.
+// contradicted_codebase_claim exists specifically because an attached file is
+// ground truth read from disk, which is why — unlike
+// unverifiable_codebase_claim — it carries no severity floor and is not
+// force-passed by the unverifiable-only verdict calibration. With nothing
+// attached, the reviewer has no file to refute anything with, so the category
+// is a hallucination wearing a hard severity: it can fail a plan gate on a
+// claim about code the reviewer never saw.
+//
+// The prompt already tells the reviewer never to emit it about an unattached
+// file, but suppression must run SERVER-SIDE, independent of reviewer
+// compliance (controller.md §5.8). Demotion, not deletion: the observation
+// may still be worth surfacing, just at the severity a claim nobody could
+// check deserves.
+func DemoteUnattachedContradictions(pr *PlanResult) {
+	demote := func(fs []Finding) {
+		for i := range fs {
+			if fs[i].Category != CategoryContradictedCodebaseClaim {
+				continue
+			}
+			fs[i].Category = CategoryUnverifiableCodebaseClaim
+			fs[i] = applySeverityFloor(fs[i])
+		}
+	}
+	demote(pr.PlanFindings)
+	for i := range pr.Tasks {
+		demote(pr.Tasks[i].Findings)
+	}
+}
+
 func validatePlanVerdict(v Verdict, where string) error {
 	switch v {
 	case VerdictPass, VerdictWarn, VerdictFail:

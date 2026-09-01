@@ -36,29 +36,35 @@ type planCachePrompt struct {
 	UserSuffix string `json:"user_suffix"`
 }
 
-// contextFileKey is the cache-key projection of one attachment: identity and
-// content hash, never the bytes. The key is itself hashed, so carrying
-// hundreds of KB into it would buy nothing.
-type contextFileKey struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
-}
-
-func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens, maxTokensOverride int, rendered renderedPlanReview, contextFiles []contextFile, repoRoot string) [32]byte {
-	ctxKeys := make([]contextFileKey, 0, len(contextFiles))
-	for _, f := range contextFiles {
-		ctxKeys = append(ctxKeys, contextFileKey{Path: f.Source.Path, SHA256: f.Source.SHA256})
-	}
+// planPassCacheKey hashes everything that can change a validate_plan result.
+//
+// The attachment set is covered by Prompts, not by a field of its own.
+// rendered.cachePrompts() carries System + UserPrefix + UserSuffix for every
+// reviewer call, and those three concatenate to the whole rendered body —
+// which interpolates each attached file's path, byte count, short hash, and
+// COMPLETE contents, under a nonce derived from the same bytes. A separate
+// path+sha projection would be a strictly weaker restatement of data already
+// in the key, at the cost of implying the bytes are not (the old comment
+// claimed content was kept out of the key; Prompts had been carrying every
+// byte of it all along).
+//
+// RepoRoot is NOT redundant the same way and must stay: nothing about
+// repo_root reaches the rendered prompt. It gates checkFileConsistency's disk
+// tier server-side, so dropping it silently disabled that tier on the second
+// of two otherwise-identical calls — a regression this key already had once.
+func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens, maxTokensOverride int, rendered renderedPlanReview, repoRoot string) [32]byte {
 	keyInput := struct {
-		Version           string            `json:"version"`
-		PlanText          string            `json:"plan_text"`
-		ProjectKnowledge  string            `json:"project_knowledge"`
-		Mode              string            `json:"mode"`
-		Model             string            `json:"model"`
-		MaxTokens         int               `json:"max_tokens"`
-		MaxTokensOverride int               `json:"max_tokens_override"`
-		Prompts           []planCachePrompt `json:"prompts"`
-		ContextFiles      []contextFileKey  `json:"context_files"`
+		Version           string `json:"version"`
+		PlanText          string `json:"plan_text"`
+		ProjectKnowledge  string `json:"project_knowledge"`
+		Mode              string `json:"mode"`
+		Model             string `json:"model"`
+		MaxTokens         int    `json:"max_tokens"`
+		MaxTokensOverride int    `json:"max_tokens_override"`
+		// Prompts carries the FULL rendered body of every reviewer call,
+		// including each attached file's contents verbatim — see the doc
+		// comment. This is what makes the attachment set part of the key.
+		Prompts []planCachePrompt `json:"prompts"`
 		// RepoRoot gates checkFileConsistency's disk tier (internal/mcpsrv/
 		// file_consistency.go): with repo_root, a Modify: target missing
 		// from disk is a finding; without it, that tier is skipped
@@ -77,7 +83,6 @@ func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens,
 		MaxTokens:         maxTokens,
 		MaxTokensOverride: maxTokensOverride,
 		Prompts:           rendered.cachePrompts(),
-		ContextFiles:      ctxKeys,
 		RepoRoot:          repoRoot,
 	}
 	// keyInput contains only strings, ints, and slices of those, so JSON

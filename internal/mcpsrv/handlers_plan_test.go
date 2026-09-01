@@ -3,6 +3,8 @@ package mcpsrv
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -1700,7 +1702,7 @@ func TestPlanPassCacheKey_CoversBothHalves(t *testing.T) {
 		}
 	}
 	keyOf := func(r renderedPlanReview) [32]byte {
-		return planPassCacheKey("plan", "pk", "mode", "model", 100, 0, r, nil, "")
+		return planPassCacheKey("plan", "pk", "mode", "model", 100, 0, r, "")
 	}
 
 	base := keyOf(build("shared-prefix", "suffix-v1"))
@@ -1875,23 +1877,44 @@ func TestValidatePlan_NoContextPaths_PromptUnchanged(t *testing.T) {
 }
 
 // A stale review after an attached file is edited is the failure this guards:
-// planPassCache keys on plan content, so without the attachment hashes a
-// caller who fixes the file a finding complained about and re-validates
-// immediately gets the pre-fix review back with no indication of reuse.
+// a caller who fixes the file a finding complained about and re-validates
+// inside the 3-minute TTL must not get the pre-fix review back.
+//
+// The key covers attachments through the RENDERED PROMPTS, which interpolate
+// each file's path, byte count, short hash and complete contents — so this
+// drives the real render rather than hand-assembling a key projection, and
+// would catch the attachment section being dropped from the template just as
+// well as the key being dropped.
 func TestPlanPassCacheKey_VariesWithAttachedContent(t *testing.T) {
-	rendered := renderedPlanReview{}
-	mk := func(sha string) [32]byte {
-		return planPassCacheKey("plan", "", "", "m", 100, 0, rendered,
-			[]contextFile{{Source: fileSource{Path: "/a.go", Bytes: 10, SHA256: sha}}}, "")
+	mk := func(t *testing.T, content string) [32]byte {
+		t.Helper()
+		sum := sha256.Sum256([]byte(content))
+		files := []contextFile{{
+			Source:  fileSource{Path: "/a.go", Bytes: len(content), SHA256: hex.EncodeToString(sum[:])},
+			Content: content,
+		}}
+		plan := buildPlanWithNTasks(1)
+		tasks, _ := planparser.SplitTasks(plan)
+		rendered, err := renderPlanReview(renderPlanReviewInputs{
+			PlanText:     plan,
+			Tasks:        tasks,
+			ChunkSize:    8,
+			ContextFiles: toPromptContextFiles(files),
+		})
+		require.NoError(t, err)
+		return planPassCacheKey("plan", "", "", "m", 100, 0, rendered, "")
 	}
-	assert.NotEqual(t, mk("aaaa"), mk("bbbb"))
-	assert.Equal(t, mk("aaaa"), mk("aaaa"))
+	assert.NotEqual(t, mk(t, "package a\n"), mk(t, "package a\n\nfunc B() {}\n"))
+	assert.Equal(t, mk(t, "package a\n"), mk(t, "package a\n"))
 }
+
+// The mirror of the above: with no attachments at all the key must still be
+// stable across identical calls.
 
 func TestPlanPassCacheKey_NoAttachmentsIsStable(t *testing.T) {
 	rendered := renderedPlanReview{}
-	a := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil, "")
-	b := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil, "")
+	a := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, "")
+	b := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, "")
 	assert.Equal(t, a, b)
 }
 
@@ -1903,7 +1926,7 @@ func TestPlanPassCacheKey_NoAttachmentsIsStable(t *testing.T) {
 func TestPlanPassCacheKey_VariesWithRepoRoot(t *testing.T) {
 	rendered := renderedPlanReview{}
 	mk := func(repoRoot string) [32]byte {
-		return planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil, repoRoot)
+		return planPassCacheKey("plan", "", "", "m", 100, 0, rendered, repoRoot)
 	}
 	assert.NotEqual(t, mk(""), mk("/repo/a"))
 	assert.NotEqual(t, mk("/repo/a"), mk("/repo/b"))
@@ -1971,4 +1994,130 @@ func TestValidatePlan_RepoRootChangeBustsPlanPassCache(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "the disk tier must run once repo_root is supplied, even though the plan text is byte-identical to the cached call")
+}
+
+// planRespWithContradiction is a plan response carrying one
+// contradicted_codebase_claim at plan level and one on the single task.
+func planRespWithContradiction(t *testing.T, severity string) providers.Response {
+	t.Helper()
+	f := `{"severity":"` + severity + `","category":"contradicted_codebase_claim","criterion":"c","evidence":"e","suggestion":"s"}`
+	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[` + f + `],"tasks":[` +
+		`{"task_index":1,"task_title":"Task 1: t1","verdict":"warn","findings":[` + f + `],"suggested_header_block":"","suggested_header_reason":""}` +
+		`],"next_action":"fix it"}`)
+	return providers.Response{RawJSON: raw, Model: "claude-sonnet-4-6"}
+}
+
+// contradicted_codebase_claim exists because an attached file is ground truth,
+// which is why it alone among the codebase-claim categories carries NO
+// severity floor. With nothing attached the reviewer has no file to refute
+// anything with, so an unfloored major/critical finding can fail a plan gate
+// over code the reviewer never saw. The prompt already forbids it; suppression
+// must ALSO run server-side, independent of reviewer compliance
+// (controller.md §5.8).
+func TestValidatePlan_ContradictionWithoutAttachmentsIsDemoted(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{planRespWithContradiction(t, "major")}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: buildPlanWithNTasks(1),
+	})
+	require.NoError(t, err)
+
+	all := append([]verdict.Finding{}, pr.PlanFindings...)
+	for _, tk := range pr.Tasks {
+		all = append(all, tk.Findings...)
+	}
+	var contradictions, demoted int
+	for _, f := range all {
+		switch f.Category {
+		case verdict.CategoryContradictedCodebaseClaim:
+			contradictions++
+		case verdict.CategoryUnverifiableCodebaseClaim:
+			demoted++
+			assert.Equal(t, verdict.SeverityMinor, f.Severity,
+				"a demoted contradiction must land on the unverifiable floor")
+		}
+	}
+	assert.Zero(t, contradictions,
+		"no contradicted_codebase_claim may survive a call with no context_paths")
+	assert.Equal(t, 2, demoted, "both the plan-level and the per-task finding must be demoted")
+}
+
+// The mirror: WITH an attachment the category is legitimate and must survive
+// at the reviewer's chosen severity, floor-free.
+func TestValidatePlan_ContradictionWithAttachmentsSurvives(t *testing.T) {
+	dir := t.TempDir()
+	f := writeTemp(t, dir, "a.go", "package a\n")
+
+	sr := &scriptedReviewer{responses: []providers.Response{planRespWithContradiction(t, "major")}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{f},
+	})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, pr.PlanFindings)
+	var found bool
+	for _, fd := range pr.PlanFindings {
+		if fd.Category == verdict.CategoryContradictedCodebaseClaim {
+			found = true
+			assert.Equal(t, verdict.SeverityMajor, fd.Severity,
+				"contradicted_codebase_claim has no severity floor when a file backs it")
+		}
+	}
+	assert.True(t, found, "an attached call must keep contradicted_codebase_claim")
+}
+
+// The Create/Modify consistency check needs no reviewer and cannot itself be
+// truncated, so a truncated reviewer response must not silently drop it — it
+// is the one finding the server already knows for certain. The same envelope
+// must also still name the attached files in its summary, which it did not:
+// the truncation path built planSummaryMeta with no ContextFiles while the
+// same call's stats counted every attached byte.
+func TestValidatePlan_TruncationKeepsFileConsistencyAndContextProvenance(t *testing.T) {
+	dir := t.TempDir()
+	attached := writeTemp(t, dir, "attached.go", "package a\n")
+
+	// Task 1 modifies a.go; Task 2 creates it — an order-tier contradiction
+	// provable from the plan text alone.
+	plan := "# Plan\n\n" +
+		"### Task 1: t1\n\n**Goal:** g1\n\n**Files:**\n- Modify: `a.go`\n\n" +
+		"### Task 2: t2\n\n**Goal:** g2\n\n**Files:**\n- Create: `a.go`\n\n"
+
+	rawJSON := []byte(`{"plan_verdict":"warn","plan_findings":[` +
+		`{"severity":"major","category":"other","criterion":"pf1","evidence":"e","suggestion":"s"}` +
+		`],"tasks":[` +
+		`{"task_index":1,"task_title":"Task 1: t1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":2,"task_title":"Task 2: t2","verdict":"warn","find`)
+
+	sr := &scriptedReviewer{
+		responses: []providers.Response{{RawJSON: rawJSON, Model: "claude-sonnet-4-6"}},
+		errors:    []error{providers.ErrResponseTruncated},
+	}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     plan,
+		ContextPaths: []string{attached},
+	})
+	require.NoError(t, err)
+	require.True(t, pr.Partial, "this must be the truncation-recovery path")
+
+	var gotConsistency bool
+	for _, f := range pr.PlanFindings {
+		if f.Criterion == "task_order_contradiction" {
+			gotConsistency = true
+		}
+	}
+	assert.True(t, gotConsistency,
+		"the reviewer-free Create/Modify finding must survive a truncated reviewer response")
+
+	assert.Contains(t, pr.SummaryBlock, "context:",
+		"a truncated review must still name what the reviewer was given")
+	assert.Contains(t, pr.SummaryBlock, mustEval(t, attached))
 }

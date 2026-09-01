@@ -43,6 +43,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/protocol/controller.md`'s per-call cost figure for the plan gate was stale — it
   advertised ~$0.01–$0.02, which was already wrong for a large plan and off by roughly 50× with
   attachments. It now carries real numbers for both cases.
+- **`stats` `payload_bytes` changed meaning on `validate_plan` events in 0.17.0**, with no events
+  schema version marker (a schema bump is deliberately out of scope for this release). It now
+  includes the `context_paths` bytes, and on a chunked round those bytes are multiplied by the
+  number of reviewer calls, because the whole attached set is re-sent on every call. Plan text is
+  deliberately NOT multiplied, so rows from calls without `context_paths` stay comparable with
+  pre-0.17.0 history. Treat `payload_bytes` on rows carrying attachments as a new series.
+- A bad `repo_root` no longer kills the review. It resolves BEFORE any attachment is read (a typo
+  used to throw away every file the server had just read off disk) and, on failure, degrades to
+  the same behaviour as omitting it — the Create/Modify disk tier is skipped and a warning is
+  logged — instead of failing the whole call over an optional argument.
+- All three `context_paths` cap breaches now surface as the too-large envelope. The 51-file count
+  cap used to return a transport error while the two byte caps returned envelopes.
+- `validate_plan` logs one structured line to stderr per call, naming the attached file count,
+  byte total, and paths.
 - The reviewer ground rules, previously duplicated verbatim across all three plan templates, are
   now one shared partial. No behavioural change for a call without `context_paths`: the rendered
   prompt is byte-identical to 0.16.0.
@@ -84,6 +98,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missed. Findings still name tasks by the plan's own numbers.
 - **The disk tier only reports "does not exist" for a genuine not-exists.** A permission or I/O
   error from `os.Stat` now leaves the target alone instead of being reported as missing.
+- **`contradicted_codebase_claim` is suppressed server-side when nothing was attached.** The
+  category deliberately carries no severity floor, because an attached file is ground truth — so
+  a reviewer emitting one on a call with no `context_paths` could fail a plan gate at `major` on
+  code it never saw. Such findings are now demoted to `unverifiable_codebase_claim` (floored to
+  minor) by the server, independent of whether the reviewer obeyed the prompt's prohibition.
+- **A truncated plan review keeps the Create/Modify consistency finding and its `context:`
+  provenance.** The reviewer-free check ran after the truncation-recovery early return, so a
+  truncated response silently dropped the one finding the server already knew for certain; and
+  the recovery envelope's summary omitted the attached-file list while the same call's stats
+  counted every attached byte.
+- `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` greater than `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` is
+  now rejected at startup, naming both variables: a per-file cap above the whole-set cap can
+  never be reached, so raising it alone silently achieves nothing.
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.

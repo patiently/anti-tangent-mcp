@@ -171,6 +171,16 @@ func TestReviewerSchemas_CategoryEnumsAreInLockstep(t *testing.T) {
 		}
 	}
 
+	// The plan-only extras must be EXACTLY the documented set. "Superset of
+	// canonical" alone would let any new category be added to a plan schema
+	// and nowhere else — including by accident, or as a typo of a category
+	// that was meant to be shared — and this test would still pass. The
+	// divergence is intentional but it is a closed list, so pin it.
+	//
+	// contradicted_codebase_claim is validate_plan-only because it depends on
+	// context_paths attachments, which only validate_plan takes.
+	wantPlanOnly := []string{"contradicted_codebase_claim"}
+
 	// Plan schemas must have consistent category enums among themselves.
 	var planCanonical []string
 	for _, s := range planSchemas {
@@ -185,6 +195,21 @@ func TestReviewerSchemas_CategoryEnumsAreInLockstep(t *testing.T) {
 				t.Errorf("%s (plan): category enum diverges from other plan schemas\n  plan canonical: %v\n  this file: %v", s.name, planCanonical, sorted)
 			}
 		}
+	}
+
+	inCanonical := make(map[string]bool, len(canonical))
+	for _, c := range canonical {
+		inCanonical[c] = true
+	}
+	var planOnly []string
+	for _, e := range planCanonical {
+		if !inCanonical[e] {
+			planOnly = append(planOnly, e)
+		}
+	}
+	sort.Strings(planOnly)
+	if !stringSlicesEqual(wantPlanOnly, planOnly) {
+		t.Errorf("plan-only category extras changed\n  want: %v\n  got:  %v\nAdding a plan-only category is a deliberate act: update wantPlanOnly (and the protocol docs) in the same change.", wantPlanOnly, planOnly)
 	}
 }
 

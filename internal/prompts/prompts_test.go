@@ -6,8 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"regexp"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 

@@ -520,3 +520,35 @@ func TestLoad_ContextCaps_Invalid(t *testing.T) {
 		})
 	}
 }
+
+// A per-file cap above the whole-set cap is unreachable configuration: every
+// file that passes the per-file check trips the set check, so an operator who
+// raises ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES to admit one large file silently
+// gets nothing. Fail at startup, naming BOTH variables.
+func TestLoad_ContextCaps_FileCapAbovePayloadCapIsRejected(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                      "k",
+		"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES":    "8193",
+		"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES": "8192",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES")
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES")
+
+	// Equal is fine: a single file may fill the whole set budget.
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                      "k",
+		"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES":    "8192",
+		"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES": "8192",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 8192, cfg.ContextMaxFileBytes)
+
+	// Raising only the per-file cap past the DEFAULT set cap is the shape an
+	// operator most plausibly writes, and must be caught too.
+	_, err = Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                   "k",
+		"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES": "1048576",
+	}))
+	require.Error(t, err)
+}

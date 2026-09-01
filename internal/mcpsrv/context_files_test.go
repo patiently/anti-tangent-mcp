@@ -55,6 +55,48 @@ func TestResolveContextPaths_CountCapRefusesBeforeAnyRead(t *testing.T) {
 	assert.Contains(t, err.Error(), "50")
 	assert.NotContains(t, err.Error(), "does-not-exist",
 		"count cap must be enforced before any path is opened")
+
+	// All three caps surface the same way. The count cap used to be the odd
+	// one out — a plain error, i.e. a transport error, while the two byte
+	// caps produced the too-large ENVELOPE — so a caller had to handle the
+	// same class of mistake in two places.
+	var tle *contextTooLargeError
+	require.True(t, errors.As(err, &tle), "the count cap must map to the too-large envelope")
+	assert.Equal(t, 51, tle.Count)
+	assert.Equal(t, maxContextFiles, tle.Limit)
+	assert.Empty(t, tle.Path, "a count breach names no single file")
+}
+
+// resolveDirInput's roots check had no coverage with a non-nil roots list —
+// only the unrestricted (nil) case was exercised, so the allowlist could have
+// been inverted or skipped entirely and every test would still pass.
+func TestResolveDirInput_RootsAllowlist(t *testing.T) {
+	allowed := t.TempDir()
+	other := t.TempDir()
+	roots := []string{mustEval(t, allowed)}
+
+	sub := filepath.Join(allowed, "pkg")
+	require.NoError(t, os.MkdirAll(sub, 0o750))
+
+	got, err := resolveDirInput(sub, roots)
+	require.NoError(t, err, "a directory under an allowlisted root must resolve")
+	assert.Equal(t, mustEval(t, sub), got)
+
+	got, err = resolveDirInput(allowed, roots)
+	require.NoError(t, err, "the root itself must resolve")
+	assert.Equal(t, mustEval(t, allowed), got)
+
+	_, err = resolveDirInput(other, roots)
+	require.Error(t, err, "a directory outside every root must be refused")
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+
+	// A symlink INSIDE an allowlisted root that points outside it must be
+	// refused on the resolved target, not on the requested path.
+	link := filepath.Join(allowed, "escape")
+	require.NoError(t, os.Symlink(other, link))
+	_, err = resolveDirInput(link, roots)
+	require.Error(t, err, "symlinks resolve before the roots check")
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
 }
 
 func TestResolveContextPaths_PerFileCap(t *testing.T) {

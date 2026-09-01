@@ -26,18 +26,30 @@ type contextFile struct {
 	Content string
 }
 
-// contextTooLargeError signals a cap breach. Path names the offending file
-// for a per-file breach and is empty for a set-level breach, so the caller
-// can build a message that says which dial to turn. Distinct from the plain
-// errors returned for bad paths, because a cap breach maps to the
-// too-large ENVELOPE while a bad path maps to a transport error (§3.3).
+// contextTooLargeError signals a cap breach. Exactly one of three shapes:
+// Count > 0 for the file-COUNT cap, Path != "" for a per-file byte cap, and
+// neither for the whole-set byte cap — so the caller can build a message that
+// says which dial to turn. Distinct from the plain errors returned for bad
+// paths, because a cap breach maps to the too-large ENVELOPE while a bad path
+// maps to a transport error (§3.3).
+//
+// All THREE caps use this type. The count cap used to return a plain error,
+// which meant one of the three "you asked for too much" outcomes arrived as a
+// transport error and the other two as envelopes — the caller had to handle
+// the same class of mistake two different ways.
 type contextTooLargeError struct {
 	Path  string
 	Bytes int
 	Limit int
+	Count int
 }
 
 func (e *contextTooLargeError) Error() string {
+	if e.Count > 0 {
+		return fmt.Sprintf(
+			"context_paths: %d entries > cap %d (attach only the files the plan makes claims about)",
+			e.Count, e.Limit)
+	}
 	if e.Path != "" {
 		return fmt.Sprintf(
 			"context_paths: %q is %d bytes > per-file cap %d (raise ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES, or drop the file)",
@@ -65,9 +77,7 @@ func resolveContextPaths(paths []string, cfg config.Config) ([]contextFile, int,
 		return nil, 0, nil
 	}
 	if len(paths) > maxContextFiles {
-		return nil, 0, fmt.Errorf(
-			"context_paths: %d entries > cap %d (attach only the files the plan makes claims about)",
-			len(paths), maxContextFiles)
+		return nil, 0, &contextTooLargeError{Count: len(paths), Limit: maxContextFiles}
 	}
 
 	out := make([]contextFile, 0, len(paths))

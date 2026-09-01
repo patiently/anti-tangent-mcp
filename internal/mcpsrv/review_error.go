@@ -103,6 +103,18 @@ type planReviewErrInputs struct {
 	// through so the truncation-recovery envelope gets the plan_text
 	// deprecation notice too — see prependPlanDeprecation's doc comment.
 	UsedPlanText bool
+	// ContextFiles is THIS call's attached set. Without it a truncated
+	// review's summary block omitted the `context:` provenance list entirely
+	// while the same call's stats counted every attached byte — the human
+	// reading the envelope could not see what the reviewer had been given.
+	ContextFiles []fileSource
+	// FileConsistency is the deterministic, reviewer-free Create/Modify
+	// finding for this plan, or nil. It is computed by the CALLER and passed
+	// in because it must survive truncation: the check needs no reviewer and
+	// cannot itself be truncated, so a truncated reviewer response silently
+	// dropping it was the one failure mode that lost a finding the server
+	// already knew for certain.
+	FileConsistency *verdict.Finding
 }
 
 // handlePlanReviewErr is the ValidatePlan analog of handlePerTaskReviewErr.
@@ -129,12 +141,21 @@ func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolRes
 	if !ok {
 		pr = truncatedPlanResult()
 	}
+	// Mirrors the fresh-review path: with nothing attached, a
+	// contradicted_codebase_claim refutes a file the reviewer never saw.
+	// Recovered partial findings go through the same server-side demotion.
+	if len(in.ContextFiles) == 0 {
+		verdict.DemoteUnattachedContradictions(&pr)
+	}
+	if in.FileConsistency != nil {
+		pr.PlanFindings = append(pr.PlanFindings, *in.FileConsistency)
+	}
 	pr = prependPlanClamp(pr, in.Clamp)
 	modelUsed := in.ModelUsed
 	if modelUsed == "" {
 		modelUsed = in.Model.String()
 	}
-	meta := planSummaryMeta{ModelUsed: modelUsed, ReviewMS: in.ReviewMS, Source: in.Source}
+	meta := planSummaryMeta{ModelUsed: modelUsed, ReviewMS: in.ReviewMS, Source: in.Source, ContextFiles: in.ContextFiles}
 	// Mirrors ValidatePlan's fresh-review path (handlers.go): run the
 	// ladder BEFORE the deprecation prepend, not after — prependPlanDeprecation
 	// is a minor CategoryOther finding, and the ladder's noise_cluster
