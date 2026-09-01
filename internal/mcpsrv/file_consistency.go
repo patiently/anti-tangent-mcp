@@ -90,6 +90,16 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 	}
 
 	var lines []string
+	// Stat failures are COUNTED here and reported in a single Warn after the
+	// loops, not logged per path. This sits inside `for _, p := range r.Modify`
+	// inside `for i, r := range refs`, so a per-path Warn was bounded only by
+	// how many unstattable Modify: bullets a 1MB plan can hold — an
+	// unreadable repo_root could emit hundreds of stderr lines for one call,
+	// against CLAUDE.md's one-line-per-call convention. One summary line per
+	// degraded surface keeps the signal and drops the flood.
+	statErrs := 0
+	var firstStatErrPath string
+	var firstStatErr error
 	for i, r := range refs {
 		taskNum := taskNumber(tasks, i)
 		for _, p := range r.Modify {
@@ -116,20 +126,28 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 			// But "could not look" must not be silent either: an unreadable
 			// repo_root (wrong ownership, a mount that went away) makes the
 			// whole disk tier inert while the response is byte-identical to
-			// a clean run. The operator gets a stderr line naming the path
-			// and the error; the finding list stays honest.
+			// a clean run. The operator gets ONE stderr line per call naming
+			// how many targets could not be stat'd plus the first path and
+			// error; the finding list stays honest.
 			_, serr := os.Stat(abs)
 			switch {
 			case errors.Is(serr, fs.ErrNotExist):
 				lines = append(lines, fmt.Sprintf(
 					"Task %d modifies `%s`, which does not exist and is created by no earlier task", taskNum, p))
 			case serr != nil:
-				slog.Warn("validate_plan: could not stat a Modify: target under repo_root; disk tier skipped for it",
-					slog.String("tool", "validate_plan"),
-					slog.String("path", abs),
-					slog.String("err", serr.Error()))
+				statErrs++
+				if firstStatErr == nil {
+					firstStatErrPath, firstStatErr = abs, serr
+				}
 			}
 		}
+	}
+	if statErrs > 0 {
+		slog.Warn("validate_plan: could not stat one or more Modify: targets under repo_root; disk tier skipped for them",
+			slog.String("tool", "validate_plan"),
+			slog.Int("unstattable_paths", statErrs),
+			slog.String("first_path", firstStatErrPath),
+			slog.String("first_err", firstStatErr.Error()))
 	}
 	if len(lines) == 0 {
 		return nil

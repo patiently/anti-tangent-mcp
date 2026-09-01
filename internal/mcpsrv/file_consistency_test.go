@@ -2,9 +2,12 @@ package mcpsrv
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -260,6 +263,41 @@ func TestCheckFileConsistency_UnstattableTargetWarnsInsteadOfSilence(t *testing.
 		"the could-not-look branch must not be silent")
 	assert.Contains(t, buf.String(), filepath.Join(root, "blocker", "x.go"),
 		"the warning must name the path it could not stat")
+}
+
+// The stat warning is ONE line per call, not one per unstattable path. It is
+// emitted from inside `for _, p := range r.Modify` inside `for i, r := range
+// refs`, so a per-path line was bounded only by how many Modify: bullets a
+// 1MB plan can carry — an unreadable repo_root could bury the operator's
+// stderr under hundreds of lines for a single call.
+func TestCheckFileConsistency_ManyUnstattableTargetsWarnOnce(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "blocker"), []byte("x"), 0o600))
+
+	body := "**Files:**\n"
+	for i := 0; i < 12; i++ {
+		body += fmt.Sprintf("- Modify: `blocker/x%d.go`\n", i)
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	f := checkFileConsistency(tasksFrom(body), root)
+	assert.Nil(t, f, "none of these is a genuine not-exists")
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 1,
+		"12 unstattable Modify: targets must produce ONE warning, got %d lines:\n%s", len(lines), buf.String())
+
+	var rec map[string]any
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &rec))
+	assert.EqualValues(t, 12, rec["unstattable_paths"],
+		"the single warning must carry the count it is standing in for")
+	assert.Equal(t, filepath.Join(root, "blocker", "x0.go"), rec["first_path"],
+		"the single warning must name the first path, so the operator has something to look at")
+	assert.NotEmpty(t, rec["first_err"])
 }
 
 // The mirror: a target the check CAN stat produces no warning at all, so the

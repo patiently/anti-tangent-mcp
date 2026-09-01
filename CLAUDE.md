@@ -121,7 +121,7 @@ Two failure modes to avoid: (1) leaking consumer code or naming into a public is
 
 ## Logging Conventions
 
-Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). One log line per hook call. Set `ANTI_TANGENT_LOG_LEVEL=debug` to also log prompts and provider responses.
+Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). One summary line per hook call, emitted on exit so it can carry the verdict and the duration — plus, where a call degraded rather than failed, at most one warning per degraded surface. A warning must be aggregated to one line per call, never emitted from inside a per-item loop. Set `ANTI_TANGENT_LOG_LEVEL=debug` to also log prompts and provider responses.
 
 ## What This Repo Is Not
 

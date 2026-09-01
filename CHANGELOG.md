@@ -83,10 +83,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flip a verdict via the `noise_cluster` minor-count trigger.
 - All three `context_paths` cap breaches now surface as the too-large envelope. The 51-file count
   cap used to return a transport error while the two byte caps returned envelopes.
-- `validate_plan` logs one structured line to stderr per call, on EXIT rather than on entry, so
-  it can carry `duration_ms`, `verdict` and `outcome` alongside the attached file count, byte
-  total, and paths. The entry line it replaces sat below both `context_paths` resolution returns,
-  so a bad `context_paths` argument produced no log line at all.
+- `validate_plan` logs one structured SUMMARY line to stderr per call, on EXIT rather than on
+  entry, so it can carry `duration_ms`, `verdict` and `outcome` alongside the attached file count,
+  byte total, and paths — plus at most one warning per degraded surface (an unusable `repo_root`;
+  `Modify:` targets the disk tier could not stat). The entry line it replaces sat below both
+  `context_paths` resolution returns, so a bad `context_paths` argument produced no log line at
+  all, and it also sat below the four argument-validation returns, which logged nothing either.
+  The summary line now also carries `repo_root_unusable`, because `repo_root` alone could not
+  distinguish "omitted" from "supplied and rejected" — an unusable `repo_root` resolves to the
+  empty string, so both logged `repo_root=false`.
 - The reviewer ground rules, previously duplicated verbatim across all three plan templates, are
   now one shared partial. No behavioural change for a call without `context_paths`: the rendered
   prompt is byte-identical to 0.16.0.
@@ -163,6 +168,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
+- **The disk tier's "could not stat" warning is now one line per call, not one per path.** It was
+  emitted from inside a nested loop over every `Modify:` bullet of every task, so an unreadable
+  `repo_root` on a large plan could bury stderr under hundreds of lines for a single call. The
+  single line carries the count plus the first path and error.
 - **A `contradicted_codebase_claim` is no longer demoted just because the reviewer put the path in
   `criterion` instead of `evidence`, and no longer kept because a longer filename happens to start
   with an attached one.** The server-side check that decides whether an attached file backs a

@@ -2397,14 +2397,22 @@ func TestValidatePlan_TruncationKeepsFileConsistencyAndContextProvenance(t *test
 // validate_plan's log line used to be emitted on ENTRY, from a point BELOW
 // both resolveContextPaths returns — so a bad context_paths argument (the
 // input a caller most often gets wrong) produced no log line at all, and no
-// call ever logged its verdict or its duration. Exactly one line per call,
-// on exit, carrying both.
+// call ever logged its verdict or its duration.
+//
+// The contract is ONE SUMMARY LINE per call, on exit, carrying both — plus at
+// most one warning per degraded surface (an unusable repo_root; Modify:
+// targets the disk tier could not stat). The earlier "exactly one line per
+// call" wording was simply false: the repo_root Warn already made two, and
+// this test's cases never exercised either warning, so it passed while the
+// claim did not hold. wantWarnings pins that second half.
 func TestValidatePlan_EmitsOneExitLogLinePerCall(t *testing.T) {
 	cases := []struct {
-		name        string
-		setup       func(t *testing.T) (*handlers, ValidatePlanArgs)
-		wantOutcome string
-		wantVerdict string
+		name         string
+		setup        func(t *testing.T) (*handlers, ValidatePlanArgs)
+		wantOutcome  string
+		wantVerdict  string
+		wantUnusable bool
+		wantWarnings int
 	}{
 		{
 			name: "success",
@@ -2429,6 +2437,45 @@ func TestValidatePlan_EmitsOneExitLogLinePerCall(t *testing.T) {
 			},
 			wantOutcome: "context_paths_error",
 			wantVerdict: "",
+		},
+		{
+			// Four argument-validation returns used to sit ABOVE the log
+			// registration, so a caller who passed both plan_text and
+			// plan_path got a transport error and total silence — the same
+			// invisible failure the exit-line rewrite existed to remove.
+			name: "argument validation error",
+			setup: func(t *testing.T) (*handlers, ValidatePlanArgs) {
+				sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+				return &handlers{deps: newDepsWithScripted(t, sr, 8)},
+					ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), PlanPath: "/tmp/also-a-path.md"}
+			},
+			wantOutcome: "validation_error",
+			wantVerdict: "",
+		},
+		{
+			name: "bad mode is a validation error too",
+			setup: func(t *testing.T) (*handlers, ValidatePlanArgs) {
+				sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+				return &handlers{deps: newDepsWithScripted(t, sr, 8)},
+					ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), Mode: "sideways"}
+			},
+			wantOutcome: "validation_error",
+			wantVerdict: "",
+		},
+		{
+			// repo_root alone cannot tell "omitted" from "supplied and
+			// rejected": an unusable repo_root resolves to "", so both
+			// logged repo_root=false.
+			name: "unusable repo_root",
+			setup: func(t *testing.T) (*handlers, ValidatePlanArgs) {
+				sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+				return &handlers{deps: newDepsWithScripted(t, sr, 8)},
+					ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), RepoRoot: "relative/not/absolute"}
+			},
+			wantOutcome:  "success",
+			wantVerdict:  "pass",
+			wantUnusable: true,
+			wantWarnings: 1,
 		},
 		{
 			name: "cache hit",
@@ -2460,16 +2507,33 @@ func TestValidatePlan_EmitsOneExitLogLinePerCall(t *testing.T) {
 			// an opaque JSON parse error instead of "nothing was logged".
 			require.NotEmpty(t, buf.String(), "every exit path must emit its log line")
 			lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-			require.Len(t, lines, 1, "expected exactly one structured log line, got %d:\n%s", len(lines), buf.String())
 
-			var rec map[string]any
-			require.NoError(t, json.Unmarshal([]byte(lines[0]), &rec))
-			assert.Equal(t, "validate_plan", rec["msg"])
+			// The summary line is the one whose msg is exactly "validate_plan";
+			// every warning carries a longer, descriptive msg. Split them so
+			// the count of each can be asserted separately.
+			var summaries, warnings []map[string]any
+			for _, ln := range lines {
+				var rec map[string]any
+				require.NoError(t, json.Unmarshal([]byte(ln), &rec))
+				if rec["msg"] == "validate_plan" {
+					summaries = append(summaries, rec)
+				} else {
+					warnings = append(warnings, rec)
+				}
+			}
+			require.Len(t, summaries, 1,
+				"expected exactly one summary line, got %d:\n%s", len(summaries), buf.String())
+			assert.Len(t, warnings, tc.wantWarnings,
+				"expected %d warning line(s), got %d:\n%s", tc.wantWarnings, len(warnings), buf.String())
+
+			rec := summaries[0]
 			assert.Equal(t, "validate_plan", rec["tool"])
 			assert.Equal(t, tc.wantOutcome, rec["outcome"])
 			assert.Equal(t, tc.wantVerdict, rec["verdict"])
 			assert.Contains(t, rec, "duration_ms", "the exit line must carry the call duration")
 			assert.Contains(t, rec, "context_paths")
+			assert.Equal(t, tc.wantUnusable, rec["repo_root_unusable"],
+				"repo_root_unusable must distinguish an omitted repo_root from a rejected one")
 		})
 	}
 }

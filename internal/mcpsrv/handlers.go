@@ -1743,21 +1743,6 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 }
 
 func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, args ValidatePlanArgs) (_ *mcp.CallToolResult, _ verdict.PlanResult, retErr error) {
-	if args.PlanText == "" && args.PlanPath == "" {
-		return nil, verdict.PlanResult{}, errors.New("plan_text or plan_path is required")
-	}
-	if args.PlanText != "" && args.PlanPath != "" {
-		return nil, verdict.PlanResult{}, errors.New("plan_text and plan_path are mutually exclusive")
-	}
-	if args.Mode != "" && args.Mode != "quick" && args.Mode != "thorough" {
-		return nil, verdict.PlanResult{}, errors.New(`mode must be "quick" or "thorough"`)
-	}
-
-	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PlanMaxTokens, h.deps.Cfg.MaxTokensCeiling)
-	if err != nil {
-		return nil, verdict.PlanResult{}, err
-	}
-
 	projectKnowledge := strings.TrimSpace(args.ProjectKnowledge)
 	pkBytes := len(projectKnowledge)
 
@@ -1768,7 +1753,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	var repoRoot string
 	// repoRootUnusable is the reason repo_root could not be resolved, empty
 	// when it was usable or was never supplied. See the resolution block
-	// below and repoRootUnusableFinding.
+	// below and prependRepoRootUnusable.
 	var repoRootUnusable string
 
 	// EXACTLY ONE stderr line per validate_plan call (CLAUDE.md's logging
@@ -1783,8 +1768,16 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// extract_handler.go — each branch sets logOutcome (and logVerdict where
 	// there is one) before returning, and the closure reads the live locals
 	// for the byte counts, so the single line always describes the actual
-	// outcome. Registered here, after argument validation, because a
-	// malformed-argument return produces neither a review nor an envelope.
+	// outcome.
+	//
+	// Registered BEFORE argument validation, not after. "A malformed-argument
+	// return produces neither a review nor an envelope" is true and is
+	// exactly why those returns need a log line: a caller passing both
+	// plan_text and plan_path, or a bad mode, or an out-of-range
+	// max_tokens_override, got a transport error and total silence on
+	// stderr — the same invisible failure the exit-line rewrite existed to
+	// remove, just moved four returns earlier. Each of the four sets
+	// logOutcome = "validation_error".
 	start := time.Now()
 	logVerdict := verdict.Verdict("")
 	logOutcome := "success"
@@ -1808,9 +1801,34 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			slog.Int("context_files", len(contextFiles)),
 			slog.Int("context_bytes", contextBytes),
 			slog.Any("context_paths", contextFilePaths(contextFiles)),
+			// repo_root alone could not distinguish "omitted" from
+			// "supplied and rejected": an unusable repo_root resolves to "",
+			// so both logged repo_root=false. repo_root_unusable separates
+			// them. The reason string stays on the Warn below rather than
+			// being inlined here, so this line's width stays bounded.
 			slog.Bool("repo_root", repoRoot != ""),
+			slog.Bool("repo_root_unusable", repoRootUnusable != ""),
 		)
 	}()
+
+	if args.PlanText == "" && args.PlanPath == "" {
+		logOutcome = "validation_error"
+		return nil, verdict.PlanResult{}, errors.New("plan_text or plan_path is required")
+	}
+	if args.PlanText != "" && args.PlanPath != "" {
+		logOutcome = "validation_error"
+		return nil, verdict.PlanResult{}, errors.New("plan_text and plan_path are mutually exclusive")
+	}
+	if args.Mode != "" && args.Mode != "quick" && args.Mode != "thorough" {
+		logOutcome = "validation_error"
+		return nil, verdict.PlanResult{}, errors.New(`mode must be "quick" or "thorough"`)
+	}
+
+	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PlanMaxTokens, h.deps.Cfg.MaxTokensCeiling)
+	if err != nil {
+		logOutcome = "validation_error"
+		return nil, verdict.PlanResult{}, err
+	}
 
 	if args.PlanPath != "" {
 		var rerr error
