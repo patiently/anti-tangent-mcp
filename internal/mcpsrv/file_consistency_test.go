@@ -125,6 +125,11 @@ func TestCheckFileConsistency_OrderTier_EdgeCases(t *testing.T) {
 // tasks by slice position instead of the plan's own "### Task N:" number.
 // Here the plan's own numbers (3, 7) diverge from slice position (1, 2); the
 // finding must name Task 3 and Task 7, never Task 1 or Task 2.
+//
+// This pins MESSAGE WORDING only. Comparison correctness is pinned separately
+// by TestCheckFileConsistency_OrderTier_ComparesSlicePositionNotTitleNumber —
+// the ordering decision moved to slice index, while naming stayed on the
+// plan's own numbers.
 func TestCheckFileConsistency_OrderTier_UsesTitleNumberNotPosition(t *testing.T) {
 	tasks := []planparser.RawTask{
 		{Title: "Task 3: Modify a", Body: "**Files:**\n- Modify: `a.go`\n"},
@@ -184,5 +189,46 @@ func TestCheckFileConsistency_LineAnchoredModifyTarget(t *testing.T) {
 			"**Files:**\n- Modify: `a.go:15-23`\n",
 		), "")
 		assert.Nil(t, f)
+	})
+}
+
+// TestCheckFileConsistency_OrderTier_ComparesSlicePositionNotTitleNumber is
+// the regression test for both directions of comparing the plan's declared
+// "Task N:" numbers instead of the order the tasks actually execute in.
+// Tasks run in slice order; nothing forces the headings to be ascending
+// 1..N, and two corpus plans already restart numbering mid-file for phases.
+func TestCheckFileConsistency_OrderTier_ComparesSlicePositionNotTitleNumber(t *testing.T) {
+	t.Run("phase-restarting numbers do not manufacture a finding", func(t *testing.T) {
+		// Correctly ordered: the creating task runs first. Its heading
+		// number (5) is larger only because phase 2 restarts at 1.
+		tasks := []planparser.RawTask{
+			{Title: "Task 5: Add the file", Body: "**Files:**\n- Create: `a.go`\n"},
+			{Title: "Task 1: Phase 2 — extend it", Body: "**Files:**\n- Modify: `a.go`\n"},
+		}
+		assert.Nil(t, checkFileConsistency(tasks, ""),
+			"the Create: task runs first; a restarted heading number is not a contradiction")
+	})
+
+	t.Run("descending numbers still catch a real ordering bug", func(t *testing.T) {
+		// Genuinely out of order: the modifying task runs first. The
+		// declared numbers descend, so a title-number comparison misses it.
+		tasks := []planparser.RawTask{
+			{Title: "Task 9: Extend the file", Body: "**Files:**\n- Modify: `a.go`\n"},
+			{Title: "Task 2: Add the file", Body: "**Files:**\n- Create: `a.go`\n"},
+		}
+		f := checkFileConsistency(tasks, "")
+		require.NotNil(t, f, "Task 9 runs before Task 2 here; that is a real contradiction")
+		assert.Contains(t, f.Evidence, "Task 9 modifies `a.go`, which is not created until Task 2",
+			"the message still names the tasks by the plan's own numbers")
+	})
+
+	t.Run("repeated numbers are ordered by position", func(t *testing.T) {
+		// Both headings say "Task 1". Only slice order can decide.
+		tasks := []planparser.RawTask{
+			{Title: "Task 1: Extend the file", Body: "**Files:**\n- Modify: `a.go`\n"},
+			{Title: "Task 1: Add the file", Body: "**Files:**\n- Create: `a.go`\n"},
+		}
+		f := checkFileConsistency(tasks, "")
+		require.NotNil(t, f, "equal declared numbers must not suppress a positional contradiction")
 	})
 }

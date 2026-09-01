@@ -69,6 +69,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path that can never exist, and the order tier never matched the anchored form against its
   unanchored `Create:` twin. A trailing `:N`, `:N-M`, or `:N,M` is now stripped before either
   tier looks at the path.
+- **The Create/Modify order tier now orders tasks by position, not by their declared number.**
+  Tasks execute in the order they appear in the plan, but nothing forces `### Task N:` headings
+  to be ascending 1..N — two corpus plans already restart numbering mid-file for phases. The
+  comparison used the declared number, so a correctly-ordered plan whose numbers restart drew a
+  bogus blocking finding, and a genuinely out-of-order plan whose numbers descend was silently
+  missed. Findings still name tasks by the plan's own numbers.
+- **The disk tier only reports "does not exist" for a genuine not-exists.** A permission or I/O
+  error from `os.Stat` now leaves the target alone instead of being reported as missing.
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.

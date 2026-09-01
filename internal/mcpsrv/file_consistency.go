@@ -4,7 +4,9 @@
 package mcpsrv
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -62,13 +64,26 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 		refs[i] = planparser.FileRefs(t.Body)
 	}
 
-	// createdBy[path] = the plan's own declared number of the FIRST task
-	// that creates it (see taskNumber).
-	createdBy := map[string]int{}
+	// createdAt[path] = the SLICE INDEX of the first task that creates it.
+	//
+	// Ordering is decided on slice index, never on the plan's own "Task N:"
+	// number, because tasks execute in the order they appear in the file and
+	// nothing forces the headings to be 1..N in ascending order. Two real
+	// corpus plans restart numbering mid-file (1-5, then 1, 2, then 6, 7)
+	// for phases; a plan may also renumber descending or repeat a number
+	// after an edit. Comparing declared numbers there produces both failure
+	// directions: a bogus blocking finding on a correctly-ordered plan whose
+	// numbers restart, and a silent miss on a genuinely out-of-order plan
+	// whose numbers happen to descend.
+	//
+	// taskNumber is still what NAMES the tasks in the message — a finding
+	// must name the task the plan's author would recognize (see its doc
+	// comment). Comparison and naming are deliberately separate concerns.
+	createdAt := map[string]int{}
 	for i, r := range refs {
 		for _, p := range r.Create {
-			if _, seen := createdBy[p]; !seen {
-				createdBy[p] = taskNumber(tasks, i)
+			if _, seen := createdAt[p]; !seen {
+				createdAt[p] = i
 			}
 		}
 	}
@@ -77,10 +92,11 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 	for i, r := range refs {
 		taskNum := taskNumber(tasks, i)
 		for _, p := range r.Modify {
-			if created, ok := createdBy[p]; ok {
-				if created > taskNum {
+			if createdIdx, ok := createdAt[p]; ok {
+				if createdIdx > i {
 					lines = append(lines, fmt.Sprintf(
-						"Task %d modifies `%s`, which is not created until Task %d", taskNum, p, created))
+						"Task %d modifies `%s`, which is not created until Task %d",
+						taskNum, p, taskNumber(tasks, createdIdx)))
 				}
 				continue
 			}
@@ -91,7 +107,11 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 			if !ok {
 				continue
 			}
-			if _, err := os.Stat(abs); err != nil {
+			// ONLY a genuine not-exists is a finding. A permission error, a
+			// too-long path, or an I/O error means the check could not look,
+			// not that the file is missing — reporting "does not exist" for
+			// those states a fact the server did not establish.
+			if _, err := os.Stat(abs); errors.Is(err, fs.ErrNotExist) {
 				lines = append(lines, fmt.Sprintf(
 					"Task %d modifies `%s`, which does not exist and is created by no earlier task", taskNum, p))
 			}
