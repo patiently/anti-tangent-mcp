@@ -1983,10 +1983,25 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		// content, and an unusable repo_root resolves to repoRoot == "",
 		// which is exactly the cache key a call that omitted repo_root
 		// produces — so the entry really can be shared between the two.
-		cached = prependRepoRootUnusable(cached, repoRootUnusable)
-		cached = prependPlanDeprecation(cached, args.PlanText != "")
-		cachedMeta := planSummaryMeta{ModelUsed: cachedModelUsed, ReviewMS: 0, Source: planSrc.String(), ContextFiles: contextSources(contextFiles)}
-		cached.SummaryBlock = formatPlanSummary(cached, cachedMeta)
+		//
+		// finish() ONLY — no applyPreLadder, and above all no verdict ladder:
+		// the entry was finalized before it was stored, and
+		// normalizePlanUnverifiableFindings is not proven idempotent, so
+		// re-running the ladder on a cached entry is not a no-op. See
+		// planCallContext for the three call orders and for the two
+		// divergences (no checkFileConsistency, no store) this path keeps on
+		// purpose.
+		cachedCall := planCallContext{
+			PlanRuns:         h.deps.PlanRuns,
+			Source:           planSrc.String(),
+			ModelUsed:        cachedModelUsed,
+			ReviewMS:         0,
+			UsedPlanText:     args.PlanText != "",
+			RepoRootUnusable: repoRootUnusable,
+			ContextFiles:     contextSources(contextFiles),
+		}
+		cachedCall.finish(&cached)
+		cachedMeta := cachedCall.meta()
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
 		h.recordStat(statParams{
@@ -2032,18 +2047,30 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// deferred exit logger. Shadowing it here would still work (the return
 	// statement assigns through), but the name would mean two different
 	// things in one function.
+	//
+	// call is built ONCE and used by BOTH exits below — the truncation
+	// recovery inside handlePlanReviewErr and the fresh-review tail after it.
+	// That shared construction is the point: the recovery path used to
+	// hand-assemble its own tail and silently lacked three of this one's
+	// steps. See planCallContext.
+	call := planCallContext{
+		PlanRuns:         h.deps.PlanRuns,
+		Source:           planSrc.String(),
+		ModelUsed:        modelUsed,
+		ReviewMS:         ms,
+		UsedPlanText:     args.PlanText != "",
+		RepoRootUnusable: repoRootUnusable,
+		Clamp:            clamp,
+		ContextFiles:     contextSources(contextFiles),
+		FileConsistency:  fileConsistency,
+		Tasks:            tasks,
+	}
 	if r, p, handled, herr := h.handlePlanReviewErr(planReviewErrInputs{
-		Err:             err,
-		Model:           model,
-		ModelUsed:       modelUsed,
-		ReviewMS:        ms,
-		PartialRaw:      partialRaw,
-		Clamp:           clamp,
-		Prior:           pr,
-		Source:          planSrc.String(),
-		UsedPlanText:    args.PlanText != "",
-		ContextFiles:    contextSources(contextFiles),
-		FileConsistency: fileConsistency,
+		Err:        err,
+		Model:      model,
+		PartialRaw: partialRaw,
+		Prior:      pr,
+		Call:       call,
 	}); handled {
 		if herr == nil {
 			h.recordStat(statParams{
@@ -2063,63 +2090,30 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		}
 		return r, p, herr
 	}
-	populateNormativeTestBodies(&pr, tasks)
-	// Server-side suppression, independent of reviewer compliance: a
-	// contradicted_codebase_claim that no attached file backs has nothing to
-	// refute with, so the category (which deliberately carries no severity
-	// floor) would let an unverifiable claim fail the gate at major or
-	// critical. Gating this on len(contextFiles) == 0 made the suppression
-	// all-or-nothing: with ANY file attached, a contradiction about some
-	// OTHER, unattached file kept its unfloored major/critical. Passing the
-	// attached paths lets the check run per finding. The prompt already
-	// forbids both shapes; this is the enforcement point.
-	verdict.DemoteUnattachedContradictions(&pr, contextFilePaths(contextFiles))
-	if fileConsistency != nil {
-		pr.PlanFindings = append(pr.PlanFindings, *fileConsistency)
-	}
-	pr = prependPlanClamp(pr, clamp)
+	call.applyPreLadder(&pr)
 	// finalizePlanVerdict (not finalizePlanResult) here: it runs the
 	// normalize/calibrate/FinalizePlanVerdict ladder without touching
-	// SummaryBlock, so the PlanRunID assignment and deprecation prepend
-	// below can both land before SummaryBlock is computed — once,
-	// authoritatively — rather than three times across this path.
+	// SummaryBlock, so the PlanRunID assignment and the two per-call
+	// advisories below can all land before SummaryBlock is computed — once,
+	// authoritatively — rather than three times across this path. The ladder
+	// stays at the call site rather than inside a planCallContext method
+	// because the cache-hit path must NOT run it; see planCallContext.
 	finalizePlanVerdict(&pr)
-	// Deprecation is added AFTER the ladder, not before: it is a minor
-	// CategoryOther finding, and the ladder (verdict.FinalizeVerdict) treats
-	// a 3rd minor finding as a noise_cluster trigger that lifts the verdict
-	// to warn. Feeding it through the ladder would violate "the deprecation
-	// finding MUST NOT change any verdict" for any plan_text caller that
-	// already had two other minor findings. The three early-exit envelopes
-	// ABOVE (context-too-large, payload-too-large, no-headings) are safe to
-	// prepend before their own finalizePlanResult call because they always
-	// carry a critical finding, which already forces fail regardless of
-	// minor count.
-	if pr.PlanRunID == "" {
-		run := h.deps.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
-		pr.PlanRunID = run.ID
-	}
-	// Cache the result WITHOUT the deprecation finding: the finding is a
-	// property of which argument THIS call used, not of the plan content,
-	// so a plan_text call and a plan_path call with byte-identical content
-	// correctly share one cache entry. Keying on "which input arg" would
-	// split the cache in two for no benefit. Deprecation is applied per-call
-	// below, after the entry is stored — see the mirrored comment on the
-	// cache-hit branch above.
+	// Mint BEFORE store, so the cached entry carries the plan_run_id and a
+	// later cache hit reuses this run instead of minting a second one for the
+	// same plan. finish()'s own mint below is guarded on PlanRunID == "" and
+	// is therefore a no-op here.
+	call.mintPlanRunID(&pr)
+	// Cache the result WITHOUT the per-call advisories: both the deprecation
+	// notice and the repo_root advisory are properties of which arguments
+	// THIS call used, not of the plan content, so a plan_text call and a
+	// plan_path call with byte-identical content correctly share one cache
+	// entry. Keying on "which input arg" would split the cache in two for no
+	// benefit. finish() applies them per call, after the entry is stored —
+	// see the mirrored comment on the cache-hit branch above.
 	h.planCache().store(cacheKey, pr, modelUsed)
-	// Both per-call advisories land here, after the store and after the
-	// ladder, for the same two reasons: neither belongs on the cached entry
-	// (both describe THIS call's arguments), and both are minor
-	// CategoryOther findings that the ladder's noise_cluster trigger would
-	// otherwise count toward a pass->warn flip. Order puts deprecation
-	// first because it has been PlanFindings[0] since it existed.
-	pr = prependRepoRootUnusable(pr, repoRootUnusable)
-	pr = prependPlanDeprecation(pr, args.PlanText != "")
-	// Single authoritative SummaryBlock computation for this path: it runs
-	// after both the PlanRunID assignment and the deprecation prepend, so
-	// the summary's plan_run_id line, provenance, and findings count/list
-	// all reflect the final state exactly once.
-	meta := planSummaryMeta{ModelUsed: modelUsed, ReviewMS: ms, Source: planSrc.String(), ContextFiles: contextSources(contextFiles)}
-	pr.SummaryBlock = formatPlanSummary(pr, meta)
+	call.finish(&pr)
+	meta := call.meta()
 	h.recordStat(statParams{
 		tool:            "validate_plan",
 		verdict:         string(pr.PlanVerdict),

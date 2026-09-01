@@ -4,15 +4,27 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
+
+// testPlanCallContext fills in the one field every planCallContext needs but
+// no test cares about: the plan-run store finish() mints from. Tests here
+// construct `&handlers{}` with no deps, so they cannot borrow h.deps.PlanRuns.
+func testPlanCallContext(c planCallContext) planCallContext {
+	if c.PlanRuns == nil {
+		c.PlanRuns = planrun.NewStore(time.Minute)
+	}
+	return c
+}
 
 // TestHandlePlanReviewErr_PreservesModelUsedAndReviewMS guards against the
 // regression CodeRabbit caught on the v0.3.3 refactor: rebuilding the
@@ -26,11 +38,13 @@ func TestHandlePlanReviewErr_PreservesModelUsedAndReviewMS(t *testing.T) {
 	r, _, handled, err := h.handlePlanReviewErr(planReviewErrInputs{
 		Err:        providers.ErrResponseTruncated,
 		Model:      config.ModelRef{Provider: "openai", Model: "gpt-5"},
-		ModelUsed:  "anthropic:claude-sonnet-4-6",
-		ReviewMS:   1234,
 		PartialRaw: nil,
-		Clamp:      verdict.Finding{},
 		Prior:      verdict.PlanResult{},
+		Call: testPlanCallContext(planCallContext{
+			ModelUsed: "anthropic:claude-sonnet-4-6",
+			ReviewMS:  1234,
+			Clamp:     verdict.Finding{},
+		}),
 	})
 	require.True(t, handled)
 	require.NoError(t, err)
@@ -53,11 +67,13 @@ func TestHandlePlanReviewErr_FallsBackToModelStringWhenModelUsedEmpty(t *testing
 	r, _, handled, err := h.handlePlanReviewErr(planReviewErrInputs{
 		Err:        providers.ErrResponseTruncated,
 		Model:      config.ModelRef{Provider: "openai", Model: "gpt-5"},
-		ModelUsed:  "",
-		ReviewMS:   0,
 		PartialRaw: nil,
-		Clamp:      verdict.Finding{},
 		Prior:      verdict.PlanResult{},
+		Call: testPlanCallContext(planCallContext{
+			ModelUsed: "",
+			ReviewMS:  0,
+			Clamp:     verdict.Finding{},
+		}),
 	})
 	require.True(t, handled)
 	require.NoError(t, err)
@@ -105,9 +121,9 @@ func TestHandlePlanReviewErr_AppliesPlanTextDeprecation(t *testing.T) {
 	h := &handlers{}
 
 	r, pr, handled, err := h.handlePlanReviewErr(planReviewErrInputs{
-		Err:          providers.ErrResponseTruncated,
-		Model:        config.ModelRef{Provider: "openai", Model: "gpt-5"},
-		UsedPlanText: true,
+		Err:   providers.ErrResponseTruncated,
+		Model: config.ModelRef{Provider: "openai", Model: "gpt-5"},
+		Call:  testPlanCallContext(planCallContext{UsedPlanText: true}),
 	})
 	require.True(t, handled)
 	require.NoError(t, err)
@@ -128,9 +144,9 @@ func TestHandlePlanReviewErr_NoDeprecationWhenPlanPathUsed(t *testing.T) {
 	h := &handlers{}
 
 	_, pr, handled, err := h.handlePlanReviewErr(planReviewErrInputs{
-		Err:          providers.ErrResponseTruncated,
-		Model:        config.ModelRef{Provider: "openai", Model: "gpt-5"},
-		UsedPlanText: false,
+		Err:   providers.ErrResponseTruncated,
+		Model: config.ModelRef{Provider: "openai", Model: "gpt-5"},
+		Call:  testPlanCallContext(planCallContext{UsedPlanText: false}),
 	})
 	require.True(t, handled)
 	require.NoError(t, err)

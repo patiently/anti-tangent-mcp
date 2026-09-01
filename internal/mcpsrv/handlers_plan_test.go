@@ -596,6 +596,83 @@ func TestValidatePlan_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 	assert.Contains(t, pr.PlanFindings[2].Suggestion, "max_tokens_override")
 }
 
+// truncatingPlanReviewer returns a two-task plan response cut mid-third-task,
+// so ValidatePlan always takes the truncation-recovery branch. The three
+// tests below use it to pin the behaviours that branch USED to lack: it
+// hand-assembled its own post-review tail and silently omitted them (see
+// planCallContext).
+func truncatingPlanReviewer(t *testing.T) *fakeReviewer {
+	t.Helper()
+	rawJSON := []byte(`{"plan_verdict":"pass","plan_findings":[],"tasks":[` +
+		`{"task_index":1,"task_title":"Task 1: with bodies","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":2,"task_title":"Task 2: Second","verdict":"warn","find`)
+	return &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: rawJSON, Model: "claude-sonnet-4-6"},
+		err:  providers.ErrResponseTruncated,
+	}
+}
+
+// TestValidatePlan_TruncationRecoveryMintsPlanRunID is the functional half of
+// the recovery-path parity gap. A truncated-but-recovered review CAN return a
+// passing verdict, controller.md §5.1 tells the controller to capture
+// `plan_run_id` from a passing validate_plan response, and plan_run_report
+// hard-requires one — so a pass-capable exit that mints none leaves that plan
+// run unreportable for its whole life. This was the only such exit.
+func TestValidatePlan_TruncationRecoveryMintsPlanRunID(t *testing.T) {
+	rv := truncatingPlanReviewer(t)
+	h := &handlers{deps: newDeps(t, rv)}
+
+	plan := "# Plan\n\n### Task 1: with bodies\n\nbody.\n\n### Task 2: Second\n\nbody.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.True(t, pr.Partial, "test setup must exercise the truncation-recovery branch")
+	assert.NotEmpty(t, pr.PlanRunID,
+		"a truncation-recovery envelope must mint a plan_run_id like every other pass-capable exit")
+	assert.Contains(t, pr.SummaryBlock, "plan_run_id:   "+pr.PlanRunID,
+		"SummaryBlock must be computed after the mint, so the id it shows is the id the envelope carries")
+
+	_, ok := h.deps.PlanRuns.Snapshot(pr.PlanRunID)
+	assert.True(t, ok, "the minted id must name a real run, so plan_run_report can find it")
+}
+
+// TestValidatePlan_TruncationRecoveryReportsUnusableRepoRoot pins the
+// repo_root advisory on the recovery path. Without it a truncated call with a
+// bad repo_root produced findings byte-identical to a truncated call that
+// never passed one — the same silence the advisory exists to break on the
+// fresh-review path.
+func TestValidatePlan_TruncationRecoveryReportsUnusableRepoRoot(t *testing.T) {
+	rv := truncatingPlanReviewer(t)
+	h := &handlers{deps: newDeps(t, rv)}
+
+	plan := "# Plan\n\n### Task 1: with bodies\n\nbody.\n\n### Task 2: Second\n\nbody.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: plan,
+		RepoRoot: "relative/not/absolute",
+	})
+	require.NoError(t, err, "an unusable repo_root stays non-fatal on the recovery path too")
+	require.True(t, pr.Partial, "test setup must exercise the truncation-recovery branch")
+	require.True(t, hasCriterion(pr.PlanFindings, "repo_root"),
+		"a truncated review must still report that the Create/Modify disk tier was skipped")
+}
+
+// TestValidatePlan_TruncationRecoveryPopulatesNormativeTestBodies pins the
+// third missing step. The recovered task results are the reviewer's own
+// per-task entries; the normative test bodies are re-attached server-side
+// from the plan text, so there is no reason a truncation should drop them.
+func TestValidatePlan_TruncationRecoveryPopulatesNormativeTestBodies(t *testing.T) {
+	rv := truncatingPlanReviewer(t)
+	h := &handlers{deps: newDeps(t, rv)}
+
+	plan := "# Plan\n\n### Task 1: with bodies\n\n**Goal:** g\n\n**NORMATIVE TEST BODIES (verbatim):**\n\n```kotlin\n@Test fun t() { /* body */ }\n```\n\n### Task 2: Second\n\nbody.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.True(t, pr.Partial, "test setup must exercise the truncation-recovery branch")
+	require.NotEmpty(t, pr.Tasks, "the recovery must have recovered at least the first task")
+	assert.Equal(t, []string{"@Test fun t() { /* body */ }"}, pr.Tasks[0].NormativeTestBodies,
+		"normative test bodies are extracted from the plan, not the reviewer response, so truncation must not drop them")
+}
+
 // TestReviewPlanChunked_Pass2Truncation_PreservesPass1Findings exercises the
 // chunked path with a Pass-2 chunk truncation and verifies that the Pass-1
 // plan_findings AND the cleanly-closed chunk task results from earlier chunks

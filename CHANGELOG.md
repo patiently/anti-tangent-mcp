@@ -163,6 +163,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
+- **A truncated `validate_plan` review now mints a `plan_run_id`.** The truncation-recovery path
+  can return a passing verdict, and controller.md §5.1 tells the controller to capture
+  `plan_run_id` from a passing response — but that path minted none, so `plan_run_report`, which
+  requires one, could never run on such a plan run. It was the only pass-capable exit without an
+  id.
+- **A truncated `validate_plan` review now reports an unusable `repo_root`.** The minor
+  `repo_root unusable (<reason>); Create/Modify disk tier skipped` advisory was applied on the
+  fresh-review and cache-hit paths only, so a truncated call with a bad `repo_root` produced a
+  findings list byte-identical to one that never passed the argument.
+- **A truncated `validate_plan` review now carries normative test bodies.** They are extracted
+  from the plan text server-side, not from the reviewer response, so a truncated reviewer reply
+  is no reason for the recovered per-task results to lose them.
+- The three post-review tails inside `validate_plan` (fresh review, truncation recovery, cache
+  hit) are now assembled from one shared `planCallContext` instead of being hand-written at each
+  site. The three fixes above were all the same defect — the recovery site drifting from the
+  other two — found one field at a time across three review rounds. The verdict ladder stays
+  deliberately outside the shared helper: the cache-hit path must never re-run it on an
+  already-finalized entry.
 
 ## [0.16.0] - 2026-08-31
 

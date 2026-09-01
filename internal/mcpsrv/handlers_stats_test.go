@@ -242,6 +242,9 @@ func TestValidatePlan_PartialRecoveryRecordsPlanHeaderCounts(t *testing.T) {
 		Reviews:   providers.Registry{"anthropic": rv},
 		Stats:     newStatsRecorder(t, dir),
 		planCache: newPlanPassCache(),
+		// Required since the truncation-recovery path mints a plan_run_id
+		// like every other pass-capable exit (see planCallContext.finish).
+		PlanRuns: planrun.NewStore(cfg.SessionTTL),
 	}}
 
 	plan := buildPlanWithNTasks(2) // both tasks headered
