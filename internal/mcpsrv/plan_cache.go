@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	planPassCacheVersion    = "plan-pass-cache-v3"
+	planPassCacheVersion    = "plan-pass-cache-v4"
 	planPassCacheTTL        = 3 * time.Minute
 	planPassCacheMaxEntries = 128
 )
@@ -44,7 +44,7 @@ type contextFileKey struct {
 	SHA256 string `json:"sha256"`
 }
 
-func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens, maxTokensOverride int, rendered renderedPlanReview, contextFiles []contextFile) [32]byte {
+func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens, maxTokensOverride int, rendered renderedPlanReview, contextFiles []contextFile, repoRoot string) [32]byte {
 	ctxKeys := make([]contextFileKey, 0, len(contextFiles))
 	for _, f := range contextFiles {
 		ctxKeys = append(ctxKeys, contextFileKey{Path: f.Source.Path, SHA256: f.Source.SHA256})
@@ -59,6 +59,15 @@ func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens,
 		MaxTokensOverride int               `json:"max_tokens_override"`
 		Prompts           []planCachePrompt `json:"prompts"`
 		ContextFiles      []contextFileKey  `json:"context_files"`
+		// RepoRoot gates checkFileConsistency's disk tier (internal/mcpsrv/
+		// file_consistency.go): with repo_root, a Modify: target missing
+		// from disk is a finding; without it, that tier is skipped
+		// entirely. Two calls with byte-identical plan text but different
+		// repo_root can therefore produce genuinely different results, so
+		// repo_root MUST be part of the key — otherwise the second call
+		// would silently reuse the first call's cached pass and the disk
+		// tier the caller asked for would never run. See design §6.
+		RepoRoot string `json:"repo_root"`
 	}{
 		Version:           planPassCacheVersion,
 		PlanText:          planText,
@@ -69,6 +78,7 @@ func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens,
 		MaxTokensOverride: maxTokensOverride,
 		Prompts:           rendered.cachePrompts(),
 		ContextFiles:      ctxKeys,
+		RepoRoot:          repoRoot,
 	}
 	// keyInput contains only strings, ints, and slices of those, so JSON
 	// marshaling cannot fail in practice.

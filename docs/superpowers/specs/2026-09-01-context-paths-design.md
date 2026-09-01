@@ -321,8 +321,12 @@ measurable success signal for this feature and is what dogfooding should look at
 
 ## 6. Order-aware Create/Modify consistency check
 
-Deterministic, server-side, no provider call. Runs on every `validate_plan` invocation,
-including the early-exit paths that never reach a reviewer.
+Deterministic, server-side, no provider call. Runs once per **fresh** review, immediately after
+`populateNormativeTestBodies` on the path that received a reviewer response and was not already
+handled as an error. It does **not** run on the too-large-payload or no-headings early-exit
+envelopes (both return before task file refs are ever parsed), on a reviewer-error envelope, or
+on a `planPassCache` hit — the cache key includes `repo_root` precisely so a hit can only occur
+when an earlier fresh call already ran this check under the same `repo_root`.
 
 ### 6.1 Where the data comes from
 

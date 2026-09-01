@@ -1700,7 +1700,7 @@ func TestPlanPassCacheKey_CoversBothHalves(t *testing.T) {
 		}
 	}
 	keyOf := func(r renderedPlanReview) [32]byte {
-		return planPassCacheKey("plan", "pk", "mode", "model", 100, 0, r, nil)
+		return planPassCacheKey("plan", "pk", "mode", "model", 100, 0, r, nil, "")
 	}
 
 	base := keyOf(build("shared-prefix", "suffix-v1"))
@@ -1837,7 +1837,7 @@ func TestPlanPassCacheKey_VariesWithAttachedContent(t *testing.T) {
 	rendered := renderedPlanReview{}
 	mk := func(sha string) [32]byte {
 		return planPassCacheKey("plan", "", "", "m", 100, 0, rendered,
-			[]contextFile{{Source: fileSource{Path: "/a.go", Bytes: 10, SHA256: sha}}})
+			[]contextFile{{Source: fileSource{Path: "/a.go", Bytes: 10, SHA256: sha}}}, "")
 	}
 	assert.NotEqual(t, mk("aaaa"), mk("bbbb"))
 	assert.Equal(t, mk("aaaa"), mk("aaaa"))
@@ -1845,9 +1845,24 @@ func TestPlanPassCacheKey_VariesWithAttachedContent(t *testing.T) {
 
 func TestPlanPassCacheKey_NoAttachmentsIsStable(t *testing.T) {
 	rendered := renderedPlanReview{}
-	a := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil)
-	b := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil)
+	a := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil, "")
+	b := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil, "")
 	assert.Equal(t, a, b)
+}
+
+// TestPlanPassCacheKey_VariesWithRepoRoot is the unit-level companion to
+// TestValidatePlan_RepoRootChangeBustsPlanPassCache: repo_root gates
+// checkFileConsistency's disk tier, so two calls with byte-identical plan
+// text but different repo_root can produce genuinely different results and
+// MUST NOT collide in the cache.
+func TestPlanPassCacheKey_VariesWithRepoRoot(t *testing.T) {
+	rendered := renderedPlanReview{}
+	mk := func(repoRoot string) [32]byte {
+		return planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil, repoRoot)
+	}
+	assert.NotEqual(t, mk(""), mk("/repo/a"))
+	assert.NotEqual(t, mk("/repo/a"), mk("/repo/b"))
+	assert.Equal(t, mk("/repo/a"), mk("/repo/a"))
 }
 
 func TestValidatePlan_FileConsistencyFindingReachesTheEnvelope(t *testing.T) {
@@ -1870,4 +1885,45 @@ func TestValidatePlan_FileConsistencyFindingReachesTheEnvelope(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "the deterministic check's finding must reach the envelope")
+}
+
+// TestValidatePlan_RepoRootChangeBustsPlanPassCache is the regression test
+// for the review finding that planPassCacheKey did not key on repoRoot: a
+// caller who first validates without repo_root (order tier only; passes and
+// is cached) and then re-validates the byte-identical plan WITH repo_root
+// must get a fresh review that runs the disk tier — not the stale cached
+// pass, which would silently skip the disk tier the caller just asked for.
+// A unit test on planPassCacheKey alone cannot catch this: the bug lives in
+// the interaction between the cache-hit return at the top of ValidatePlan
+// and the checkFileConsistency call 44 lines later on the fresh path.
+func TestValidatePlan_RepoRootChangeBustsPlanPassCache(t *testing.T) {
+	plan := "# Plan\n\n" +
+		"### Task 1: t1\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n\n**Files:**\n- Modify: `a.go`\n\n"
+
+	dir := t.TempDir() // empty: a.go does not exist here
+
+	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+	h := &handlers{deps: newDeps(t, rv)}
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.Equal(t, verdict.VerdictPass, first.PlanVerdict, "no repo_root: order tier alone finds nothing")
+	require.Equal(t, 1, rv.Calls)
+	for _, f := range first.PlanFindings {
+		require.NotEqual(t, "task_order_contradiction", f.Criterion)
+	}
+
+	_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan, RepoRoot: dir})
+	require.NoError(t, err)
+	assert.Equal(t, 2, rv.Calls, "repo_root must change the cache key: this must be a fresh review, not a cache hit")
+	assert.NotContains(t, second.NextAction, "[cached", "must not be served from the no-repo_root entry")
+
+	var found bool
+	for _, f := range second.PlanFindings {
+		if f.Criterion == "task_order_contradiction" {
+			found = true
+			assert.Contains(t, f.Evidence, "does not exist")
+		}
+	}
+	assert.True(t, found, "the disk tier must run once repo_root is supplied, even though the plan text is byte-identical to the cached call")
 }

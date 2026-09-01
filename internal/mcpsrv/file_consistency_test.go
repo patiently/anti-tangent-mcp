@@ -86,3 +86,36 @@ func TestCheckFileConsistency_PathEscapingRepoRootIsIgnored(t *testing.T) {
 func TestCheckFileConsistency_NoFilesSections(t *testing.T) {
 	assert.Nil(t, checkFileConsistency(tasksFrom("**Goal:** g\n"), t.TempDir()))
 }
+
+// TestCheckFileConsistency_OrderTier_EdgeCases covers two off-by-one shapes
+// that a check like this breaks on: a path created by two different tasks
+// (createdBy must key on the FIRST task, not the last), and a task that
+// creates and modifies the same path in its own **Files:** section (the
+// "created > taskNum" comparison is strict, so equal must not be a finding).
+func TestCheckFileConsistency_OrderTier_EdgeCases(t *testing.T) {
+	cases := []struct {
+		name  string
+		tasks []string
+	}{
+		{
+			name: "first Create wins when a path is created by two different tasks",
+			tasks: []string{
+				"**Files:**\n- Create: `a.go`\n",
+				"**Files:**\n- Modify: `a.go`\n",
+				"**Files:**\n- Create: `a.go`\n",
+			},
+		},
+		{
+			name: "a Modify in the same task that creates the path is fine",
+			tasks: []string{
+				"**Files:**\n- Create: `a.go`\n- Modify: `a.go`\n",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := checkFileConsistency(tasksFrom(tc.tasks...), "")
+			assert.Nil(t, f)
+		})
+	}
+}
