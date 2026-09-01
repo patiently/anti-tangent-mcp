@@ -37,7 +37,16 @@ var (
 	// two shapes that must survive intact: a Windows drive letter (`C:\x`)
 	// has no digits after the colon and is not at the end of the string,
 	// and a URL scheme (`https://…`) is followed by slashes, not digits.
-	lineAnchorRe = regexp.MustCompile(`:\d+(?:[-,]\d+)?$`)
+	//
+	// The group REPEATS (`(?:…)+$`) because editors emit line:column as well
+	// as line ranges. A single-group pattern stripped only the trailing
+	// `:12` from `x.go:57:12`, leaving the phantom path `x.go:57` — which
+	// stats as missing and never string-matches its unanchored `Create:`
+	// twin, i.e. the exact bug this regex exists to prevent, just one colon
+	// deeper. Repeating cannot widen the match past the shapes above: every
+	// repetition must still be `:digits`, so `C:\x` and `https://…` are
+	// untouched.
+	lineAnchorRe = regexp.MustCompile(`(?::\d+(?:[-,]\d+)?)+$`)
 )
 
 // FileRefs extracts a task body's declared file operations.
@@ -111,8 +120,9 @@ func cleanRefPath(tail string) string {
 	return stripLineAnchor(strings.TrimSpace(fields[0]))
 }
 
-// stripLineAnchor removes a trailing ":N", ":N-M", or ":N,M" line anchor
-// (see lineAnchorRe). A reference that is NOTHING but an anchor collapses to
+// stripLineAnchor removes a trailing ":N", ":N-M", ":N,M", or repeated
+// (":N:C", ":N-M:C") line anchor (see lineAnchorRe). A reference that is
+// NOTHING but an anchor collapses to
 // the empty string, which FileRefs already skips — an anchor with no path in
 // front of it names no file.
 func stripLineAnchor(p string) string {

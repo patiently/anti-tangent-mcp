@@ -99,12 +99,16 @@ followed by bullets naming a verb and a path.
 Rules the parser actually applies:
 
 - The heading must be a line of its own reading `**Files:**` (case-insensitive).
-- Bullets may use `-` or `*` and MUST have a space after the marker.
+- Bullets may use `-` or `*`. A space after the marker is OPTIONAL for a recognized verb —
+  `-Create: path` parses. The space governs the UNRECOGNIZED-VERB fallback: a bullet whose
+  verb is not Create/Modify/Delete is skipped and collection continues only when it starts
+  `- ` or `* `; without the space, collection stops at that line.
 - The verb is `Create`, `Modify`, or `Delete`, case-insensitive. Two verbs may be joined with
   `/` (`Create/Modify:`) for a file one task creates and another edits; both are recorded.
 - The path may be backtick-quoted or bare. Bare takes the first whitespace-delimited token.
 - A trailing parenthetical (`(the roots parsing)`) is dropped, and so is a trailing line anchor
-  — `:57`, `:57-70`, `:57,70` — so anchoring a `Modify:` to the lines you are editing is safe.
+  — `:57`, `:57-70`, `:57,70`, and repeated forms like `:57:12` — so anchoring a `Modify:` to
+  the lines you are editing is safe.
 - Paths are repo-relative. Collection stops at the first line that is neither a bullet nor
   blank, so a following `**Steps:**` section is never harvested.
 

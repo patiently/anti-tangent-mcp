@@ -606,3 +606,84 @@ func TestParseTasksOnly_RejectsEmptyFindingStrings(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "criterion is required")
 }
+
+// contradictionResult builds a PlanResult carrying one
+// contradicted_codebase_claim at plan level and one on a task, both at
+// `severity` with the supplied evidence strings.
+func contradictionResult(planEvidence, taskEvidence string) PlanResult {
+	f := func(evidence string) Finding {
+		return Finding{
+			Severity:   SeverityCritical,
+			Category:   CategoryContradictedCodebaseClaim,
+			Criterion:  "crit",
+			Evidence:   evidence,
+			Suggestion: "sugg",
+		}
+	}
+	return PlanResult{
+		PlanFindings: []Finding{f(planEvidence)},
+		Tasks:        []PlanTaskResult{{TaskIndex: 1, TaskTitle: "Task 1: t1", Findings: []Finding{f(taskEvidence)}}},
+	}
+}
+
+// The demotion is PER FINDING, not per call. Gating the whole sweep on
+// "nothing was attached" meant a single attached file re-armed the unfloored
+// critical severity for a contradiction about a file the reviewer had never
+// been shown — the category carries no severity floor precisely because an
+// attached file is ground truth, so an unbacked one can fail a plan gate over
+// code nobody saw.
+func TestDemoteUnattachedContradictions_IsPerFinding(t *testing.T) {
+	pr := contradictionResult(
+		"/repo/internal/mcpsrv/handlers.go line 12 says otherwise", // backed
+		"internal/other/other.go has no such field",                // NOT backed
+	)
+	DemoteUnattachedContradictions(&pr, []string{"/repo/internal/mcpsrv/handlers.go"})
+
+	assert.Equal(t, CategoryContradictedCodebaseClaim, pr.PlanFindings[0].Category,
+		"a contradiction naming an attached file must survive")
+	assert.Equal(t, SeverityCritical, pr.PlanFindings[0].Severity,
+		"a backed contradiction keeps its unfloored severity")
+
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.Tasks[0].Findings[0].Category,
+		"a contradiction naming no attached file must be demoted even though something was attached")
+	assert.Equal(t, SeverityMinor, pr.Tasks[0].Findings[0].Severity)
+}
+
+// Basename containment is the match, deliberately: the ground rules ask the
+// reviewer to quote the attached file's ABSOLUTE path, but reviewers
+// routinely quote the repo-relative form. Failing open there keeps a
+// legitimate contradiction rather than silently minor-ing it.
+func TestDemoteUnattachedContradictions_MatchesRepoRelativeQuoting(t *testing.T) {
+	pr := contradictionResult("internal/mcpsrv/handlers.go defines no such symbol", "handlers.go:12 disagrees")
+	DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/mcpsrv/handlers.go"})
+
+	assert.Equal(t, CategoryContradictedCodebaseClaim, pr.PlanFindings[0].Category)
+	assert.Equal(t, CategoryContradictedCodebaseClaim, pr.Tasks[0].Findings[0].Category)
+}
+
+// An empty attached set demotes everything — the original all-or-nothing
+// behavior, which is still correct when nothing at all was attached.
+func TestDemoteUnattachedContradictions_EmptyAttachedSetDemotesAll(t *testing.T) {
+	pr := contradictionResult("internal/mcpsrv/handlers.go", "internal/verdict/verdict.go")
+	DemoteUnattachedContradictions(&pr, nil)
+
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.PlanFindings[0].Category)
+	assert.Equal(t, SeverityMinor, pr.PlanFindings[0].Severity)
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.Tasks[0].Findings[0].Category)
+	assert.Equal(t, SeverityMinor, pr.Tasks[0].Findings[0].Severity)
+}
+
+// Demotion rewrites category and severity ONLY. The observation is still
+// worth surfacing, so the reviewer's prose must survive untouched — an
+// implementation that blanked it would pass a category+severity-only test.
+func TestDemoteUnattachedContradictions_PreservesFindingProse(t *testing.T) {
+	pr := contradictionResult("unbacked evidence text", "other unbacked evidence")
+	DemoteUnattachedContradictions(&pr, nil)
+
+	for _, f := range []Finding{pr.PlanFindings[0], pr.Tasks[0].Findings[0]} {
+		assert.Equal(t, "crit", f.Criterion, "criterion must survive demotion")
+		assert.Equal(t, "sugg", f.Suggestion, "suggestion must survive demotion")
+	}
+	assert.Equal(t, "unbacked evidence text", pr.PlanFindings[0].Evidence)
+	assert.Equal(t, "other unbacked evidence", pr.Tasks[0].Findings[0].Evidence)
+}

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode"
 )
 
 // fileSource is the provenance of one resolved file input. Path is the
@@ -158,7 +159,12 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 	}, nil
 }
 
-// rejectControlChars refuses a resolved path containing any byte below 0x20.
+// rejectControlChars refuses a resolved path containing any character that
+// can forge structure in the rendered prompt: C0 controls (< 0x20), DEL
+// (0x7f), the Unicode line/paragraph separators U+2028 and U+2029, and every
+// Unicode format character (category Cf) — which covers U+202E RIGHT-TO-LEFT
+// OVERRIDE (the Trojan-Source class, CVE-2021-42574) and U+200B ZERO WIDTH
+// SPACE.
 //
 // This is a PROMPT-INTEGRITY guard, not a filesystem one. Linux permits every
 // byte but '/' and NUL in a file name, EvalSymlinks returns whatever the link
@@ -179,15 +185,33 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 // too-large envelope: unlike a cap breach there is no caller-tunable dial
 // and no partial result to return — the path is simply not renderable.
 //
+// A `r < 0x20` predicate alone was not enough: U+2028 and U+2029 ARE line
+// breaks to a model reading the prompt, U+202E reverses the apparent
+// direction of everything after it (so a path can render as text it does not
+// contain), and U+200B is invisible padding that defeats an eyeball
+// comparison of two paths. All of them survive a C0-only test.
+//
+// Rejecting the whole Cf category fails CLOSED on the rare legitimate
+// filename that carries a format character, which is the right trade here:
+// the alternative is rendering an unreviewable path into the instruction
+// region, and the error names the path so the operator can rename it.
+//
 // %q escapes the offending bytes, so naming the path in the error cannot
 // re-inject them into whatever reads the error.
 func rejectControlChars(resolved string) error {
-	if i := strings.IndexFunc(resolved, func(r rune) bool { return r < 0x20 }); i >= 0 {
+	if i := strings.IndexFunc(resolved, forgesPromptStructure); i >= 0 {
 		return fmt.Errorf(
 			"resolved path %q contains a control character at byte %d; refusing to render it into the reviewer prompt",
 			resolved, i)
 	}
 	return nil
+}
+
+// forgesPromptStructure reports whether r can forge prompt structure. Split
+// out of rejectControlChars so the predicate can be stated once and read
+// without the surrounding error plumbing.
+func forgesPromptStructure(r rune) bool {
+	return r < 0x20 || r == 0x7f || r == '\u2028' || r == '\u2029' || unicode.Is(unicode.Cf, r)
 }
 
 // withinRoots reports whether p sits inside any root. Empty roots means

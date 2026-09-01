@@ -50,6 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented nowhere authors look.
 - `core.md`'s `payload_too_large` FAQ names the `validate_plan` and `context_paths` caps, not just
   the shared `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
+- Three stale doc claims corrected: `authoring.md` §3.9 said `**Files:**` bullets "MUST have a
+  space after the marker" (the parser accepts `-Create:`; the space governs only the
+  unrecognized-verb fallback); `.claude-plugin/marketplace.json` still advertised the plugin as
+  loading "the full INTEGRATION.md ... instead of ~10k tokens", stale since the role-scoped
+  split; and README hardcoded "the chunked (>8-task) path" where
+  `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` is documented as tunable. README's env table also now
+  documents the relation between the two `context_paths` caps.
 - README's prompt-caching claim was wrong in both directions: only the Anthropic client sends a
   cache breakpoint, and only on the chunked path — single-call plans and the OpenAI/Google clients
   re-send the whole attached set every call. README's context-window sizing guidance now accounts
@@ -60,17 +67,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`stats` `payload_bytes` changed meaning on `validate_plan` events in 0.17.0**, with no events
   schema version marker (a schema bump is deliberately out of scope for this release). It now
   includes the `context_paths` bytes, and on a chunked round those bytes are multiplied by the
-  number of reviewer calls, because the whole attached set is re-sent on every call. Plan text is
+  number of reviewer calls, because the whole attached set is re-sent on every call. A cache HIT
+  makes no reviewer call, so it bills the attached set exactly once. Plan text is
   deliberately NOT multiplied, so rows from calls without `context_paths` stay comparable with
   pre-0.17.0 history. Treat `payload_bytes` on rows carrying attachments as a new series.
 - A bad `repo_root` no longer kills the review. It resolves BEFORE any attachment is read (a typo
   used to throw away every file the server had just read off disk) and, on failure, degrades to
-  the same behaviour as omitting it — the Create/Modify disk tier is skipped and a warning is
-  logged — instead of failing the whole call over an optional argument.
+  skipping the Create/Modify disk tier instead of failing the whole call over an optional
+  argument. That degradation is now **visible in-band**: the response carries a minor
+  `repo_root unusable (<reason>); Create/Modify disk tier skipped` finding as well as the stderr
+  warning. Without it the envelope, summary and findings were byte-identical to a call that never
+  passed `repo_root` — including for a plain relative path, which is an ordinary caller bug — so
+  silence read as "the tier ran and found nothing". Like the `plan_text` deprecation notice it is
+  applied per call, after the verdict ladder, and is never stored on a cache entry, so it cannot
+  flip a verdict via the `noise_cluster` minor-count trigger.
 - All three `context_paths` cap breaches now surface as the too-large envelope. The 51-file count
   cap used to return a transport error while the two byte caps returned envelopes.
-- `validate_plan` logs one structured line to stderr per call, naming the attached file count,
-  byte total, and paths.
+- `validate_plan` logs one structured line to stderr per call, on EXIT rather than on entry, so
+  it can carry `duration_ms`, `verdict` and `outcome` alongside the attached file count, byte
+  total, and paths. The entry line it replaces sat below both `context_paths` resolution returns,
+  so a bad `context_paths` argument produced no log line at all.
 - The reviewer ground rules, previously duplicated verbatim across all three plan templates, are
   now one shared partial. No behavioural change for a call without `context_paths`: the rendered
   prompt is byte-identical to 0.16.0.
@@ -80,7 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being absent from an attached file is the expected state, not a contradiction — and (c) explain
   that attached paths are absolute and match the plan's repo-relative paths by suffix. All three
   are gated on `context_paths`; a call without attachments still renders byte-identically to
-  0.16.0.
+  0.16.0. The marker rule names this call's nonce token explicitly and states that a
+  marker-shaped line carrying any other token is file content, not a boundary; the binding rule
+  matches whole path segments and tells the reviewer to treat a plan path as UNATTACHED whenever
+  two attached files could match it or the binding is otherwise uncertain, because a wrong
+  binding is worse than none; and a `contradicted_codebase_claim` must satisfy the plan-text
+  evidence rule in addition to quoting the attached file, not instead of it.
 
 ### Security
 - **A file name containing a control character is now refused, not rendered.** `context_paths`
@@ -88,8 +109,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and Linux permits every byte but `/` and NUL in a file name. A resolved path carrying an
   embedded newline injected lines into the enumerated attached-paths list *inside* the reviewer's
   ground rules — above and outside the nonce-guarded `BEGIN/END FILE` region — and into the
-  summary block's `context:` provenance list. Any resolved path with a byte below `0x20` is now
-  rejected outright.
+  summary block's `context:` provenance list. A resolved path is now rejected outright when it
+  carries any C0 control (`< 0x20`), DEL (`0x7f`), U+2028 or U+2029 (which are line breaks to a
+  model reading the prompt), or any Unicode format character — which covers U+202E
+  RIGHT-TO-LEFT OVERRIDE, the Trojan-Source class (CVE-2021-42574), and the invisible U+200B.
 - **`context_paths` sends file contents verbatim to the configured reviewer vendor.** Everything
   the caller attaches is transmitted to whichever third-party API `ANTI_TANGENT_PLAN_MODEL`
   names, in full, on every reviewer call of the round. Attach only what the plan makes claims
@@ -102,8 +125,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — the convention superpowers' task-format reference asks for. The Create/Modify consistency
   check kept the anchor as part of the path, so the disk tier stat'd `internal/x.go:57-70`, a
   path that can never exist, and the order tier never matched the anchored form against its
-  unanchored `Create:` twin. A trailing `:N`, `:N-M`, or `:N,M` is now stripped before either
-  tier looks at the path.
+  unanchored `Create:` twin. A trailing `:N`, `:N-M`, `:N,M`, or a repeated form such as the
+  `line:column` an editor emits (`internal/x.go:57:12`) is now stripped before either tier looks
+  at the path.
 - **The Create/Modify order tier now orders tasks by position, not by their declared number.**
   Tasks execute in the order they appear in the plan, but nothing forces `### Task N:` headings
   to be ascending 1..N — two corpus plans already restart numbering mid-file for phases. The
@@ -111,20 +135,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bogus blocking finding, and a genuinely out-of-order plan whose numbers descend was silently
   missed. Findings still name tasks by the plan's own numbers.
 - **The disk tier only reports "does not exist" for a genuine not-exists.** A permission or I/O
-  error from `os.Stat` now leaves the target alone instead of being reported as missing.
-- **`contradicted_codebase_claim` is suppressed server-side when nothing was attached.** The
-  category deliberately carries no severity floor, because an attached file is ground truth — so
-  a reviewer emitting one on a call with no `context_paths` could fail a plan gate at `major` on
-  code it never saw. Such findings are now demoted to `unverifiable_codebase_claim` (floored to
-  minor) by the server, independent of whether the reviewer obeyed the prompt's prohibition.
+  error from `os.Stat` now leaves the target alone instead of being reported as missing — and
+  logs a stderr warning naming the path and the error, so an unreadable `repo_root` no longer
+  makes the whole disk tier silently inert.
+- **`contradicted_codebase_claim` is suppressed server-side unless an attached file backs it.**
+  The category deliberately carries no severity floor, because an attached file is ground truth —
+  so a reviewer emitting one about code it never saw could fail a plan gate at `major`. Any such
+  finding whose evidence names none of the attached files is demoted to
+  `unverifiable_codebase_claim` (floored to minor), independent of whether the reviewer obeyed
+  the prompt's prohibition. The test is per finding, not per call: gating it on "nothing was
+  attached at all" meant a single attached file re-armed the unfloored severity for a
+  contradiction about some other, unattached file. Matching is on basename containment, which
+  fails open — reviewers often quote the repo-relative path where the rules ask for the absolute
+  one, and a legitimate contradiction must survive loose quoting.
 - **A truncated plan review keeps the Create/Modify consistency finding and its `context:`
   provenance.** The reviewer-free check ran after the truncation-recovery early return, so a
   truncated response silently dropped the one finding the server already knew for certain; and
   the recovery envelope's summary omitted the attached-file list while the same call's stats
   counted every attached byte.
-- `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` greater than `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` is
-  now rejected at startup, naming both variables: a per-file cap above the whole-set cap can
-  never be reached, so raising it alone silently achieves nothing.
+- An **explicitly set** `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` greater than
+  `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` is rejected at startup, naming both variables: a
+  per-file cap above the whole-set cap can never be reached, so raising it alone silently
+  achieves nothing. Lowering only the payload cap below the 131072 per-file **default** clamps
+  that untouched default down instead of erroring — the unconditional check made any
+  `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` under 131072 refuse to boot, taking every
+  anti-tangent tool off the host over a value the operator never set.
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.

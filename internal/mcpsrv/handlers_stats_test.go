@@ -596,3 +596,94 @@ func TestNilStatsDisabledNoFiles(t *testing.T) {
 		t.Fatalf("ValidateTaskSpec: %v", err)
 	}
 }
+
+// TestValidatePlan_CacheHitBillsAttachmentBytesOnce pins the cache-hit
+// recordStat call site. contextPayloadBytes multiplies the attached set by
+// rendered.reviewerCalls() because a chunked round re-sends every attached
+// byte on every reviewer call — but a cache HIT makes no reviewer call at
+// all, so it sends the set zero times. Using the multiplied figure there
+// billed a 3-call round's worth of attachment traffic for a round that sent
+// none, and the miss got worse, not better, once the multiplier landed.
+func TestValidatePlan_CacheHitBillsAttachmentBytesOnce(t *testing.T) {
+	dir := t.TempDir()
+	cfg := statsTestConfig(t)
+	cfg.PlanTasksPerChunk = 1 // force the chunked path: reviewerCalls() > 1
+
+	ctxDir := t.TempDir()
+	f := filepath.Join(ctxDir, "attached.go")
+	contextContent := "package a\n// SENTINEL_ATTACHED\n"
+	if err := os.WriteFile(f, []byte(contextContent), 0o600); err != nil {
+		t.Fatalf("write context file: %v", err)
+	}
+
+	sr := &scriptedReviewer{responses: []providers.Response{
+		passOneResp(),
+		chunkResp(t, titlesRange(1, 1)),
+		chunkResp(t, titlesRange(2, 2)),
+	}}
+	h := &handlers{deps: Deps{
+		Cfg:       cfg,
+		Sessions:  session.NewStore(cfg.SessionTTL),
+		Reviews:   providers.Registry{"anthropic": sr},
+		Stats:     newStatsRecorder(t, dir),
+		PlanRuns:  planrun.NewStore(time.Hour),
+		planCache: newPlanPassCache(),
+	}}
+
+	planText := buildPlanWithNTasks(2)
+	args := ValidatePlanArgs{PlanText: planText, ContextPaths: []string{f}}
+
+	if _, _, err := h.ValidatePlan(context.Background(), nil, args); err != nil {
+		t.Fatalf("ValidatePlan (fresh): %v", err)
+	}
+	if _, _, err := h.ValidatePlan(context.Background(), nil, args); err != nil {
+		t.Fatalf("ValidatePlan (cached): %v", err)
+	}
+
+	evs := readEvents(t, dir)
+	if len(evs) != 2 {
+		t.Fatalf("expected 2 stat events (one fresh, one cache hit), got %d", len(evs))
+	}
+	fresh, cached := evs[0], evs[1]
+	if !cached.Cached {
+		t.Fatalf("second event must be the cache hit; Cached = %v", cached.Cached)
+	}
+
+	// The fresh round really did re-send the attachment on every one of its
+	// reviewer calls, so its bill is the multiplied one. That half must keep
+	// working — otherwise this test would pass against a fix that simply
+	// deleted the multiplier.
+	wantFresh := len(planText) + len(contextContent)*3
+	if fresh.PayloadBytes != wantFresh {
+		t.Errorf("fresh event.PayloadBytes = %d, want %d (planBytes=%d + contextBytes=%d x 3 reviewer calls)",
+			fresh.PayloadBytes, wantFresh, len(planText), len(contextContent))
+	}
+
+	wantCached := len(planText) + len(contextContent)
+	if cached.PayloadBytes != wantCached {
+		t.Errorf("cache-hit event.PayloadBytes = %d, want %d (planBytes=%d + contextBytes=%d, counted ONCE); "+
+			"a cache hit makes no reviewer call, so it must not be billed per reviewer call",
+			cached.PayloadBytes, wantCached, len(planText), len(contextContent))
+	}
+}
+
+// readEvents returns every record in events.jsonl, in order.
+func readEvents(t *testing.T, dir string) []stats.Event {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("events.jsonl: %v", err)
+	}
+	if len(b) == 0 {
+		t.Fatal("events.jsonl is empty")
+	}
+	var out []stats.Event
+	for _, line := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
+		var ev stats.Event
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("unmarshal event %q: %v", line, err)
+		}
+		out = append(out, ev)
+	}
+	return out
+}

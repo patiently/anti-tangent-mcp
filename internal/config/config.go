@@ -295,6 +295,10 @@ func Load(env func(string) string) (Config, error) {
 		}
 		cfg.PlanMaxPayloadBytes = n
 	}
+	// fileCapExplicit distinguishes "the operator set a per-file cap" from
+	// "the default is still in place" — the cross-check below treats the two
+	// cases differently, and by then the value alone cannot tell them apart.
+	fileCapExplicit := false
 	if v := env("ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -304,6 +308,7 @@ func Load(env func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES: must be positive, got %d", n)
 		}
 		cfg.ContextMaxFileBytes = n
+		fileCapExplicit = true
 	}
 	if v := env("ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -317,15 +322,35 @@ func Load(env func(string) string) (Config, error) {
 	}
 	// Cross-check, after BOTH have been read: a per-file cap above the
 	// whole-set cap is unreachable configuration. Every file that passes the
-	// per-file check would then trip the set check, so raising
-	// ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES to "allow a big file" silently
-	// achieves nothing — the operator's intent is defeated by a limit they
-	// did not think to raise. Fail at startup naming both variables rather
-	// than at review time naming only one.
+	// per-file check would then trip the set check.
+	//
+	// Which of the two responses is right depends on whether the operator
+	// ASKED for the per-file cap they got:
+	//
+	//   - Explicitly set above the payload cap → hard error naming both
+	//     variables. Raising ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES to "allow a
+	//     big file" would otherwise achieve nothing at all, the operator's
+	//     intent silently defeated by a limit they did not think to raise.
+	//     Failing at startup naming both beats failing at review time naming
+	//     one.
+	//   - Still the DEFAULT (131072) and merely larger than a payload cap
+	//     the operator lowered → clamp it down. Erroring here made
+	//     ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES below 131072 refuse to boot
+	//     at all: Load returns an error, main exits 1, and every
+	//     anti-tangent tool vanishes from the host — a startup-denial bug
+	//     for a value the operator never touched.
+	//
+	// Deliberately NOT "clamp always, with a warning": Load runs before the
+	// JSON logger is installed, so the warning would go nowhere, and an
+	// unconditional clamp reintroduces exactly the silent defeat the error
+	// exists to stop.
 	if cfg.ContextMaxFileBytes > cfg.ContextMaxPayloadBytes {
-		return Config{}, fmt.Errorf(
-			"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES (%d) must be <= ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES (%d): a per-file cap above the whole-set cap can never be reached",
-			cfg.ContextMaxFileBytes, cfg.ContextMaxPayloadBytes)
+		if fileCapExplicit {
+			return Config{}, fmt.Errorf(
+				"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES (%d) must be <= ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES (%d): a per-file cap above the whole-set cap can never be reached",
+				cfg.ContextMaxFileBytes, cfg.ContextMaxPayloadBytes)
+		}
+		cfg.ContextMaxFileBytes = cfg.ContextMaxPayloadBytes
 	}
 	if v := env("ANTI_TANGENT_PLAN_ROOTS"); v != "" {
 		for _, p := range filepath.SplitList(v) {

@@ -211,6 +211,10 @@ ANTI_TANGENT_PLAN_ROOTS=                      # OS path-list separator (":" on U
 # validate_plan context_paths attachments (design 2026-09-01)
 ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES=131072    # per-file cap for context_paths attachments; oversized files are refused, never truncated
 ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES=524288 # cap for the attached set as a whole
+# The two are related: a per-file cap above the whole-set cap can never be reached. Setting
+# ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES explicitly above ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES
+# is a startup error (the raise would achieve nothing); lowering only the payload cap below the
+# 131072 default clamps the untouched per-file default down to it, and the server still boots.
 # context_paths also caps at 50 files total — fixed, not env-configurable
 
 # Output budgets + chunking (v0.1.4+):
@@ -363,7 +367,8 @@ those.
 `plan_path` — restricting one restricts all three.
 
 **Attachments are almost never cached.** Only the Anthropic client sends an explicit cache
-breakpoint, and only on the chunked (>8-task) path — `reviewPlanSingle` sets no `CachePrefix`,
+breakpoint, and only on the chunked path (plans above `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK`
+tasks, default 8) — `reviewPlanSingle` sets no `CachePrefix`,
 and its parse-retry resends the whole rendered user message. So a single-call plan pays full
 price for its attachments on every call, and so does every call when `ANTI_TANGENT_PLAN_MODEL`
 names an OpenAI or Google model, since those clients have no prompt-cache support at all. Budget

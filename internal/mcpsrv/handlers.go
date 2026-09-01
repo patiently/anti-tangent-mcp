@@ -581,6 +581,20 @@ func contextFilePaths(files []contextFile) []string {
 	return out
 }
 
+// fileSourcePaths is contextFilePaths for the already-projected provenance
+// form. handlePlanReviewErr carries []fileSource rather than []contextFile
+// (it never needs the content), and both call sites of
+// verdict.DemoteUnattachedContradictions must pass the SAME attached set —
+// a divergence there is exactly how the demotion would go all-or-nothing
+// again on one path only.
+func fileSourcePaths(files []fileSource) []string {
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		out = append(out, f.Path)
+	}
+	return out
+}
+
 // contextSources projects the resolved attachment set down to the provenance
 // used by planSummaryMeta.ContextFiles — path and byte count for the summary
 // block, nothing the reviewer prompt needed (Content).
@@ -705,6 +719,39 @@ func prependPlanDeprecation(pr verdict.PlanResult, usedPlanText bool) verdict.Pl
 		Criterion:  "input",
 		Evidence:   "plan_text was supplied; it is deprecated and will be removed in 1.0.0",
 		Suggestion: "pass plan_path with the absolute path to the plan file instead",
+	}
+	pr.PlanFindings = append([]verdict.Finding{f}, pr.PlanFindings...)
+	return pr
+}
+
+// prependRepoRootUnusable adds the in-band signal that a supplied repo_root
+// could not be used and the Create/Modify disk tier was therefore skipped.
+// reason is empty when repo_root was usable or was never supplied, in which
+// case pr is returned untouched.
+//
+// Without it, an unusable repo_root produced an envelope, a summary and a
+// findings list byte-identical to a call that never passed repo_root at all
+// — including for a plain relative path, which resolveDirInput rejects
+// outright. controller.md §5.8 and the tool description both promise
+// repo_root "enables the disk tier", so silence there reads as "the tier ran
+// and found nothing". A summary-only line would not do: findings are what
+// callers parse.
+//
+// Modelled on prependPlanDeprecation, and applied at the same call sites,
+// for the same reason: it is a minor CategoryOther finding, so running it
+// through verdict.FinalizeVerdict would let it count toward the
+// noise_cluster (3rd-minor) trigger and flip a pass to warn. It must be
+// applied POST-ladder and per-call, and never stored on a cache entry.
+func prependRepoRootUnusable(pr verdict.PlanResult, reason string) verdict.PlanResult {
+	if reason == "" {
+		return pr
+	}
+	f := verdict.Finding{
+		Severity:   verdict.SeverityMinor,
+		Category:   verdict.CategoryOther,
+		Criterion:  "repo_root",
+		Evidence:   "repo_root unusable (" + reason + "); Create/Modify disk tier skipped",
+		Suggestion: "pass repo_root as an absolute path to an existing directory inside ANTI_TANGENT_PLAN_ROOTS, or omit it and rely on the plan-order tier alone",
 	}
 	pr.PlanFindings = append([]verdict.Finding{f}, pr.PlanFindings...)
 	return pr
@@ -1695,7 +1742,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	return envelopeResult(env)
 }
 
-func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, args ValidatePlanArgs) (*mcp.CallToolResult, verdict.PlanResult, error) {
+func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, args ValidatePlanArgs) (_ *mcp.CallToolResult, _ verdict.PlanResult, retErr error) {
 	if args.PlanText == "" && args.PlanPath == "" {
 		return nil, verdict.PlanResult{}, errors.New("plan_text or plan_path is required")
 	}
@@ -1716,6 +1763,55 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 
 	planText := args.PlanText
 	var planSrc fileSource
+	var contextFiles []contextFile
+	var contextBytes int
+	var repoRoot string
+	// repoRootUnusable is the reason repo_root could not be resolved, empty
+	// when it was usable or was never supplied. See the resolution block
+	// below and repoRootUnusableFinding.
+	var repoRootUnusable string
+
+	// EXACTLY ONE stderr line per validate_plan call (CLAUDE.md's logging
+	// convention), emitted on EXIT rather than on entry. The old entry line
+	// sat BELOW both resolveContextPaths returns, so a context_paths failure
+	// — the input a caller most often gets wrong — logged nothing at all,
+	// and its own comment claiming "the only earlier returns are
+	// argument-validation errors and the plan_path too-large envelope" was
+	// false. An entry line also cannot carry the verdict or the duration,
+	// because neither exists yet: no validate_plan call was observable in
+	// the log. This is the deferred log-vars pattern from prime_handler.go /
+	// extract_handler.go — each branch sets logOutcome (and logVerdict where
+	// there is one) before returning, and the closure reads the live locals
+	// for the byte counts, so the single line always describes the actual
+	// outcome. Registered here, after argument validation, because a
+	// malformed-argument return produces neither a review nor an envelope.
+	start := time.Now()
+	logVerdict := verdict.Verdict("")
+	logOutcome := "success"
+	defer func() {
+		// planText is empty on the plan_path too-large exit (resolveFileInput
+		// returns no content there), so fall back to the size the stat saw.
+		planBytesLogged := len(planText)
+		if planBytesLogged == 0 && planSrc.Bytes > 0 {
+			planBytesLogged = planSrc.Bytes
+		}
+		if retErr != nil && logOutcome == "success" {
+			logOutcome = "error"
+		}
+		slog.Info("validate_plan",
+			slog.String("tool", "validate_plan"),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+			slog.String("verdict", string(logVerdict)),
+			slog.String("outcome", logOutcome),
+			slog.Int("plan_bytes", planBytesLogged),
+			slog.Int("project_knowledge_bytes", pkBytes),
+			slog.Int("context_files", len(contextFiles)),
+			slog.Int("context_bytes", contextBytes),
+			slog.Any("context_paths", contextFilePaths(contextFiles)),
+			slog.Bool("repo_root", repoRoot != ""),
+		)
+	}()
+
 	if args.PlanPath != "" {
 		var rerr error
 		planText, planSrc, rerr = resolveFileInput(
@@ -1731,9 +1827,11 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 				modelUsed:    h.deps.Cfg.PlanModel.String(),
 				payloadBytes: total,
 			})
+			logOutcome, logVerdict = "plan_too_large", pr.PlanVerdict
 			return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
 		}
 		if rerr != nil {
+			logOutcome = "plan_path_error"
 			return nil, verdict.PlanResult{}, rerr
 		}
 	}
@@ -1749,21 +1847,30 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// Non-fatal: repoRoot == "" already means "skip the disk tier" (see
 	// file_consistency.go, whose own comment rules out "refusing to review a
 	// plan for want of an optional argument"). Degrading to that is the same
-	// outcome as omitting repo_root, and the operator gets a stderr warning
-	// naming the reason.
-	var repoRoot string
+	// outcome as omitting repo_root.
+	//
+	// Silently, though, it was NOT the same outcome to the caller: envelope,
+	// summary and findings became byte-identical to a call that never passed
+	// repo_root, while controller.md §5.8 and the tool description both
+	// promise repo_root "enables the disk tier". resolveDirInput also
+	// rejects a plain relative path — an ordinary caller bug — and that was
+	// swallowed too. The reason is therefore captured here and surfaced
+	// in-band as a finding (repoRootUnusableFinding), not just on stderr:
+	// findings are what callers parse.
 	if args.RepoRoot != "" {
 		resolved, rerr := resolveDirInput(args.RepoRoot, h.deps.Cfg.PlanRoots)
 		if rerr != nil {
+			repoRootUnusable = rerr.Error()
 			slog.Warn("validate_plan: repo_root unusable, skipping the Create/Modify disk tier",
 				slog.String("tool", "validate_plan"),
-				slog.String("err", rerr.Error()))
+				slog.String("err", repoRootUnusable))
 		} else {
 			repoRoot = resolved
 		}
 	}
 
-	contextFiles, contextBytes, cerr := resolveContextPaths(args.ContextPaths, h.deps.Cfg)
+	var cerr error
+	contextFiles, contextBytes, cerr = resolveContextPaths(args.ContextPaths, h.deps.Cfg)
 	if cerr != nil {
 		var tle *contextTooLargeError
 		if errors.As(cerr, &tle) {
@@ -1776,27 +1883,12 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 				modelUsed:    h.deps.Cfg.PlanModel.String(),
 				payloadBytes: len(planText) + pkBytes,
 			})
+			logOutcome, logVerdict = "context_too_large", pr.PlanVerdict
 			return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
 		}
+		logOutcome = "context_paths_error"
 		return nil, verdict.PlanResult{}, cerr
 	}
-
-	// One stderr line per validate_plan call (CLAUDE.md's logging
-	// convention). Emitted here, as early as every input is known: the only
-	// earlier returns are argument-validation errors and the plan_path
-	// too-large envelope, none of which reach a reviewer. The attached paths
-	// are listed because they are the input a caller most often gets wrong —
-	// too many files, or the wrong ones — and nothing else in the response
-	// names them when the review succeeds.
-	slog.Info("validate_plan",
-		slog.String("tool", "validate_plan"),
-		slog.Int("plan_bytes", len(planText)),
-		slog.Int("project_knowledge_bytes", pkBytes),
-		slog.Int("context_files", len(contextFiles)),
-		slog.Int("context_bytes", contextBytes),
-		slog.Any("context_paths", contextFilePaths(contextFiles)),
-		slog.Bool("repo_root", repoRoot != ""),
-	)
 
 	planBytes := len(planText)
 	if total := planBytes + pkBytes; total > h.deps.Cfg.PlanMaxPayloadBytes {
@@ -1810,6 +1902,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			modelUsed:    h.deps.Cfg.PlanModel.String(),
 			payloadBytes: total + contextBytes,
 		})
+		logOutcome, logVerdict = "payload_too_large", pr.PlanVerdict
 		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String(), ContextFiles: contextSources(contextFiles)})
 	}
 	tasks, _ := planparser.SplitTasks(planText)
@@ -1832,6 +1925,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			tasksTotal:      tasksTotal,
 			tasksWithHeader: tasksWithHeader,
 		})
+		logOutcome, logVerdict = "no_headings", pr.PlanVerdict
 		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String(), ContextFiles: contextSources(contextFiles)})
 	}
 
@@ -1845,6 +1939,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 
 	model, err := h.resolveModel(args.ModelOverride, h.deps.Cfg.PlanModel)
 	if err != nil {
+		logOutcome = "model_error"
 		return nil, verdict.PlanResult{}, err
 	}
 	rendered, err := renderPlanReview(renderPlanReviewInputs{
@@ -1856,6 +1951,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		ContextFiles:     toPromptContextFiles(contextFiles),
 	})
 	if err != nil {
+		logOutcome = "render_error"
 		return nil, verdict.PlanResult{}, err
 	}
 	// The attached set is re-sent WHOLE on every reviewer call of the round —
@@ -1881,23 +1977,35 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		// finding; recompute it again now that the finding may have been
 		// added, so SummaryBlock's count/list stays consistent with
 		// PlanFindings.
+		//
+		// The repo_root advisory rides the same rails for the same reason:
+		// it describes THIS call's repo_root argument, not the cached plan
+		// content, and an unusable repo_root resolves to repoRoot == "",
+		// which is exactly the cache key a call that omitted repo_root
+		// produces — so the entry really can be shared between the two.
+		cached = prependRepoRootUnusable(cached, repoRootUnusable)
 		cached = prependPlanDeprecation(cached, args.PlanText != "")
 		cachedMeta := planSummaryMeta{ModelUsed: cachedModelUsed, ReviewMS: 0, Source: planSrc.String(), ContextFiles: contextSources(contextFiles)}
 		cached.SummaryBlock = formatPlanSummary(cached, cachedMeta)
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
 		h.recordStat(statParams{
-			tool:            "validate_plan",
-			verdict:         string(cached.PlanVerdict),
-			findings:        planFindings(cached),
-			modelUsed:       cachedModelUsed,
-			reviewMS:        0,
-			partial:         cached.Partial,
-			cached:          true,
-			payloadBytes:    planBytes + pkBytes + contextPayloadBytes,
+			tool:      "validate_plan",
+			verdict:   string(cached.PlanVerdict),
+			findings:  planFindings(cached),
+			modelUsed: cachedModelUsed,
+			reviewMS:  0,
+			partial:   cached.Partial,
+			cached:    true,
+			// contextBytes, NOT contextPayloadBytes: a cache hit makes no
+			// reviewer call at all, so it sends the attached set zero times.
+			// Multiplying by reviewerCalls() here billed a 3-call chunked
+			// round's worth of attachment traffic for a round that sent none.
+			payloadBytes:    planBytes + pkBytes + contextBytes,
 			tasksTotal:      tasksTotal,
 			tasksWithHeader: tasksWithHeader,
 		})
+		logOutcome, logVerdict = "cache_hit", cached.PlanVerdict
 		return planEnvelopeResultFinalized(cached, cachedMeta)
 	}
 
@@ -1920,7 +2028,11 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// letting a truncated response drop it lost a finding the server already
 	// knew for certain.
 	fileConsistency := checkFileConsistency(tasks, repoRoot)
-	if r, p, handled, retErr := h.handlePlanReviewErr(planReviewErrInputs{
+	// herr, not retErr: retErr is this function's NAMED return, read by the
+	// deferred exit logger. Shadowing it here would still work (the return
+	// statement assigns through), but the name would mean two different
+	// things in one function.
+	if r, p, handled, herr := h.handlePlanReviewErr(planReviewErrInputs{
 		Err:             err,
 		Model:           model,
 		ModelUsed:       modelUsed,
@@ -1933,7 +2045,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		ContextFiles:    contextSources(contextFiles),
 		FileConsistency: fileConsistency,
 	}); handled {
-		if retErr == nil {
+		if herr == nil {
 			h.recordStat(statParams{
 				tool:            "validate_plan",
 				verdict:         string(p.PlanVerdict),
@@ -1945,18 +2057,23 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 				tasksTotal:      tasksTotal,
 				tasksWithHeader: tasksWithHeader,
 			})
+			logOutcome, logVerdict = "truncated", p.PlanVerdict
+		} else {
+			logOutcome = "review_error"
 		}
-		return r, p, retErr
+		return r, p, herr
 	}
 	populateNormativeTestBodies(&pr, tasks)
-	// Server-side suppression, independent of reviewer compliance: with no
-	// attached files there is nothing for a contradicted_codebase_claim to
-	// refute, so the category (which deliberately carries no severity floor)
-	// would let an unverifiable claim fail the gate at major or critical.
-	// The prompt already forbids it; this is the enforcement point.
-	if len(contextFiles) == 0 {
-		verdict.DemoteUnattachedContradictions(&pr)
-	}
+	// Server-side suppression, independent of reviewer compliance: a
+	// contradicted_codebase_claim that no attached file backs has nothing to
+	// refute with, so the category (which deliberately carries no severity
+	// floor) would let an unverifiable claim fail the gate at major or
+	// critical. Gating this on len(contextFiles) == 0 made the suppression
+	// all-or-nothing: with ANY file attached, a contradiction about some
+	// OTHER, unattached file kept its unfloored major/critical. Passing the
+	// attached paths lets the check run per finding. The prompt already
+	// forbids both shapes; this is the enforcement point.
+	verdict.DemoteUnattachedContradictions(&pr, contextFilePaths(contextFiles))
 	if fileConsistency != nil {
 		pr.PlanFindings = append(pr.PlanFindings, *fileConsistency)
 	}
@@ -1989,6 +2106,13 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// below, after the entry is stored — see the mirrored comment on the
 	// cache-hit branch above.
 	h.planCache().store(cacheKey, pr, modelUsed)
+	// Both per-call advisories land here, after the store and after the
+	// ladder, for the same two reasons: neither belongs on the cached entry
+	// (both describe THIS call's arguments), and both are minor
+	// CategoryOther findings that the ladder's noise_cluster trigger would
+	// otherwise count toward a pass->warn flip. Order puts deprecation
+	// first because it has been PlanFindings[0] since it existed.
+	pr = prependRepoRootUnusable(pr, repoRootUnusable)
 	pr = prependPlanDeprecation(pr, args.PlanText != "")
 	// Single authoritative SummaryBlock computation for this path: it runs
 	// after both the PlanRunID assignment and the deprecation prepend, so
@@ -2007,6 +2131,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		tasksTotal:      tasksTotal,
 		tasksWithHeader: tasksWithHeader,
 	})
+	logVerdict = pr.PlanVerdict
 	return planEnvelopeResultFinalized(pr, meta)
 }
 

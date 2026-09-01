@@ -91,6 +91,14 @@ func TestFileRefs_StripsTrailingLineAnchor(t *testing.T) {
 		{"comma pair, backticked", "**Files:**\n- Modify: `a/b.go:57,70`\n", "a/b.go"},
 		{"bare path", "**Files:**\n- Modify: a/b.go:15-23\n", "a/b.go"},
 		{"anchor plus parenthetical", "**Files:**\n- Modify: `a/b.go:15-23` (the render func)\n", "a/b.go"},
+		// line:column is what an editor and most greps emit. A single
+		// non-repeating anchor group stripped only the trailing ":12",
+		// leaving the phantom path "a/b.go:57" — which stats as missing and
+		// never matches its unanchored Create: twin, i.e. exactly the bug
+		// the anchor strip exists to prevent, one colon deeper.
+		{"line and column", "**Files:**\n- Modify: `a/b.go:57:12`\n", "a/b.go"},
+		{"range then column", "**Files:**\n- Modify: `a/b.go:57-70:12`\n", "a/b.go"},
+		{"bare line and column", "**Files:**\n- Modify: a/b.go:57:12\n", "a/b.go"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

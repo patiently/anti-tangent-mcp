@@ -552,3 +552,32 @@ func TestLoad_ContextCaps_FileCapAbovePayloadCapIsRejected(t *testing.T) {
 	}))
 	require.Error(t, err)
 }
+
+// Lowering ONLY ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES below the 131072
+// per-file default must not prevent the server booting. The cross-check
+// above is there to stop an EXPLICIT per-file raise from being silently
+// defeated; applied to the untouched default it turned any payload cap under
+// 131072 into a startup failure — Load errors, main exits 1, and every
+// anti-tangent tool disappears from the host over a value the operator never
+// set. The default clamps down instead.
+func TestLoad_ContextCaps_LoweredPayloadCapClampsTheDefaultFileCap(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                      "k",
+		"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES": "65536",
+	}))
+	require.NoError(t, err, "a payload cap below the default per-file cap must still boot")
+	assert.Equal(t, 65536, cfg.ContextMaxPayloadBytes)
+	assert.Equal(t, 65536, cfg.ContextMaxFileBytes,
+		"the untouched default per-file cap clamps down to the payload cap")
+
+	// The clamp must NOT extend to an explicit set: that is the silent
+	// defeat the cross-check exists to prevent, and it still errors.
+	_, err = Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                      "k",
+		"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES":    "131072",
+		"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES": "65536",
+	}))
+	require.Error(t, err, "an EXPLICIT per-file cap above the payload cap must still be rejected")
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES")
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES")
+}

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path"
+	"path/filepath"
+	"strings"
 )
 
 // ParsePlan decodes provider output into a PlanResult and validates enum fields.
@@ -55,26 +58,55 @@ func ParsePlan(raw []byte) (PlanResult, error) {
 }
 
 // DemoteUnattachedContradictions rewrites every contradicted_codebase_claim
-// in pr into an unverifiable_codebase_claim, floored to minor.
+// in pr that NO attached file backs into an unverifiable_codebase_claim,
+// floored to minor. attachedPaths is this call's attached set (absolute
+// paths); an empty set demotes every contradiction.
 //
-// Call it on a validate_plan result produced with NO attached context files.
 // contradicted_codebase_claim exists specifically because an attached file is
 // ground truth read from disk, which is why — unlike
 // unverifiable_codebase_claim — it carries no severity floor and is not
-// force-passed by the unverifiable-only verdict calibration. With nothing
-// attached, the reviewer has no file to refute anything with, so the category
-// is a hallucination wearing a hard severity: it can fail a plan gate on a
-// claim about code the reviewer never saw.
+// force-passed by the unverifiable-only verdict calibration. With no file
+// behind it the category is a hallucination wearing a hard severity: it can
+// fail a plan gate on a claim about code the reviewer never saw.
+//
+// Per-finding, not per-call: gating the whole sweep on "nothing was attached"
+// made the suppression all-or-nothing, so a single attached file re-armed the
+// unfloored severity for a contradiction about some OTHER file the reviewer
+// had never been shown.
+//
+// The match is deliberately conservative — a finding survives when its
+// evidence contains ANY attached path's BASENAME. The ground rules require
+// the reviewer to quote the attached file's absolute path, but reviewers
+// routinely quote the repo-relative form instead, so basename containment
+// fails OPEN: a legitimate contradiction is kept even when the quoting is
+// loose, and only a finding naming none of the attached files is demoted.
 //
 // The prompt already tells the reviewer never to emit it about an unattached
 // file, but suppression must run SERVER-SIDE, independent of reviewer
 // compliance (controller.md §5.8). Demotion, not deletion: the observation
 // may still be worth surfacing, just at the severity a claim nobody could
 // check deserves.
-func DemoteUnattachedContradictions(pr *PlanResult) {
+func DemoteUnattachedContradictions(pr *PlanResult, attachedPaths []string) {
+	bases := make([]string, 0, len(attachedPaths))
+	for _, p := range attachedPaths {
+		if b := path.Base(filepath.ToSlash(p)); b != "" && b != "." && b != "/" {
+			bases = append(bases, b)
+		}
+	}
+	backed := func(f Finding) bool {
+		for _, b := range bases {
+			if strings.Contains(f.Evidence, b) {
+				return true
+			}
+		}
+		return false
+	}
 	demote := func(fs []Finding) {
 		for i := range fs {
 			if fs[i].Category != CategoryContradictedCodebaseClaim {
+				continue
+			}
+			if backed(fs[i]) {
 				continue
 			}
 			fs[i].Category = CategoryUnverifiableCodebaseClaim

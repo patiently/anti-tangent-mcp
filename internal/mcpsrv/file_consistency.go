@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -111,9 +112,22 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 			// too-long path, or an I/O error means the check could not look,
 			// not that the file is missing — reporting "does not exist" for
 			// those states a fact the server did not establish.
-			if _, err := os.Stat(abs); errors.Is(err, fs.ErrNotExist) {
+			//
+			// But "could not look" must not be silent either: an unreadable
+			// repo_root (wrong ownership, a mount that went away) makes the
+			// whole disk tier inert while the response is byte-identical to
+			// a clean run. The operator gets a stderr line naming the path
+			// and the error; the finding list stays honest.
+			_, serr := os.Stat(abs)
+			switch {
+			case errors.Is(serr, fs.ErrNotExist):
 				lines = append(lines, fmt.Sprintf(
 					"Task %d modifies `%s`, which does not exist and is created by no earlier task", taskNum, p))
+			case serr != nil:
+				slog.Warn("validate_plan: could not stat a Modify: target under repo_root; disk tier skipped for it",
+					slog.String("tool", "validate_plan"),
+					slog.String("path", abs),
+					slog.String("err", serr.Error()))
 			}
 		}
 	}

@@ -141,12 +141,11 @@ func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolRes
 	if !ok {
 		pr = truncatedPlanResult()
 	}
-	// Mirrors the fresh-review path: with nothing attached, a
-	// contradicted_codebase_claim refutes a file the reviewer never saw.
-	// Recovered partial findings go through the same server-side demotion.
-	if len(in.ContextFiles) == 0 {
-		verdict.DemoteUnattachedContradictions(&pr)
-	}
+	// Mirrors the fresh-review path: a contradicted_codebase_claim that no
+	// attached file backs refutes a file the reviewer never saw. Recovered
+	// partial findings go through the same server-side demotion, with the
+	// same per-finding (not all-or-nothing) test.
+	verdict.DemoteUnattachedContradictions(&pr, fileSourcePaths(in.ContextFiles))
 	if in.FileConsistency != nil {
 		pr.PlanFindings = append(pr.PlanFindings, *in.FileConsistency)
 	}

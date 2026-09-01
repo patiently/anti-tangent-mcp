@@ -1,6 +1,8 @@
 package mcpsrv
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -231,4 +233,51 @@ func TestCheckFileConsistency_OrderTier_ComparesSlicePositionNotTitleNumber(t *t
 		f := checkFileConsistency(tasks, "")
 		require.NotNil(t, f, "equal declared numbers must not suppress a positional contradiction")
 	})
+}
+
+// The disk tier deliberately reports ONLY a genuine fs.ErrNotExist as a
+// finding: a permission error, an ENOTDIR, or an I/O error means the check
+// could not LOOK, not that the file is missing. Narrowing to ErrNotExist was
+// right, but it left the could-not-look branch emitting nothing at all — an
+// unreadable repo_root made the whole disk tier inert while the response
+// stayed byte-identical to a clean run. The operator gets a stderr line.
+func TestCheckFileConsistency_UnstattableTargetWarnsInsteadOfSilence(t *testing.T) {
+	root := t.TempDir()
+	// A regular file where the plan expects a directory: stat("<root>/blocker/x.go")
+	// returns ENOTDIR, which is NOT fs.ErrNotExist.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "blocker"), []byte("x"), 0o600))
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	f := checkFileConsistency(tasksFrom("**Files:**\n- Modify: `blocker/x.go`\n"), root)
+
+	assert.Nil(t, f,
+		"a path the check could not stat must not be reported as \"does not exist\"")
+	assert.Contains(t, buf.String(), "could not stat",
+		"the could-not-look branch must not be silent")
+	assert.Contains(t, buf.String(), filepath.Join(root, "blocker", "x.go"),
+		"the warning must name the path it could not stat")
+}
+
+// The mirror: a target the check CAN stat produces no warning at all, so the
+// new stderr line cannot become noise on every healthy call.
+func TestCheckFileConsistency_StattableTargetEmitsNoWarning(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "present.go"), []byte("x"), 0o600))
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+
+	// One target that exists, one that genuinely does not.
+	f := checkFileConsistency(tasksFrom("**Files:**\n- Modify: `present.go`\n- Modify: `absent.go`\n"), root)
+
+	require.NotNil(t, f, "the genuinely-missing target must still be a finding")
+	assert.Contains(t, f.Evidence, "absent.go")
+	assert.NotContains(t, f.Evidence, "present.go")
+	assert.Empty(t, buf.String(), "neither a hit nor a genuine not-exists may emit a warning")
 }
