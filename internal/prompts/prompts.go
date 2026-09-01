@@ -244,10 +244,18 @@ func RenderExtract(in ExtractInput) (Output, error) {
 	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
+// render parses the whole embedded template set and executes the named one.
+//
+// The full set (rather than just the named file) is parsed because the plan
+// templates share the "plan_rules" partial — the reviewer ground rules were
+// previously duplicated verbatim across all three, which is how a posture
+// edit drifts. Parsing eight small templates costs microseconds and always
+// precedes an HTTP call to a reviewer LLM, so the waste is unmeasurable next
+// to what it prevents.
 func render(name string, data any) (string, error) {
-	tmpl, err := template.New("").ParseFS(templatesFS, "templates/"+name)
+	tmpl, err := template.ParseFS(templatesFS, "templates/*.tmpl")
 	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", name, err)
+		return "", fmt.Errorf("parse templates: %w", err)
 	}
 	var buf bytes.Buffer
 	if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
