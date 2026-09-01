@@ -261,8 +261,26 @@ const contextNonceMaxAttempts = 1000
 // of a line, as either half of the BEGIN/END FILE delimiter shape inside any
 // attached file's content — the situation DeriveContextFilesNonce's retry
 // loop exists to catch.
+//
+// The pattern is deliberately LOOSER than the shape context_files.tmpl
+// renders. What matters is not whether a line is byte-identical to a real
+// delimiter, but whether a model reading the prompt could take it for one —
+// and `----BEGIN FILE <tok>:`, a leading-indented `  --- BEGIN FILE <tok>:`,
+// or a tab in place of the colon all read as delimiters while failing an
+// exact-shape test. The ground rules tell the reviewer that a marker-shaped
+// line carrying the WRONG token is content; they say nothing that would
+// help against a near-shape carrying the RIGHT one, which is precisely the
+// case this detector has to cover.
+//
+// Widening costs almost nothing. A false positive here re-derives the nonce
+// with the attempt counter folded into the hash and tries again — still
+// deterministic, so the plan-pass cache key is unaffected — and the retry
+// loop is bounded by contextNonceMaxAttempts.
+//
+// The token itself is still matched verbatim (QuoteMeta), so a line carrying
+// any other token is not a collision at any spelling.
 func contextNonceDelimiterCollides(files []ContextFile, token string) bool {
-	re := regexp.MustCompile(`(?m)^--- (?:BEGIN|END) FILE ` + regexp.QuoteMeta(token) + `: `)
+	re := regexp.MustCompile(`(?m)^[ \t]*-{3,}[ \t]*(?:BEGIN|END)[ \t]+FILE[ \t]+` + regexp.QuoteMeta(token) + `[ \t]*[:\t]`)
 	for _, f := range files {
 		if re.MatchString(f.Content) {
 			return true

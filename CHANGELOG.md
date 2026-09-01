@@ -172,6 +172,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
+- **The context-nonce collision detector now recognises near-shaped delimiters.** It demanded the
+  rendered marker verbatim (`^--- (?:BEGIN|END) FILE <token>: `), so a line carrying the CORRECT
+  token in a slightly different shape — a fourth dash, a leading indent, a tab in place of the
+  colon — read to a model as a real boundary while slipping past the check. The ground rules do
+  not cover that case either: they only dismiss marker-shaped lines carrying the WRONG token. The
+  token is still matched verbatim, and a false positive merely re-derives the nonce with the
+  attempt counter folded in, which stays deterministic.
 - **The effective `context_paths` caps are now visible at startup, and the per-file refusal no
   longer advises a change that breaks the next boot.** When the per-file cap is still the default
   and the operator lowers `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` below it, `config.Load` clamps
