@@ -1127,6 +1127,11 @@ func TestRenderPlanFindingsOnly_MarkerMidParagraphInPlanText_SplitsAtRealHeading
 		"the suffix must still start at the real section heading, not the mid-paragraph mention")
 }
 
+// testContextNonce pins ContextFilesNonce for tests that assert on the exact
+// delimiter text, so the render is deterministic instead of picking a fresh
+// random token every run (see NewContextFilesNonce).
+const testContextNonce = "abc123"
+
 func ctxFiles() []ContextFile {
 	return []ContextFile{
 		{Path: "/repo/internal/config/config.go", Bytes: 42, SHA256Short: "9f2ab41c", Content: "package config\n\ntype Config struct{ PlanRoots []string }\n"},
@@ -1136,20 +1141,21 @@ func ctxFiles() []ContextFile {
 
 func TestRenderPlan_WithContextFiles_Golden(t *testing.T) {
 	out, err := RenderPlan(PlanInput{
-		PlanText:     "# Plan\n\n### Task 1: t1\n\n**Goal:** g1\n",
-		ContextFiles: ctxFiles(),
+		PlanText:          "# Plan\n\n### Task 1: t1\n\n**Goal:** g1\n",
+		ContextFiles:      ctxFiles(),
+		ContextFilesNonce: testContextNonce,
 	})
 	require.NoError(t, err)
 	golden(t, "plan_basic_with_context_files", out.System+"\n---USER---\n"+out.User)
 }
 
 func TestRenderPlan_WithContextFiles_Structure(t *testing.T) {
-	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles()})
+	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles(), ContextFilesNonce: testContextNonce})
 	require.NoError(t, err)
 
 	assert.Contains(t, out.User, "## Attached source files")
-	assert.Contains(t, out.User, "--- BEGIN FILE: /repo/internal/config/config.go (42 bytes, sha256 9f2ab41c…) ---")
-	assert.Contains(t, out.User, "--- END FILE: /repo/internal/config/config.go ---")
+	assert.Contains(t, out.User, "--- BEGIN FILE "+testContextNonce+": /repo/internal/config/config.go (42 bytes, sha256 9f2ab41c…) ---")
+	assert.Contains(t, out.User, "--- END FILE "+testContextNonce+": /repo/internal/config/config.go ---")
 
 	// Posture: both directions of the guard must be present.
 	assert.Contains(t, out.User, "absence from the attached set is NOT evidence")
@@ -1161,6 +1167,17 @@ func TestRenderPlan_WithContextFiles_Structure(t *testing.T) {
 	// Ordering: attachments precede the plan.
 	assert.Less(t, strings.Index(out.User, "## Attached source files"),
 		strings.Index(out.User, "## Plan under review"))
+}
+
+// Two RenderPlan calls with no pinned nonce must not collide: each generates
+// its own fresh random token, so the same attachment set renders with
+// different delimiters across calls.
+func TestRenderPlan_WithContextFiles_NonceDiffersAcrossCallsWhenUnset(t *testing.T) {
+	a, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles()})
+	require.NoError(t, err)
+	b, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles()})
+	require.NoError(t, err)
+	assert.NotEqual(t, a.User, b.User, "an unset nonce must be freshly generated per render call")
 }
 
 func TestRenderPlan_WithoutContextFiles_OmitsSection(t *testing.T) {
@@ -1176,12 +1193,12 @@ func TestRenderPlan_WithoutContextFiles_OmitsSection(t *testing.T) {
 // the kind of assumption a future edit to just one of the three can quietly
 // invalidate.
 func TestRenderPlanFindingsOnly_WithContextFiles_Structure(t *testing.T) {
-	out, err := RenderPlanFindingsOnly(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles()})
+	out, err := RenderPlanFindingsOnly(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles(), ContextFilesNonce: testContextNonce})
 	require.NoError(t, err)
 
 	assert.Contains(t, out.User, "## Attached source files")
-	assert.Contains(t, out.User, "--- BEGIN FILE: /repo/internal/config/config.go (42 bytes, sha256 9f2ab41c…) ---")
-	assert.Contains(t, out.User, "--- END FILE: /repo/internal/config/config.go ---")
+	assert.Contains(t, out.User, "--- BEGIN FILE "+testContextNonce+": /repo/internal/config/config.go (42 bytes, sha256 9f2ab41c…) ---")
+	assert.Contains(t, out.User, "--- END FILE "+testContextNonce+": /repo/internal/config/config.go ---")
 
 	// Posture: both directions of the guard must be present.
 	assert.Contains(t, out.User, "absence from the attached set is NOT evidence")
@@ -1223,4 +1240,42 @@ func TestRenderPlan_AttachedFileWithBackticksAndFence(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Contains(t, out.User, content, "content must survive verbatim")
+}
+
+// The delimiter-collision case FIX1 exists for: an attached file whose own
+// content contains a literal "--- END FILE: <path> ---" line — this repo's
+// own templates, golden files, and docs all contain exactly that shape. The
+// render must stay unambiguous: the REAL terminator carries this render's
+// nonce, so it is textually distinct from the nonce-less decoy line sitting
+// inside the attached content.
+func TestRenderPlan_AttachedFileWithDecoyEndFileLine_RemainsUnambiguous(t *testing.T) {
+	decoy := "package config\n\n// --- END FILE: /some/path.go ---\nfunc F() {}\n"
+	out, err := RenderPlan(PlanInput{
+		PlanText: "# Plan\n",
+		ContextFiles: []ContextFile{{
+			Path: "/repo/config.go", Bytes: len(decoy), SHA256Short: "cafebabe", Content: decoy,
+		}},
+		ContextFilesNonce: testContextNonce,
+	})
+	require.NoError(t, err)
+
+	// The decoy line survives verbatim as attached content...
+	assert.Contains(t, out.User, decoy, "attached content must survive verbatim, decoy included")
+
+	// ...but it is the OLD, nonce-less delimiter shape. Exactly one line in
+	// the whole render matches it: the decoy itself. The real terminator no
+	// longer matches this shape at all, because it now carries the nonce.
+	assert.Equal(t, 1, strings.Count(out.User, "--- END FILE: /some/path.go ---"),
+		"only the decoy matches the nonce-less shape; the real terminator must not")
+
+	// The real terminator is distinguishable by construction: it carries
+	// this render's nonce and names the file that was ACTUALLY attached.
+	realTerminator := "--- END FILE " + testContextNonce + ": /repo/config.go ---"
+	assert.Contains(t, out.User, realTerminator)
+	assert.Equal(t, 1, strings.Count(out.User, realTerminator))
+
+	// The decoy, even though it says "END FILE", never acquires the nonce —
+	// it is inert content, not a second terminator.
+	assert.NotContains(t, out.User, "END FILE "+testContextNonce+": /some/path.go",
+		"the decoy must not accidentally be treated as a nonce-bearing terminator")
 }

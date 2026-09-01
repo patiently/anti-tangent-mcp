@@ -1980,12 +1980,22 @@ type renderPlanReviewInputs struct {
 }
 
 func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
+	// One nonce for the whole review, generated once here rather than left
+	// to each Render* call: the chunked path below issues a findings-only
+	// call plus one call per chunk, all sharing in.ContextFiles, and their
+	// UserPrefix must be byte-identical for the provider-side prompt cache
+	// to ever hit. See prompts.PlanChunkInput.ContextFilesNonce.
+	var contextFilesNonce string
+	if len(in.ContextFiles) > 0 {
+		contextFilesNonce = prompts.NewContextFilesNonce()
+	}
 	if len(in.Tasks) <= in.ChunkSize {
 		rendered, err := prompts.RenderPlan(prompts.PlanInput{
-			PlanText:         in.PlanText,
-			ProjectKnowledge: in.ProjectKnowledge,
-			Mode:             in.Mode,
-			ContextFiles:     in.ContextFiles,
+			PlanText:          in.PlanText,
+			ProjectKnowledge:  in.ProjectKnowledge,
+			Mode:              in.Mode,
+			ContextFiles:      in.ContextFiles,
+			ContextFilesNonce: contextFilesNonce,
 		})
 		if err != nil {
 			return renderedPlanReview{}, fmt.Errorf("render plan prompt: %w", err)
@@ -1996,10 +2006,11 @@ func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
 		return renderedPlanReview{}, fmt.Errorf("renderPlanReview: chunkSize must be positive, got %d", in.ChunkSize)
 	}
 	findingsOnly, err := prompts.RenderPlanFindingsOnly(prompts.PlanInput{
-		PlanText:         in.PlanText,
-		ProjectKnowledge: in.ProjectKnowledge,
-		Mode:             in.Mode,
-		ContextFiles:     in.ContextFiles,
+		PlanText:          in.PlanText,
+		ProjectKnowledge:  in.ProjectKnowledge,
+		Mode:              in.Mode,
+		ContextFiles:      in.ContextFiles,
+		ContextFilesNonce: contextFilesNonce,
 	})
 	if err != nil {
 		return renderedPlanReview{}, fmt.Errorf("render plan_findings_only: %w", err)
@@ -2012,11 +2023,12 @@ func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
 		}
 		chunkTasks := in.Tasks[i:end]
 		chunkPrompt, err := prompts.RenderPlanTasksChunk(prompts.PlanChunkInput{
-			PlanText:         in.PlanText,
-			ProjectKnowledge: in.ProjectKnowledge,
-			ChunkTasks:       chunkTasks,
-			Mode:             in.Mode,
-			ContextFiles:     in.ContextFiles,
+			PlanText:          in.PlanText,
+			ProjectKnowledge:  in.ProjectKnowledge,
+			ChunkTasks:        chunkTasks,
+			Mode:              in.Mode,
+			ContextFiles:      in.ContextFiles,
+			ContextFilesNonce: contextFilesNonce,
 		})
 		if err != nil {
 			return renderedPlanReview{}, fmt.Errorf("render plan_tasks_chunk: %w", err)

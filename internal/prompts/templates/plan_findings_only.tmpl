@@ -8,9 +8,9 @@
 {{if .ContextFiles -}}
 ## Attached source files (complete contents, read from disk by the server)
 
-{{range .ContextFiles}}--- BEGIN FILE: {{.Path}} ({{.Bytes}} bytes, sha256 {{.SHA256Short}}…) ---
+{{range .ContextFiles}}--- BEGIN FILE {{$.ContextFilesNonce}}: {{.Path}} ({{.Bytes}} bytes, sha256 {{.SHA256Short}}…) ---
 {{.Content}}
---- END FILE: {{.Path}} ---
+--- END FILE {{$.ContextFilesNonce}}: {{.Path}} ---
 
 {{end -}}
 {{end -}}
