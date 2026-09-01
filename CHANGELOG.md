@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-09-01
+
+### Added
+- **`ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES`** (default 131072) and
+  **`ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES`** (default 524288) — per-file and whole-set byte
+  caps for `validate_plan`'s new `context_paths` attachments. Separate from the plan cap so an
+  oversized attachment set is refused with its own actionable message.
+
 ## [0.16.0] - 2026-08-31
 
 ### Added

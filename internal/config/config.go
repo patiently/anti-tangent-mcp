@@ -42,6 +42,16 @@ type Config struct {
 	// and the calling agent already has unrestricted file read, so the server
 	// acquires no capability the caller lacks. See design §3.1 / §3.2.
 	PlanRoots []string
+	// ContextMaxFileBytes caps each individual file attached to
+	// validate_plan via context_paths. ContextMaxPayloadBytes caps the
+	// attached set as a whole. Both are separate from PlanMaxPayloadBytes so
+	// an oversized attachment set is refused with its own actionable
+	// message rather than being blamed on the plan. Oversized attachments
+	// are REFUSED, never truncated: the reviewer is told attached files are
+	// complete, and a silently-shortened file turns that promise into a
+	// source of false contradicted_codebase_claim findings. See design §3.2.
+	ContextMaxFileBytes    int
+	ContextMaxPayloadBytes int
 	// Stats subsystem (opt-in; see spec 2026-06-02). StatsDir == "" disables
 	// it entirely.
 	StatsDir              string
@@ -102,6 +112,8 @@ func Load(env func(string) string) (Config, error) {
 		PlanTasksPerChunk:     8,
 		MaxTokensCeiling:      16384,
 		PlanMaxPayloadBytes:   1048576,
+		ContextMaxFileBytes:   131072,
+		ContextMaxPayloadBytes: 524288,
 		StatsSummaryInterval:  24 * time.Hour,
 		StatsSummaryThreshold: 50,
 		StatsRetentionDays:    30,
@@ -282,6 +294,26 @@ func Load(env func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES: must be positive, got %d", n)
 		}
 		cfg.PlanMaxPayloadBytes = n
+	}
+	if v := env("ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES: must be positive, got %d", n)
+		}
+		cfg.ContextMaxFileBytes = n
+	}
+	if v := env("ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES: must be positive, got %d", n)
+		}
+		cfg.ContextMaxPayloadBytes = n
 	}
 	if v := env("ANTI_TANGENT_PLAN_ROOTS"); v != "" {
 		for _, p := range filepath.SplitList(v) {

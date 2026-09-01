@@ -485,3 +485,44 @@ func TestPlanMaxPayloadBytesFollowsSharedCap(t *testing.T) {
 		assert.Equal(t, 1048576, cfg.PlanMaxPayloadBytes)
 	})
 }
+
+func TestLoad_ContextCaps_Defaults(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "k")
+	cfg, err := Load(env(map[string]string{"ANTHROPIC_API_KEY": "k"}))
+	require.NoError(t, err)
+	assert.Equal(t, 131072, cfg.ContextMaxFileBytes)
+	assert.Equal(t, 524288, cfg.ContextMaxPayloadBytes)
+}
+
+func TestLoad_ContextCaps_Overrides(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "k")
+	t.Setenv("ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES", "4096")
+	t.Setenv("ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES", "8192")
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                      "k",
+		"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES":    "4096",
+		"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES": "8192",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 4096, cfg.ContextMaxFileBytes)
+	assert.Equal(t, 8192, cfg.ContextMaxPayloadBytes)
+}
+
+func TestLoad_ContextCaps_Invalid(t *testing.T) {
+	for _, tc := range []struct{ env, val string }{
+		{"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES", "nope"},
+		{"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES", "0"},
+		{"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES", "-1"},
+	} {
+		t.Run(tc.env+"="+tc.val, func(t *testing.T) {
+			t.Setenv("ANTHROPIC_API_KEY", "k")
+			t.Setenv(tc.env, tc.val)
+			_, err := Load(env(map[string]string{
+				"ANTHROPIC_API_KEY": "k",
+				tc.env:              tc.val,
+			}))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.env)
+		})
+	}
+}
