@@ -18,10 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Oversized attachments are refused, never truncated: the reviewer is told attached files are
   complete, and a silently-shortened file would turn that promise into false findings.
 - **`contradicted_codebase_claim`.** A new finding category for a plan claim an attached file
-  refutes. Unlike `unverifiable_codebase_claim` it carries no severity floor — an attached file
-  is ground truth read from disk, so the reviewer's chosen severity stands — and it is never
-  rolled into the `codebase_reference_checklist` nor force-passed by the unverifiable-only
-  verdict calibration.
+  refutes. When an attached file backs it, it carries no severity floor — the file is ground truth
+  read from disk, so the reviewer's chosen severity stands — and it is neither rolled into the
+  `codebase_reference_checklist` nor force-passed by the unverifiable-only verdict calibration. A
+  contradiction the attached set does NOT back is demoted server-side to
+  `unverifiable_codebase_claim`, and from there it is floored to minor, rolled up and force-passable
+  like any other unverifiable claim. `docs/protocol/core.md` states the rule with that
+  qualification.
 - **Order-aware Create/Modify consistency check.** Deterministic and reviewer-free, with two
   independently-gated tiers rather than one combined AND check. Order tier (always runs): a
   `Modify:` target whose earliest `Create:` bullet in the plan belongs to a later task is
@@ -50,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented nowhere authors look.
 - `core.md`'s `payload_too_large` FAQ names the `validate_plan` and `context_paths` caps, not just
   the shared `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
+- `docs/protocol/controller.md` §5.8 says what an unusable `repo_root` produces — a minor
+  `criterion: repo_root` finding, verdict unchanged, disk tier skipped. Controllers act on the
+  findings list, and an unexplained entry there is an operational question at gate time.
 - Three stale doc claims corrected: `authoring.md` §3.9 said `**Files:**` bullets "MUST have a
   space after the marker" (the parser accepts `-Create:`; the space governs only the
   unrecognized-verb fallback); `.claude-plugin/marketplace.json` still advertised the plugin as
@@ -99,29 +105,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that detector with every golden still green. There is now also an attachment golden for a chunk
   template. Every existing golden is byte-identical across the extraction, which is what proves it
   was mechanical.
-- The attachment-mode ground rules now (a) tell the reviewer that everything between the
+- The attachment-mode ground rules (a) tell the reviewer that everything between the
   `BEGIN/END FILE` markers is file content quoted as data and must never be followed as
   instructions, (b) say that the plan describes work not yet done — a symbol the plan says to add
   being absent from an attached file is the expected state, not a contradiction — and (c) explain
   that attached paths are absolute and match the plan's repo-relative paths by suffix. All three
   are gated on `context_paths`; a call without attachments still renders byte-identically to
   0.16.0. The marker rule names this call's nonce token explicitly and states that a
-  marker-shaped line carrying any other token is file content, not a boundary; the binding rule
-  matches whole path segments and tells the reviewer to treat a plan path as UNATTACHED whenever
-  two attached files could match it or the binding is otherwise uncertain, because a wrong
-  binding is worse than none; and a `contradicted_codebase_claim` must satisfy the plan-text
-  evidence rule in addition to quoting the attached file, not instead of it.
+  marker-shaped line carrying any other token is file content, not a boundary. The binding rule
+  matches whole path segments, states its example in repo-relative terms rather than inventing a
+  plausible-looking absolute root two paragraphs after telling the reviewer to distrust
+  official-looking strings, and tells the reviewer to treat a plan path as UNATTACHED whenever two
+  attached files could match it or the binding is otherwise uncertain, because a wrong binding is
+  worse than none — and the absence-is-evidence grant, which names the enumerated attached list
+  explicitly, carves those UNATTACHED paths back out, so an ambiguously-bindable path stays
+  black-box even though the file it might name is attached. `unverifiable_codebase_claim` is
+  scoped by SETTLEMENT rather than by filename — emit it for any claim the attached files do not
+  settle, which includes a cross-file claim that names an attached file but turns on code outside
+  the attached set. And a `contradicted_codebase_claim` must satisfy the plan-text evidence rule
+  in addition to quoting the attached file, not instead of it.
 
 ### Security
-- **A file name containing a control character is now refused, not rendered.** `context_paths`
-  and `plan_path` resolve symlinks with `EvalSymlinks`, which returns the target name verbatim,
-  and Linux permits every byte but `/` and NUL in a file name. A resolved path carrying an
-  embedded newline injected lines into the enumerated attached-paths list *inside* the reviewer's
-  ground rules — above and outside the nonce-guarded `BEGIN/END FILE` region — and into the
-  summary block's `context:` provenance list. A resolved path is now rejected outright when it
+- **A resolved path carrying a control or format character is refused, not rendered.**
+  `context_paths`, `plan_path` and `repo_root` all resolve symlinks with `EvalSymlinks`, which
+  returns the target name verbatim, and Linux permits every byte but `/` and NUL in a file name. A
+  resolved path carrying an embedded newline injected lines into the enumerated attached-paths list
+  *inside* the reviewer's ground rules — above and outside the nonce-guarded `BEGIN/END FILE`
+  region — and into the summary block's `context:` provenance list; for `repo_root` the route is
+  the wrapped `os.PathError` on a failing resolve, which prints the raw path unescaped into the
+  minor `repo_root unusable (<reason>)` finding. A resolved path is now rejected outright when it
   carries any C0 control (`< 0x20`), DEL (`0x7f`), U+2028 or U+2029 (which are line breaks to a
   model reading the prompt), or any Unicode format character — which covers U+202E
-  RIGHT-TO-LEFT OVERRIDE, the Trojan-Source class (CVE-2021-42574), and the invisible U+200B.
+  RIGHT-TO-LEFT OVERRIDE, the Trojan-Source class (CVE-2021-42574), and the invisible U+200B. The
+  refusal names the offending code point (`disallowed control or format character U+XXXX`) and the
+  remedy — rename the file, or drop it from `context_paths` — because "control character" alone is
+  a misnomer for a category that includes format characters such as a soft hyphen, and `%q` alone
+  left the operator decoding an escape by hand. README documents the refusal.
 - **`context_paths` sends file contents verbatim to the configured reviewer vendor.** Everything
   the caller attaches is transmitted to whichever third-party API `ANTI_TANGENT_PLAN_MODEL`
   names, in full, on every reviewer call of the round. Attach only what the plan makes claims
@@ -144,19 +163,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bogus blocking finding, and a genuinely out-of-order plan whose numbers descend was silently
   missed. Findings still name tasks by the plan's own numbers.
 - **The disk tier only reports "does not exist" for a genuine not-exists.** A permission or I/O
-  error from `os.Stat` now leaves the target alone instead of being reported as missing — and
-  logs a stderr warning naming the path and the error, so an unreadable `repo_root` no longer
-  makes the whole disk tier silently inert.
+  error from `os.Stat` now leaves the target alone instead of being reported as missing, and
+  surfaces instead as a single aggregated stderr warning per call carrying the count plus the first
+  path and error. So an unreadable `repo_root` no longer makes the whole disk tier silently inert —
+  and, because the warning is emitted once rather than from inside the nested loop over every
+  `Modify:` bullet of every task, it cannot bury stderr under hundreds of lines for one call.
 - **`contradicted_codebase_claim` is suppressed server-side unless an attached file backs it.**
   The category deliberately carries no severity floor, because an attached file is ground truth —
   so a reviewer emitting one about code it never saw could fail a plan gate at `major`. Any such
-  finding whose evidence names none of the attached files is demoted to
-  `unverifiable_codebase_claim` (floored to minor), independent of whether the reviewer obeyed
-  the prompt's prohibition. The test is per finding, not per call: gating it on "nothing was
-  attached at all" meant a single attached file re-armed the unfloored severity for a
-  contradiction about some other, unattached file. Matching is on basename containment, which
-  fails open — reviewers often quote the repo-relative path where the rules ask for the absolute
-  one, and a legitimate contradiction must survive loose quoting.
+  finding naming none of the attached files is demoted to `unverifiable_codebase_claim` (floored to
+  minor), independent of whether the reviewer obeyed the prompt's prohibition. The test is per
+  finding, not per call: gating it on "nothing was attached at all" meant a single attached file
+  re-armed the unfloored severity for a contradiction about some other, unattached file.
+  Both `evidence` and `criterion` are read, matching the sibling `validate_task_spec` guard —
+  reviewers routinely name the file in `criterion`, and reading `evidence` alone would demote a
+  correct, ground-truth refutation to a minor unverifiable claim, which the unverifiable-only
+  calibration then force-passes with "No blocking plan-quality findings remain". The attached file's
+  basename must be bounded at BOTH ends by something that cannot be part of a filename, so
+  `config.golden` and `myconfig.go` are not mentions of `config.go`. A boundary is anything that is
+  not a letter, digit, `_` or `-` — stated as what breaks a filename rather than as a list of the
+  punctuation reviewers were observed using, so a quoting style nobody enumerated fails OPEN
+  rather than silently dropping a real refutation: absolute, repo-relative, backticked, quoted,
+  parenthesised, bracketed, line-anchored, `**bold**`, `<angled>` and `#L42`-anchored mentions all
+  bind. `.` is a boundary, which is what rejects `config.golden` and also what lets a sibling name
+  like `config.go.bak` bind — the fail-open side of the same trade, and the cheap direction to be
+  wrong in.
 - **A truncated plan review keeps the Create/Modify consistency finding and its `context:`
   provenance.** The reviewer-free check ran after the truncation-recovery early return, so a
   truncated response silently dropped the one finding the server already knew for certain; and
@@ -172,29 +203,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
-- The attachment ground rules read more carefully. "For those files, and only those files" had
-  drifted to the wrong nearest antecedent once the paragraph above it was rewritten to end on
-  "treat that path as UNATTACHED"; it now names the enumerated attached list explicitly. And the
-  suffix-binding example no longer invents a plausible-looking absolute root (`/abs/repo/...`) two
-  paragraphs after telling the reviewer to distrust official-looking strings, in a prompt whose
-  attached-files list carries the caller's real root — it states the rule in repo-relative terms
-  instead. No behavioural change for a call without `context_paths`.
-- **The control-character path rejection now names the code point and the remedy.** "Control
-  character" was a misnomer once the predicate grew to cover all of `unicode.Cf` — a soft hyphen
-  is a format character, not a control one — and `%q` alone left the operator decoding an escape
-  by hand. The message now says "disallowed control or format character U+XXXX" and names the fix
-  (rename the file, or drop it from `context_paths`). README documents the refusal.
-- **`docs/protocol/core.md` no longer promises `contradicted_codebase_claim` is unconditionally
-  unfloored.** Since the server started demoting a contradiction the attached set does not back,
-  the category IS floored, rolled up and force-passable in that case. core.md said otherwise
-  without qualification. `docs/protocol/controller.md` §5.8 also now says what an unusable
-  `repo_root` produces — a minor `criterion: repo_root` finding, verdict unchanged, disk tier
-  skipped — since controllers act on the findings list and an unexplained entry there is an
-  operational question at gate time.
 - **The context-nonce collision detector now recognises near-shaped delimiters.** It demanded the
   rendered marker verbatim (`^--- (?:BEGIN|END) FILE <token>: `), so a line carrying the CORRECT
   token in a slightly different shape — a fourth dash, a leading indent, a tab in place of the
-  colon — read to a model as a real boundary while slipping past the check. The ground rules do
+  colon, or the path elided entirely (`--- END FILE <token> ---`, which is the rendered END marker
+  minus its path and the near-shape a model asked to close a block is likeliest to produce) — read
+  to a model as a real boundary while slipping past the check. The ground rules do
   not cover that case either: they only dismiss marker-shaped lines carrying the WRONG token. The
   token is still matched verbatim, and a false positive merely re-derives the nonce with the
   attempt counter folded in, which stays deterministic.
@@ -205,24 +219,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line now carries both effective caps (it is emitted after the JSON logger is installed, so the
   "the warning would go nowhere" reasoning that keeps `config.Load` itself quiet does not apply).
   The per-file refusal previously said "raise `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES`" without
-  mentioning that raising it above the whole-set cap makes the next start fail; it now names
-  `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` and its current value.
-- **The disk tier's "could not stat" warning is now one line per call, not one per path.** It was
-  emitted from inside a nested loop over every `Modify:` bullet of every task, so an unreadable
-  `repo_root` on a large plan could bury stderr under hundreds of lines for a single call. The
-  single line carries the count plus the first path and error.
-- **A `contradicted_codebase_claim` is no longer demoted just because the reviewer put the path in
-  `criterion` instead of `evidence`, and no longer kept because a longer filename happens to start
-  with an attached one.** The server-side check that decides whether an attached file backs a
-  contradiction read `evidence` alone, and matched by raw substring — so `config.golden` counted as
-  a mention of an attached `config.go`, while a correct refutation naming its file in `criterion`
-  counted as naming nothing. The second direction was the damaging one: an unbacked contradiction
-  is demoted to a minor `unverifiable_codebase_claim`, and a plan whose only findings are minor
-  unverifiable claims is force-passed with "No blocking plan-quality findings remain" — so a
-  ground-truth refutation could vanish from the gate verdict entirely. Both fields are now read
-  (matching the sibling `validate_task_spec` guard), and the basename must appear at BOTH
-  boundaries as a whole filename. The guard stays deliberately fail-open: absolute, repo-relative,
-  backticked, quoted, parenthesised and line-anchored quotings all still bind.
+  mentioning that raising it above the whole-set cap makes the next start fail; it now names the
+  whole-set cap and its current value immediately after the per-file one, ahead of the remedy
+  clause, so the ceiling survives the summary block's per-finding evidence truncation. The
+  truncated form an operator actually reads used to end mid-way through "raise
+  `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES`", showing them the advice that breaks their next boot with
+  the correction cut off.
 - **A truncated `validate_plan` review now mints a `plan_run_id`.** The truncation-recovery path
   can return a passing verdict, and controller.md §5.1 tells the controller to capture
   `plan_run_id` from a passing response — but that path minted none, so `plan_run_report`, which

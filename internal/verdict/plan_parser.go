@@ -222,18 +222,26 @@ func ApplyPlanQualitySanity(pr *PlanResult) {
 // that false positive is the one AFTER the basename (`l`), not the one
 // before it. Half the rule is no rule.
 //
-// The allowed sets keep the guard fail-open on every quoting style a
-// reviewer actually uses. Before: start of string, a path separator, a
-// space, a backtick, or a quote — so `cmd/server/config.go` and "`config.go`"
-// both still bind to an attached `.../config.go`, which is the point of
-// matching on the basename at all. After: end of string, whitespace, a
-// backtick or quote, `:` (a line anchor such as `handlers.go:57`), `,`, `)`,
-// or `.` (a filename ending a sentence).
+// The boundary test is a DENYLIST, not an allowlist: a boundary holds unless
+// the adjacent rune could itself be part of an unbroken filename token (see
+// isFilenameRune). An allowlist of the punctuation reviewers were observed
+// using was tried first and was wrong in the expensive direction — every
+// character nobody thought of became a false negative, so markdown emphasis
+// (`**config.go**`), brackets (`[config.go]`), a fragment anchor
+// (`config.go#L42`), a semicolon, angle brackets and an em-dash all bound to
+// nothing. Inverting the test makes the unforeseen case fail OPEN, which is
+// the stance this guard is supposed to take.
 //
 // A false NEGATIVE here is the expensive direction: it demotes a ground-truth
 // refutation to a minor unverifiable claim, which the unverifiable-only
 // calibration then force-passes. A false positive merely keeps a finding at
 // the severity the reviewer chose.
+//
+// The match is on the basename, so it is deliberately NOT whole-FILENAME
+// matching: `.` is not a filename-token rune, so an attached `config.go`
+// also binds to a mention of `config.go.bak` or `config.go.orig`. That is
+// accepted for the same fail-open reason — a sibling backup name is a far
+// cheaper wrong answer than dropping a real refutation on the floor.
 func mentionsBasename(text, base string) bool {
 	if base == "" || text == "" {
 		return false
@@ -254,34 +262,43 @@ func mentionsBasename(text, base string) bool {
 }
 
 // basenameStartsAt reports whether prefix — everything before a candidate
-// match — ends at a filename boundary. Backslash is accepted alongside `/`
-// because a Windows host renders attached paths with it, and the attached
-// set's basenames are slash-normalized before they get here. `(` mirrors the
-// `)` the after-boundary set already accepts, so a parenthesised mention
-// binds from both ends rather than only one.
+// match — ends at a filename boundary. Anything that is not a filename-token
+// rune is a boundary, so a path separator (`/` or the `\` a Windows host
+// renders), a backtick, a quote, an opening bracket or paren, markdown
+// emphasis, whitespace, and every punctuation mark nobody enumerated all
+// bind.
 func basenameStartsAt(prefix string) bool {
 	if prefix == "" {
 		return true
 	}
 	r, _ := utf8.DecodeLastRuneInString(prefix)
-	switch r {
-	case '/', '\\', '`', '\'', '"', '(':
-		return true
-	}
-	return unicode.IsSpace(r)
+	return !isFilenameRune(r)
 }
 
 // basenameEndsAt reports whether suffix — everything after a candidate match
 // — begins at a filename boundary. This is the half the original fix
-// proposal omitted, and the half that rejects `config.golden`.
+// proposal omitted, and the half that rejects `config.golden` (`l` is a
+// filename rune) and `myconfig.go` from the other side.
 func basenameEndsAt(suffix string) bool {
 	if suffix == "" {
 		return true
 	}
 	r, _ := utf8.DecodeRuneInString(suffix)
-	switch r {
-	case '`', '\'', '"', ':', ',', ')', '.':
-		return true
-	}
-	return unicode.IsSpace(r)
+	return !isFilenameRune(r)
+}
+
+// isFilenameRune reports whether r can be part of an unbroken filename token:
+// a letter, a digit, `_`, or `-`. Only these break a boundary.
+//
+// `.` is deliberately absent — a period is how a filename ends a sentence,
+// and treating it as a token rune would reject `…refuted by config.go.` The
+// price is that `config.go.bak` also binds; see mentionsBasename.
+//
+// `_` and `-` ARE token runes, because Go source files in this repository are
+// snake_case: admitting `_` as a boundary would bind a mention of
+// `plan_parser.go` to an attached `parser.go`. The cost is that markdown
+// underscore emphasis (`_config.go_`) still does not bind; asterisk emphasis
+// (`**config.go**`), which is what reviewers actually emit, does.
+func isFilenameRune(r rune) bool {
+	return r == '_' || r == '-' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }

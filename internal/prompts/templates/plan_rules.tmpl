@@ -10,11 +10,11 @@ Each attached file below sits between a `--- BEGIN FILE ... ---` line and an `--
 
 Attached paths are absolute; the plan refers to the same files by repo-relative path. Bind a plan path to an attached path by suffix, matching WHOLE path segments only — an attached path ENDING in `/internal/verdict/verdict.go` is the plan's `internal/verdict/verdict.go`, whatever directories precede it, while a partial-segment overlap such as `ict/verdict.go` is not a match. If two or more attached files could match a path the plan names, or you are otherwise unsure which attached file the plan means, treat that path as UNATTACHED: apply the black-box rules below to it, and never use an attached file to refute or confirm a claim about it. A wrong binding is worse than no binding.
 
-For the attached files enumerated at the top of this section, and only those, absence IS evidence: if a symbol is not present in an attached file, it is not in that file, and you may say so.
+For the attached files enumerated at the top of this section, and only those, absence IS evidence: if a symbol is not present in an attached file, it is not in that file, and you may say so — except for any path the paragraph above told you to treat as UNATTACHED, which stays black-box even though one of the attached files might be the file it names.
 
 Every other file, path, or symbol referenced by the plan remains a black-box identifier reference — you do not know its definition, signature, return type, or behavior. **The caller attached only what they judged relevant, so absence from the attached set is NOT evidence of absence from the codebase.** The overwhelming majority of this repository is not in front of you.
 
-Emit `unverifiable_codebase_claim` only for claims about code that is NOT attached. Do not emit it for a claim the attached files settle.
+Emit `unverifiable_codebase_claim` for any claim the attached files do not settle. Naming an attached file is not enough: a claim about how attached code is USED elsewhere — that a function is called at startup, that a value is read by some other package — is not settled by the attached files unless the code that would settle it is itself attached. Do not emit it for a claim the attached files do settle.
 
 The plan describes work that has NOT been done yet. A symbol the plan says to add being absent from an attached file is the EXPECTED state, not a contradiction; on a resumed run that symbol may already be present, which is also not a contradiction. Judge the plan's claims about how the code IS today, not about what it will become.
 

@@ -50,6 +50,8 @@ type contextTooLargeError struct {
 	// with "must be <= ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES" (config.go's
 	// cross-check) — the server refusing a file and then, if you follow its
 	// own advice literally, refusing to start. Unset on the other two shapes.
+	// Rendered as "whole-set cap N" right after the per-file cap so it
+	// survives the summary block's evidence truncation; see Error().
 	PayloadLimit int
 }
 
@@ -60,8 +62,18 @@ func (e *contextTooLargeError) Error() string {
 			e.Count, e.Limit)
 	}
 	if e.Path != "" {
+		// The whole-set cap is named IMMEDIATELY after the per-file one, not
+		// at the end of the remedy clause. This message becomes a finding's
+		// evidence, and formatFindingEvidence truncates evidence at
+		// summaryEvidenceMax (120) runes — with an absolute path in front of
+		// it the tail is always cut, so the previous wording showed the
+		// operator "(raise ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES…" and elided
+		// the "but not above…" that stops that advice from breaking their
+		// next boot. Front-loading the ceiling means the truncated form
+		// carries both numbers and no half-advice; the full text, with both
+		// env var names, still reaches the JSON plan_findings.
 		return fmt.Sprintf(
-			"context_paths: %q is %d bytes > per-file cap %d (raise ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES, but not above ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES (%d) or the next start fails — raise that one too, or drop the file)",
+			"context_paths: %q is %d bytes > per-file cap %d (whole-set cap %d — raise both ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES, or drop the file)",
 			e.Path, e.Bytes, e.Limit, e.PayloadLimit)
 	}
 	return fmt.Sprintf(
@@ -124,7 +136,21 @@ func resolveContextPaths(paths []string, cfg config.Config) ([]contextFile, int,
 
 // resolveDirInput is the directory-shaped sibling of resolveFileInput, used
 // for repo_root. Same absolute-path requirement, same symlink resolution
-// before the roots check, but it stats for a directory and reads nothing.
+// before the roots check, same rejectControlChars guard, but it stats for a
+// directory and reads nothing.
+//
+// The rejectControlChars call is in LOCKSTEP with resolveFileInput's, and for
+// the same reason: EvalSymlinks returns the target name verbatim, and a
+// resolved repo_root carrying an embedded newline reaches the operator's eyes
+// unescaped through the failure paths BELOW it. The %w-wrapped os.PathError
+// from a failing stat prints the raw path, that error becomes the reason
+// string on the minor `repo_root unusable (<reason>)` finding, and
+// formatFindingEvidence preserves newlines and merely re-indents them — so
+// the path forges lines in the paste-ready summary block a human reads as
+// server output. rejectControlChars' own comment ("%q escapes the offending
+// bytes, so naming the path in the error cannot re-inject them") holds only
+// for the errors that use %q; these use %w. Rejecting up front is the guard
+// that makes the claim true for both siblings.
 func resolveDirInput(path string, roots []string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("repo_root must be absolute, got %q", path)
@@ -132,6 +158,9 @@ func resolveDirInput(path string, roots []string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return "", fmt.Errorf("resolve repo_root %q: %w", path, err)
+	}
+	if err := rejectControlChars(resolved); err != nil {
+		return "", err
 	}
 	if !withinRoots(resolved, roots) {
 		return "", fmt.Errorf("repo_root %q is outside ANTI_TANGENT_PLAN_ROOTS", resolved)

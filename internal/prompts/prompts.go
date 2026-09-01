@@ -279,8 +279,17 @@ const contextNonceMaxAttempts = 1000
 //
 // The token itself is still matched verbatim (QuoteMeta), so a line carrying
 // any other token is not a collision at any spelling.
+//
+// What may follow the token is either the `:`/tab the rendered marker uses,
+// OR the closing dashes with nothing between — `--- END FILE <tok> ---`.
+// That last shape is the rendered END marker minus its path, which is the
+// near-shape a model asked to close a block is likeliest to produce, and it
+// carries no separator at all. It stays distinct from the deliberate
+// non-collision `--- BEGIN FILE <tok> /a.go ---`: that line has CONTENT
+// between the token and the dashes, so the alternation's `[ \t]*-{3,}[ \t]*$`
+// does not reach.
 func contextNonceDelimiterCollides(files []ContextFile, token string) bool {
-	re := regexp.MustCompile(`(?m)^[ \t]*-{3,}[ \t]*(?:BEGIN|END)[ \t]+FILE[ \t]+` + regexp.QuoteMeta(token) + `[ \t]*[:\t]`)
+	re := regexp.MustCompile(`(?m)^[ \t]*-{3,}[ \t]*(?:BEGIN|END)[ \t]+FILE[ \t]+` + regexp.QuoteMeta(token) + `(?:[ \t]*[:\t]|[ \t]*-{3,}[ \t]*$)`)
 	for _, f := range files {
 		if re.MatchString(f.Content) {
 			return true

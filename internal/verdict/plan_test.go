@@ -745,6 +745,56 @@ func TestDemoteUnattachedContradictions_QuotingStylesStillBind(t *testing.T) {
 	}
 }
 
+// The boundary test used to be an ALLOWLIST of the punctuation reviewers had
+// been observed using, which made every character nobody enumerated a false
+// negative — the expensive direction. Each of these forms bound under the
+// pre-inversion raw containment, then stopped binding under the allowlist,
+// and must bind again now that a boundary holds unless the adjacent rune is
+// a filename-token rune.
+func TestDemoteUnattachedContradictions_MarkdownAndPunctuationStillBind(t *testing.T) {
+	for _, evidence := range []string{
+		"**config.go** contradicts the plan",              // bold emphasis
+		"[config.go] contradicts the plan",                // bracketed
+		"config.go#L42 contradicts the plan",              // fragment anchor
+		"config.go; the plan says otherwise",              // semicolon
+		"<config.go> contradicts the plan",                // angle brackets
+		"config.go\u2014line 42 contradicts the plan",     // em-dash, no space
+		"see [config.go](internal/config/config.go) here", // markdown link
+	} {
+		pr := contradictionResult(evidence, evidence)
+		DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/config/config.go"})
+		assert.Equal(t, CategoryContradictedCodebaseClaim, pr.PlanFindings[0].Category,
+			"evidence %q must bind to the attached config.go", evidence)
+		assert.Equal(t, SeverityCritical, pr.PlanFindings[0].Severity,
+			"a backed contradiction keeps its unfloored severity: %q", evidence)
+	}
+}
+
+// The inversion is a denylist of filename-token runes, and `_`/`-` are on it
+// on purpose: this repository's Go files are snake_case, so admitting `_` as
+// a boundary would bind a mention of `plan_parser.go` to an attached
+// `parser.go`. These must therefore still be rejected — including markdown
+// UNDERSCORE emphasis, which is the one quoting style the inversion does not
+// recover. Asterisk emphasis, which is what reviewers actually emit, does
+// bind (see the test above).
+func TestDemoteUnattachedContradictions_FilenameTokenRunesStillReject(t *testing.T) {
+	for _, evidence := range []string{
+		"plan_config.go has no such field",   // `_` before
+		"config.go_old has no such field",    // `_` after
+		"my-config.go has no such field",     // `-` before
+		"config.go-orig has no such field",   // `-` after
+		"_config.go_ has no such field",      // markdown underscore emphasis
+		"config.golden pins another value",   // the original false positive
+		"see myconfig.go for the real value", // letter before
+	} {
+		pr := contradictionResult(evidence, evidence)
+		DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/config/config.go"})
+		assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.PlanFindings[0].Category,
+			"evidence %q must NOT bind to the attached config.go", evidence)
+		assert.Equal(t, SeverityMinor, pr.PlanFindings[0].Severity)
+	}
+}
+
 // Demotion rewrites category and severity ONLY. The observation is still
 // worth surfacing, so the reviewer's prose must survive untouched — an
 // implementation that blanked it would pass a category+severity-only test.
