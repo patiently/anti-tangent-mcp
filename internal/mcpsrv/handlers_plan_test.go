@@ -2378,6 +2378,10 @@ func TestValidatePlan_EmitsOneExitLogLinePerCall(t *testing.T) {
 			defer slog.SetDefault(prev)
 			_, _, _ = h.ValidatePlan(context.Background(), nil, args)
 
+			// NotEmpty first: an empty buffer splits to one empty string, so
+			// the Len check below would pass and the failure would surface as
+			// an opaque JSON parse error instead of "nothing was logged".
+			require.NotEmpty(t, buf.String(), "every exit path must emit its log line")
 			lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
 			require.Len(t, lines, 1, "expected exactly one structured log line, got %d:\n%s", len(lines), buf.String())
 
