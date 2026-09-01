@@ -673,6 +673,76 @@ func TestDemoteUnattachedContradictions_EmptyAttachedSetDemotesAll(t *testing.T)
 	assert.Equal(t, SeverityMinor, pr.Tasks[0].Findings[0].Severity)
 }
 
+// The path a reviewer names often lands in `criterion`, not `evidence` — the
+// sibling guard suppressUnverifiableCodebaseClaim has read both fields since
+// it existed. Reading evidence alone made a correct, ground-truth refutation
+// vanish from the gate verdict: demoted to a minor unverifiable claim, then
+// force-passed by calibratePlanVerdictForUnverifiableOnly, which rewrites
+// next_action to "No blocking plan-quality findings remain".
+func TestDemoteUnattachedContradictions_MatchesPathInCriterion(t *testing.T) {
+	pr := contradictionResult("the plan's claim is refuted", "the plan's claim is refuted")
+	pr.PlanFindings[0].Criterion = "internal/mcpsrv/handlers.go"
+	pr.Tasks[0].Findings[0].Criterion = "handlers.go:57"
+	DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/mcpsrv/handlers.go"})
+
+	assert.Equal(t, CategoryContradictedCodebaseClaim, pr.PlanFindings[0].Category,
+		"a path in criterion must back the finding just as one in evidence does")
+	assert.Equal(t, SeverityCritical, pr.PlanFindings[0].Severity)
+	assert.Equal(t, CategoryContradictedCodebaseClaim, pr.Tasks[0].Findings[0].Category,
+		"a line-anchored path in criterion must back the finding too")
+}
+
+// The match is on the WHOLE filename. Raw containment accepted a longer name
+// that merely starts with an attached basename — `config.golden` for an
+// attached `config.go` — so a contradiction about a file nobody attached kept
+// its unfloored severity and could fail the gate.
+func TestDemoteUnattachedContradictions_RejectsBasenamePrefixOfLongerName(t *testing.T) {
+	pr := contradictionResult(
+		"testdata/config.golden pins a different value",
+		"the fixture config.golden disagrees",
+	)
+	DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/config/config.go"})
+
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.PlanFindings[0].Category,
+		"config.golden is not config.go: the char AFTER the basename is what rejects it")
+	assert.Equal(t, SeverityMinor, pr.PlanFindings[0].Severity)
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.Tasks[0].Findings[0].Category)
+	assert.Equal(t, SeverityMinor, pr.Tasks[0].Findings[0].Severity)
+}
+
+// The other edge: a longer name ENDING in the attached basename must not
+// match either. `myconfig.go` is not `config.go`.
+func TestDemoteUnattachedContradictions_RejectsBasenameSuffixOfLongerName(t *testing.T) {
+	pr := contradictionResult("myconfig.go has no such field", "src/oldconfig.go disagrees")
+	DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/config/config.go"})
+
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.PlanFindings[0].Category)
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.Tasks[0].Findings[0].Category)
+}
+
+// Fail-open is the design stance, so every quoting style a reviewer actually
+// uses must still bind. Each of these names the attached file at both
+// boundaries and must keep its unfloored severity.
+func TestDemoteUnattachedContradictions_QuotingStylesStillBind(t *testing.T) {
+	for _, evidence := range []string{
+		"/abs/repo/internal/config/config.go says otherwise",
+		"internal/config/config.go says otherwise",
+		"config.go says otherwise",
+		"see `config.go` for the real value",
+		"see \"config.go\" for the real value",
+		"config.go:57 disagrees",
+		"the value lives in config.go.",
+		"config.go, not the plan's file, defines it",
+		"defined in (config.go) already",
+		"the file is config.go",
+	} {
+		pr := contradictionResult(evidence, evidence)
+		DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/config/config.go"})
+		assert.Equal(t, CategoryContradictedCodebaseClaim, pr.PlanFindings[0].Category,
+			"evidence %q must bind to the attached config.go", evidence)
+	}
+}
+
 // Demotion rewrites category and severity ONLY. The observation is still
 // worth surfacing, so the reviewer's prose must survive untouched — an
 // implementation that blanked it would pass a category+severity-only test.

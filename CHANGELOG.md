@@ -163,6 +163,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
+- **A `contradicted_codebase_claim` is no longer demoted just because the reviewer put the path in
+  `criterion` instead of `evidence`, and no longer kept because a longer filename happens to start
+  with an attached one.** The server-side check that decides whether an attached file backs a
+  contradiction read `evidence` alone, and matched by raw substring — so `config.golden` counted as
+  a mention of an attached `config.go`, while a correct refutation naming its file in `criterion`
+  counted as naming nothing. The second direction was the damaging one: an unbacked contradiction
+  is demoted to a minor `unverifiable_codebase_claim`, and a plan whose only findings are minor
+  unverifiable claims is force-passed with "No blocking plan-quality findings remain" — so a
+  ground-truth refutation could vanish from the gate verdict entirely. Both fields are now read
+  (matching the sibling `validate_task_spec` guard), and the basename must appear at BOTH
+  boundaries as a whole filename. The guard stays deliberately fail-open: absolute, repo-relative,
+  backticked, quoted, parenthesised and line-anchored quotings all still bind.
 - **A truncated `validate_plan` review now mints a `plan_run_id`.** The truncation-recovery path
   can return a passing verdict, and controller.md §5.1 tells the controller to capture
   `plan_run_id` from a passing response — but that path minted none, so `plan_run_report`, which

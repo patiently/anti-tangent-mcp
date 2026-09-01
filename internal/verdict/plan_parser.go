@@ -8,6 +8,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ParsePlan decodes provider output into a PlanResult and validates enum fields.
@@ -75,11 +77,21 @@ func ParsePlan(raw []byte) (PlanResult, error) {
 // had never been shown.
 //
 // The match is deliberately conservative — a finding survives when its
-// evidence contains ANY attached path's BASENAME. The ground rules require
-// the reviewer to quote the attached file's absolute path, but reviewers
-// routinely quote the repo-relative form instead, so basename containment
-// fails OPEN: a legitimate contradiction is kept even when the quoting is
-// loose, and only a finding naming none of the attached files is demoted.
+// evidence OR its criterion names ANY attached path's BASENAME. Both fields
+// are read because reviewers put the path in either one; the sibling guard
+// suppressUnverifiableCodebaseClaim (mcpsrv/task_spec_normalize.go) has read
+// both since it existed, and controller.md documents that shape. Reading
+// evidence alone meant a correct, ground-truth refutation whose path sat in
+// `criterion` was demoted to a minor unverifiable claim, which
+// calibratePlanVerdictForUnverifiableOnly then force-passes — the refutation
+// disappeared from the gate verdict entirely.
+//
+// The ground rules require the reviewer to quote the attached file's absolute
+// path, but reviewers routinely quote the repo-relative form instead, so
+// basename matching fails OPEN: a legitimate contradiction is kept even when
+// the quoting is loose, and only a finding naming none of the attached files
+// is demoted. The match is on the WHOLE filename, though, not on raw
+// containment — see mentionsBasename.
 //
 // The prompt already tells the reviewer never to emit it about an unattached
 // file, but suppression must run SERVER-SIDE, independent of reviewer
@@ -95,7 +107,7 @@ func DemoteUnattachedContradictions(pr *PlanResult, attachedPaths []string) {
 	}
 	backed := func(f Finding) bool {
 		for _, b := range bases {
-			if strings.Contains(f.Evidence, b) {
+			if mentionsBasename(f.Evidence, b) || mentionsBasename(f.Criterion, b) {
 				return true
 			}
 		}
@@ -199,4 +211,77 @@ func ApplyPlanQualitySanity(pr *PlanResult) {
 			pr.PlanQuality = PlanQualityRough
 		}
 	}
+}
+
+// mentionsBasename reports whether text names base as a whole filename
+// rather than as a fragment of a longer one.
+//
+// BOTH boundaries are checked, and both are load-bearing. Raw containment
+// (strings.Contains) accepted `config.golden` as a mention of `config.go`,
+// and a before-only boundary test still does: the character that produces
+// that false positive is the one AFTER the basename (`l`), not the one
+// before it. Half the rule is no rule.
+//
+// The allowed sets keep the guard fail-open on every quoting style a
+// reviewer actually uses. Before: start of string, a path separator, a
+// space, a backtick, or a quote — so `cmd/server/config.go` and "`config.go`"
+// both still bind to an attached `.../config.go`, which is the point of
+// matching on the basename at all. After: end of string, whitespace, a
+// backtick or quote, `:` (a line anchor such as `handlers.go:57`), `,`, `)`,
+// or `.` (a filename ending a sentence).
+//
+// A false NEGATIVE here is the expensive direction: it demotes a ground-truth
+// refutation to a minor unverifiable claim, which the unverifiable-only
+// calibration then force-passes. A false positive merely keeps a finding at
+// the severity the reviewer chose.
+func mentionsBasename(text, base string) bool {
+	if base == "" || text == "" {
+		return false
+	}
+	for off := 0; off+len(base) <= len(text); {
+		i := strings.Index(text[off:], base)
+		if i < 0 {
+			return false
+		}
+		start := off + i
+		end := start + len(base)
+		if basenameStartsAt(text[:start]) && basenameEndsAt(text[end:]) {
+			return true
+		}
+		off = start + 1
+	}
+	return false
+}
+
+// basenameStartsAt reports whether prefix — everything before a candidate
+// match — ends at a filename boundary. Backslash is accepted alongside `/`
+// because a Windows host renders attached paths with it, and the attached
+// set's basenames are slash-normalized before they get here. `(` mirrors the
+// `)` the after-boundary set already accepts, so a parenthesised mention
+// binds from both ends rather than only one.
+func basenameStartsAt(prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(prefix)
+	switch r {
+	case '/', '\\', '`', '\'', '"', '(':
+		return true
+	}
+	return unicode.IsSpace(r)
+}
+
+// basenameEndsAt reports whether suffix — everything after a candidate match
+// — begins at a filename boundary. This is the half the original fix
+// proposal omitted, and the half that rejects `config.golden`.
+func basenameEndsAt(suffix string) bool {
+	if suffix == "" {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(suffix)
+	switch r {
+	case '`', '\'', '"', ':', ',', ')', '.':
+		return true
+	}
+	return unicode.IsSpace(r)
 }
