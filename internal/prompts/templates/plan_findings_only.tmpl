@@ -5,15 +5,7 @@
 {{.ProjectKnowledge}}
 
 {{end -}}
-{{if .ContextFiles -}}
-## Attached source files (complete contents, read from disk by the server)
-
-{{range .ContextFiles}}--- BEGIN FILE {{$.ContextFilesNonce}}: {{.Path}} ({{.Bytes}} bytes, sha256 {{.SHA256Short}}…) ---
-{{.Content}}
---- END FILE {{$.ContextFilesNonce}}: {{.Path}} ---
-
-{{end -}}
-{{end -}}
+{{template "context_files" . -}}
 ## Plan under review
 
 {{.PlanText}}

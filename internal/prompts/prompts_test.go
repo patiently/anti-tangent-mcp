@@ -1179,6 +1179,24 @@ func TestRenderPlan_WithContextFiles_Golden(t *testing.T) {
 	golden(t, "plan_basic_with_context_files", out.System+"\n---USER---\n"+out.User)
 }
 
+// The attachment block used to be duplicated byte-for-byte across all three
+// plan templates while only plan.tmpl had attachment goldens — so an edit to
+// the chunked templates' copy (the delimiter shape included, which
+// contextNonceDelimiterCollides matches on) could land with every golden
+// still green. The block is now one shared partial, and this golden pins its
+// rendering through a chunk template so the chunked path is covered by more
+// than a structural Contains check.
+func TestRenderPlanTasksChunk_WithContextFiles_Golden(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:          "# Plan\n\n### Task 1: t1\n\n**Goal:** g1\n### Task 2: t2\n\n**Goal:** g2\n",
+		ChunkTasks:        []planparser.RawTask{{Title: "Task 1: t1", Body: "**Goal:** g1\n"}},
+		ContextFiles:      ctxFiles(),
+		ContextFilesNonce: testContextNonce,
+	})
+	require.NoError(t, err)
+	golden(t, "plan_tasks_chunk_with_context_files", out.System+"\n---USER---\n"+out.User)
+}
+
 // TestRenderPlan_WithProjectKnowledgeAndContextFiles_Golden covers the
 // combination no other golden did: plan_rules.tmpl has independent
 // {{if .ProjectKnowledge}} and {{if .ContextFiles}} branches that interleave,

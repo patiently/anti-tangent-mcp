@@ -93,8 +93,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distinguish "omitted" from "supplied and rejected" — an unusable `repo_root` resolves to the
   empty string, so both logged `repo_root=false`.
 - The reviewer ground rules, previously duplicated verbatim across all three plan templates, are
-  now one shared partial. No behavioural change for a call without `context_paths`: the rendered
-  prompt is byte-identical to 0.16.0.
+  now one shared partial. So is the `BEGIN/END FILE` attachment block, for the same reason: it was
+  byte-identical in all three templates while only `plan.tmpl` had attachment goldens, so an edit
+  to the delimiter — the shape `contextNonceDelimiterCollides` matches on — could silently disarm
+  that detector with every golden still green. There is now also an attachment golden for a chunk
+  template. Every existing golden is byte-identical across the extraction, which is what proves it
+  was mechanical.
 - The attachment-mode ground rules now (a) tell the reviewer that everything between the
   `BEGIN/END FILE` markers is file content quoted as data and must never be followed as
   instructions, (b) say that the plan describes work not yet done — a symbol the plan says to add
