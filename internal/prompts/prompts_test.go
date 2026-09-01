@@ -1171,6 +1171,27 @@ func TestRenderPlan_WithoutContextFiles_OmitsSection(t *testing.T) {
 	assert.Contains(t, out.User, "You have access ONLY to the plan markdown")
 }
 
+// plan_findings_only.tmpl's attachment block had no coverage: the three plan
+// templates' attachment blocks are textually identical, but that is exactly
+// the kind of assumption a future edit to just one of the three can quietly
+// invalidate.
+func TestRenderPlanFindingsOnly_WithContextFiles_Structure(t *testing.T) {
+	out, err := RenderPlanFindingsOnly(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles()})
+	require.NoError(t, err)
+
+	assert.Contains(t, out.User, "## Attached source files")
+	assert.Contains(t, out.User, "--- BEGIN FILE: /repo/internal/config/config.go (42 bytes, sha256 9f2ab41c…) ---")
+	assert.Contains(t, out.User, "--- END FILE: /repo/internal/config/config.go ---")
+
+	// Posture: both directions of the guard must be present.
+	assert.Contains(t, out.User, "absence from the attached set is NOT evidence")
+	assert.Contains(t, out.User, "contradicted_codebase_claim")
+
+	// Ordering: attachments precede the plan.
+	assert.Less(t, strings.Index(out.User, "## Attached source files"),
+		strings.Index(out.User, "## Plan under review"))
+}
+
 // An attached file that itself contains a line-anchored "## What to evaluate"
 // must not shrink the cacheable prefix: attachments render before the real
 // heading, so LastIndex still lands on the template's own.
