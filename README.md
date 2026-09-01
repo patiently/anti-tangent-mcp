@@ -349,19 +349,26 @@ always wins over that default, even to a value lower than `ANTI_TANGENT_MAX_PAYL
 
 The 1MB default for `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` is not itself a hard ceiling — the real
 limit is whatever context window `ANTI_TANGENT_PLAN_MODEL` has, since the chunked `validate_plan` path
-resends the full plan text on every Pass-1 and per-chunk reviewer call. That is comfortably true
-for the two Anthropic models this project defaults to (`claude-sonnet-4-6` and `claude-opus-4-7`,
-both 1M-token context), but not for `claude-haiku-4-5-20251001` (200K context) or for most of the
-allowlisted OpenAI/Google models — check that model's context window before pointing a fast/cheap
+resends the full plan text on every Pass-1 and per-chunk reviewer call. `context_paths` sits on top
+of that and is NOT covered by the plan cap: up to `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` (512KB by
+default) of attachments is re-sent alongside the plan on every one of those calls, so size the
+context window against plan bytes plus attachment bytes, not plan bytes alone. Both caps together
+fit comfortably in the two Anthropic models this project defaults to (`claude-sonnet-4-6` and
+`claude-opus-4-7`, both 1M-token context), but not in `claude-haiku-4-5-20251001` (200K context)
+or in most of the allowlisted OpenAI/Google models — check that model's context window before pointing a fast/cheap
 tier at plans anywhere near the 1MB cap, and prefer `claude-sonnet-4-6` / `claude-opus-4-7` for
 those.
 
 `context_paths` and `repo_root` are governed by the same `ANTI_TANGENT_PLAN_ROOTS` allowlist as
 `plan_path` — restricting one restricts all three.
 
-**Attachments are only cached on Anthropic reviewers.** The OpenAI and Google clients have no
-prompt-cache support, so a large attached set is billed in full on every reviewer call of every
-round when `ANTI_TANGENT_PLAN_MODEL` names one of them.
+**Attachments are almost never cached.** Only the Anthropic client sends an explicit cache
+breakpoint, and only on the chunked (>8-task) path — `reviewPlanSingle` sets no `CachePrefix`,
+and its parse-retry resends the whole rendered user message. So a single-call plan pays full
+price for its attachments on every call, and so does every call when `ANTI_TANGENT_PLAN_MODEL`
+names an OpenAI or Google model, since those clients have no prompt-cache support at all. Budget
+for the attached set being re-sent in full on every reviewer call unless you are on a chunked
+Anthropic round.
 
 ## Use with Claude Code (`.mcp.json`)
 

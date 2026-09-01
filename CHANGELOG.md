@@ -42,7 +42,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `docs/protocol/controller.md`'s per-call cost figure for the plan gate was stale — it
   advertised ~$0.01–$0.02, which was already wrong for a large plan and off by roughly 50× with
-  attachments. It now carries real numbers for both cases.
+  attachments. It now carries real numbers for both cases, and `core.md`'s FAQ (which still
+  quoted the old figure) points at it.
+- `docs/protocol/authoring.md` gains §3.9, documenting the literal `**Files:**` bullet syntax the
+  Create/Modify check parses — verbs, backticked or bare paths, `Create/Modify:`, trailing
+  parentheticals and line anchors. The check has always keyed on that structure and it was
+  documented nowhere authors look.
+- `core.md`'s `payload_too_large` FAQ names the `validate_plan` and `context_paths` caps, not just
+  the shared `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
+- README's prompt-caching claim was wrong in both directions: only the Anthropic client sends a
+  cache breakpoint, and only on the chunked path — single-call plans and the OpenAI/Google clients
+  re-send the whole attached set every call. README's context-window sizing guidance now accounts
+  for the attachment bytes re-sent alongside the plan.
+- `plugin/anti-tangent-protocol` is version 0.2.0 (bundled protocol content changed). Nothing in
+  the release workflow bumps it, so it is bumped by hand here, together with its
+  `.claude-plugin/marketplace.json` entry.
 - **`stats` `payload_bytes` changed meaning on `validate_plan` events in 0.17.0**, with no events
   schema version marker (a schema bump is deliberately out of scope for this release). It now
   includes the `context_paths` bytes, and on a chunked round those bytes are multiplied by the

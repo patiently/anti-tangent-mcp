@@ -97,7 +97,7 @@ If you're unsure, look for the structured task block. No block → no protocol. 
 
 **How do I know my session expired?** A `category: session_not_found` finding. Default TTL is 4h. Re-call `validate_task_spec` to start a fresh session.
 
-**My payload is too big.** A `category: payload_too_large` finding. Default cap is 200 KB across `changed_files`, `final_files`, and `final_diff`. For `validate_completion`, pass `final_diff` instead of or alongside `final_files`; for `check_progress`, reduce `changed_files` or split the call. `ANTI_TANGENT_MAX_PAYLOAD_BYTES` controls the cap.
+**My payload is too big.** A `category: payload_too_large` finding. Default cap is 200 KB across `changed_files`, `final_files`, and `final_diff`. For `validate_completion`, pass `final_diff` instead of or alongside `final_files`; for `check_progress`, reduce `changed_files` or split the call. `ANTI_TANGENT_MAX_PAYLOAD_BYTES` controls the cap. For `validate_plan` the cap is `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES`, and `context_paths` attachments have two caps of their own — `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` per file and `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` for the whole attached set — plus a fixed 50-file count cap. The finding's `evidence` names which one was breached.
 
 **A `validate_completion` call returned `category: malformed_evidence`.** The server's evidence-shape guard rejected your submission pre-review. The `evidence` field names the offending pattern — typically a truncation marker (`(truncated)`, `[truncated]`, `// ... unchanged`), a `...`-only placeholder line, or empty `Path` entries in `final_files`. Re-submit with full file contents or a complete unified diff. Rejection is cached for 5 minutes by canonical content hash. If your file legitimately contains one of these literal strings (e.g. a fixture or doc), pass a complete `final_diff` rather than `final_files`.
 
@@ -125,7 +125,7 @@ implied, and the reviewer has not yet been able to review your code.
 
 **Does `check_progress` catch failing tests?** No — the reviewer reasons over text, not execution. Use it for drift detection (scope creep, untouched ACs, unaddressed prior findings); run tests separately.
 
-**Cost / latency overhead.** Roughly 1–2 s and $0.001–$0.02 per call. One mandatory `validate_plan` per handoff, two mandatory implementer calls per task (pre + post). Use a cheap-fast model for mid-checks and a stronger model for handoff/post.
+**Cost / latency overhead.** Roughly 1–2 s and $0.001–$0.02 per call without `context_paths`. With a large attached set a single `validate_plan` round can reach ~$1.31 — see [`controller.md`](controller.md) §5.8 for the measurement and what drives it. One mandatory `validate_plan` per handoff, two mandatory implementer calls per task (pre + post). Use a cheap-fast model for mid-checks and a stronger model for handoff/post.
 
 **Where do I file bugs?** [`https://github.com/patiently/anti-tangent-mcp/issues`](https://github.com/patiently/anti-tangent-mcp/issues).
 
