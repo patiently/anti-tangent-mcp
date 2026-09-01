@@ -168,6 +168,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
+- **The effective `context_paths` caps are now visible at startup, and the per-file refusal no
+  longer advises a change that breaks the next boot.** When the per-file cap is still the default
+  and the operator lowers `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` below it, `config.Load` clamps
+  the per-file cap down silently — nothing reported the value actually in force. The `starting`
+  line now carries both effective caps (it is emitted after the JSON logger is installed, so the
+  "the warning would go nowhere" reasoning that keeps `config.Load` itself quiet does not apply).
+  The per-file refusal previously said "raise `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES`" without
+  mentioning that raising it above the whole-set cap makes the next start fail; it now names
+  `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` and its current value.
 - **The disk tier's "could not stat" warning is now one line per call, not one per path.** It was
   emitted from inside a nested loop over every `Modify:` bullet of every task, so an unreadable
   `repo_root` on a large plan could bury stderr under hundreds of lines for a single call. The

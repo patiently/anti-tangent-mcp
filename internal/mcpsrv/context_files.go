@@ -42,6 +42,15 @@ type contextTooLargeError struct {
 	Bytes int
 	Limit int
 	Count int
+	// PayloadLimit is the whole-set cap in force, carried on the PER-FILE
+	// shape so the refusal can name the ceiling the suggested remedy has to
+	// stay under. Without it the message advised "raise
+	// ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES" with no hint that raising it above
+	// ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES makes the very next boot fail
+	// with "must be <= ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES" (config.go's
+	// cross-check) — the server refusing a file and then, if you follow its
+	// own advice literally, refusing to start. Unset on the other two shapes.
+	PayloadLimit int
 }
 
 func (e *contextTooLargeError) Error() string {
@@ -52,8 +61,8 @@ func (e *contextTooLargeError) Error() string {
 	}
 	if e.Path != "" {
 		return fmt.Sprintf(
-			"context_paths: %q is %d bytes > per-file cap %d (raise ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES, or drop the file)",
-			e.Path, e.Bytes, e.Limit)
+			"context_paths: %q is %d bytes > per-file cap %d (raise ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES, but not above ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES (%d) or the next start fails — raise that one too, or drop the file)",
+			e.Path, e.Bytes, e.Limit, e.PayloadLimit)
 	}
 	return fmt.Sprintf(
 		"context_paths: attached set is %d bytes > cap %d (raise ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES, or attach fewer files)",
@@ -88,9 +97,10 @@ func resolveContextPaths(paths []string, cfg config.Config) ([]contextFile, int,
 		content, src, err := resolveFileInput(p, cfg.PlanRoots, cfg.ContextMaxFileBytes)
 		if errors.Is(err, errTooLarge) {
 			return nil, 0, &contextTooLargeError{
-				Path:  src.Path,
-				Bytes: src.Bytes,
-				Limit: cfg.ContextMaxFileBytes,
+				Path:         src.Path,
+				Bytes:        src.Bytes,
+				Limit:        cfg.ContextMaxFileBytes,
+				PayloadLimit: cfg.ContextMaxPayloadBytes,
 			}
 		}
 		if err != nil {

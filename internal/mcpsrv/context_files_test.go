@@ -109,6 +109,12 @@ func TestResolveContextPaths_PerFileCap(t *testing.T) {
 	assert.Equal(t, 100, tle.Limit)
 	assert.Contains(t, tle.Path, "big.go")
 	assert.Contains(t, tle.Error(), "ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES")
+	// The remedy the message suggests must not be one that breaks the next
+	// boot: config.go refuses to start when the per-file cap exceeds the
+	// whole-set cap, so the refusal has to name the ceiling it must stay
+	// under, with the value actually in force.
+	assert.Equal(t, 10000, tle.PayloadLimit)
+	assert.Contains(t, tle.Error(), "ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES (10000)")
 }
 
 func TestResolveContextPaths_SetCap(t *testing.T) {
