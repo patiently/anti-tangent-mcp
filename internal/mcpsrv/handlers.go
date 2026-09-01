@@ -1753,8 +1753,6 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			return nil, verdict.PlanResult{}, rerr
 		}
 	}
-	_ = repoRoot // consumed by the Create/Modify check in Task 9
-
 	planBytes := len(planText)
 	if total := planBytes + pkBytes; total > h.deps.Cfg.PlanMaxPayloadBytes {
 		pr := prependPlanDeprecation(
@@ -1888,6 +1886,9 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return r, p, retErr
 	}
 	populateNormativeTestBodies(&pr, tasks)
+	if fc := checkFileConsistency(tasks, repoRoot); fc != nil {
+		pr.PlanFindings = append(pr.PlanFindings, *fc)
+	}
 	pr = prependPlanClamp(pr, clamp)
 	// finalizePlanVerdict (not finalizePlanResult) here: it runs the
 	// normalize/calibrate/FinalizePlanVerdict ladder without touching

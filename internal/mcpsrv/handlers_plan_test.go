@@ -1849,3 +1849,25 @@ func TestPlanPassCacheKey_NoAttachmentsIsStable(t *testing.T) {
 	b := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil)
 	assert.Equal(t, a, b)
 }
+
+func TestValidatePlan_FileConsistencyFindingReachesTheEnvelope(t *testing.T) {
+	plan := "# Plan\n\n" +
+		"### Task 1: t1\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n\n**Files:**\n- Modify: `a.go`\n\n" +
+		"### Task 2: t2\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n\n**Files:**\n- Create: `a.go`\n\n"
+
+	sr := &scriptedReviewer{responses: []providers.Response{singlePlanResp(t, 2)}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+
+	var found bool
+	for _, f := range pr.PlanFindings {
+		if f.Criterion == "task_order_contradiction" {
+			found = true
+			assert.Equal(t, verdict.SeverityMajor, f.Severity)
+		}
+	}
+	assert.True(t, found, "the deterministic check's finding must reach the envelope")
+}
