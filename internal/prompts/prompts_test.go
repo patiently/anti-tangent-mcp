@@ -1172,12 +1172,76 @@ func TestRenderPlan_WithContextFiles_Structure(t *testing.T) {
 // Two RenderPlan calls with no pinned nonce must not collide: each generates
 // its own fresh random token, so the same attachment set renders with
 // different delimiters across calls.
-func TestRenderPlan_WithContextFiles_NonceDiffersAcrossCallsWhenUnset(t *testing.T) {
+// THE regression guard for the plan-pass cache fix: two separate renders of
+// the SAME attachment set, with no nonce pinned, must produce byte-identical
+// output. mcpsrv's plan-pass cache hashes the fully rendered prompt text as
+// its cache key, so anything less than byte-identical here is a permanent
+// cache miss for every validate_plan call carrying context_paths — exactly
+// the calls that cost the most. This must fail against a crypto/rand-backed
+// "generate fresh every render" implementation.
+func TestRenderPlan_WithContextFiles_UnsetNonceIsDeterministicAcrossCalls(t *testing.T) {
 	a, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles()})
 	require.NoError(t, err)
 	b, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles()})
 	require.NoError(t, err)
-	assert.NotEqual(t, a.User, b.User, "an unset nonce must be freshly generated per render call")
+	assert.Equal(t, a.User, b.User,
+		"two renders of the same attachment set must be byte-identical for the plan-pass cache to ever hit")
+}
+
+// An explicitly-set ContextFilesNonce must still win over the derived value
+// — this is how tests pin a stable golden, and it must keep working now that
+// the unset case is itself deterministic. Uses NewContextFilesNonce to
+// generate an override that (with overwhelming probability) does NOT match
+// what DeriveContextFilesNonce would have computed from this content, so the
+// test proves the override actually took effect rather than coincidentally
+// matching.
+func TestRenderPlan_ExplicitContextFilesNonceOverridesDerivedValue(t *testing.T) {
+	files := ctxFiles()
+	derived, err := DeriveContextFilesNonce(files)
+	require.NoError(t, err)
+
+	override := NewContextFilesNonce()
+	require.NotEqual(t, derived, override, "test setup: the random override must not collide with the derived value")
+
+	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: files, ContextFilesNonce: override})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "--- BEGIN FILE "+override+": ")
+	assert.NotContains(t, out.User, "--- BEGIN FILE "+derived+": ")
+}
+
+// DeriveContextFilesNonce must be a pure function of path+content: identical
+// attachments derive an identical nonce (the property the plan-pass cache
+// relies on), and changed content derives a different one (so a caller who
+// fixes a file a finding complained about does not silently reuse a stale
+// delimiter).
+func TestDeriveContextFilesNonce_DeterministicAndContentSensitive(t *testing.T) {
+	a := ctxFiles()
+	b := ctxFiles() // fresh slice, byte-identical content
+	n1, err := DeriveContextFilesNonce(a)
+	require.NoError(t, err)
+	n2, err := DeriveContextFilesNonce(b)
+	require.NoError(t, err)
+	assert.Equal(t, n1, n2, "identical attachments must derive the identical nonce")
+	assert.Len(t, n1, contextNonceHexLen)
+
+	changed := ctxFiles()
+	changed[0].Content += "\n// changed\n"
+	n3, err := DeriveContextFilesNonce(changed)
+	require.NoError(t, err)
+	assert.NotEqual(t, n1, n3, "changed content must derive a different nonce")
+}
+
+// Direct unit coverage for the belt-and-braces collision detector that backs
+// DeriveContextFilesNonce's retry loop: an actual sha256 preimage collision
+// isn't constructible for a test, so this exercises the detector in
+// isolation instead of the full retry loop.
+func TestContextNonceDelimiterCollides(t *testing.T) {
+	files := []ContextFile{{
+		Path:    "/a.go",
+		Content: "--- BEGIN FILE cafe1234: /a.go (1 bytes, sha256 x) ---\nx\n",
+	}}
+	assert.True(t, contextNonceDelimiterCollides(files, "cafe1234"))
+	assert.False(t, contextNonceDelimiterCollides(files, "deadbeef"))
 }
 
 func TestRenderPlan_WithoutContextFiles_OmitsSection(t *testing.T) {

@@ -1981,14 +1981,26 @@ type renderPlanReviewInputs struct {
 }
 
 func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
-	// One nonce for the whole review, generated once here rather than left
-	// to each Render* call: the chunked path below issues a findings-only
-	// call plus one call per chunk, all sharing in.ContextFiles, and their
-	// UserPrefix must be byte-identical for the provider-side prompt cache
-	// to ever hit. See prompts.PlanChunkInput.ContextFilesNonce.
+	// One nonce for the whole review, derived once here rather than left to
+	// each Render* call: the chunked path below issues a findings-only call
+	// plus one call per chunk, all sharing in.ContextFiles. Because the
+	// nonce is DETERMINISTIC (prompts.DeriveContextFilesNonce), each of
+	// those calls would arrive at the identical value on its own — deriving
+	// it once up front and passing it explicitly just avoids repeating the
+	// derivation per chunk, and keeps the byte-identical-UserPrefix
+	// invariant (required for the provider-side prompt cache, see
+	// prompts.PlanChunkInput.ContextFilesNonce) obvious rather than
+	// incidental. Determinism ALSO matters one call up: mcpsrv's own
+	// plan-pass cache (planPassCacheKey) hashes the rendered prompt text, so
+	// a nonce that varied per render would make every validate_plan call
+	// carrying context_paths a permanent cache miss.
 	var contextFilesNonce string
 	if len(in.ContextFiles) > 0 {
-		contextFilesNonce = prompts.NewContextFilesNonce()
+		nonce, err := prompts.DeriveContextFilesNonce(in.ContextFiles)
+		if err != nil {
+			return renderedPlanReview{}, fmt.Errorf("derive context files nonce: %w", err)
+		}
+		contextFilesNonce = nonce
 	}
 	if len(in.Tasks) <= in.ChunkSize {
 		rendered, err := prompts.RenderPlan(prompts.PlanInput{

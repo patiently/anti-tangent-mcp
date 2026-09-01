@@ -1771,6 +1771,42 @@ func TestValidatePlan_ContextPaths_TooLargeIsAnEnvelope(t *testing.T) {
 	assert.Zero(t, sr.calls, "no reviewer call is made on a refused payload")
 }
 
+// TestValidatePlan_ContextPaths_CacheHitAcrossSeparateCalls is the
+// end-to-end regression test for the plan-pass cache fix: two SEPARATE
+// ValidatePlan calls with byte-identical plan_text AND byte-identical
+// context_paths, inside the cache TTL, must produce a cache hit (the
+// reviewer call count must stay at 1). planPassCacheKey hashes the fully
+// rendered prompt text, so this is the capability a crypto/rand-backed
+// per-render nonce would have silently killed for every context_paths
+// caller — the calls that cost the most — and that a unit test on nonce
+// equality alone would not prove, since it never exercises the cache.
+func TestValidatePlan_ContextPaths_CacheHitAcrossSeparateCalls(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.go")
+	require.NoError(t, os.WriteFile(f, []byte("package config\n// SENTINEL_ATTACHED\n"), 0o600))
+
+	sr := &scriptedReviewer{responses: []providers.Response{singlePlanResp(t, 1)}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	args := ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{f},
+	}
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.Equal(t, verdict.VerdictPass, first.PlanVerdict, "must pass so it is cached")
+	require.Equal(t, 1, sr.calls)
+
+	_, second, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sr.calls,
+		"a second call with identical plan_text and identical context_paths must be a cache hit, not a fresh reviewer call")
+	assert.Contains(t, second.NextAction, "[cached",
+		"second call must be served from the shared cache entry, proving this exercises the cache-hit path")
+}
+
 func TestValidatePlan_ContextPaths_BadPathIsTransportError(t *testing.T) {
 	sr := &scriptedReviewer{}
 	d := newDepsWithScripted(t, sr, 8)
