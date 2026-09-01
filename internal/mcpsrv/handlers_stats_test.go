@@ -455,6 +455,66 @@ func TestValidatePlanNoHeadingsRecordsStat(t *testing.T) {
 	// that actually exercise non-zero counts.
 }
 
+// TestValidatePlan_ContextPathsPayloadTooLarge_RecordsContextBytes pins the
+// plan-cap-breach recordStat call site (the "total := planBytes + pkBytes"
+// branch): contextBytes is resolved before this branch runs, and its bytes
+// must be folded into the recorded payloadBytes even though the cap
+// COMPARISON itself deliberately excludes them (attachments have their own
+// separate budget — see tooLargePlanResult's doc comment). Before the fix,
+// this call site read the pre-existing local `total` (== planBytes+pkBytes)
+// verbatim, so a successful context_paths resolution alongside an over-cap
+// plan silently under-reported payloadBytes by exactly the attachment size.
+func TestValidatePlan_ContextPathsPayloadTooLarge_RecordsContextBytes(t *testing.T) {
+	dir := t.TempDir()
+	cfg := statsTestConfig(t)
+	cfg.PlanMaxPayloadBytes = 20 // buildPlanWithNTasks(1) alone already exceeds this
+
+	ctxDir := t.TempDir()
+	f := filepath.Join(ctxDir, "config.go")
+	contextContent := "package config\n// SENTINEL_ATTACHED\n"
+	if err := os.WriteFile(f, []byte(contextContent), 0o600); err != nil {
+		t.Fatalf("write context file: %v", err)
+	}
+
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	h := &handlers{deps: Deps{
+		Cfg:       cfg,
+		Sessions:  session.NewStore(cfg.SessionTTL),
+		Reviews:   providers.Registry{"anthropic": rv},
+		Stats:     newStatsRecorder(t, dir),
+		planCache: newPlanPassCache(),
+	}}
+
+	planText := buildPlanWithNTasks(1)
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     planText,
+		ContextPaths: []string{f},
+	})
+	if err != nil {
+		t.Fatalf("ValidatePlan: %v", err)
+	}
+	if pr.PlanVerdict != "fail" {
+		t.Fatalf("pr.PlanVerdict = %q, want %q (plan cap must trip)", pr.PlanVerdict, "fail")
+	}
+	if rv.Calls != 0 {
+		t.Fatalf("rv.Calls = %d, want 0 (an over-cap rejection must short-circuit the reviewer)", rv.Calls)
+	}
+
+	ev := readSingleEvent(t, dir)
+	if ev.Tool != "validate_plan" {
+		t.Errorf("event.Tool = %q, want %q", ev.Tool, "validate_plan")
+	}
+	if ev.Verdict != "fail" {
+		t.Errorf("event.Verdict = %q, want %q", ev.Verdict, "fail")
+	}
+	wantPayload := len(planText) + len(contextContent) // pkBytes is 0
+	if ev.PayloadBytes != wantPayload {
+		t.Errorf("event.PayloadBytes = %d, want %d (planBytes=%d + contextBytes=%d); "+
+			"the plan-cap-breach recordStat call site must include contextBytes",
+			ev.PayloadBytes, wantPayload, len(planText), len(contextContent))
+	}
+}
+
 // TestExtractEmptyEnvelopesRecordsStat pins that the empty-completion_envelopes
 // refusal records one extract event carrying the verdict (previously the
 // success-only recordStat skipped this path AND omitted the verdict).

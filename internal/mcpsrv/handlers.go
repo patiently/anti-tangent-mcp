@@ -1754,7 +1754,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			verdict:      string(pr.PlanVerdict),
 			findings:     planFindings(pr),
 			modelUsed:    h.deps.Cfg.PlanModel.String(),
-			payloadBytes: total,
+			payloadBytes: total + contextBytes,
 		})
 		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
 	}
