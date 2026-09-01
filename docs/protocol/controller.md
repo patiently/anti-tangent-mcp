@@ -116,3 +116,8 @@ alone, so an already-implemented worktree does NOT exempt a genuine ordering bug
 tier** (needs `repo_root`) only reaches a `Modify:` target that no task creates at all, and
 flags it if it also doesn't exist on disk. Either tier emits the same plan-level
 `task_order_contradiction` finding.
+
+A `repo_root` the server cannot resolve is not fatal: the disk tier is skipped, the order tier
+still runs, and the response carries a minor `criterion: repo_root` finding saying so. It never
+changes the verdict — if you see one at gate time, fix the argument and re-run to get the disk
+tier, or ignore it and gate on the order tier alone.

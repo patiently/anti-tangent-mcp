@@ -172,6 +172,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
+- **`docs/protocol/core.md` no longer promises `contradicted_codebase_claim` is unconditionally
+  unfloored.** Since the server started demoting a contradiction the attached set does not back,
+  the category IS floored, rolled up and force-passable in that case. core.md said otherwise
+  without qualification. `docs/protocol/controller.md` §5.8 also now says what an unusable
+  `repo_root` produces — a minor `criterion: repo_root` finding, verdict unchanged, disk tier
+  skipped — since controllers act on the findings list and an unexplained entry there is an
+  operational question at gate time.
 - **The context-nonce collision detector now recognises near-shaped delimiters.** It demanded the
   rendered marker verbatim (`^--- (?:BEGIN|END) FILE <token>: `), so a line carrying the CORRECT
   token in a slightly different shape — a fourth dash, a leading indent, a tab in place of the

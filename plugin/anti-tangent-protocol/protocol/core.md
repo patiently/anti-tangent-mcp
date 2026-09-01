@@ -45,7 +45,10 @@ attached file refutes the claim, the reviewer emits `contradicted_codebase_claim
 carrying its own chosen severity (no `minor` floor, unlike `unverifiable_codebase_claim`) and
 never rolled into the `codebase_reference_checklist` rollup or force-passed by the
 unverifiable-only verdict calibration, since an attached file is ground truth read from disk,
-not a caller claim.
+not a caller claim. That holds only while the finding names one of the attached files: if it
+names none of them, the server demotes it to `unverifiable_codebase_claim`, after which the
+`minor` floor, the rollup and the force-pass all apply again — a contradiction about a file
+nobody attached has no ground truth behind it.
 
 ### Reducing text-only review noise
 
