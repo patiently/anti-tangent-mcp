@@ -1700,7 +1700,7 @@ func TestPlanPassCacheKey_CoversBothHalves(t *testing.T) {
 		}
 	}
 	keyOf := func(r renderedPlanReview) [32]byte {
-		return planPassCacheKey("plan", "pk", "mode", "model", 100, 0, r)
+		return planPassCacheKey("plan", "pk", "mode", "model", 100, 0, r, nil)
 	}
 
 	base := keyOf(build("shared-prefix", "suffix-v1"))
@@ -1827,4 +1827,25 @@ func TestValidatePlan_NoContextPaths_PromptUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, sr.requests[0].User, "## Attached source files")
 	assert.Contains(t, sr.requests[0].User, "You have access ONLY to the plan markdown")
+}
+
+// A stale review after an attached file is edited is the failure this guards:
+// planPassCache keys on plan content, so without the attachment hashes a
+// caller who fixes the file a finding complained about and re-validates
+// immediately gets the pre-fix review back with no indication of reuse.
+func TestPlanPassCacheKey_VariesWithAttachedContent(t *testing.T) {
+	rendered := renderedPlanReview{}
+	mk := func(sha string) [32]byte {
+		return planPassCacheKey("plan", "", "", "m", 100, 0, rendered,
+			[]contextFile{{Source: fileSource{Path: "/a.go", Bytes: 10, SHA256: sha}}})
+	}
+	assert.NotEqual(t, mk("aaaa"), mk("bbbb"))
+	assert.Equal(t, mk("aaaa"), mk("aaaa"))
+}
+
+func TestPlanPassCacheKey_NoAttachmentsIsStable(t *testing.T) {
+	rendered := renderedPlanReview{}
+	a := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil)
+	b := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, nil)
+	assert.Equal(t, a, b)
 }

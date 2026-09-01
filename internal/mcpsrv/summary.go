@@ -54,6 +54,11 @@ type planSummaryMeta struct {
 	ModelUsed string
 	ReviewMS  int64
 	Source    string
+	// ContextFiles is the attached set for THIS call. Carried per-call, never
+	// stored on the cache entry, for the same reason as Source: planPassCacheKey
+	// hashes content, so echoing a stored entry's list would name another
+	// caller's files.
+	ContextFiles []fileSource
 }
 
 // formatPlanSummary renders a deterministic, paste-ready text block for a
@@ -73,6 +78,16 @@ func formatPlanSummary(pr verdict.PlanResult, meta planSummaryMeta) string {
 	}
 	if meta.Source != "" {
 		fmt.Fprintf(&b, "  source:        %s\n", meta.Source)
+	}
+	if len(meta.ContextFiles) > 0 {
+		totalCtx := 0
+		for _, f := range meta.ContextFiles {
+			totalCtx += f.Bytes
+		}
+		fmt.Fprintf(&b, "  context:       %d files, %d B\n", len(meta.ContextFiles), totalCtx)
+		for _, f := range meta.ContextFiles {
+			fmt.Fprintf(&b, "                 - %s (%d B)\n", f.Path, f.Bytes)
+		}
 	}
 	if pr.Partial {
 		b.WriteString("  partial:       true\n")

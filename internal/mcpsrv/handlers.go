@@ -575,6 +575,17 @@ func toPromptContextFiles(files []contextFile) []prompts.ContextFile {
 	return out
 }
 
+// contextSources projects the resolved attachment set down to the provenance
+// used by planSummaryMeta.ContextFiles — path and byte count for the summary
+// block, nothing the reviewer prompt needed (Content).
+func contextSources(files []contextFile) []fileSource {
+	out := make([]fileSource, 0, len(files))
+	for _, f := range files {
+		out = append(out, f.Source)
+	}
+	return out
+}
+
 func priorFindings(s *session.Session) []verdict.Finding {
 	out := append([]verdict.Finding{}, s.PreFindings...)
 	for _, cp := range s.Checkpoints {
@@ -1756,7 +1767,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			modelUsed:    h.deps.Cfg.PlanModel.String(),
 			payloadBytes: total + contextBytes,
 		})
-		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
+		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String(), ContextFiles: contextSources(contextFiles)})
 	}
 	tasks, _ := planparser.SplitTasks(planText)
 	tasksTotal := len(tasks)
@@ -1778,7 +1789,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			tasksTotal:      tasksTotal,
 			tasksWithHeader: tasksWithHeader,
 		})
-		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
+		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String(), ContextFiles: contextSources(contextFiles)})
 	}
 
 	// Adaptive plan budget: apply only when no override was supplied. The
@@ -1804,7 +1815,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}
-	cacheKey := planPassCacheKey(planText, projectKnowledge, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
+	cacheKey := planPassCacheKey(planText, projectKnowledge, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered, contextFiles)
 	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey, planSrc.String()); ok {
 		// Deprecation is a property of THIS call's input (plan_text vs.
 		// plan_path), not of the cached plan content, so it is applied here
@@ -1817,7 +1828,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		// added, so SummaryBlock's count/list stays consistent with
 		// PlanFindings.
 		cached = prependPlanDeprecation(cached, args.PlanText != "")
-		cachedMeta := planSummaryMeta{ModelUsed: cachedModelUsed, ReviewMS: 0, Source: planSrc.String()}
+		cachedMeta := planSummaryMeta{ModelUsed: cachedModelUsed, ReviewMS: 0, Source: planSrc.String(), ContextFiles: contextSources(contextFiles)}
 		cached.SummaryBlock = formatPlanSummary(cached, cachedMeta)
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
@@ -1910,7 +1921,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// after both the PlanRunID assignment and the deprecation prepend, so
 	// the summary's plan_run_id line, provenance, and findings count/list
 	// all reflect the final state exactly once.
-	meta := planSummaryMeta{ModelUsed: modelUsed, ReviewMS: ms, Source: planSrc.String()}
+	meta := planSummaryMeta{ModelUsed: modelUsed, ReviewMS: ms, Source: planSrc.String(), ContextFiles: contextSources(contextFiles)}
 	pr.SummaryBlock = formatPlanSummary(pr, meta)
 	h.recordStat(statParams{
 		tool:            "validate_plan",

@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	planPassCacheVersion    = "plan-pass-cache-v2"
+	planPassCacheVersion    = "plan-pass-cache-v3"
 	planPassCacheTTL        = 3 * time.Minute
 	planPassCacheMaxEntries = 128
 )
@@ -36,7 +36,19 @@ type planCachePrompt struct {
 	UserSuffix string `json:"user_suffix"`
 }
 
-func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens, maxTokensOverride int, rendered renderedPlanReview) [32]byte {
+// contextFileKey is the cache-key projection of one attachment: identity and
+// content hash, never the bytes. The key is itself hashed, so carrying
+// hundreds of KB into it would buy nothing.
+type contextFileKey struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens, maxTokensOverride int, rendered renderedPlanReview, contextFiles []contextFile) [32]byte {
+	ctxKeys := make([]contextFileKey, 0, len(contextFiles))
+	for _, f := range contextFiles {
+		ctxKeys = append(ctxKeys, contextFileKey{Path: f.Source.Path, SHA256: f.Source.SHA256})
+	}
 	keyInput := struct {
 		Version           string            `json:"version"`
 		PlanText          string            `json:"plan_text"`
@@ -46,6 +58,7 @@ func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens,
 		MaxTokens         int               `json:"max_tokens"`
 		MaxTokensOverride int               `json:"max_tokens_override"`
 		Prompts           []planCachePrompt `json:"prompts"`
+		ContextFiles      []contextFileKey  `json:"context_files"`
 	}{
 		Version:           planPassCacheVersion,
 		PlanText:          planText,
@@ -55,6 +68,7 @@ func planPassCacheKey(planText, projectKnowledge, mode, model string, maxTokens,
 		MaxTokens:         maxTokens,
 		MaxTokensOverride: maxTokensOverride,
 		Prompts:           rendered.cachePrompts(),
+		ContextFiles:      ctxKeys,
 	}
 	// keyInput contains only strings, ints, and slices of those, so JSON
 	// marshaling cannot fail in practice.
