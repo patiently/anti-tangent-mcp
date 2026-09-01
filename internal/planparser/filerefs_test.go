@@ -48,3 +48,28 @@ func TestFileRefs_TestPrefixIgnored(t *testing.T) {
 	assert.Equal(t, []string{"a.go"}, refs.Modify)
 	assert.Empty(t, refs.Create)
 }
+
+// Regression test for panic on empty tail after colon.
+func TestFileRefs_EmptyPathAfterColon(t *testing.T) {
+	// A bullet with only whitespace after the colon should not panic.
+	refs := FileRefs("**Files:**\n- Modify:   \n")
+	assert.Empty(t, refs.Create)
+	assert.Empty(t, refs.Modify)
+	assert.Empty(t, refs.Delete)
+}
+
+// Regression test for unterminated backtick.
+func TestFileRefs_UnterminatedBacktick(t *testing.T) {
+	// A path with an opening backtick but no closing backtick should
+	// extract the content after the opening backtick as the first token.
+	refs := FileRefs("**Files:**\n- Modify: `abc.go\n")
+	assert.Equal(t, []string{"abc.go"}, refs.Modify, "unterminated backtick should be stripped")
+}
+
+// Regression test for bare path first-token behavior.
+func TestFileRefs_BarePathFirstToken(t *testing.T) {
+	// A bare path with multiple whitespace-delimited tokens should
+	// take only the first token.
+	refs := FileRefs("**Files:**\n- Delete: foo bar.go\n")
+	assert.Equal(t, []string{"foo"}, refs.Delete, "bare path should be first whitespace-delimited token")
+}

@@ -53,8 +53,9 @@ func FileRefs(body string) TaskFileRefs {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "- ") ||
 				strings.HasPrefix(trimmed, "* ") {
-				// A bullet with an unrecognized verb (e.g. "Test:") — skip it
-				// but stay in the section.
+				// A bullet with an unrecognized verb (e.g. "- Test: ...") — skip it
+				// but stay in the section. Bullets must have a space after the marker
+				// to distinguish them from markdown formatting like **section:**.
 				continue
 			}
 			break
@@ -87,6 +88,12 @@ func cleanRefPath(tail string) string {
 		if j := strings.Index(rest, "`"); j >= 0 {
 			return strings.TrimSpace(rest[:j])
 		}
+		// Unterminated backtick: use the part after the opening backtick
+		tail = rest
 	}
-	return strings.TrimSpace(strings.Fields(tail+" ")[0])
+	fields := strings.Fields(tail + " ")
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(fields[0])
 }
