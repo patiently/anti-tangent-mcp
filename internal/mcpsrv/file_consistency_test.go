@@ -119,3 +119,36 @@ func TestCheckFileConsistency_OrderTier_EdgeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckFileConsistency_OrderTier_UsesTitleNumberNotPosition is the
+// regression test for the review finding that task_order_contradiction named
+// tasks by slice position instead of the plan's own "### Task N:" number.
+// Here the plan's own numbers (3, 7) diverge from slice position (1, 2); the
+// finding must name Task 3 and Task 7, never Task 1 or Task 2.
+func TestCheckFileConsistency_OrderTier_UsesTitleNumberNotPosition(t *testing.T) {
+	tasks := []planparser.RawTask{
+		{Title: "Task 3: Modify a", Body: "**Files:**\n- Modify: `a.go`\n"},
+		{Title: "Task 7: Create a", Body: "**Files:**\n- Create: `a.go`\n"},
+	}
+	f := checkFileConsistency(tasks, "")
+	require.NotNil(t, f)
+	assert.Contains(t, f.Evidence, "Task 3")
+	assert.Contains(t, f.Evidence, "Task 7")
+	assert.NotContains(t, f.Evidence, "Task 1 ")
+	assert.NotContains(t, f.Evidence, "Task 2 ")
+}
+
+// TestCheckFileConsistency_OrderTier_FallsBackToPositionWhenTitleUnparseable
+// covers the fallback half of the same fix: when Title is empty or does not
+// match the "Task N:" shape, the finding must still name a task — via the
+// 1-based slice position — rather than silently dropping the check.
+func TestCheckFileConsistency_OrderTier_FallsBackToPositionWhenTitleUnparseable(t *testing.T) {
+	tasks := []planparser.RawTask{
+		{Title: "not a task heading", Body: "**Files:**\n- Modify: `a.go`\n"},
+		{Title: "", Body: "**Files:**\n- Create: `a.go`\n"},
+	}
+	f := checkFileConsistency(tasks, "")
+	require.NotNil(t, f)
+	assert.Contains(t, f.Evidence, "Task 1")
+	assert.Contains(t, f.Evidence, "Task 2")
+}

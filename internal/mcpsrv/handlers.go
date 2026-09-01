@@ -1733,7 +1733,8 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if cerr != nil {
 		var tle *contextTooLargeError
 		if errors.As(cerr, &tle) {
-			pr := prependPlanClamp(contextTooLargePlanResult(tle), clamp)
+			pr := prependPlanDeprecation(
+				prependPlanClamp(contextTooLargePlanResult(tle), clamp), args.PlanText != "")
 			h.recordStat(statParams{
 				tool:         "validate_plan",
 				verdict:      string(pr.PlanVerdict),

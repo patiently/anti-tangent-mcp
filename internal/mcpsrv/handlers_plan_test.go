@@ -1756,9 +1756,18 @@ func TestValidatePlan_ContextPaths_TooLargeIsAnEnvelope(t *testing.T) {
 	})
 	require.NoError(t, err, "a cap breach is an envelope, not a transport error")
 	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
-	require.NotEmpty(t, pr.PlanFindings)
-	assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
-	assert.Contains(t, pr.PlanFindings[0].Evidence, "ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES")
+	require.Len(t, pr.PlanFindings, 2, "the too-large finding plus the plan_text deprecation notice")
+	assert.Equal(t, 1, countPlanDeprecationFindings(pr.PlanFindings),
+		"a plan_text caller must still get the deprecation notice on this envelope, like every other too-large exit")
+
+	var tooLarge *verdict.Finding
+	for i := range pr.PlanFindings {
+		if pr.PlanFindings[i].Category == verdict.CategoryTooLarge {
+			tooLarge = &pr.PlanFindings[i]
+		}
+	}
+	require.NotNil(t, tooLarge, "the too-large finding must still be present")
+	assert.Contains(t, tooLarge.Evidence, "ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES")
 	assert.Zero(t, sr.calls, "no reviewer call is made on a refused payload")
 }
 

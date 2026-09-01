@@ -7,11 +7,33 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
+
+// taskNumberHeadingRe matches the leading "Task N:" of a
+// planparser.RawTask.Title (e.g. "Task 4: Add /healthz endpoint").
+var taskNumberHeadingRe = regexp.MustCompile(`^Task (\d+):`)
+
+// taskNumber returns the plan's own declared number for tasks[i] — parsed
+// from its Title — falling back to the 1-based slice position when Title is
+// empty or does not match the "Task N:" shape. Findings must name the task
+// the plan's author would recognize: on a plan whose "### Task N:" headings
+// are not exactly 1..N (a deletion, an insertion, a plan numbered from 0),
+// the slice position and the plan's own number diverge, and a finding that
+// names the position is a finding that names the wrong task.
+func taskNumber(tasks []planparser.RawTask, i int) int {
+	if m := taskNumberHeadingRe.FindStringSubmatch(tasks[i].Title); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			return n
+		}
+	}
+	return i + 1
+}
 
 // checkFileConsistency reports Modify: targets that cannot exist when their
 // task runs. Returns nil when the plan is consistent — which is the expected
@@ -40,19 +62,20 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 		refs[i] = planparser.FileRefs(t.Body)
 	}
 
-	// createdBy[path] = 1-based index of the FIRST task that creates it.
+	// createdBy[path] = the plan's own declared number of the FIRST task
+	// that creates it (see taskNumber).
 	createdBy := map[string]int{}
 	for i, r := range refs {
 		for _, p := range r.Create {
 			if _, seen := createdBy[p]; !seen {
-				createdBy[p] = i + 1
+				createdBy[p] = taskNumber(tasks, i)
 			}
 		}
 	}
 
 	var lines []string
 	for i, r := range refs {
-		taskNum := i + 1
+		taskNum := taskNumber(tasks, i)
 		for _, p := range r.Modify {
 			if created, ok := createdBy[p]; ok {
 				if created > taskNum {
