@@ -99,6 +99,9 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 	if err != nil {
 		return "", fileSource{}, fmt.Errorf("resolve %q: %w", path, err)
 	}
+	if err := rejectControlChars(resolved); err != nil {
+		return "", fileSource{}, err
+	}
 	if !withinRoots(resolved, roots) {
 		return "", fileSource{}, fmt.Errorf(
 			"%q is outside ANTI_TANGENT_PLAN_ROOTS (%s)", resolved, strings.Join(roots, string(os.PathListSeparator)))
@@ -145,6 +148,38 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 		Bytes:  len(b),
 		SHA256: hex.EncodeToString(sum[:]),
 	}, nil
+}
+
+// rejectControlChars refuses a resolved path containing any byte below 0x20.
+//
+// This is a PROMPT-INTEGRITY guard, not a filesystem one. Linux permits every
+// byte but '/' and NUL in a file name, EvalSymlinks returns whatever the link
+// target says verbatim, and text/template escapes nothing — so a file (or a
+// symlink target) named with an embedded newline injects a line break into
+// two places that are structurally trusted:
+//
+//   - the enumerated attached-paths list rendered INSIDE the reviewer's
+//     ground rules (plan_rules.tmpl), which sits ABOVE and OUTSIDE the
+//     nonce-guarded BEGIN/END FILE region. Injected lines land in the
+//     instruction region the nonce deliberately does not protect, so a
+//     hostile repo could append its own ground rules and make the plan gate
+//     pass anything;
+//   - the `context:` provenance list in the summary block (summary.go),
+//     where the same bytes forge lines a human reads as server output.
+//
+// One rejection covers both. It is a plain error (a transport error), not a
+// too-large envelope: unlike a cap breach there is no caller-tunable dial
+// and no partial result to return — the path is simply not renderable.
+//
+// %q escapes the offending bytes, so naming the path in the error cannot
+// re-inject them into whatever reads the error.
+func rejectControlChars(resolved string) error {
+	if i := strings.IndexFunc(resolved, func(r rune) bool { return r < 0x20 }); i >= 0 {
+		return fmt.Errorf(
+			"resolved path %q contains a control character at byte %d; refusing to render it into the reviewer prompt",
+			resolved, i)
+	}
+	return nil
 }
 
 // withinRoots reports whether p sits inside any root. Empty roots means

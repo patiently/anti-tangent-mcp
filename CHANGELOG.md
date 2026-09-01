@@ -47,6 +47,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now one shared partial. No behavioural change for a call without `context_paths`: the rendered
   prompt is byte-identical to 0.16.0.
 
+### Security
+- **A file name containing a control character is now refused, not rendered.** `context_paths`
+  and `plan_path` resolve symlinks with `EvalSymlinks`, which returns the target name verbatim,
+  and Linux permits every byte but `/` and NUL in a file name. A resolved path carrying an
+  embedded newline injected lines into the enumerated attached-paths list *inside* the reviewer's
+  ground rules — above and outside the nonce-guarded `BEGIN/END FILE` region — and into the
+  summary block's `context:` provenance list. Any resolved path with a byte below `0x20` is now
+  rejected outright.
+- **`context_paths` sends file contents verbatim to the configured reviewer vendor.** Everything
+  the caller attaches is transmitted to whichever third-party API `ANTI_TANGENT_PLAN_MODEL`
+  names, in full, on every reviewer call of the round. Attach only what the plan makes claims
+  about, and set `ANTI_TANGENT_PLAN_ROOTS` to bound what the server will read on the caller's
+  behalf. The tool description now says so at the call site.
+
 ### Fixed
 - **Line-anchored `Modify:` bullets no longer produce phantom "does not exist" findings.** Plans
   routinely anchor a file reference to the lines being edited (`- Modify: internal/x.go:57-70`)

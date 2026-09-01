@@ -922,6 +922,9 @@ func validatePlanTool() *mcp.Tool {
 			"Optionally pass context_paths: ABSOLUTE paths to source files the plan makes claims about. " +
 			"The server reads them whole and the reviewer verifies claims against them instead of emitting unverifiable_codebase_claim. " +
 			"Attach only files the plan actually touches — this is by far the most expensive input the tool takes. " +
+			"Every attached byte is sent VERBATIM to the configured reviewer vendor's API (a third party), in full, on every reviewer call of the round; " +
+			"do not attach secrets, credentials, or files the repo would not otherwise send off-host. " +
+			"ANTI_TANGENT_PLAN_ROOTS bounds which directories the server will read on your behalf. " +
 			"Optionally pass repo_root (absolute) to enable the disk tier of the Create/Modify consistency check. ",
 	}
 }
