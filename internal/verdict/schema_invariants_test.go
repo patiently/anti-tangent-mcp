@@ -121,7 +121,7 @@ func TestReviewerSchemas_CategoryEnumsAreInLockstep(t *testing.T) {
 
 	// Separate plan schemas from non-plan schemas.
 	planSchemaNames := map[string]bool{
-		"plan_schema.json":              true,
+		"plan_schema.json":               true,
 		"plan_findings_only_schema.json": true,
 		"tasks_only_schema.json":         true,
 	}
@@ -156,10 +156,6 @@ func TestReviewerSchemas_CategoryEnumsAreInLockstep(t *testing.T) {
 			sorted := append([]string(nil), enum...)
 			sort.Strings(sorted)
 			// Check that canonical is a subset of sorted.
-			canonicalSet := make(map[string]bool)
-			for _, c := range canonical {
-				canonicalSet[c] = true
-			}
 			for _, c := range canonical {
 				found := false
 				for _, e := range sorted {

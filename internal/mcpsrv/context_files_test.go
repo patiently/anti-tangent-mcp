@@ -123,6 +123,24 @@ func TestResolveContextPaths_OutsideRoots(t *testing.T) {
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
 }
 
+// Security-relevant (design §11): a symlink that LIVES inside
+// ANTI_TANGENT_PLAN_ROOTS but RESOLVES to a target outside it must be
+// refused just like a path given directly outside roots. The roots check
+// must apply to the symlink-resolved (real) path, never to where the
+// symlink itself sits — otherwise a symlink planted inside an allowed root
+// is a bypass that reads any file on disk into the reviewer prompt.
+func TestResolveContextPaths_SymlinkInsideRootsButResolvesOutside(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	secret := writeTemp(t, outside, "secret.go", "package secret\n")
+	link := filepath.Join(root, "link.go")
+	require.NoError(t, os.Symlink(secret, link))
+
+	_, _, err := resolveContextPaths([]string{link}, ctxCfg(1000, 10000, []string{root}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+}
+
 func TestResolveContextPaths_EmptyInput(t *testing.T) {
 	files, total, err := resolveContextPaths(nil, ctxCfg(1000, 10000, nil))
 	require.NoError(t, err)
