@@ -152,3 +152,37 @@ func TestCheckFileConsistency_OrderTier_FallsBackToPositionWhenTitleUnparseable(
 	assert.Contains(t, f.Evidence, "Task 1")
 	assert.Contains(t, f.Evidence, "Task 2")
 }
+
+// TestCheckFileConsistency_LineAnchoredModifyTarget is the end-to-end guard
+// for the false-positive class the line-anchor strip closes (see
+// planparser.stripLineAnchor). Plans anchor Modify: bullets to the lines
+// being edited; before the strip the disk tier stat'd `a.go:15-23`, a path
+// that can never exist, and reported a major finding about a file sitting
+// right there on disk. The order tier missed the same plans for the mirror
+// reason: the anchored string never matched its unanchored Create: twin.
+func TestCheckFileConsistency_LineAnchoredModifyTarget(t *testing.T) {
+	t.Run("disk tier does not false-positive on an existing file", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("x"), 0o600))
+		f := checkFileConsistency(tasksFrom("**Files:**\n- Modify: `a.go:15-23`\n"), dir)
+		assert.Nil(t, f, "a.go exists; the line anchor must not be stat'd as part of the path")
+	})
+
+	t.Run("order tier still matches the unanchored Create twin", func(t *testing.T) {
+		f := checkFileConsistency(tasksFrom(
+			"**Files:**\n- Modify: `a.go:15-23`\n",
+			"**Files:**\n- Create: `a.go`\n",
+		), "")
+		require.NotNil(t, f, "the anchored Modify: must match the later Create: of the same path")
+		assert.Contains(t, f.Evidence, "`a.go`")
+		assert.NotContains(t, f.Evidence, "15-23")
+	})
+
+	t.Run("order tier accepts an earlier Create of the anchored path", func(t *testing.T) {
+		f := checkFileConsistency(tasksFrom(
+			"**Files:**\n- Create: `a.go`\n",
+			"**Files:**\n- Modify: `a.go:15-23`\n",
+		), "")
+		assert.Nil(t, f)
+	})
+}

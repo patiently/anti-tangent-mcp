@@ -25,6 +25,19 @@ var (
 	fileBulletRe = regexp.MustCompile(`(?i)^\s*[-*]\s*((?:create|modify|delete)(?:/(?:create|modify|delete))*)\s*:\s*(.+)$`)
 	// trailingParenRe strips a trailing "(lines 10-20)"-style annotation.
 	trailingParenRe = regexp.MustCompile(`\s*\([^)]*\)\s*$`)
+	// lineAnchorRe strips a trailing line anchor — ":57", ":57-70", ":57,70"
+	// — from a path reference. Plans routinely anchor a Modify: bullet to
+	// the lines being edited (superpowers' task-format reference asks for
+	// "line ranges for modifications", and this repo's own plans use it),
+	// and the anchored string is not a path: statting `parser.go:57-70`
+	// reports a file that "does not exist" when parser.go plainly does, and
+	// the anchored form never string-matches its unanchored Create: twin.
+	//
+	// Anchored to a trailing `:digits` group only, which is what keeps the
+	// two shapes that must survive intact: a Windows drive letter (`C:\x`)
+	// has no digits after the colon and is not at the end of the string,
+	// and a URL scheme (`https://…`) is followed by slashes, not digits.
+	lineAnchorRe = regexp.MustCompile(`:\d+(?:[-,]\d+)?$`)
 )
 
 // FileRefs extracts a task body's declared file operations.
@@ -80,20 +93,28 @@ func FileRefs(body string) TaskFileRefs {
 
 // cleanRefPath takes the path out of a bullet's tail: backtick-quoted when
 // present, else the first whitespace-delimited token, with any trailing
-// parenthetical annotation removed.
+// parenthetical annotation and any trailing line anchor removed.
 func cleanRefPath(tail string) string {
 	tail = strings.TrimSpace(trailingParenRe.ReplaceAllString(strings.TrimSpace(tail), ""))
 	if i := strings.Index(tail, "`"); i >= 0 {
 		rest := tail[i+1:]
 		if j := strings.Index(rest, "`"); j >= 0 {
-			return strings.TrimSpace(rest[:j])
+			return stripLineAnchor(strings.TrimSpace(rest[:j]))
 		}
 		// Unterminated backtick: use the part after the opening backtick
 		tail = rest
 	}
-	fields := strings.Fields(tail + " ")
+	fields := strings.Fields(tail)
 	if len(fields) == 0 {
 		return ""
 	}
-	return strings.TrimSpace(fields[0])
+	return stripLineAnchor(strings.TrimSpace(fields[0]))
+}
+
+// stripLineAnchor removes a trailing ":N", ":N-M", or ":N,M" line anchor
+// (see lineAnchorRe). A reference that is NOTHING but an anchor collapses to
+// the empty string, which FileRefs already skips — an anchor with no path in
+// front of it names no file.
+func stripLineAnchor(p string) string {
+	return lineAnchorRe.ReplaceAllString(p, "")
 }

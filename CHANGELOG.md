@@ -48,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt is byte-identical to 0.16.0.
 
 ### Fixed
+- **Line-anchored `Modify:` bullets no longer produce phantom "does not exist" findings.** Plans
+  routinely anchor a file reference to the lines being edited (`- Modify: internal/x.go:57-70`)
+  — the convention superpowers' task-format reference asks for. The Create/Modify consistency
+  check kept the anchor as part of the path, so the disk tier stat'd `internal/x.go:57-70`, a
+  path that can never exist, and the order tier never matched the anchored form against its
+  unanchored `Create:` twin. A trailing `:N`, `:N-M`, or `:N,M` is now stripped before either
+  tier looks at the path.
 - **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.

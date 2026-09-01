@@ -73,3 +73,57 @@ func TestFileRefs_BarePathFirstToken(t *testing.T) {
 	refs := FileRefs("**Files:**\n- Delete: foo bar.go\n")
 	assert.Equal(t, []string{"foo"}, refs.Delete, "bare path should be first whitespace-delimited token")
 }
+
+// Plans anchor Modify: bullets to the lines being edited — superpowers'
+// task-format reference asks for "line ranges for modifications", and this
+// repo's own plans write "- Modify: `internal/verdict/parser.go:57-70`".
+// The anchor is not part of the path: leaving it on makes the disk tier stat
+// a path that can never exist, and stops the anchored form from matching its
+// unanchored Create: twin.
+func TestFileRefs_StripsTrailingLineAnchor(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"single line, backticked", "**Files:**\n- Modify: `a/b.go:57`\n", "a/b.go"},
+		{"line range, backticked", "**Files:**\n- Modify: `a/b.go:57-70`\n", "a/b.go"},
+		{"comma pair, backticked", "**Files:**\n- Modify: `a/b.go:57,70`\n", "a/b.go"},
+		{"bare path", "**Files:**\n- Modify: a/b.go:15-23\n", "a/b.go"},
+		{"anchor plus parenthetical", "**Files:**\n- Modify: `a/b.go:15-23` (the render func)\n", "a/b.go"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, []string{tc.want}, FileRefs(tc.body).Modify)
+		})
+	}
+}
+
+// The anchor strip must not eat anything that merely contains a colon. A
+// Windows drive letter has no digits after its colon and is not at the end
+// of the string; a URL scheme is followed by slashes; a filename that ends
+// in digits has no colon before them.
+func TestFileRefs_LineAnchorStripLeavesOtherColonsAlone(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"windows drive letter", "**Files:**\n- Modify: `C:\\repo\\a.go`\n", `C:\repo\a.go`},
+		{"url", "**Files:**\n- Modify: `https://example.com/a.go`\n", "https://example.com/a.go"},
+		{"filename ending in digits", "**Files:**\n- Modify: `migrations/0042.sql`\n", "migrations/0042.sql"},
+		{"colon then non-digits", "**Files:**\n- Modify: `a/b.go:head`\n", "a/b.go:head"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, []string{tc.want}, FileRefs(tc.body).Modify)
+		})
+	}
+}
+
+// A bullet whose path is nothing but an anchor names no file, so it must
+// drop out rather than register ":15" as a path.
+func TestFileRefs_AnchorOnlyPathIsDropped(t *testing.T) {
+	refs := FileRefs("**Files:**\n- Modify: `:15-23`\n")
+	assert.Empty(t, refs.Modify)
+}
