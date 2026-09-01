@@ -8,10 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.17.0] - 2026-09-01
 
 ### Added
+- **`context_paths` on `validate_plan`.** Absolute paths to source files the plan makes claims
+  about. The server reads them whole and renders them ahead of the plan, and the reviewer's
+  ground rules are rewritten to enumerate exactly what is attached: for those files absence is
+  evidence, and everything else stays black-box. The reviewer verifies codebase claims instead
+  of emitting `unverifiable_codebase_claim` for each one. **Opt-in and materially expensive** —
+  a 170KB plan with ~100K tokens of attachments runs roughly $1.31 per round on the default
+  plan model, against cents without them. Attach only the files the plan actually touches.
+  Oversized attachments are refused, never truncated: the reviewer is told attached files are
+  complete, and a silently-shortened file would turn that promise into false findings.
+- **`contradicted_codebase_claim`.** A new finding category for a plan claim an attached file
+  refutes. Unlike `unverifiable_codebase_claim` it carries no severity floor — an attached file
+  is ground truth read from disk, so the reviewer's chosen severity stands — and it is never
+  rolled into the `codebase_reference_checklist` nor force-passed by the unverifiable-only
+  verdict calibration.
+- **Order-aware Create/Modify consistency check.** Deterministic and reviewer-free: a task's
+  `Modify:` target must exist on disk or be created by a lower-numbered task. Emits one
+  plan-level `task_order_contradiction` finding. The mirror check — flagging a `Create:` target
+  that already exists — is deliberately absent: measured on a real plan it produced 9 false
+  positives, every one of them because an earlier task had already been implemented in the
+  worktree, which is a legitimate state for a resumed plan run.
+- **`repo_root` on `validate_plan`** — optional absolute path that enables the disk tier of that
+  check. Without it the order tier still runs.
 - **`ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES`** (default 131072) and
   **`ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES`** (default 524288) — per-file and whole-set byte
   caps for `validate_plan`'s new `context_paths` attachments. Separate from the plan cap so an
   oversized attachment set is refused with its own actionable message.
+
+### Changed
+- `docs/protocol/controller.md`'s per-call cost figure for the plan gate was stale — it
+  advertised ~$0.01–$0.02, which was already wrong for a large plan and off by roughly 50× with
+  attachments. It now carries real numbers for both cases.
+- The reviewer ground rules, previously duplicated verbatim across all three plan templates, are
+  now one shared partial. No behavioural change for a call without `context_paths`: the rendered
+  prompt is byte-identical to 0.16.0.
+
+### Fixed
+- **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
+  editing a source file a finding complained about and immediately re-validating would return
+  the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
 
 ## [0.16.0] - 2026-08-31
 

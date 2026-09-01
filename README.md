@@ -208,6 +208,10 @@ ANTI_TANGENT_LOG_LEVEL=info
 # ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES=1048576 # optional override; unset falls back to max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES) — raising the shared cap above raises this too; setting this always wins, even below the shared cap
 ANTI_TANGENT_PLAN_ROOTS=                      # OS path-list separator (":" on Unix, ";" on Windows) list of absolute roots; empty = unrestricted
 
+# validate_plan context_paths attachments (design 2026-09-01)
+ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES=131072    # per-file cap for context_paths attachments; oversized files are refused, never truncated
+ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES=524288 # cap for the attached set as a whole
+
 # Output budgets + chunking (v0.1.4+):
 ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion); raise if a stateful hook returns a truncation finding
 ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # output cap per reviewer call in validate_plan (single-call and per-chunk); raise if plan validation returns a truncation finding
@@ -350,6 +354,13 @@ both 1M-token context), but not for `claude-haiku-4-5-20251001` (200K context) o
 allowlisted OpenAI/Google models — check that model's context window before pointing a fast/cheap
 tier at plans anywhere near the 1MB cap, and prefer `claude-sonnet-4-6` / `claude-opus-4-7` for
 those.
+
+`context_paths` and `repo_root` are governed by the same `ANTI_TANGENT_PLAN_ROOTS` allowlist as
+`plan_path` — restricting one restricts all three.
+
+**Attachments are only cached on Anthropic reviewers.** The OpenAI and Google clients have no
+prompt-cache support, so a large attached set is billed in full on every reviewer call of every
+round when `ANTI_TANGENT_PLAN_MODEL` names one of them.
 
 ## Use with Claude Code (`.mcp.json`)
 

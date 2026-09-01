@@ -39,6 +39,14 @@ The integration is **system-agnostic**: it works with superpowers, hone-ai, vani
 
 When the reviewer encounters a plan claim it cannot verify text-only, as of v0.3.1 it flags `unverifiable_codebase_claim` rather than silently passing. These are *not failures* — treat them as "things to grep before dispatching."
 
+When `validate_plan`'s `context_paths` attached the relevant file (v0.17.0+), the reviewer
+verifies the claim against it instead: no `unverifiable_codebase_claim` for that claim. If the
+attached file refutes the claim, the reviewer emits `contradicted_codebase_claim` instead —
+carrying its own chosen severity (no `minor` floor, unlike `unverifiable_codebase_claim`) and
+never rolled into the `codebase_reference_checklist` rollup or force-passed by the
+unverifiable-only verdict calibration, since an attached file is ground truth read from disk,
+not a caller claim.
+
 ### Reducing text-only review noise
 
 - Pre-flight grep before calling `validate_task_spec` when the task names codebase references.
@@ -80,7 +88,7 @@ If you're unsure, look for the structured task block. No block → no protocol. 
 
 **Finding categories.** Canonical set surfaced by the reviewer (see `internal/verdict/verdict.go` for the authoritative enum):
 
-- Spec / lifecycle: `missing_acceptance_criterion`, `scope_drift`, `ambiguous_spec`, `unaddressed_finding`, `quality`, `convention_deviation`, `attestation_contradiction`, `unverifiable_codebase_claim`, `other`.
+- Spec / lifecycle: `missing_acceptance_criterion`, `scope_drift`, `ambiguous_spec`, `unaddressed_finding`, `quality`, `convention_deviation`, `attestation_contradiction`, `unverifiable_codebase_claim`, `contradicted_codebase_claim`, `other`.
 - Evidence: `insufficient_evidence` — emitted by `validate_completion` when an AC cannot be assessed from the submitted evidence, and by `extract_project_knowledge`. Server-only: `malformed_evidence`, `codescene_not_run`, `codescene_skipped`.
 - Operational: `session_not_found`, `payload_too_large`.
 - Project-knowledge (v0.6.0+): `kb_gap`, `ambiguous_pick`, `missing_index_entry` (prime); `redundant_proposal`, `contradicts_existing` (extract).

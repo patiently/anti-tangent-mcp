@@ -33,7 +33,7 @@ not on disk; it is deprecated and will be removed in 1.0.0.
 
 The implementing subagent still calls `validate_task_spec` at task start in its own session — see §4. The plan-level gate and the per-task implementer gate are two different responsibilities at two different moments.
 
-**Why this matters:** catching a vague AC at handoff costs one `validate_plan` call (~$0.01–$0.02); catching it after a subagent spent 10 minutes against a misread spec costs a wasted dispatch.
+**Why this matters:** catching a vague AC at handoff costs one `validate_plan` call — cents without `context_paths`, up to roughly $1.31 per round with a large attached set (see §5.8) — versus a wasted dispatch after a subagent spent 10 minutes against a misread spec.
 
 **Skip this gate** when the plan has only one task (go straight to per-task validation), or when the work didn't come from a plan at all (see §1).
 
@@ -88,3 +88,25 @@ Use `phase: "post"` only to recover a task session after implementation already 
 Use `controller_verified_references` when the controller has already grep-verified specific file paths, symbols, line anchors, commands, or adjacent patterns. Example: `controller_verified_references: ["cmd/import.go", "ParserOptions.Strict", "ParseFile"]`.
 
 CVR entries are caller attestations: they suppress matching `unverifiable_codebase_claim` findings by substring match only, not real contradictions or ambiguity. Suppression runs server-side (deterministic) as well as in the reviewer prompt — a substring match against the finding's `evidence` or `criterion` (either direction; 4-code-point floor on CVR entries) suppresses the entire `unverifiable_codebase_claim`, independent of reviewer compliance.
+
+### 5.8 Attaching source files: `context_paths` and `repo_root`
+
+`validate_plan` accepts `context_paths` — a list of **absolute** paths to source files the plan
+makes claims about. The server reads each one whole and renders it into the prompt ahead of the
+plan (governed by the same `ANTI_TANGENT_PLAN_ROOTS` allowlist as `plan_path`). For attached
+files the reviewer verifies claims directly instead of emitting `unverifiable_codebase_claim`,
+and emits `contradicted_codebase_claim` (see [`core.md`](core.md)) when an attached file refutes
+one.
+
+**Opt-in and expensive — attach only the files the plan actually makes claims about.** Measured
+on a real 9-task, 170KB plan: the 24 referenced paths that existed cost ~100K tokens of
+attachments, about 2.2× the plan's own size, and turned a chunked round into 3 reviewer calls at
+~147K input tokens each — roughly **$1.31 per round** at the default plan model's rate, against
+cents per round with no attachments.
+
+Oversized attachments are **refused, never truncated**: the reviewer is told attached files are
+complete, and a silently-shortened one would make that a lie. `repo_root` (optional, absolute,
+same allowlist) enables the disk tier of `validate_plan`'s deterministic, reviewer-free
+Create/Modify consistency check — a `Modify:` target with no earlier `Create:` and nothing on
+disk emits a plan-level `task_order_contradiction` finding; without `repo_root`, only the
+plan-text order tier runs.
