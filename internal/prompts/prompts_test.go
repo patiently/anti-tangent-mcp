@@ -1185,8 +1185,13 @@ func TestRenderPlan_WithContextFiles_Golden(t *testing.T) {
 // and their whitespace and ordering are only pinned when both are set.
 func TestRenderPlan_WithProjectKnowledgeAndContextFiles_Golden(t *testing.T) {
 	out, err := RenderPlan(PlanInput{
-		PlanText:          "# Plan\n\n### Task 1: t1\n\n**Goal:** g1\n",
-		ProjectKnowledge:  "- decision: PlanRoots is an allowlist, empty means unrestricted.\n",
+		PlanText: "# Plan\n\n### Task 1: t1\n\n**Goal:** g1\n",
+		// No trailing newline: every other Project-knowledge fixture in this
+		// file ends without one, and the template supplies its own blank line
+		// after the section. A fixture that carried one pinned an extra blank
+		// line here, so this golden could not corroborate the plain
+		// project-knowledge golden's inter-section whitespace.
+		ProjectKnowledge:  "- decision: PlanRoots is an allowlist, empty means unrestricted.",
 		ContextFiles:      ctxFiles(),
 		ContextFilesNonce: testContextNonce,
 	})
