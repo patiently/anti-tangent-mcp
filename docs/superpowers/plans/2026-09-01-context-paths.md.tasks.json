@@ -4,19 +4,19 @@
     {
       "id": 1,
       "subject": "Task 1: Config — attachment byte caps",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Add the two attachment byte caps to `Config` with env-var parsing that matches the existing pattern.\n\n**Files:**\n- Modify: `internal/config/config.go`\n- Test: `internal/config/config_test.go`\n\n**Acceptance Criteria:**\n- [ ] `Config.ContextMaxFileBytes` defaults to 131072 and `Config.ContextMaxPayloadBytes` defaults to 524288.\n- [ ] `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` and `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` override them.\n- [ ] A non-integer or non-positive value for either returns an error naming that env var.\n- [ ] No other config default changes.\n\n**Verify:** `go test -race ./internal/config/...` → PASS\n\n```json:metadata\n{\"files\": [\"internal/config/config.go\", \"internal/config/config_test.go\", \"CHANGELOG.md\"], \"verifyCommand\": \"go test -race ./internal/config/...\", \"acceptanceCriteria\": [\"ContextMaxFileBytes defaults to 131072 and ContextMaxPayloadBytes to 524288\", \"Both env vars override the defaults\", \"Non-integer or non-positive values error naming the env var\", \"No other config default changes\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
       "id": 2,
       "subject": "Task 2: `contradicted_codebase_claim` category",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Add the new finding category to the verdict type, the validator, and the three plan schemas, with no severity floor.\n\n**Files:**\n- Modify: `internal/verdict/verdict.go`\n- Modify: `internal/verdict/parser.go:57-70` (`validCategory`)\n- Modify: `internal/verdict/plan_schema.json`\n- Modify: `internal/verdict/plan_findings_only_schema.json`\n- Modify: `internal/verdict/tasks_only_schema.json`\n- Test: `internal/verdict/parser_test.go`\n\n**Acceptance Criteria:**\n- [ ] `verdict.CategoryContradictedCodebaseClaim` exists with value `\"contradicted_codebase_claim\"`.\n- [ ] `validCategory` accepts it.\n- [ ] `applySeverityFloor` leaves a `major` or `critical` one **unchanged** (contrast: `unverifiable_codebase_claim` is floored to minor).\n- [ ] The category appears in the `category` enum of `plan_schema.json`, `plan_findings_only_schema.json`, and `tasks_only_schema.json`, and in **no other** schema.\n- [ ] All three edited JSON files remain valid JSON.\n\n**Verify:** `go test -race ./internal/verdict/...` → PASS\n\n```json:metadata\n{\"files\": [\"internal/verdict/verdict.go\", \"internal/verdict/parser.go\", \"internal/verdict/plan_schema.json\", \"internal/verdict/plan_findings_only_schema.json\", \"internal/verdict/tasks_only_schema.json\", \"internal/verdict/parser_test.go\"], \"verifyCommand\": \"go test -race ./internal/verdict/...\", \"acceptanceCriteria\": [\"CategoryContradictedCodebaseClaim exists with the right string value\", \"validCategory accepts it\", \"applySeverityFloor leaves major/critical unchanged\", \"Present in the three plan schema enums and no others\", \"All edited JSON files remain valid\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
       "id": 3,
       "subject": "Task 3: `context_paths` resolution with caps",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Turn a `[]string` of absolute paths into resolved, de-duplicated, cap-checked file contents — or a typed refusal — reusing the existing `resolveFileInput`.\n\n**Files:**\n- Create: `internal/mcpsrv/context_files.go`\n- Create: `internal/mcpsrv/context_files_test.go`\n\n**Acceptance Criteria:**\n- [ ] `resolveContextPaths` returns `[]contextFile` in caller-supplied order with total bytes.\n- [ ] A list longer than `maxContextFiles` (50) is refused **before any file is opened**.\n- [ ] A single file over `cfg.ContextMaxFileBytes` returns a `*contextTooLargeError` naming that path.\n- [ ] A set exceeding `cfg.ContextMaxPayloadBytes` returns a `*contextTooLargeError` with `Path == \"\"` and the running total.\n- [ ] Paths resolving to the same file (e.g. via symlink) are de-duplicated, first occurrence kept, counted once.\n- [ ] A missing / relative / non-regular path, or one outside `ANTI_TANGENT_PLAN_ROOTS`, returns a plain error (not `*contextTooLargeError`).\n- [ ] `resolveDirInput` resolves an absolute directory subject to roots and rejects a regular file.\n\n**Verify:** `go test -race ./internal/mcpsrv/ -run 'TestResolveContextPaths|TestResolveDirInput' -v` → PASS\n\n```json:metadata\n{\"files\": [\"internal/mcpsrv/context_files.go\", \"internal/mcpsrv/context_files_test.go\"], \"verifyCommand\": \"go test -race ./internal/mcpsrv/ -run 'TestResolveContextPaths|TestResolveDirInput' -v\", \"acceptanceCriteria\": [\"resolveContextPaths returns files in order with total bytes\", \"Count cap refuses before any file is opened\", \"Per-file breach returns contextTooLargeError naming the path\", \"Set breach returns contextTooLargeError with empty Path and the running total\", \"Symlink-equal paths de-duplicated and counted once\", \"Bad paths return plain errors, not contextTooLargeError\", \"resolveDirInput accepts a directory and rejects a regular file\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         1
@@ -25,7 +25,7 @@
     {
       "id": 4,
       "subject": "Task 4: Extract the shared plan ground-rules partial (no behavior change)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Move the ground-rules text — currently duplicated verbatim in three plan templates — into one shared partial, with the existing golden files proving nothing changed.\n\n**Files:**\n- Create: `internal/prompts/templates/plan_rules.tmpl`\n- Modify: `internal/prompts/templates/plan.tmpl:1-16`\n- Modify: `internal/prompts/templates/plan_findings_only.tmpl:1-16`\n- Modify: `internal/prompts/templates/plan_tasks_chunk.tmpl:1-16`\n- Modify: `internal/prompts/prompts.go` (`render`)\n- Test: `internal/prompts/prompts_test.go` (existing goldens are the test)\n\n**Acceptance Criteria:**\n- [ ] The ground-rules text exists in exactly one file, `plan_rules.tmpl`.\n- [ ] All three plan templates include it via `{{template \"plan_rules\" .}}`.\n- [ ] **Every existing golden file passes unchanged** — no `-update` run, no golden diff.\n- [ ] `render` parses the whole `templates/*.tmpl` set and executes the named template.\n\n**Verify:** `go test -race ./internal/prompts/...` → PASS with zero golden diffs\n\n```json:metadata\n{\"files\": [\"internal/prompts/templates/plan_rules.tmpl\", \"internal/prompts/templates/plan.tmpl\", \"internal/prompts/templates/plan_findings_only.tmpl\", \"internal/prompts/templates/plan_tasks_chunk.tmpl\", \"internal/prompts/prompts.go\"], \"verifyCommand\": \"go test -race ./internal/prompts/...\", \"acceptanceCriteria\": [\"Ground-rules text lives in exactly one file\", \"All three plan templates include it via the partial\", \"Every existing golden passes unchanged with no -update run\", \"render parses the whole templates/*.tmpl set\"], \"modelTier\": \"standard\"}\n```"
     },
     {
@@ -59,7 +59,7 @@
     {
       "id": 8,
       "subject": "Task 8: Parse `**Files:**` bullets per task",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Extract each task's `Create:` / `Modify:` / `Delete:` path lists from its markdown body.\n\n**Files:**\n- Create: `internal/planparser/filerefs.go`\n- Create: `internal/planparser/filerefs_test.go`\n\n**Acceptance Criteria:**\n- [ ] `FileRefs(body string) TaskFileRefs` returns the three path lists.\n- [ ] Backtick-quoted paths are unquoted; bare paths are taken as the first whitespace-delimited token.\n- [ ] A trailing parenthetical such as `(lines 1651-1875)` is stripped.\n- [ ] `Create/Modify:` on one bullet contributes to **both** lists.\n- [ ] Matching is case-insensitive on the verb and tolerates `-` or `*` bullets.\n- [ ] A body with no `**Files:**` section returns three empty lists.\n- [ ] Bullets after the `**Files:**` section ends (a blank line followed by a non-bullet line) are not collected.\n\n**Verify:** `go test -race ./internal/planparser/...` → PASS\n\n```json:metadata\n{\"files\": [\"internal/planparser/filerefs.go\", \"internal/planparser/filerefs_test.go\"], \"verifyCommand\": \"go test -race ./internal/planparser/...\", \"acceptanceCriteria\": [\"FileRefs returns Create/Modify/Delete lists\", \"Backticked and bare paths both parse\", \"Trailing parentheticals stripped\", \"Create/Modify contributes to both lists\", \"Case-insensitive verbs, - and * bullets\", \"No Files section yields empty lists\", \"Bullets after the section ends are not collected\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
@@ -75,7 +75,7 @@
     {
       "id": 10,
       "subject": "Task 10: Pin the rollup and calibration guards",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Prove that a `contradicted_codebase_claim` is never absorbed into the checklist rollup and never force-passed — the one failure mode that would make this feature worse than not shipping it.\n\n**Files:**\n- Test: `internal/mcpsrv/plan_normalize_test.go`\n\n**Acceptance Criteria:**\n- [ ] A task-level `contradicted_codebase_claim` survives `normalizePlanUnverifiableFindings` attached to its task.\n- [ ] It does not appear in the `codebase_reference_checklist` rollup evidence.\n- [ ] `calibratePlanVerdictForUnverifiableOnly` does **not** force `pass` when one is present alongside minor unverifiable findings.\n- [ ] A control case with only minor unverifiable findings still force-passes (proving the test discriminates).\n\n**Verify:** `go test -race ./internal/mcpsrv/ -run 'TestNormalizePlan|TestCalibratePlan' -v` → PASS\n\n```json:metadata\n{\"files\": [\"internal/mcpsrv/plan_normalize_test.go\"], \"verifyCommand\": \"go test -race ./internal/mcpsrv/ -run 'TestNormalizePlan|TestCalibratePlan' -v\", \"acceptanceCriteria\": [\"Contradiction survives rollup attached to its task\", \"Contradiction evidence is absent from the checklist rollup\", \"Calibration does not force-pass when a contradiction is present\", \"Control case with only minor unverifiable findings still force-passes\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         2
@@ -93,5 +93,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-01T08:30:10.516554+00:00"
+  "lastUpdated": "2026-09-01T10:25:00.313298+00:00"
 }
