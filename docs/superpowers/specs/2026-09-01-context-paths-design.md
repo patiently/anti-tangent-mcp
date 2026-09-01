@@ -219,14 +219,24 @@ Attached content is **not** wrapped in a markdown code fence. Go source contains
 chosen can be broken by a legitimate attachment. Explicit delimiters instead:
 
 ```text
---- BEGIN FILE: /abs/path/internal/config/config.go (4211 bytes, sha256 9f2ab41c…) ---
+--- BEGIN FILE 7c1e9a04: /abs/path/internal/config/config.go (4211 bytes, sha256 9f2ab41c…) ---
 <verbatim file content>
---- END FILE: /abs/path/internal/config/config.go ---
+--- END FILE 7c1e9a04: /abs/path/internal/config/config.go ---
 ```
 
 The byte count and short hash are the same provenance a caller already sees on the summary's
 `source:` line for `plan_path`, reusing `fileSource.String()`'s formatting. They also give the
 reviewer a way to say *which* file its evidence came from without paraphrasing.
+
+The `7c1e9a04` token is the irony the paragraph above almost missed: a bare, unadorned
+delimiter has exactly the weakness just argued against fences, since a legitimate attachment
+can itself contain a line reading `--- END FILE: ...` and forge a premature terminator (six
+files in this very repository do). The token closes that the same way the byte count and hash
+close paraphrasing: it is derived from the attached content itself
+(`sha256(Path || 0x00 || Content || 0x00, per file in render order)[:8]`), so two renders of the
+same attachment set are still byte-identical and the plan-pass cache (§7) still hits; on the rare
+chance a derived candidate collides with delimiter-shaped text already in the content, it is
+discarded and re-derived with a retry counter folded in.
 
 ### 4.3 The ground rules become a shared partial
 

@@ -1169,9 +1169,6 @@ func TestRenderPlan_WithContextFiles_Structure(t *testing.T) {
 		strings.Index(out.User, "## Plan under review"))
 }
 
-// Two RenderPlan calls with no pinned nonce must not collide: each generates
-// its own fresh random token, so the same attachment set renders with
-// different delimiters across calls.
 // THE regression guard for the plan-pass cache fix: two separate renders of
 // the SAME attachment set, with no nonce pinned, must produce byte-identical
 // output. mcpsrv's plan-pass cache hashes the fully rendered prompt text as
