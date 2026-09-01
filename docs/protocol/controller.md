@@ -105,8 +105,14 @@ attachments, about 2.2× the plan's own size, and turned a chunked round into 3 
 cents per round with no attachments.
 
 Oversized attachments are **refused, never truncated**: the reviewer is told attached files are
-complete, and a silently-shortened one would make that a lie. `repo_root` (optional, absolute,
-same allowlist) enables the disk tier of `validate_plan`'s deterministic, reviewer-free
-Create/Modify consistency check — a `Modify:` target with no earlier `Create:` and nothing on
-disk emits a plan-level `task_order_contradiction` finding; without `repo_root`, only the
-plan-text order tier runs.
+complete, and a silently-shortened one would make that a lie. A fixed, non-configurable cap of
+50 files also applies to `context_paths`.
+
+`repo_root` (optional, absolute, same allowlist) enables the disk tier of `validate_plan`'s
+deterministic, reviewer-free Create/Modify consistency check. Its two tiers are independently
+gated, not combined by AND: the **order tier** (always runs) flags a `Modify:` target whose
+earliest `Create:` bullet anywhere in the plan belongs to a later task — decided from plan text
+alone, so an already-implemented worktree does NOT exempt a genuine ordering bug. The **disk
+tier** (needs `repo_root`) only reaches a `Modify:` target that no task creates at all, and
+flags it if it also doesn't exist on disk. Either tier emits the same plan-level
+`task_order_contradiction` finding.

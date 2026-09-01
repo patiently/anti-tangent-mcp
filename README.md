@@ -211,6 +211,7 @@ ANTI_TANGENT_PLAN_ROOTS=                      # OS path-list separator (":" on U
 # validate_plan context_paths attachments (design 2026-09-01)
 ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES=131072    # per-file cap for context_paths attachments; oversized files are refused, never truncated
 ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES=524288 # cap for the attached set as a whole
+# context_paths also caps at 50 files total — fixed, not env-configurable
 
 # Output budgets + chunking (v0.1.4+):
 ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion); raise if a stateful hook returns a truncation finding
@@ -430,7 +431,7 @@ Adding a new model is a one-line change in [`internal/providers/reviewer.go`](in
 
 ## The 7 tools
 
-- `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings and mints a `plan_run_id`. Accepts `plan_path` (v0.16.0+, preferred) with an absolute path, or `plan_text` (deprecated, removed in 1.0.0) — see "File-path inputs and the trust model" above.
+- `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings and mints a `plan_run_id`. Accepts `plan_path` (v0.16.0+, preferred) with an absolute path, or `plan_text` (deprecated, removed in 1.0.0) — see "File-path inputs and the trust model" above. Also accepts `context_paths` (v0.17.0+, absolute paths to source files the plan makes claims about; opt-in and materially more expensive — see above) and `repo_root` (v0.17.0+, absolute) to enable the disk tier of a deterministic Create/Modify consistency check.
 - `validate_task_spec` — call once before coding. Returns findings on missing goals, weak acceptance criteria, unstated assumptions. Returns a `session_id` you thread through the next two calls. Accepts the controller's `plan_run_id` (optional, best-effort) to tie the task to its plan run.
 - `check_progress` — call at checkpoints during implementation. Catches scope drift, untouched ACs, and unaddressed prior findings.
 - `validate_completion` — call before claiming done. Walks every AC and non-goal explicitly. Accepts an optional structured `codescene` argument (see "Companion tool: CodeScene MCP" above).

@@ -22,12 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is ground truth read from disk, so the reviewer's chosen severity stands — and it is never
   rolled into the `codebase_reference_checklist` nor force-passed by the unverifiable-only
   verdict calibration.
-- **Order-aware Create/Modify consistency check.** Deterministic and reviewer-free: a task's
-  `Modify:` target must exist on disk or be created by a lower-numbered task. Emits one
-  plan-level `task_order_contradiction` finding. The mirror check — flagging a `Create:` target
-  that already exists — is deliberately absent: measured on a real plan it produced 9 false
-  positives, every one of them because an earlier task had already been implemented in the
-  worktree, which is a legitimate state for a resumed plan run.
+- **Order-aware Create/Modify consistency check.** Deterministic and reviewer-free, with two
+  independently-gated tiers rather than one combined AND check. Order tier (always runs): a
+  `Modify:` target whose earliest `Create:` bullet in the plan belongs to a later task is
+  flagged from plan text alone, regardless of what's on disk — an already-implemented worktree
+  does not excuse a genuine ordering bug. Disk tier (needs `repo_root`): reached only for a
+  `Modify:` target that no task creates at all, and flags it if it also doesn't exist on disk.
+  Either tier emits one plan-level `task_order_contradiction` finding. The mirror check —
+  flagging a `Create:` target that already exists — is deliberately absent: measured on a real
+  plan it produced 9 false positives, every one of them because an earlier task had already been
+  implemented in the worktree, which is a legitimate state for a resumed plan run.
 - **`repo_root` on `validate_plan`** — optional absolute path that enables the disk tier of that
   check. Without it the order tier still runs.
 - **`ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES`** (default 131072) and
