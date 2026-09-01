@@ -106,6 +106,46 @@ func passOneResp() providers.Response {
 	}
 }
 
+// singlePlanResp returns a scripted providers.Response containing a valid
+// single-call PlanResult JSON (the "tasks" key is present, unlike
+// passOneResp's plan_findings_only shape) covering N tasks titled to match
+// buildPlanWithNTasks(n).
+func singlePlanResp(t *testing.T, n int) providers.Response {
+	t.Helper()
+	type item struct {
+		TaskIndex             int    `json:"task_index"`
+		TaskTitle             string `json:"task_title"`
+		Verdict               string `json:"verdict"`
+		Findings              []any  `json:"findings"`
+		SuggestedHeaderBlock  string `json:"suggested_header_block"`
+		SuggestedHeaderReason string `json:"suggested_header_reason"`
+	}
+	titles := titlesRange(1, n)
+	items := make([]item, 0, len(titles))
+	for i, ttl := range titles {
+		items = append(items, item{
+			TaskIndex: i + 1,
+			TaskTitle: ttl,
+			Verdict:   "pass",
+			Findings:  []any{},
+		})
+	}
+	raw, err := json.Marshal(struct {
+		PlanVerdict  string `json:"plan_verdict"`
+		PlanQuality  string `json:"plan_quality"`
+		PlanFindings []any  `json:"plan_findings"`
+		Tasks        []item `json:"tasks"`
+		NextAction   string `json:"next_action"`
+	}{"pass", "actionable", []any{}, items, "Proceed with implementation."})
+	if err != nil {
+		t.Fatalf("singlePlanResp marshal: %v", err)
+	}
+	return providers.Response{
+		RawJSON: raw,
+		Model:   "claude-sonnet-4-6",
+	}
+}
+
 // chunkResp returns a providers.Response containing a valid TasksOnly JSON for
 // the given task titles. TaskIndex within the JSON is 1-based relative to the
 // slice position (identity validation uses task_title, not task_index).

@@ -1720,3 +1720,111 @@ func TestPlanPassCacheKey_CoversBothHalves(t *testing.T) {
 		assert.Equal(t, base, again)
 	})
 }
+
+func TestValidatePlan_ContextPaths_ReachThePrompt(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.go")
+	require.NoError(t, os.WriteFile(f, []byte("package config\n// SENTINEL_ATTACHED\n"), 0o600))
+
+	sr := &scriptedReviewer{responses: []providers.Response{singlePlanResp(t, 1)}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{f},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, sr.requests)
+	assert.Contains(t, sr.requests[0].User, "SENTINEL_ATTACHED")
+	assert.Contains(t, sr.requests[0].User, "## Attached source files")
+}
+
+func TestValidatePlan_ContextPaths_TooLargeIsAnEnvelope(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "big.go")
+	require.NoError(t, os.WriteFile(f, []byte(strings.Repeat("x", 500)), 0o600))
+
+	sr := &scriptedReviewer{}
+	d := newDepsWithScripted(t, sr, 8)
+	d.Cfg.ContextMaxFileBytes = 100
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{f},
+	})
+	require.NoError(t, err, "a cap breach is an envelope, not a transport error")
+	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
+	require.NotEmpty(t, pr.PlanFindings)
+	assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
+	assert.Contains(t, pr.PlanFindings[0].Evidence, "ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES")
+	assert.Zero(t, sr.calls, "no reviewer call is made on a refused payload")
+}
+
+func TestValidatePlan_ContextPaths_BadPathIsTransportError(t *testing.T) {
+	sr := &scriptedReviewer{}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{"/nonexistent/nope.go"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context_paths")
+	assert.Zero(t, sr.calls)
+}
+
+// Spec §11: the attachment block must land inside the CACHEABLE prefix on
+// the chunked path, not in the per-call suffix — that placement is the whole
+// reason attachments render before the plan.
+func TestValidatePlan_ContextPaths_LandInTheCachePrefix(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.go")
+	require.NoError(t, os.WriteFile(f, []byte("package config\n// SENTINEL_ATTACHED\n"), 0o600))
+
+	sr := &scriptedReviewer{
+		responses: []providers.Response{
+			passOneResp(),
+			chunkResp(t, titlesRange(1, 8)),
+			chunkResp(t, titlesRange(9, 9)),
+		},
+	}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(9),
+		ContextPaths: []string{f},
+	})
+	require.NoError(t, err)
+	require.Len(t, sr.requests, 3)
+
+	// Pass 1 carries no breakpoint (its tools block differs), so the
+	// attachment is in its plain User body.
+	assert.Empty(t, sr.requests[0].CachePrefix)
+	assert.Contains(t, sr.requests[0].User, "SENTINEL_ATTACHED")
+
+	// Both chunk calls carry the attachment in the SHARED prefix, and their
+	// per-call suffixes must not repeat it.
+	for i := 1; i < 3; i++ {
+		assert.Contains(t, sr.requests[i].CachePrefix, "SENTINEL_ATTACHED", "chunk %d prefix", i)
+		assert.NotContains(t, sr.requests[i].User, "SENTINEL_ATTACHED", "chunk %d suffix", i)
+	}
+	assert.Equal(t, sr.requests[1].CachePrefix, sr.requests[2].CachePrefix,
+		"the prefix must be byte-identical across chunks or nothing is ever cache-read")
+}
+
+func TestValidatePlan_NoContextPaths_PromptUnchanged(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{singlePlanResp(t, 1)}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: buildPlanWithNTasks(1),
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, sr.requests[0].User, "## Attached source files")
+	assert.Contains(t, sr.requests[0].User, "You have access ONLY to the plan markdown")
+}

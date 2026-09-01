@@ -554,6 +554,27 @@ func toPromptFiles(files []FileArg) []prompts.File {
 	return out
 }
 
+// toPromptContextFiles converts resolved attachments into the prompts
+// package's render-facing shape. The short hash is the same 8-digit prefix
+// the summary block shows, so a reviewer citing a file and a human reading
+// the summary are looking at the same identity.
+func toPromptContextFiles(files []contextFile) []prompts.ContextFile {
+	out := make([]prompts.ContextFile, 0, len(files))
+	for _, f := range files {
+		short := f.Source.SHA256
+		if len(short) > 8 {
+			short = short[:8]
+		}
+		out = append(out, prompts.ContextFile{
+			Path:        f.Source.Path,
+			Bytes:       f.Source.Bytes,
+			SHA256Short: short,
+			Content:     f.Content,
+		})
+	}
+	return out
+}
+
 func priorFindings(s *session.Session) []verdict.Finding {
 	out := append([]verdict.Finding{}, s.PreFindings...)
 	for _, cp := range s.Checkpoints {
@@ -868,12 +889,14 @@ type ValidateCompletionArgs struct {
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
 type ValidatePlanArgs struct {
-	PlanText          string `json:"plan_text,omitempty"`
-	PlanPath          string `json:"plan_path,omitempty"`
-	ProjectKnowledge  string `json:"project_knowledge,omitempty"`
-	ModelOverride     string `json:"model_override,omitempty"`
-	MaxTokensOverride int    `json:"max_tokens_override,omitempty"`
-	Mode              string `json:"mode,omitempty"`
+	PlanText          string   `json:"plan_text,omitempty"`
+	PlanPath          string   `json:"plan_path,omitempty"`
+	ProjectKnowledge  string   `json:"project_knowledge,omitempty"`
+	ModelOverride     string   `json:"model_override,omitempty"`
+	MaxTokensOverride int      `json:"max_tokens_override,omitempty"`
+	Mode              string   `json:"mode,omitempty"`
+	ContextPaths      []string `json:"context_paths,omitempty"`
+	RepoRoot          string   `json:"repo_root,omitempty"`
 }
 
 func validatePlanTool() *mcp.Tool {
@@ -884,7 +907,11 @@ func validatePlanTool() *mcp.Tool {
 			"Call this once at plan-handoff time; the per-task `validate_task_spec` is still called by each implementing subagent at task start. " +
 			"Pass plan_path with the ABSOLUTE path to the plan file — the server reads it, so a large plan costs the caller no output tokens. " +
 			"plan_text is deprecated and will be removed in 1.0.0. Exactly one of the two must be set. " +
-			"If repo policy has carve-outs such as docs-only commit exceptions, state them literally in the plan — the reviewer cannot read external CLAUDE.md policy.",
+			"If repo policy has carve-outs such as docs-only commit exceptions, state them literally in the plan — the reviewer cannot read external CLAUDE.md policy. " +
+			"Optionally pass context_paths: ABSOLUTE paths to source files the plan makes claims about. " +
+			"The server reads them whole and the reviewer verifies claims against them instead of emitting unverifiable_codebase_claim. " +
+			"Attach only files the plan actually touches — this is by far the most expensive input the tool takes. " +
+			"Optionally pass repo_root (absolute) to enable the disk tier of the Create/Modify consistency check. ",
 	}
 }
 
@@ -1676,7 +1703,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		if errors.Is(rerr, errTooLarge) {
 			total := planSrc.Bytes + pkBytes
 			pr := prependPlanClamp(
-				tooLargePlanResult(total, planSrc.Bytes, pkBytes, h.deps.Cfg.PlanMaxPayloadBytes), clamp)
+				tooLargePlanResult(total, planSrc.Bytes, pkBytes, 0, h.deps.Cfg.PlanMaxPayloadBytes), clamp)
 			h.recordStat(statParams{
 				tool:         "validate_plan",
 				verdict:      string(pr.PlanVerdict),
@@ -1691,10 +1718,36 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		}
 	}
 
+	contextFiles, contextBytes, cerr := resolveContextPaths(args.ContextPaths, h.deps.Cfg)
+	if cerr != nil {
+		var tle *contextTooLargeError
+		if errors.As(cerr, &tle) {
+			pr := prependPlanClamp(contextTooLargePlanResult(tle), clamp)
+			h.recordStat(statParams{
+				tool:         "validate_plan",
+				verdict:      string(pr.PlanVerdict),
+				findings:     planFindings(pr),
+				modelUsed:    h.deps.Cfg.PlanModel.String(),
+				payloadBytes: len(planText) + pkBytes,
+			})
+			return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
+		}
+		return nil, verdict.PlanResult{}, cerr
+	}
+	var repoRoot string
+	if args.RepoRoot != "" {
+		var rerr error
+		repoRoot, rerr = resolveDirInput(args.RepoRoot, h.deps.Cfg.PlanRoots)
+		if rerr != nil {
+			return nil, verdict.PlanResult{}, rerr
+		}
+	}
+	_ = repoRoot // consumed by the Create/Modify check in Task 9
+
 	planBytes := len(planText)
 	if total := planBytes + pkBytes; total > h.deps.Cfg.PlanMaxPayloadBytes {
 		pr := prependPlanDeprecation(
-			prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, h.deps.Cfg.PlanMaxPayloadBytes), clamp),
+			prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, contextBytes, h.deps.Cfg.PlanMaxPayloadBytes), clamp),
 			args.PlanText != "")
 		h.recordStat(statParams{
 			tool:         "validate_plan",
@@ -1721,7 +1774,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			verdict:         string(pr.PlanVerdict),
 			findings:        planFindings(pr),
 			modelUsed:       h.deps.Cfg.PlanModel.String(),
-			payloadBytes:    planBytes + pkBytes,
+			payloadBytes:    planBytes + pkBytes + contextBytes,
 			tasksTotal:      tasksTotal,
 			tasksWithHeader: tasksWithHeader,
 		})
@@ -1746,6 +1799,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		Tasks:            tasks,
 		ChunkSize:        h.deps.Cfg.PlanTasksPerChunk,
 		Mode:             args.Mode,
+		ContextFiles:     toPromptContextFiles(contextFiles),
 	})
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
@@ -1775,7 +1829,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			reviewMS:        0,
 			partial:         cached.Partial,
 			cached:          true,
-			payloadBytes:    planBytes + pkBytes,
+			payloadBytes:    planBytes + pkBytes + contextBytes,
 			tasksTotal:      tasksTotal,
 			tasksWithHeader: tasksWithHeader,
 		})
@@ -1815,7 +1869,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 				modelUsed:       model.String(),
 				reviewMS:        ms,
 				partial:         p.Partial,
-				payloadBytes:    planBytes + pkBytes,
+				payloadBytes:    planBytes + pkBytes + contextBytes,
 				tasksTotal:      tasksTotal,
 				tasksWithHeader: tasksWithHeader,
 			})
@@ -1865,7 +1919,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		modelUsed:       modelUsed,
 		reviewMS:        ms,
 		partial:         pr.Partial,
-		payloadBytes:    planBytes + pkBytes,
+		payloadBytes:    planBytes + pkBytes + contextBytes,
 		tasksTotal:      tasksTotal,
 		tasksWithHeader: tasksWithHeader,
 	})
@@ -1910,6 +1964,7 @@ type renderPlanReviewInputs struct {
 	Tasks            []planparser.RawTask
 	ChunkSize        int
 	Mode             string
+	ContextFiles     []prompts.ContextFile
 }
 
 func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
@@ -1918,6 +1973,7 @@ func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
 			PlanText:         in.PlanText,
 			ProjectKnowledge: in.ProjectKnowledge,
 			Mode:             in.Mode,
+			ContextFiles:     in.ContextFiles,
 		})
 		if err != nil {
 			return renderedPlanReview{}, fmt.Errorf("render plan prompt: %w", err)
@@ -1931,6 +1987,7 @@ func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
 		PlanText:         in.PlanText,
 		ProjectKnowledge: in.ProjectKnowledge,
 		Mode:             in.Mode,
+		ContextFiles:     in.ContextFiles,
 	})
 	if err != nil {
 		return renderedPlanReview{}, fmt.Errorf("render plan_findings_only: %w", err)
@@ -1947,6 +2004,7 @@ func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
 			ProjectKnowledge: in.ProjectKnowledge,
 			ChunkTasks:       chunkTasks,
 			Mode:             in.Mode,
+			ContextFiles:     in.ContextFiles,
 		})
 		if err != nil {
 			return renderedPlanReview{}, fmt.Errorf("render plan_tasks_chunk: %w", err)
@@ -2047,21 +2105,45 @@ func noHeadingsPlanResult() verdict.PlanResult {
 
 // tooLargePlanResult builds the rejection PlanResult for a cumulative
 // payload-too-large hit on (plan content, from either plan_text or plan_path,
-// + project_knowledge). The evidence names both contributors so the caller
-// can tell which input to shrink. Critical so the ladder derives fail from
-// one critical, matching the explicit Verdict: fail.
-func tooLargePlanResult(total, planBytes, pkBytes, limit int) verdict.PlanResult {
+// + project_knowledge). total and the cap comparison deliberately exclude
+// contextBytes — context_paths has its own separate budget enforced by
+// resolveContextPaths/contextTooLargePlanResult — but contextBytes is still
+// named in the evidence string so the caller can see the full cost picture
+// even when it isn't what tripped this particular cap. Critical so the
+// ladder derives fail from one critical, matching the explicit Verdict: fail.
+func tooLargePlanResult(total, planBytes, pkBytes, contextBytes, limit int) verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictFail,
 		PlanFindings: []verdict.Finding{{
 			Severity:   verdict.SeverityCritical,
 			Category:   verdict.CategoryTooLarge,
 			Criterion:  "payload",
-			Evidence:   fmt.Sprintf("payload %d bytes > cap %d (plan: %d, project_knowledge: %d)", total, limit, planBytes, pkBytes),
+			Evidence:   fmt.Sprintf("payload %d bytes > cap %d (plan: %d, project_knowledge: %d, context_paths: %d)", total, limit, planBytes, pkBytes, contextBytes),
 			Suggestion: "Split the plan into smaller chunks or pass a unified diff.",
 		}},
 		Tasks:      []verdict.PlanTaskResult{},
 		NextAction: "Reduce plan size and retry.",
+	}
+}
+
+// contextTooLargePlanResult renders a context_paths cap breach as the same
+// too-large envelope shape as an oversized plan, but with the attachment's
+// own message — which names the offending file (or the running total) and
+// the env var that governs it. A cap breach is content-too-large, so it is
+// an envelope; a bad path is bad input, so it stays a transport error.
+// See design §3.3.
+func contextTooLargePlanResult(err *contextTooLargeError) verdict.PlanResult {
+	return verdict.PlanResult{
+		PlanVerdict: verdict.VerdictFail,
+		PlanFindings: []verdict.Finding{{
+			Severity:   verdict.SeverityCritical,
+			Category:   verdict.CategoryTooLarge,
+			Criterion:  "context_paths",
+			Evidence:   err.Error(),
+			Suggestion: "Attach fewer or smaller files, or raise the named cap.",
+		}},
+		Tasks:      []verdict.PlanTaskResult{},
+		NextAction: "Reduce the attached file set and retry.",
 	}
 }
 
