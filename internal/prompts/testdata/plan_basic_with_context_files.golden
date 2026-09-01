@@ -1,22 +1,51 @@
-{{template "plan_rules" . -}}
-{{if .ProjectKnowledge -}}
-## Project knowledge (caller-supplied context from the team's KB)
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
+## Reviewer ground rules
 
-{{.ProjectKnowledge}}
+You have been given the plan markdown below AND the COMPLETE contents of these 2 source files, read from disk by the server:
 
-{{end -}}
-{{if .ContextFiles -}}
+- `/repo/internal/config/config.go`
+- `/repo/internal/verdict/verdict.go`
+
+For those files, and only those files, absence IS evidence: if a symbol is not present in an attached file, it is not in that file, and you may say so.
+
+Every other file, path, or symbol referenced by the plan remains a black-box identifier reference — you do not know its definition, signature, return type, or behavior. **The caller attached only what they judged relevant, so absence from the attached set is NOT evidence of absence from the codebase.** The overwhelming majority of this repository is not in front of you.
+
+Emit `unverifiable_codebase_claim` only for claims about code that is NOT attached. Do not emit it for a claim the attached files settle.
+
+When a plan claim is refuted by an attached file, emit `category: contradicted_codebase_claim` instead. Quote the attached file's path and the specific symbol or line in `evidence`. Severity is yours to choose (`major` is typical). **Never emit `contradicted_codebase_claim` about a file, symbol, or path that is not in the attached list above** — you cannot refute what you cannot see.
+
+For `unstated_assumption` findings, only flag assumption gaps that are visible in the plan text itself (e.g. an AC that says "fast" without a measurable target). Do NOT speculate about behavior of named code symbols you cannot see. If the plan says "update Foo.Bar to handle X", do NOT emit a finding about what Foo.Bar's current signature is or what error types it returns — you cannot know.
+
+Every finding's `evidence` field must quote or paraphrase text that literally appears in the plan above, OR describe an expected piece of plan text that is absent (e.g. "the task block has no `Acceptance criteria:` section"). If your evidence cannot be tied to plan text — present or missing — do not emit the finding.
+
+When you cite a code symbol's signature, an example sibling key, or an adjacent attribute value as an *illustration*, prefix it with `e.g. illustrative —`. The reader does not know whether your illustration matches the codebase, and false confidence is worse than no example.
+
+When the plan asserts something about the codebase that you cannot verify from the plan text alone — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim from the plan. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase.
+
 ## Attached source files (complete contents, read from disk by the server)
 
-{{range .ContextFiles}}--- BEGIN FILE: {{.Path}} ({{.Bytes}} bytes, sha256 {{.SHA256Short}}…) ---
-{{.Content}}
---- END FILE: {{.Path}} ---
+--- BEGIN FILE: /repo/internal/config/config.go (42 bytes, sha256 9f2ab41c…) ---
+package config
 
-{{end}}
-{{end -}}
+type Config struct{ PlanRoots []string }
+
+--- END FILE: /repo/internal/config/config.go ---
+
+--- BEGIN FILE: /repo/internal/verdict/verdict.go (21 bytes, sha256 3c1af09b…) ---
+package verdict
+
+--- END FILE: /repo/internal/verdict/verdict.go ---
+
+
 ## Plan under review
 
-{{.PlanText}}
+# Plan
+
+### Task 1: t1
+
+**Goal:** g1
+
 
 ## What to evaluate
 
@@ -69,10 +98,6 @@ still misimplement; minor = nit.
 - `actionable`: spec is dispatchable but has meaningful gaps an implementer would have to ask clarifying questions about, or quality issues that risk rework.
 - `rigorous`: spec is ready to hand to a fresh implementer with high confidence; remaining findings are stylistic or expected-of-the-process.
 
-{{ if eq .Mode "quick" -}}
-**Quick mode.** Surface only the most-severe findings — at most 3 per scope (3 plan-level findings, and at most 3 findings per task). Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
-
-{{ end -}}
 ## Output
 
 Respond with a JSON object matching the provided schema. Do not include

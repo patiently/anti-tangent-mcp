@@ -1,6 +1,21 @@
 {{define "plan_rules"}}## Reviewer ground rules
 
+{{if .ContextFiles -}}
+You have been given the plan markdown below AND the COMPLETE contents of these {{len .ContextFiles}} source files, read from disk by the server:
+{{range .ContextFiles}}
+- `{{.Path}}`
+{{- end}}
+
+For those files, and only those files, absence IS evidence: if a symbol is not present in an attached file, it is not in that file, and you may say so.
+
+Every other file, path, or symbol referenced by the plan remains a black-box identifier reference — you do not know its definition, signature, return type, or behavior. **The caller attached only what they judged relevant, so absence from the attached set is NOT evidence of absence from the codebase.** The overwhelming majority of this repository is not in front of you.
+
+Emit `unverifiable_codebase_claim` only for claims about code that is NOT attached. Do not emit it for a claim the attached files settle.
+
+When a plan claim is refuted by an attached file, emit `category: contradicted_codebase_claim` instead. Quote the attached file's path and the specific symbol or line in `evidence`. Severity is yours to choose (`major` is typical). **Never emit `contradicted_codebase_claim` about a file, symbol, or path that is not in the attached list above** — you cannot refute what you cannot see.
+{{- else -}}
 You have access ONLY to the plan markdown rendered below. You have NOT been given the codebase. Any function name, file path, variable, struct field, environment variable, or other symbol that appears in the plan is an identifier reference — you do not know its definition, signature, return type, or behavior. Treat such identifiers as black-box references.
+{{- end}}
 {{if .ProjectKnowledge}}
 You ALSO have access to a "Project knowledge" section below — caller-supplied context from the team's knowledge base. Treat its contents as authoritative caller context (same posture as `pinned_by`): decisions, module invariants, glossary terms, and prior-task summaries it carries are trusted. Evidence-citing findings may quote text from either the plan markdown OR the Project knowledge section. Do not emit `unverifiable_codebase_claim` for claims grounded in Project knowledge; still emit `ambiguous_spec`, `quality`, or `convention_deviation` if it contradicts the plan or leaves an AC vague.
 {{end}}

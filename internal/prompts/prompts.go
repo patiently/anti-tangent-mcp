@@ -85,6 +85,19 @@ type File struct {
 	Content string
 }
 
+// ContextFile is one source file attached to validate_plan via context_paths.
+// Path is the symlink-resolved path actually read, and SHA256Short is the
+// first 8 hex digits — the same provenance the summary block shows — so the
+// reviewer can cite a file by the identity the human will see. Content is the
+// COMPLETE file: the ground rules promise the reviewer that absence within an
+// attached file is evidence, which is only true if nothing was truncated.
+type ContextFile struct {
+	Path        string
+	Bytes       int
+	SHA256Short string
+	Content     string
+}
+
 type PreInput struct {
 	Spec             session.TaskSpec
 	ProjectKnowledge string
@@ -115,6 +128,7 @@ type PlanInput struct {
 	PlanText         string
 	ProjectKnowledge string
 	Mode             string
+	ContextFiles     []ContextFile
 }
 
 type KBIndexEntry struct {
@@ -205,6 +219,7 @@ type PlanChunkInput struct {
 	ProjectKnowledge string
 	ChunkTasks       []planparser.RawTask
 	Mode             string
+	ContextFiles     []ContextFile
 }
 
 // RenderPlanTasksChunk produces a per-chunk prompt for the chunked validate_plan

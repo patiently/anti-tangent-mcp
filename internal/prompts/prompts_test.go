@@ -1126,3 +1126,80 @@ func TestRenderPlanFindingsOnly_MarkerMidParagraphInPlanText_SplitsAtRealHeading
 	assert.True(t, strings.HasPrefix(strings.TrimLeft(out.UserSuffix, "\n"), "## What to evaluate"),
 		"the suffix must still start at the real section heading, not the mid-paragraph mention")
 }
+
+func ctxFiles() []ContextFile {
+	return []ContextFile{
+		{Path: "/repo/internal/config/config.go", Bytes: 42, SHA256Short: "9f2ab41c", Content: "package config\n\ntype Config struct{ PlanRoots []string }\n"},
+		{Path: "/repo/internal/verdict/verdict.go", Bytes: 21, SHA256Short: "3c1af09b", Content: "package verdict\n"},
+	}
+}
+
+func TestRenderPlan_WithContextFiles_Golden(t *testing.T) {
+	out, err := RenderPlan(PlanInput{
+		PlanText:     "# Plan\n\n### Task 1: t1\n\n**Goal:** g1\n",
+		ContextFiles: ctxFiles(),
+	})
+	require.NoError(t, err)
+	golden(t, "plan_basic_with_context_files", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPlan_WithContextFiles_Structure(t *testing.T) {
+	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n", ContextFiles: ctxFiles()})
+	require.NoError(t, err)
+
+	assert.Contains(t, out.User, "## Attached source files")
+	assert.Contains(t, out.User, "--- BEGIN FILE: /repo/internal/config/config.go (42 bytes, sha256 9f2ab41c…) ---")
+	assert.Contains(t, out.User, "--- END FILE: /repo/internal/config/config.go ---")
+
+	// Posture: both directions of the guard must be present.
+	assert.Contains(t, out.User, "absence from the attached set is NOT evidence")
+	assert.Contains(t, out.User, "contradicted_codebase_claim")
+
+	// Each attached path is enumerated in the rules, not just summarized.
+	assert.Contains(t, out.User, "/repo/internal/verdict/verdict.go")
+
+	// Ordering: attachments precede the plan.
+	assert.Less(t, strings.Index(out.User, "## Attached source files"),
+		strings.Index(out.User, "## Plan under review"))
+}
+
+func TestRenderPlan_WithoutContextFiles_OmitsSection(t *testing.T) {
+	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n"})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, "## Attached source files")
+	assert.NotContains(t, out.User, "contradicted_codebase_claim")
+	assert.Contains(t, out.User, "You have access ONLY to the plan markdown")
+}
+
+// An attached file that itself contains a line-anchored "## What to evaluate"
+// must not shrink the cacheable prefix: attachments render before the real
+// heading, so LastIndex still lands on the template's own.
+func TestRenderPlanTasksChunk_AttachedFileWithEvaluateHeading(t *testing.T) {
+	out, err := RenderPlanTasksChunk(PlanChunkInput{
+		PlanText:   "# Plan\n\n### Task 1: t1\n",
+		ChunkTasks: []planparser.RawTask{{Title: "Task 1: t1", Body: "### Task 1: t1\n"}},
+		ContextFiles: []ContextFile{{
+			Path: "/repo/doc.md", Bytes: 30, SHA256Short: "deadbeef",
+			Content: "## What to evaluate\n\nnot the real one\n",
+		}},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out.UserPrefix)
+	assert.True(t, strings.HasPrefix(out.UserSuffix, "## What to evaluate"))
+	assert.Contains(t, out.UserPrefix, "not the real one",
+		"the decoy heading stays inside the cacheable prefix")
+	assert.Equal(t, 1, strings.Count(out.UserSuffix, "## What to evaluate"),
+		"the suffix starts at the template's own heading, not the decoy")
+}
+
+// Attached content is delimited, never fenced — Go raw strings contain
+// backticks and would break any fence length we picked.
+func TestRenderPlan_AttachedFileWithBackticksAndFence(t *testing.T) {
+	content := "const q = `SELECT 1`\n\n```go\nfmt.Println(\"x\")\n```\n"
+	out, err := RenderPlan(PlanInput{
+		PlanText:     "# Plan\n",
+		ContextFiles: []ContextFile{{Path: "/repo/q.go", Bytes: 50, SHA256Short: "aaaabbbb", Content: content}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, content, "content must survive verbatim")
+}
