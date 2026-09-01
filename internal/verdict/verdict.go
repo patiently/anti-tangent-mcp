@@ -53,6 +53,18 @@ const (
 	// verify." Intentionally NOT in applySeverityFloor's list — the
 	// reviewer's chosen severity (typically major) is preserved.
 	CategoryAttestationContradiction Category = "attestation_contradiction"
+	// CategoryContradictedCodebaseClaim is emitted by the reviewer when a
+	// plan statement is refuted by the contents of a file supplied via
+	// validate_plan's context_paths. Distinct from
+	// unverifiable_codebase_claim: an attached file is ground truth read
+	// from disk by the server, so a contradiction is a hard finding, not
+	// "can't verify." Distinct from attestation_contradiction, which is a
+	// conflict with a caller-ASSERTED harness shape rather than with bytes
+	// the server read. Intentionally NOT in applySeverityFloor's list — the
+	// reviewer's chosen severity (typically major) is preserved. Only valid
+	// for claims about files that were actually attached; the ground rules
+	// forbid emitting it about anything outside the attached set.
+	CategoryContradictedCodebaseClaim Category = "contradicted_codebase_claim"
 	// CategoryMalformedEvidence is server-only. It is emitted exclusively
 	// by the validate_completion evidence-shape guard, which constructs
 	// the envelope directly without round-tripping through Parse(). It is

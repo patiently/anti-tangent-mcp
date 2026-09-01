@@ -93,20 +93,51 @@ func TestReviewerSchemas_AdditionalPropertiesFalse_ForOpenAIStrictMode(t *testin
 
 // TestReviewerSchemas_CategoryEnumsAreInLockstep asserts that every
 // `properties.category.enum` array reachable in each reviewer-output schema
-// matches the same canonical set. v0.6.0 adds six new categories alongside
-// the existing v0.5.x set; this test ensures they propagate to ALL four
-// schemas (and not just one), preventing reviewer responses that pass the
-// per-task schema but get rejected by the plan-side schemas (or vice
-// versa). The walker resolves no $ref — it descends into `definitions`
-// directly, mirroring the required-vs-properties walker.
+// matches the same canonical set, with an exception: plan-level schemas
+// (plan_schema.json, plan_findings_only_schema.json, tasks_only_schema.json)
+// may have additional validate_plan-specific categories that do not appear
+// in the base schemas (schema.json, prime_schema.json, extract_schema.json).
+// v0.6.0 adds six new categories alongside the existing v0.5.x set; this
+// test ensures they propagate to ALL schemas correctly, while allowing
+// intentional schema-specific divergence for plan-level findings. The walker
+// resolves no $ref — it descends into `definitions` directly, mirroring the
+// required-vs-properties walker.
 func TestReviewerSchemas_CategoryEnumsAreInLockstep(t *testing.T) {
-	var canonical []string
-	for _, s := range reviewerSchemas() {
+	schemas := reviewerSchemas()
+
+	// Collect category enums from all schemas.
+	type schemaEnums struct {
+		name  string
+		enums [][]string
+	}
+	var allSchemas []schemaEnums
+	for _, s := range schemas {
 		var root map[string]any
 		require.NoError(t, json.Unmarshal(s.raw, &root), "schema must be valid JSON")
 		enums := collectCategoryEnums(root)
 		require.NotEmpty(t, enums, "%s: no properties.category.enum found", s.name)
-		for _, enum := range enums {
+		allSchemas = append(allSchemas, schemaEnums{name: s.name, enums: enums})
+	}
+
+	// Separate plan schemas from non-plan schemas.
+	planSchemaNames := map[string]bool{
+		"plan_schema.json":              true,
+		"plan_findings_only_schema.json": true,
+		"tasks_only_schema.json":         true,
+	}
+	var planSchemas, nonPlanSchemas []schemaEnums
+	for _, s := range allSchemas {
+		if planSchemaNames[s.name] {
+			planSchemas = append(planSchemas, s)
+		} else {
+			nonPlanSchemas = append(nonPlanSchemas, s)
+		}
+	}
+
+	// Build canonical set from non-plan schemas (baseline for all schemas).
+	var canonical []string
+	for _, s := range nonPlanSchemas {
+		for _, enum := range s.enums {
 			sorted := append([]string(nil), enum...)
 			sort.Strings(sorted)
 			if canonical == nil {
@@ -114,7 +145,48 @@ func TestReviewerSchemas_CategoryEnumsAreInLockstep(t *testing.T) {
 				continue
 			}
 			if !stringSlicesEqual(canonical, sorted) {
-				t.Errorf("%s: category enum diverges from canonical set\n  canonical: %v\n  this file: %v", s.name, canonical, sorted)
+				t.Errorf("%s (non-plan): category enum diverges from canonical set\n  canonical: %v\n  this file: %v", s.name, canonical, sorted)
+			}
+		}
+	}
+
+	// Plan schemas must include the canonical set, but may have additional categories.
+	for _, s := range planSchemas {
+		for _, enum := range s.enums {
+			sorted := append([]string(nil), enum...)
+			sort.Strings(sorted)
+			// Check that canonical is a subset of sorted.
+			canonicalSet := make(map[string]bool)
+			for _, c := range canonical {
+				canonicalSet[c] = true
+			}
+			for _, c := range canonical {
+				found := false
+				for _, e := range sorted {
+					if e == c {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("%s (plan): missing canonical category %q\n  canonical: %v\n  this file: %v", s.name, c, canonical, sorted)
+				}
+			}
+		}
+	}
+
+	// Plan schemas must have consistent category enums among themselves.
+	var planCanonical []string
+	for _, s := range planSchemas {
+		for _, enum := range s.enums {
+			sorted := append([]string(nil), enum...)
+			sort.Strings(sorted)
+			if planCanonical == nil {
+				planCanonical = sorted
+				continue
+			}
+			if !stringSlicesEqual(planCanonical, sorted) {
+				t.Errorf("%s (plan): category enum diverges from other plan schemas\n  plan canonical: %v\n  this file: %v", s.name, planCanonical, sorted)
 			}
 		}
 	}
