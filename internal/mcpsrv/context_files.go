@@ -155,10 +155,24 @@ func resolveDirInput(path string, roots []string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("repo_root must be absolute, got %q", path)
 	}
+	// BEFORE resolution, not only after: EvalSymlinks fails with an
+	// *fs.PathError whose Error() interpolates the path UNQUOTED, and %w
+	// carries that text out verbatim. handlers.go stores it in
+	// repoRootUnusable, which becomes a finding whose evidence
+	// formatFindingEvidence indents while preserving newlines - so a
+	// newline in repo_root injects lines into the summary the caller
+	// parses. The %q on the outer wrap does not save it; the wrapped
+	// PathError is the vector. Same invariant resolveFileInput holds for
+	// context_paths.
+	if err := rejectControlChars(path); err != nil {
+		return "", err
+	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return "", fmt.Errorf("resolve repo_root %q: %w", path, err)
 	}
+	// Re-checked on the resolved path: resolution can introduce components
+	// the caller never typed.
 	if err := rejectControlChars(resolved); err != nil {
 		return "", err
 	}

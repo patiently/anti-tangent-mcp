@@ -118,6 +118,28 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 			if !ok {
 				continue
 			}
+			// resolveUnderRoot is LEXICAL only, and os.Stat follows
+			// symlinks. A link inside the repo pointing out of it
+			// ("vendor -> /etc") therefore makes the disk tier answer
+			// "does this path exist anywhere on this box" instead of
+			// "does this file exist in the repository" - the question it
+			// is documented to answer, and the only one a plan reviewer
+			// has any business asking.
+			//
+			// Resolve the PARENT and require it to stay under the root,
+			// then Lstat the leaf. Lstat, not Stat, because a symlink
+			// that lives in the repo IS a repo file: reporting it missing
+			// because its target is absent would be a false positive on
+			// every dangling in-repo link. A parent that will not resolve
+			// falls through to the os.Stat below, whose error handling
+			// already separates "missing" from "could not look".
+			leaf := abs
+			if rp, rerr := filepath.EvalSymlinks(filepath.Dir(abs)); rerr == nil {
+				if !withinRoots(rp, []string{repoRoot}) {
+					continue
+				}
+				leaf = filepath.Join(rp, filepath.Base(abs))
+			}
 			// ONLY a genuine not-exists is a finding. A permission error, a
 			// too-long path, or an I/O error means the check could not look,
 			// not that the file is missing — reporting "does not exist" for
@@ -129,7 +151,7 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 			// a clean run. The operator gets ONE stderr line per call naming
 			// how many targets could not be stat'd plus the first path and
 			// error; the finding list stays honest.
-			_, serr := os.Stat(abs)
+			_, serr := os.Lstat(leaf)
 			switch {
 			case errors.Is(serr, fs.ErrNotExist):
 				lines = append(lines, fmt.Sprintf(
@@ -137,7 +159,7 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 			case serr != nil:
 				statErrs++
 				if firstStatErr == nil {
-					firstStatErrPath, firstStatErr = abs, serr
+					firstStatErrPath, firstStatErr = leaf, serr
 				}
 			}
 		}

@@ -1,6 +1,7 @@
 package planparser
 
 import (
+	"path"
 	"regexp"
 	"strings"
 )
@@ -108,7 +109,7 @@ func cleanRefPath(tail string) string {
 	if i := strings.Index(tail, "`"); i >= 0 {
 		rest := tail[i+1:]
 		if j := strings.Index(rest, "`"); j >= 0 {
-			return stripLineAnchor(strings.TrimSpace(rest[:j]))
+			return canonRefPath(stripLineAnchor(strings.TrimSpace(rest[:j])))
 		}
 		// Unterminated backtick: use the part after the opening backtick
 		tail = rest
@@ -117,7 +118,7 @@ func cleanRefPath(tail string) string {
 	if len(fields) == 0 {
 		return ""
 	}
-	return stripLineAnchor(strings.TrimSpace(fields[0]))
+	return canonRefPath(stripLineAnchor(strings.TrimSpace(fields[0])))
 }
 
 // stripLineAnchor removes a trailing ":N", ":N-M", ":N,M", or repeated
@@ -127,4 +128,28 @@ func cleanRefPath(tail string) string {
 // front of it names no file.
 func stripLineAnchor(p string) string {
 	return lineAnchorRe.ReplaceAllString(p, "")
+}
+
+// canonRefPath collapses a repo-relative plan path to ONE identity, so that
+// "Modify: ./a.go" in one task and "Create: a.go" in another are the same
+// key in the order-aware check rather than two unrelated files - a miss that
+// is invisible when repo_root is absent, because the disk tier that would
+// otherwise catch it never runs.
+//
+// path.Clean, not filepath.Clean: plan bullets are markdown and always
+// slash-separated, and filepath.Clean would rewrite them with backslashes on
+// Windows, splitting the identity by GOOS instead of unifying it.
+// "../x" is preserved as-is and resolveUnderRoot still refuses it.
+//
+// Only genuine repo-relative paths are touched. A URL is left alone because
+// path.Clean collapses its "//" into "/" - "https://example.com/a.go" comes
+// back "https:/example.com/a.go", corrupting a value the parser is
+// documented to pass through (TestFileRefs_LineAnchorStripLeavesOtherColonsAlone
+// pins it). Absolute paths are left alone too: resolveUnderRoot refuses them
+// outright, so there is nothing to unify and no reason to rewrite them.
+func canonRefPath(p string) string {
+	if p == "" || path.IsAbs(p) || strings.Contains(p, "://") {
+		return p
+	}
+	return path.Clean(p)
 }

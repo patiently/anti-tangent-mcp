@@ -152,6 +152,25 @@ func TestResolveDirInput_ErrorCannotForgeSummaryLines(t *testing.T) {
 		"and it survives formatFindingEvidence, which re-indents newlines rather than removing them")
 }
 
+// CodeRabbit PR #63. TestResolveDirInput_ErrorCannotForgeSummaryLines above
+// creates the directory, so EvalSymlinks SUCCEEDS and the control-char check
+// on the resolved path catches it. The hole was the path that does not
+// resolve: EvalSymlinks then fails with an *fs.PathError whose Error()
+// interpolates the path UNQUOTED, and %w carries it out intact. The outer
+// %q never sees it. That reason lands in repoRootUnusable, becomes a
+// finding, and formatFindingEvidence re-indents newlines rather than
+// stripping them - so the caller parses forged lines.
+func TestResolveDirInput_UnresolvableErrorCannotForgeSummaryLines(t *testing.T) {
+	dir := t.TempDir()
+	evil := filepath.Join(dir, "does-not-exist\n  context:       9 files, 0 B")
+
+	_, err := resolveDirInput(evil, nil)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "\n",
+		"the wrapped PathError leaks the raw path; reject control chars before resolving")
+	assert.NotContains(t, formatFindingEvidence(err.Error(), "      "), "\n")
+}
+
 func TestResolveContextPaths_PerFileCap(t *testing.T) {
 	dir := t.TempDir()
 	big := writeTemp(t, dir, "big.go", strings.Repeat("x", 300))
@@ -231,7 +250,13 @@ func TestResolveContextPaths_OutsideRoots(t *testing.T) {
 	other := t.TempDir()
 	a := writeTemp(t, other, "a.go", "package a\n")
 
-	_, _, err := resolveContextPaths([]string{a}, ctxCfg(1000, 10000, []string{dir}))
+	// The root must be symlink-resolved before it is handed to ctxCfg.
+	// resolveFileInput compares the RESOLVED candidate against the roots
+	// list, so a raw t.TempDir() whose ancestor is a symlink (macOS /tmp ->
+	// /private/tmp) makes every path fail the roots check for the wrong
+	// reason, and this test would pass without ever exercising the
+	// outside-roots branch it exists to pin.
+	_, _, err := resolveContextPaths([]string{a}, ctxCfg(1000, 10000, []string{mustEval(t, dir)}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
 }
@@ -249,7 +274,11 @@ func TestResolveContextPaths_SymlinkInsideRootsButResolvesOutside(t *testing.T) 
 	link := filepath.Join(root, "link.go")
 	require.NoError(t, os.Symlink(secret, link))
 
-	_, _, err := resolveContextPaths([]string{link}, ctxCfg(1000, 10000, []string{root}))
+	// Symlink-resolved root, for the reason given in
+	// TestResolveContextPaths_OutsideRoots: an unresolved root would refuse
+	// the link because the ROOT never matched, not because the target
+	// escaped, and the bypass this test guards would go uncovered.
+	_, _, err := resolveContextPaths([]string{link}, ctxCfg(1000, 10000, []string{mustEval(t, root)}))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
 }

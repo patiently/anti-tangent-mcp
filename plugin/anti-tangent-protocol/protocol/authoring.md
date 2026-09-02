@@ -102,7 +102,7 @@ Rules the parser actually applies:
 - Bullets may use `-` or `*`. A space after the marker is OPTIONAL for a recognized verb —
   `-Create: path` parses. The space governs the UNRECOGNIZED-VERB fallback: a bullet whose
   verb is not Create/Modify/Delete is skipped and collection continues only when it starts
-  `- ` or `* `; without the space, collection stops at that line.
+  `-` or `*` followed by one space; without it, collection stops at that line.
 - The verb is `Create`, `Modify`, or `Delete`, case-insensitive. Two verbs may be joined with
   `/` (`Create/Modify:`) for a file one task creates and another edits; both are recorded.
 - The path may be backtick-quoted or bare. Bare takes the first whitespace-delimited token.

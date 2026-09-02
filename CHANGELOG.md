@@ -141,6 +141,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remedy — rename the file, or drop it from `context_paths` — because "control character" alone is
   a misnomer for a category that includes format characters such as a soft hyphen, and `%q` alone
   left the operator decoding an escape by hand. README documents the refusal.
+  For `repo_root` the check runs **before** `EvalSymlinks` as well as after: the wrapped
+  `*fs.PathError` from a failing resolve interpolates the path unquoted, so the post-resolution
+  check — which only runs when resolution succeeds — could never see it. The outer `%q` escapes
+  its own copy and does not help. (Reported by CodeRabbit on PR #63.)
 - **`context_paths` sends file contents verbatim to the configured reviewer vendor.** Everything
   the caller attaches is transmitted to whichever third-party API `ANTI_TANGENT_PLAN_MODEL`
   names, in full, on every reviewer call of the round. Attach only what the plan makes claims
@@ -148,6 +152,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behalf. The tool description now says so at the call site.
 
 ### Fixed
+- **The `Create:`/`Modify:` disk tier no longer follows a symlink out of the repository.**
+  `resolveUnderRoot` rejects lexical traversal (`../../etc/passwd`) but is purely textual, and
+  `os.Stat` follows symlinks — so a link living inside `repo_root` but pointing outside it made the
+  check answer "does this path exist anywhere on this machine" rather than "does this file exist in
+  the repository". The parent directory is now symlink-resolved and required to stay under the root
+  before the leaf is stat'd. The leaf uses `Lstat`: a symlink the repository contains *is* a file
+  the repository contains, and `Stat` reported every dangling in-repo link as missing — a false
+  positive that is now fixed as a side effect. (Reported by CodeRabbit on PR #63.)
+- **`./a.go` and `a.go` are one file in the order-aware check.** `cleanRefPath` preserved each
+  bullet's raw spelling, so `Modify: ./a.go` in an early task and `Create: a.go` in a later one
+  were unrelated map keys and the contradiction went unreported. Repo-relative paths are now
+  canonicalised with `path.Clean`. URLs and absolute paths are left untouched — `path.Clean`
+  collapses the `//` in `https://example.com/a.go`, and absolute paths are refused upstream anyway.
+  This was only ever visible without `repo_root`, since the disk tier would otherwise have caught
+  it. (Reported by CodeRabbit on PR #63.)
+- **Two roots-allowlist tests could pass without exercising the branch they pin.** The
+  outside-roots and symlink-escape tests in `context_files_test.go` passed a raw `t.TempDir()` as
+  the root while `resolveFileInput` compares the symlink-*resolved* candidate against it. Where an
+  ancestor of the temp directory is itself a symlink (macOS `/tmp` → `/private/tmp`), every path
+  failed the roots check because the root never matched — and both tests, which only assert that
+  *an* error occurred, would have passed while covering nothing. Both now resolve the root first,
+  as `TestResolveDirInput_RootsAllowlist` already did. (Reported by CodeRabbit on PR #63.)
 - **Line-anchored `Modify:` bullets no longer produce phantom "does not exist" findings.** Plans
   routinely anchor a file reference to the lines being edited (`- Modify: internal/x.go:57-70`)
   — the convention superpowers' task-format reference asks for. The Create/Modify consistency
@@ -204,7 +230,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   editing a source file a finding complained about and immediately re-validating would return
   the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
 - **The context-nonce collision detector now recognises near-shaped delimiters.** It demanded the
-  rendered marker verbatim (`^--- (?:BEGIN|END) FILE <token>: `), so a line carrying the CORRECT
+  rendered marker verbatim (`^--- (?:BEGIN|END) FILE <token>:\x20`), so a line carrying the CORRECT
   token in a slightly different shape — a fourth dash, a leading indent, a tab in place of the
   colon, or the path elided entirely (`--- END FILE <token> ---`, which is the rendered END marker
   minus its path and the near-shape a model asked to close a block is likeliest to produce) — read

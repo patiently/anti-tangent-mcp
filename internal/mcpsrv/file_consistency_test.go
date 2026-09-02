@@ -319,3 +319,69 @@ func TestCheckFileConsistency_StattableTargetEmitsNoWarning(t *testing.T) {
 	assert.NotContains(t, f.Evidence, "present.go")
 	assert.Empty(t, buf.String(), "neither a hit nor a genuine not-exists may emit a warning")
 }
+
+// CodeRabbit PR #63: resolveUnderRoot is lexical only, and os.Stat follows
+// symlinks — so a link that lives inside the repo but points out of it made
+// the disk tier report on a path outside the repository entirely. The check
+// is documented to answer "does this file exist in the repo"; an in-root
+// symlink must not widen that to the whole filesystem.
+func TestCheckFileConsistency_DiskTier_InRootSymlinkToOutsideIsIgnored(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "passwd"), []byte("x\n"), 0o600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "link")))
+
+	// The target exists, but only outside the root. Before the containment
+	// re-check this produced NO finding — which is how the caller learned
+	// the external file was there.
+	f := checkFileConsistency(tasksFrom("**Files:**\n- Modify: `link/passwd`\n"), root)
+	assert.Nil(t, f, "an escaping symlink must be skipped, not stat'd")
+
+	// And the mirror: a name that does not exist behind the same escaping
+	// link must not be reported as a missing repo file either.
+	f = checkFileConsistency(tasksFrom("**Files:**\n- Modify: `link/absent`\n"), root)
+	assert.Nil(t, f)
+}
+
+// A symlink that stays inside the root is an ordinary repo file and must
+// still satisfy the disk tier — the containment check must not turn every
+// in-repo link into a false "does not exist".
+func TestCheckFileConsistency_DiskTier_InRootSymlinkStayingInsideIsFine(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "real.go"), []byte("package a\n"), 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(root, "real.go"), filepath.Join(root, "alias.go")))
+
+	f := checkFileConsistency(tasksFrom("**Files:**\n- Modify: `alias.go`\n"), root)
+	assert.Nil(t, f)
+}
+
+// Lstat, not Stat: a dangling link is still a file the repository contains,
+// and calling it missing would be a false positive on every broken symlink
+// in the tree.
+func TestCheckFileConsistency_DiskTier_DanglingInRootSymlinkIsNotMissing(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Symlink(filepath.Join(root, "gone.go"), filepath.Join(root, "dangling.go")))
+
+	f := checkFileConsistency(tasksFrom("**Files:**\n- Modify: `dangling.go`\n"), root)
+	assert.Nil(t, f)
+}
+
+// CodeRabbit PR #63: "./a.go" and "a.go" are the same file, so a later
+// Create: of one must contradict an earlier Modify: of the other. With no
+// repo_root the disk tier never runs, so the order tier is the only thing
+// that can catch it — which is exactly when the split identity was silent.
+func TestCheckFileConsistency_OrderTier_CanonicalisesEquivalentSpellings(t *testing.T) {
+	for _, tc := range []struct{ modify, create string }{
+		{"./a.go", "a.go"},
+		{"a.go", "./a.go"},
+		{"dir/../a.go", "a.go"},
+		{"./dir/b.go", "dir/b.go"},
+	} {
+		f := checkFileConsistency(tasksFrom(
+			"**Files:**\n- Modify: `"+tc.modify+"`\n",
+			"**Files:**\n- Create: `"+tc.create+"`\n",
+		), "")
+		require.NotNil(t, f, "Modify %q / Create %q should contradict", tc.modify, tc.create)
+		assert.Equal(t, "task_order_contradiction", f.Criterion)
+	}
+}
