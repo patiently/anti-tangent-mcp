@@ -129,3 +129,42 @@ func TestOpenAI_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_REQUEST_TIMEOUT")
 	assert.True(t, errors.Is(err, context.DeadlineExceeded))
 }
+
+func TestOpenAI_CachePrefix(t *testing.T) {
+	capture := func(t *testing.T, req Request) map[string]any {
+		t.Helper()
+		var got map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Errorf("decode request body: %v", err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"model": "gpt-5",
+				"choices": [{
+					"message": {"role":"assistant","content":"{\"ok\":true}"}
+				}],
+				"usage": {"prompt_tokens": 12, "completion_tokens": 8}
+			}`))
+		}))
+		defer srv.Close()
+		_, err := NewOpenAI("test-key", srv.URL, 5*time.Second).Review(context.Background(), req)
+		require.NoError(t, err)
+		return got
+	}
+
+	base := Request{Model: "gpt-5", System: "sys", User: "tail", MaxTokens: 1024, JSONSchema: []byte(`{"type":"object"}`)}
+
+	t.Run("cache prefix is concatenated, not blocked", func(t *testing.T) {
+		req := base
+		req.CachePrefix = "head"
+		got := capture(t, req)
+
+		msgs := got["messages"].([]any)
+		user := msgs[len(msgs)-1].(map[string]any)
+		assert.Equal(t, "headtail", user["content"])
+	})
+}

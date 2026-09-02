@@ -35,6 +35,8 @@ Out of scope:
 - A first-class `info` severity. Existing schemas and consumers understand `critical|major|minor`; introducing `info` is cleaner conceptually but broader than needed for this release.
 - A `verified_claims` input for `validate_plan`. That is likely useful, but it needs a separate design for claim identity, dedupe, stale verification, and how much trust the reviewer should place in caller assertions.
 - `plan_text_from_file`. MCP hosts vary in filesystem access; direct server-side file reads would change the deployment/security model.
+  **Superseded in 0.16.0** — see `2026-08-31-plan-path-design.md` §8, which addresses both
+  premises and accepts the deployment-model change explicitly.
 - Cross-run finding memory, `iteration_count`, or finding fingerprint deltas. `validate_plan` remains stateless by design.
 - Automatic CodeScene invocation. CodeScene remains a companion convention outside this server.
 

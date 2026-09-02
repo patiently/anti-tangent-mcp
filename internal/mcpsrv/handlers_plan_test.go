@@ -1,9 +1,12 @@
 package mcpsrv
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,6 +19,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
+	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -48,6 +52,71 @@ func TestReviewPlanChunked_9Tasks_2Chunks(t *testing.T) {
 		expected := titlesRange(i+1, i+1)[0]
 		assert.Equal(t, expected, task.TaskTitle, "task[%d] title mismatch", i)
 	}
+}
+
+// TestReviewPlanChunked_CachePrefixWiring pins the wiring between
+// prompts.Output.UserPrefix and providers.Request.CachePrefix at the handler
+// level, where nothing else in the default suite asserts it. Without this,
+// a regression such as `User: rendered.User` on a chunk request (sending the
+// prefix duplicated into the body instead of the suffix alone) — or
+// resurrecting a CachePrefix on the Pass-1 request — would pass every other
+// test, which is exactly how the bug this fix wave addresses reached final
+// review.
+func TestReviewPlanChunked_CachePrefixWiring(t *testing.T) {
+	plan := buildPlanWithNTasks(9)
+	sr := &scriptedReviewer{
+		responses: []providers.Response{
+			passOneResp(),                   // call 1: Pass1
+			chunkResp(t, titlesRange(1, 8)), // call 2: tasks 1-8
+			chunkResp(t, titlesRange(9, 9)), // call 3: task 9
+		},
+	}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.Len(t, sr.requests, 3, "Pass1 + 2 chunks = 3 requests")
+
+	pass1Req, chunk1Req, chunk2Req := sr.requests[0], sr.requests[1], sr.requests[2]
+
+	assert.Empty(t, pass1Req.CachePrefix,
+		"Pass 1 must send an EMPTY CachePrefix: its tools block (PlanFindingsOnlySchema) "+
+			"differs from the chunk calls' (TasksOnlySchema), so a cache entry it wrote "+
+			"could never be read back — a breakpoint there is pure write premium")
+
+	require.NotEmpty(t, chunk1Req.CachePrefix, "chunk 1's request must carry a non-empty CachePrefix")
+	require.NotEmpty(t, chunk2Req.CachePrefix, "chunk 2's request must carry a non-empty CachePrefix")
+	assert.Equal(t, chunk1Req.CachePrefix, chunk2Req.CachePrefix,
+		"all chunk requests must share the identical CachePrefix value so Anthropic can match the cache entry across chunks")
+
+	// Independently re-render what reviewPlanChunked itself would have
+	// rendered for this plan, and check the captured requests against it
+	// directly rather than against each other only.
+	tasks, _ := planparser.SplitTasks(plan)
+	require.Len(t, tasks, 9)
+	rendered, err := renderPlanReview(renderPlanReviewInputs{
+		PlanText:  plan,
+		Tasks:     tasks,
+		ChunkSize: 8,
+	})
+	require.NoError(t, err)
+	require.Len(t, rendered.Chunks, 2, "9 tasks at chunk size 8 renders 2 chunks")
+	wantPrefix := rendered.Chunks[0].Prompt.UserPrefix
+	require.NotEmpty(t, wantPrefix)
+	assert.Equal(t, wantPrefix, chunk1Req.CachePrefix, "chunk 1's CachePrefix must equal the rendered UserPrefix")
+	assert.Equal(t, wantPrefix, chunk2Req.CachePrefix, "chunk 2's CachePrefix must equal the rendered UserPrefix")
+
+	// Each chunk's User must be the SUFFIX only. A regression that instead
+	// sends the full rendered.User (prefix+suffix) would still "work"
+	// functionally, but would duplicate the prefix into the body and the
+	// cache would never match — so assert the negative directly.
+	assert.Equal(t, rendered.Chunks[0].Prompt.UserSuffix, chunk1Req.User, "chunk 1's User must be exactly the rendered suffix")
+	assert.Equal(t, rendered.Chunks[1].Prompt.UserSuffix, chunk2Req.User, "chunk 2's User must be exactly the rendered suffix")
+	assert.False(t, strings.HasPrefix(chunk1Req.User, chunk1Req.CachePrefix),
+		"chunk 1's User must NOT start with its own CachePrefix — that would mean the full body was sent instead of the suffix")
+	assert.False(t, strings.HasPrefix(chunk2Req.User, chunk2Req.CachePrefix),
+		"chunk 2's User must NOT start with its own CachePrefix — that would mean the full body was sent instead of the suffix")
 }
 
 // TestReviewPlanChunked_16Tasks_2Chunks verifies that a 16-task plan with
@@ -514,11 +583,14 @@ func TestValidatePlan_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 	require.Len(t, pr.Tasks, 2)
 	assert.Equal(t, "Task 1: First", pr.Tasks[0].TaskTitle)
 	assert.Equal(t, "Task 2: Second", pr.Tasks[1].TaskTitle)
-	// plan_findings has the original major finding plus the minor truncation marker.
-	require.Len(t, pr.PlanFindings, 2)
-	assert.Equal(t, "pf1", pr.PlanFindings[0].Criterion)
-	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[1].Severity)
-	assert.Contains(t, pr.PlanFindings[1].Suggestion, "max_tokens_override")
+	// plan_findings has the plan_text deprecation notice (leading — see
+	// prependPlanDeprecation), the original major finding, and the minor
+	// truncation marker.
+	require.Len(t, pr.PlanFindings, 3)
+	assert.Equal(t, "input", pr.PlanFindings[0].Criterion, "plan_text deprecation notice must lead")
+	assert.Equal(t, "pf1", pr.PlanFindings[1].Criterion)
+	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[2].Severity)
+	assert.Contains(t, pr.PlanFindings[2].Suggestion, "max_tokens_override")
 }
 
 // TestReviewPlanChunked_Pass2Truncation_PreservesPass1Findings exercises the
@@ -572,11 +644,15 @@ func TestReviewPlanChunked_Pass2Truncation_PreservesPass1Findings(t *testing.T) 
 	require.NoError(t, err)
 	assert.True(t, pr.Partial, "envelope must be marked partial after Pass-2 truncation")
 
-	// Pass-1 plan finding must survive the truncation recovery.
-	require.GreaterOrEqual(t, len(pr.PlanFindings), 2,
-		"expected at least Pass-1 finding + truncation marker; got %d", len(pr.PlanFindings))
-	assert.Equal(t, "pass1_pf", pr.PlanFindings[0].Criterion,
-		"Pass-1 plan finding must be the first PlanFinding")
+	// Pass-1 plan finding must survive the truncation recovery. PlanFindings[0]
+	// is the plan_text deprecation notice (this test uses PlanText), which
+	// must also survive the truncation-recovery path — see
+	// TestValidatePlan_TruncatedResponseSurfacesWarn.
+	require.GreaterOrEqual(t, len(pr.PlanFindings), 3,
+		"expected at least deprecation notice + Pass-1 finding + truncation marker; got %d", len(pr.PlanFindings))
+	assert.Equal(t, "input", pr.PlanFindings[0].Criterion, "plan_text deprecation notice must lead")
+	assert.Equal(t, "pass1_pf", pr.PlanFindings[1].Criterion,
+		"Pass-1 plan finding must be the second PlanFinding, right after the deprecation notice")
 	// Last finding must be the minor truncation marker.
 	last := pr.PlanFindings[len(pr.PlanFindings)-1]
 	assert.Equal(t, verdict.SeverityMinor, last.Severity)
@@ -614,7 +690,26 @@ func runValidatePlanWithReviewerJSON(t *testing.T, raw []byte, taskCount int) (v
 	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
 		PlanText: buildPlanWithNTasks(taskCount),
 	})
+	// Every caller of this helper uses plan_text and predates the plan_path
+	// deprecation notice; strip it here rather than rework each caller's
+	// unrelated rollup/calibration assertions to account for an extra,
+	// orthogonal finding. See TestValidatePlanPathInput for deprecation
+	// coverage.
+	pr.PlanFindings = stripPlanDeprecationFinding(pr.PlanFindings)
 	return pr, err
+}
+
+// stripPlanDeprecationFinding removes the plan_text deprecation notice (see
+// prependPlanDeprecation) from a findings slice, if present.
+func stripPlanDeprecationFinding(findings []verdict.Finding) []verdict.Finding {
+	out := make([]verdict.Finding, 0, len(findings))
+	for _, f := range findings {
+		if f.Category == verdict.CategoryOther && f.Criterion == "input" {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 func TestValidatePlan_RollsUpTaskUnverifiableFindings(t *testing.T) {
@@ -738,6 +833,7 @@ func TestValidatePlan_ChunkedUnverifiableFindingsRollUp(t *testing.T) {
 
 	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: buildPlanWithNTasks(9)})
 	require.NoError(t, err)
+	pr.PlanFindings = stripPlanDeprecationFinding(pr.PlanFindings)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, "codebase_reference_checklist", pr.PlanFindings[0].Criterion)
 	assert.Contains(t, pr.PlanFindings[0].Evidence, "Task 1")
@@ -998,7 +1094,7 @@ func TestPlanPassCache_EvictsOldestExpiryWhenFull(t *testing.T) {
 		cache.store(key, verdict.PlanResult{PlanVerdict: verdict.VerdictPass, NextAction: strconv.Itoa(i)}, "claude-sonnet-4-6")
 	}
 	assert.Equal(t, planPassCacheMaxEntries, cache.entryCountForTest())
-	_, _, ok := cache.lookup([32]byte{1})
+	_, _, ok := cache.lookup([32]byte{1}, "")
 	assert.False(t, ok, "oldest entry should be evicted when cache reaches max size")
 }
 
@@ -1014,8 +1110,11 @@ func TestValidatePlan_CacheKeyIncludesClampState(t *testing.T) {
 		MaxTokensOverride: 32000,
 	})
 	require.NoError(t, err)
-	require.NotEmpty(t, first.PlanFindings)
-	assert.Equal(t, "max_tokens_override", first.PlanFindings[0].Criterion)
+	require.Len(t, first.PlanFindings, 2)
+	// The plan_text deprecation notice is prepended after the ladder runs,
+	// landing ahead of the clamp finding.
+	assert.Equal(t, "input", first.PlanFindings[0].Criterion)
+	assert.Equal(t, "max_tokens_override", first.PlanFindings[1].Criterion)
 	assert.Equal(t, 1, rv.Calls)
 
 	_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
@@ -1054,12 +1153,12 @@ func TestPlanPassCache_LookupReturnsIndependentSlices(t *testing.T) {
 		NextAction: "Proceed.",
 	}, "claude-sonnet-4-6")
 
-	first, _, ok := cache.lookup(key)
+	first, _, ok := cache.lookup(key, "")
 	require.True(t, ok)
 	first.PlanFindings[0].Evidence = "mutated plan evidence"
 	first.Tasks[0].Findings[0].Evidence = "mutated task evidence"
 
-	second, _, ok := cache.lookup(key)
+	second, _, ok := cache.lookup(key, "")
 	require.True(t, ok)
 	assert.Equal(t, "cached plan evidence", second.PlanFindings[0].Evidence)
 	assert.Equal(t, "cached task evidence", second.Tasks[0].Findings[0].Evidence)
@@ -1159,13 +1258,13 @@ func TestValidatePlan_PopulatesNormativeTestBodies_ZeroBasedTaskIndex(t *testing
 // ---------------------------------------------------------------------------
 
 // TestValidatePlan_ProjectKnowledge_OverCap exercises the cumulative payload
-// guard: when plan_text + project_knowledge exceeds MaxPayloadBytes, the
+// guard: when plan_text + project_knowledge exceeds PlanMaxPayloadBytes, the
 // synthetic payload_too_large finding's evidence must name both contributors
 // so the caller can tell which to shrink.
 func TestValidatePlan_ProjectKnowledge_OverCap(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed.")}
 	d := newDeps(t, rv)
-	d.Cfg.MaxPayloadBytes = 20
+	d.Cfg.PlanMaxPayloadBytes = 20
 	h := &handlers{deps: d}
 
 	planText := buildPlanWithNTasks(1) // > 20 bytes
@@ -1177,10 +1276,14 @@ func TestValidatePlan_ProjectKnowledge_OverCap(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
 	assert.Equal(t, 0, rv.Calls, "over-cap rejection must short-circuit the reviewer")
-	require.NotEmpty(t, pr.PlanFindings)
-	require.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
-	evidence := pr.PlanFindings[0].Evidence
-	assert.Contains(t, evidence, "plan_text:")
+	// 2 findings: the plan_text deprecation notice (prepended ahead of the
+	// too-large envelope, safe because the critical too-large finding
+	// already forces fail) plus the too-large finding itself.
+	require.Len(t, pr.PlanFindings, 2)
+	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
+	require.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[1].Category)
+	evidence := pr.PlanFindings[1].Evidence
+	assert.Contains(t, evidence, "plan:")
 	assert.Contains(t, evidence, "project_knowledge:")
 	assert.Contains(t, evidence, strconv.Itoa(len(planText)), "evidence reports plan_text byte count")
 	assert.Contains(t, evidence, strconv.Itoa(len(pk)), "evidence reports project_knowledge byte count")
@@ -1378,4 +1481,242 @@ func TestValidateCompletion_ValidPlanRunID_UpdatesRow(t *testing.T) {
 	assert.True(t, row.Codescene.Ran)
 	assert.Equal(t, planrun.StateRan, row.CodesceneState)
 	assert.False(t, row.CompletedAt.IsZero())
+}
+
+// ---------------------------------------------------------------------------
+// Task 3 (v0.16.0) — validate_plan plan_path input, plan_text deprecation
+// ---------------------------------------------------------------------------
+
+func TestValidatePlanPathInput(t *testing.T) {
+	planMD := "# P\n\n### Task 1: Do a thing\n\n**Goal:** g\n\n**Acceptance criteria:**\n- [ ] a\n"
+
+	t.Run("neither input", func(t *testing.T) {
+		h := newTestPlanHandlers(t)
+		_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "plan_text or plan_path is required")
+	})
+
+	t.Run("both inputs", func(t *testing.T) {
+		h := newTestPlanHandlers(t)
+		_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+			PlanText: planMD, PlanPath: "/tmp/x.md",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+
+	t.Run("plan_path matches plan_text", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "plan.md")
+		require.NoError(t, os.WriteFile(p, []byte(planMD), 0o644))
+
+		h := newTestPlanHandlers(t)
+		_, viaPath, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: p})
+		require.NoError(t, err)
+
+		h2 := newTestPlanHandlers(t)
+		_, viaText, err := h2.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planMD})
+		require.NoError(t, err)
+
+		assert.Equal(t, len(viaPath.Tasks), len(viaText.Tasks))
+		assert.Equal(t, viaPath.PlanVerdict, viaText.PlanVerdict)
+	})
+
+	t.Run("plan_text emits one deprecation finding", func(t *testing.T) {
+		h := newTestPlanHandlers(t)
+		_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planMD})
+		require.NoError(t, err)
+
+		var dep []verdict.Finding
+		for _, f := range pr.PlanFindings {
+			if f.Criterion == "input" {
+				dep = append(dep, f)
+			}
+		}
+		require.Len(t, dep, 1)
+		assert.Equal(t, verdict.SeverityMinor, dep[0].Severity)
+		assert.Equal(t, verdict.CategoryOther, dep[0].Category)
+		assert.Contains(t, dep[0].Suggestion, "plan_path")
+	})
+
+	t.Run("plan_path over plan cap returns envelope", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "big.md")
+		require.NoError(t, os.WriteFile(p, bytes.Repeat([]byte("x"), 5000), 0o644))
+
+		h := newTestPlanHandlers(t)
+		h.deps.Cfg.PlanMaxPayloadBytes = 1024
+		_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: p})
+		require.NoError(t, err, "too-large is an envelope, not a transport error")
+		require.NotEmpty(t, pr.PlanFindings)
+		assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
+		assert.Contains(t, pr.PlanFindings[0].Evidence, "5000", "true file size")
+		assert.Contains(t, pr.PlanFindings[0].Evidence, "plan:")
+		assert.NotContains(t, pr.PlanFindings[0].Evidence, "plan_text:")
+	})
+
+	t.Run("plan cap is independent of shared cap", func(t *testing.T) {
+		h := newTestPlanHandlers(t)
+		h.deps.Cfg.MaxPayloadBytes = 10 // would reject if the plan path used it
+		h.deps.Cfg.PlanMaxPayloadBytes = 1 << 20
+		_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planMD})
+		require.NoError(t, err)
+		for _, f := range pr.PlanFindings {
+			assert.NotEqual(t, verdict.CategoryTooLarge, f.Category)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Task 3 fix round 1 (v0.16.0) — deprecation must not leak across the shared
+// plan-pass cache entry when plan_text and plan_path supply identical content
+// ---------------------------------------------------------------------------
+
+// countPlanDeprecationFindings counts how many findings in the slice are the
+// plan_text deprecation notice (see prependPlanDeprecation). Unlike
+// stripPlanDeprecationFinding, this does not mutate/copy — it's used purely
+// for assertions on finding count.
+func countPlanDeprecationFindings(findings []verdict.Finding) int {
+	n := 0
+	for _, f := range findings {
+		if f.Category == verdict.CategoryOther && f.Criterion == "input" {
+			n++
+		}
+	}
+	return n
+}
+
+// assertPlanSummaryMatchesFindings checks that SummaryBlock's
+// `plan_findings: N (...)` count matches len(pr.PlanFindings), so the two
+// never drift when the deprecation finding is added/omitted after
+// SummaryBlock was first computed.
+func assertPlanSummaryMatchesFindings(t *testing.T, pr verdict.PlanResult) {
+	t.Helper()
+	want := "plan_findings: " + strconv.Itoa(len(pr.PlanFindings)) + " ("
+	assert.Contains(t, pr.SummaryBlock, want,
+		"SummaryBlock's plan_findings count must match len(PlanFindings)")
+}
+
+// TestValidatePlan_DeprecationNotCachedAcrossInputMethods is the regression
+// test for the review finding that planPassCacheKey keys only on plan
+// content/model/mode, not on which argument (plan_text or plan_path)
+// supplied it. Two calls with byte-identical plan content share one cache
+// entry within the pass cache's TTL; the deprecation finding must therefore
+// be applied per-call from the shared entry, never stored on it — otherwise
+// whichever call populates the entry first would decide whether the OTHER
+// call's response carries the deprecation notice, independent of what that
+// second call actually passed.
+func TestValidatePlan_DeprecationNotCachedAcrossInputMethods(t *testing.T) {
+	planMD := buildPlanWithNTasks(1)
+
+	t.Run("plan_path then plan_text: cache hit gains the deprecation finding", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "plan.md")
+		require.NoError(t, os.WriteFile(p, []byte(planMD), 0o644))
+
+		rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+		h := &handlers{deps: newDeps(t, rv)}
+
+		_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: p})
+		require.NoError(t, err)
+		require.Equal(t, verdict.VerdictPass, first.PlanVerdict, "only pass results are cached")
+		assert.Equal(t, 0, countPlanDeprecationFindings(first.PlanFindings),
+			"plan_path call must not carry the deprecation finding")
+		assertPlanSummaryMatchesFindings(t, first)
+		require.Equal(t, 1, rv.Calls)
+
+		_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planMD})
+		require.NoError(t, err)
+		assert.Equal(t, 1, rv.Calls, "second call must be a cache hit, not a fresh reviewer call")
+		assert.Contains(t, second.NextAction, "[cached",
+			"second call must be served from the shared cache entry, proving this exercises the cache-hit path")
+		assert.Equal(t, 1, countPlanDeprecationFindings(second.PlanFindings),
+			"plan_text call must carry exactly one deprecation finding, even on a cache hit")
+		assertPlanSummaryMatchesFindings(t, second)
+	})
+
+	t.Run("plan_text then plan_path: cache hit does not inherit the deprecation finding", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "plan.md")
+		require.NoError(t, os.WriteFile(p, []byte(planMD), 0o644))
+
+		rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+		h := &handlers{deps: newDeps(t, rv)}
+
+		_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: planMD})
+		require.NoError(t, err)
+		require.Equal(t, verdict.VerdictPass, first.PlanVerdict, "only pass results are cached")
+		assert.Equal(t, 1, countPlanDeprecationFindings(first.PlanFindings),
+			"plan_text call must carry exactly one deprecation finding")
+		assertPlanSummaryMatchesFindings(t, first)
+		require.Equal(t, 1, rv.Calls)
+
+		_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: p})
+		require.NoError(t, err)
+		assert.Equal(t, 1, rv.Calls, "second call must be a cache hit, not a fresh reviewer call")
+		assert.Contains(t, second.NextAction, "[cached",
+			"second call must be served from the shared cache entry, proving this exercises the cache-hit path")
+		assert.Equal(t, 0, countPlanDeprecationFindings(second.PlanFindings),
+			"plan_path call must not inherit the plan_text call's deprecation finding")
+		assertPlanSummaryMatchesFindings(t, second)
+	})
+}
+
+// TestValidatePlanProvenanceOnCacheHit is the regression test for the
+// provenance requirement that a cache hit must render the CURRENT call's
+// source, never the stored entry's. planPassCacheKey hashes content, so two
+// different paths holding byte-identical plans share one cache entry;
+// echoing the stored path would name an earlier caller's file.
+func TestValidatePlanProvenanceOnCacheHit(t *testing.T) {
+	planMD := "# P\n\n### Task 1: T\n\n**Goal:** g\n\n**Acceptance criteria:**\n- [ ] a\n"
+	dirA, dirB := t.TempDir(), t.TempDir()
+	pa := filepath.Join(dirA, "plan.md")
+	pb := filepath.Join(dirB, "plan.md")
+	require.NoError(t, os.WriteFile(pa, []byte(planMD), 0o644))
+	require.NoError(t, os.WriteFile(pb, []byte(planMD), 0o644)) // identical content
+
+	h := newTestPlanHandlers(t)
+	_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: pa})
+	require.NoError(t, err)
+	require.Equal(t, verdict.VerdictPass, first.PlanVerdict, "must pass so it is cached")
+
+	_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanPath: pb})
+	require.NoError(t, err)
+	assert.Contains(t, second.SummaryBlock, "[cached", "identical content hits the cache")
+	assert.Contains(t, second.SummaryBlock, dirB, "echoes the CURRENT call's path")
+	assert.NotContains(t, second.SummaryBlock, dirA, "must not echo the cached entry's path")
+}
+
+// TestPlanPassCacheKey_CoversBothHalves is the regression test for the
+// requirement that planPassCacheKey covers the FULL rendered prompt —
+// UserPrefix and UserSuffix — not just the shared prefix. If either half
+// dropped out of the key, a template edit confined to that half would be
+// invisible to the cache and could serve stale cached "pass" results for up
+// to planPassCacheTTL.
+func TestPlanPassCacheKey_CoversBothHalves(t *testing.T) {
+	build := func(prefix, suffix string) renderedPlanReview {
+		return renderedPlanReview{
+			FindingsOnly: &prompts.Output{System: "sys", UserPrefix: prefix, UserSuffix: suffix},
+			Chunks: []renderedPlanChunk{
+				{Prompt: prompts.Output{System: "sys", UserPrefix: prefix, UserSuffix: "chunk-body"}},
+			},
+		}
+	}
+	keyOf := func(r renderedPlanReview) [32]byte {
+		return planPassCacheKey("plan", "pk", "mode", "model", 100, 0, r)
+	}
+
+	base := keyOf(build("shared-prefix", "suffix-v1"))
+
+	t.Run("suffix-only edit changes the key", func(t *testing.T) {
+		edited := keyOf(build("shared-prefix", "suffix-v2"))
+		assert.NotEqual(t, base, edited, "a per-call suffix template edit must change the cache key")
+	})
+
+	t.Run("prefix-only edit changes the key", func(t *testing.T) {
+		edited := keyOf(build("shared-prefix-edited", "suffix-v1"))
+		assert.NotEqual(t, base, edited, "a shared-prefix template edit must change the cache key")
+	})
+
+	t.Run("identical inputs produce identical keys", func(t *testing.T) {
+		again := keyOf(build("shared-prefix", "suffix-v1"))
+		assert.Equal(t, base, again)
+	})
 }

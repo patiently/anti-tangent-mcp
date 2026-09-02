@@ -1,6 +1,9 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -318,4 +321,167 @@ func TestLoad_Codescene(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_CODESCENE")
 	assert.Contains(t, err.Error(), `allowed: "", "required"`)
+}
+
+func TestPlanPayloadCapAndRoots(t *testing.T) {
+	base := map[string]string{"ANTHROPIC_API_KEY": "k"}
+	envFrom := func(m map[string]string) func(string) string {
+		return func(k string) string { return m[k] }
+	}
+
+	t.Run("defaults", func(t *testing.T) {
+		cfg, err := Load(envFrom(base))
+		require.NoError(t, err)
+		assert.Equal(t, 1048576, cfg.PlanMaxPayloadBytes)
+		assert.Equal(t, 204800, cfg.MaxPayloadBytes)
+		assert.Empty(t, cfg.PlanRoots)
+	})
+
+	t.Run("plan cap override", func(t *testing.T) {
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES": "4096"}
+		cfg, err := Load(envFrom(m))
+		require.NoError(t, err)
+		assert.Equal(t, 4096, cfg.PlanMaxPayloadBytes)
+		assert.Equal(t, 204800, cfg.MaxPayloadBytes, "shared cap untouched")
+	})
+
+	t.Run("plan cap rejects non-positive", func(t *testing.T) {
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES": "0"}
+		_, err := Load(envFrom(m))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES")
+	})
+
+	t.Run("roots parsed and cleaned", func(t *testing.T) {
+		// Built from t.TempDir() + filepath.Join so both entries are absolute
+		// and platform-native on Windows too (not just Unix-shaped literals),
+		// joined with the OS path-list separator (filepath.SplitList's
+		// convention) rather than a literal ":". base itself exists (created
+		// by t.TempDir()) but its two joined children do not.
+		base := t.TempDir()
+		rootA := filepath.Join(base, "does-not-exist-a")
+		rootB := filepath.Join(base, "does-not-exist-b")
+		rootsEnv := strings.Join([]string{rootA + string(filepath.Separator), rootB, " "},
+			string(os.PathListSeparator))
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": rootsEnv}
+		cfg, err := Load(envFrom(m))
+		require.NoError(t, err)
+		// Neither rootA nor rootB exists on disk, so this also pins the
+		// not-yet-created-root fallback: EvalSymlinks fails and the Cleaned
+		// value is kept rather than erroring at startup.
+		assert.Equal(t, []string{rootA, rootB}, cfg.PlanRoots)
+	})
+
+	// TestPlanPayloadCapAndRoots/"roots are symlink-resolved" is the regression
+	// test for the withinRoots mismatch: internal/mcpsrv/file_source.go's
+	// resolveFileInput EvalSymlinks the candidate path before checking root
+	// membership, so a root that is only Cleaned (not resolved) refuses every
+	// legitimate path under it whenever an ancestor of the root is itself a
+	// symlink — exactly the shape of macOS's /tmp -> /private/tmp, which is
+	// also what docs/protocol/implementer.md told implementers to use.
+	t.Run("roots are symlink-resolved", func(t *testing.T) {
+		real := t.TempDir()
+		realResolved, err := filepath.EvalSymlinks(real)
+		require.NoError(t, err)
+		linkParent := t.TempDir()
+		link := filepath.Join(linkParent, "link-root")
+		require.NoError(t, os.Symlink(real, link))
+
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": link}
+		cfg, err := Load(envFrom(m))
+		require.NoError(t, err)
+		assert.Equal(t, []string{realResolved}, cfg.PlanRoots,
+			"a symlinked root must resolve to the real path so it matches resolveFileInput's resolved candidate")
+	})
+
+	t.Run("relative root rejected", func(t *testing.T) {
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": "relative/path"}
+		_, err := Load(envFrom(m))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+		assert.Contains(t, err.Error(), "absolute")
+	})
+
+	// Regression test: ANTI_TANGENT_PLAN_ROOTS is a security-narrowing
+	// setting. A set-but-empty-after-parsing value (a bare separator, or
+	// whitespace-only entries) used to leave cfg.PlanRoots nil with no
+	// error — which withinRoots treats as "allow everything", the exact
+	// opposite of what an operator setting this variable intends. It must
+	// fail closed at startup instead.
+	t.Run("set but zero usable entries fails closed", func(t *testing.T) {
+		for name, v := range map[string]string{
+			"bare separator":      string(os.PathListSeparator),
+			"whitespace only":     "   ",
+			"whitespace and seps": " " + string(os.PathListSeparator) + " ",
+		} {
+			t.Run(name, func(t *testing.T) {
+				m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": v}
+				_, err := Load(envFrom(m))
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+			})
+		}
+	})
+
+	// Regression test for the Windows unusability bug: parsing used to
+	// hardcode ":" as the separator, so a Windows value like `C:\plans` split
+	// into ["C", "\plans"] and failed the absolute-path check — no value of
+	// the variable worked on that platform. Building the input with
+	// os.PathListSeparator (rather than a literal ":") means this test
+	// exercises the OS's real separator on every platform it runs on,
+	// including a hypothetical Windows CI run where it would be ";".
+	t.Run("roots parsed using the OS path-list separator", func(t *testing.T) {
+		a := t.TempDir()
+		b := t.TempDir()
+		joined := strings.Join([]string{a, b}, string(os.PathListSeparator))
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_PLAN_ROOTS": joined}
+		cfg, err := Load(envFrom(m))
+		require.NoError(t, err)
+		aResolved, err := filepath.EvalSymlinks(a)
+		require.NoError(t, err)
+		bResolved, err := filepath.EvalSymlinks(b)
+		require.NoError(t, err)
+		assert.Equal(t, []string{aResolved, bResolved}, cfg.PlanRoots)
+	})
+}
+
+func TestPlanMaxPayloadBytesFollowsSharedCap(t *testing.T) {
+	envFrom := func(m map[string]string) func(string) string {
+		return func(k string) string { return m[k] }
+	}
+
+	t.Run("neither var set defaults to 1MB", func(t *testing.T) {
+		cfg, err := Load(envFrom(map[string]string{"ANTHROPIC_API_KEY": "k"}))
+		require.NoError(t, err)
+		assert.Equal(t, 1048576, cfg.PlanMaxPayloadBytes)
+	})
+
+	t.Run("shared cap raised above 1MB raises the plan cap with it", func(t *testing.T) {
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_MAX_PAYLOAD_BYTES": "2097152"}
+		cfg, err := Load(envFrom(m))
+		require.NoError(t, err)
+		assert.Equal(t, 2097152, cfg.MaxPayloadBytes)
+		assert.Equal(t, 2097152, cfg.PlanMaxPayloadBytes,
+			"an operator who already raised the shared cap must not regress on upgrade")
+	})
+
+	t.Run("explicit plan cap wins even when lower than the raised shared cap", func(t *testing.T) {
+		m := map[string]string{
+			"ANTHROPIC_API_KEY":                   "k",
+			"ANTI_TANGENT_MAX_PAYLOAD_BYTES":      "2097152",
+			"ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES": "500000",
+		}
+		cfg, err := Load(envFrom(m))
+		require.NoError(t, err)
+		assert.Equal(t, 2097152, cfg.MaxPayloadBytes)
+		assert.Equal(t, 500000, cfg.PlanMaxPayloadBytes, "explicit setting must win even if lower")
+	})
+
+	t.Run("shared cap below 1MB leaves the plan cap at the 1MB default", func(t *testing.T) {
+		m := map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_MAX_PAYLOAD_BYTES": "102400"}
+		cfg, err := Load(envFrom(m))
+		require.NoError(t, err)
+		assert.Equal(t, 102400, cfg.MaxPayloadBytes)
+		assert.Equal(t, 1048576, cfg.PlanMaxPayloadBytes)
+	})
 }

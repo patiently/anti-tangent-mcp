@@ -156,3 +156,67 @@ func TestAnthropic_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_REQUEST_TIMEOUT")
 	assert.True(t, errors.Is(err, context.DeadlineExceeded))
 }
+
+func TestAnthropicCachePrefix(t *testing.T) {
+	capture := func(t *testing.T, req Request) map[string]any {
+		t.Helper()
+		var got map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Errorf("decode request body: %v", err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"model":"m","stop_reason":"tool_use",
+				"content":[{"type":"tool_use","input":{"ok":true}}],
+				"usage":{"input_tokens":10,"output_tokens":2,
+				         "cache_read_input_tokens":7,"cache_creation_input_tokens":3}}`))
+		}))
+		defer srv.Close()
+		_, err := NewAnthropic("k", srv.URL, 5*time.Second).Review(context.Background(), req)
+		require.NoError(t, err)
+		return got
+	}
+
+	base := Request{Model: "m", System: "sys", User: "tail", MaxTokens: 100, JSONSchema: []byte(`{"type":"object"}`)}
+
+	t.Run("no prefix keeps a plain string content", func(t *testing.T) {
+		got := capture(t, base)
+		msgs := got["messages"].([]any)
+		content := msgs[0].(map[string]any)["content"]
+		assert.Equal(t, "tail", content, "unchanged wire shape when caching is off")
+	})
+
+	t.Run("prefix produces two blocks with cache_control on the first", func(t *testing.T) {
+		req := base
+		req.CachePrefix = "head"
+		got := capture(t, req)
+
+		blocks := got["messages"].([]any)[0].(map[string]any)["content"].([]any)
+		require.Len(t, blocks, 2)
+
+		first := blocks[0].(map[string]any)
+		assert.Equal(t, "head", first["text"])
+		assert.Equal(t, map[string]any{"type": "ephemeral"}, first["cache_control"])
+
+		second := blocks[1].(map[string]any)
+		assert.Equal(t, "tail", second["text"])
+		assert.NotContains(t, second, "cache_control", "only the prefix is a breakpoint")
+	})
+
+	t.Run("cache usage is surfaced", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"model":"m","stop_reason":"tool_use",
+				"content":[{"type":"tool_use","input":{"ok":true}}],
+				"usage":{"input_tokens":10,"output_tokens":2,
+				         "cache_read_input_tokens":7,"cache_creation_input_tokens":3}}`))
+		}))
+		defer srv.Close()
+		resp, err := NewAnthropic("k", srv.URL, 5*time.Second).Review(context.Background(), base)
+		require.NoError(t, err)
+		assert.Equal(t, 7, resp.CacheReadInputTokens)
+		assert.Equal(t, 3, resp.CacheCreationInputTokens)
+	})
+}

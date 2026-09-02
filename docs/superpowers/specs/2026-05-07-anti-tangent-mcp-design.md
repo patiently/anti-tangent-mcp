@@ -73,7 +73,10 @@ A single Go binary, internally organized by layer.
 ### Runtime properties
 
 - Single binary, no external runtime dependencies beyond outbound HTTPS to the chosen provider.
-- No DB, no Redis, no filesystem state.
+- No DB, no Redis, no persistent filesystem state. As of 0.16.0, `validate_plan` and
+  `validate_completion` read plan/evidence files from disk when given path inputs (`plan_path`,
+  `final_diff_path`, `final_files[].path`) — see
+  `docs/superpowers/specs/2026-08-31-plan-path-design.md`.
 - Sessions live in memory, expire after a configurable TTL (default 4h).
 - If the server restarts, in-flight sessions are lost — re-issuing `validate_task_spec` is cheap (~1-2s, one LLM call).
 
@@ -159,8 +162,9 @@ The mid-hook prompt explicitly instructs the reviewer **not** to critique code s
 {
   "session_id": "string, required",
   "summary": "string, required — what you implemented, in your own words",
+  "final_diff_path": "string, optional — absolute path to a diff file; alternative to final_files",
   "final_files": [
-    { "path": "src/foo.go", "content": "full file content" }
+    { "path": "src/foo.go", "content": "full file content, optional — omitting it makes the server read `path` instead" }
   ],
   "test_evidence": "string, optional — output of test runs, build logs, etc.",
   "model_override": "string, optional"

@@ -23,18 +23,27 @@ type Reviewer interface {
 }
 
 type Request struct {
-	Model      string
-	System     string
-	User       string
-	MaxTokens  int
-	JSONSchema []byte
+	Model  string
+	System string
+	// CachePrefix is a stable head shared byte-for-byte across several calls.
+	// When non-empty the Anthropic client sends it as its own content block
+	// marked cache_control: ephemeral, so later calls read it at ~0.1x input
+	// price instead of re-billing it. Providers without a prefix-cache
+	// concept concatenate it onto User. Set ONLY on the chunked validate_plan
+	// path: on a single call a breakpoint is a 1.25x write against zero reads.
+	CachePrefix string
+	User        string
+	MaxTokens   int
+	JSONSchema  []byte
 }
 
 type Response struct {
-	RawJSON      []byte
-	Model        string
-	InputTokens  int
-	OutputTokens int
+	RawJSON                  []byte
+	Model                    string
+	InputTokens              int
+	OutputTokens             int
+	CacheReadInputTokens     int
+	CacheCreationInputTokens int
 }
 
 // allowlist holds the known model IDs per provider. Adding a new model is a

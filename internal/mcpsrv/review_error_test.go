@@ -95,6 +95,51 @@ func TestHandlePlanReviewErr_NilErrorReturnsHandledFalse(t *testing.T) {
 	require.Nil(t, r)
 }
 
+// TestHandlePlanReviewErr_AppliesPlanTextDeprecation is the direct unit-level
+// regression test for the fix-round bug: prependPlanDeprecation's doc
+// comment claims it "survives every early-exit path", but the
+// truncation-recovery path used to return before it was ever applied. A
+// plan_text caller whose reviewer response truncates must still get the
+// deprecation notice, leading PlanFindings (see prependPlanDeprecation).
+func TestHandlePlanReviewErr_AppliesPlanTextDeprecation(t *testing.T) {
+	h := &handlers{}
+
+	r, pr, handled, err := h.handlePlanReviewErr(planReviewErrInputs{
+		Err:          providers.ErrResponseTruncated,
+		Model:        config.ModelRef{Provider: "openai", Model: "gpt-5"},
+		UsedPlanText: true,
+	})
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.NotNil(t, r)
+
+	require.NotEmpty(t, pr.PlanFindings)
+	assert.Equal(t, "input", pr.PlanFindings[0].Criterion,
+		"plan_text deprecation notice must lead PlanFindings even on the truncation-recovery path")
+	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[0].Severity)
+	assert.Contains(t, pr.SummaryBlock, "1.0.0",
+		"SummaryBlock must be (re)computed after the deprecation prepend, not before it")
+}
+
+// TestHandlePlanReviewErr_NoDeprecationWhenPlanPathUsed pins the other side:
+// a plan_path caller's truncation-recovery envelope must NOT gain the
+// plan_text deprecation notice.
+func TestHandlePlanReviewErr_NoDeprecationWhenPlanPathUsed(t *testing.T) {
+	h := &handlers{}
+
+	_, pr, handled, err := h.handlePlanReviewErr(planReviewErrInputs{
+		Err:          providers.ErrResponseTruncated,
+		Model:        config.ModelRef{Provider: "openai", Model: "gpt-5"},
+		UsedPlanText: false,
+	})
+	require.True(t, handled)
+	require.NoError(t, err)
+
+	for _, f := range pr.PlanFindings {
+		assert.NotEqual(t, "input", f.Criterion, "plan_path callers must not see the plan_text deprecation notice")
+	}
+}
+
 // decodeCallToolEnvelope pulls the JSON-marshaled envelope text out of a
 // CallToolResult and decodes the model_used + review_ms fields the plan
 // recovery path is expected to surface.

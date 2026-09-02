@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,17 @@ type Config struct {
 	ExtractMaxTokens  int
 	PlanTasksPerChunk int
 	MaxTokensCeiling  int
+	// PlanMaxPayloadBytes caps plan content + project_knowledge for
+	// validate_plan only. Separate from MaxPayloadBytes because validate_plan
+	// gained ~10x headroom with plan_path while the other tools did not; a
+	// 1MB plan is ~270K tokens, which the chunked path sends on every call,
+	// so the cap stays a real guard. See design §4.
+	PlanMaxPayloadBytes int
+	// PlanRoots restricts which directories file-path inputs may be read
+	// from. Empty (the default) means unrestricted — the server is stdio-only
+	// and the calling agent already has unrestricted file read, so the server
+	// acquires no capability the caller lacks. See design §3.1 / §3.2.
+	PlanRoots []string
 	// Stats subsystem (opt-in; see spec 2026-06-02). StatsDir == "" disables
 	// it entirely.
 	StatsDir              string
@@ -89,6 +101,7 @@ func Load(env func(string) string) (Config, error) {
 		ExtractMaxTokens:      8192,
 		PlanTasksPerChunk:     8,
 		MaxTokensCeiling:      16384,
+		PlanMaxPayloadBytes:   1048576,
 		StatsSummaryInterval:  24 * time.Hour,
 		StatsSummaryThreshold: 50,
 		StatsRetentionDays:    30,
@@ -190,6 +203,16 @@ func Load(env func(string) string) (Config, error) {
 		}
 		cfg.MaxPayloadBytes = n
 	}
+	// PlanMaxPayloadBytes tracks the shared cap when an operator raises it: a
+	// host that already raised ANTI_TANGENT_MAX_PAYLOAD_BYTES above the 1MB
+	// plan default must not regress to rejecting plans it accepted before
+	// validate_plan gained its own cap. cfg.PlanMaxPayloadBytes is still
+	// initialized to 1048576 above, so this is exactly max(1048576,
+	// cfg.MaxPayloadBytes). The explicit ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES
+	// override below always wins over this default, even if lower.
+	if cfg.MaxPayloadBytes > cfg.PlanMaxPayloadBytes {
+		cfg.PlanMaxPayloadBytes = cfg.MaxPayloadBytes
+	}
 	if v := env("ANTI_TANGENT_REQUEST_TIMEOUT"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -249,6 +272,36 @@ func Load(env func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_TASKS_PER_CHUNK: must be positive, got %d", n)
 		}
 		cfg.PlanTasksPerChunk = n
+	}
+	if v := env("ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES: must be positive, got %d", n)
+		}
+		cfg.PlanMaxPayloadBytes = n
+	}
+	if v := env("ANTI_TANGENT_PLAN_ROOTS"); v != "" {
+		for _, p := range filepath.SplitList(v) {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if !filepath.IsAbs(p) {
+				return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_ROOTS: %q is not an absolute path", p)
+			}
+			cfg.PlanRoots = append(cfg.PlanRoots, resolvePlanRoot(p))
+		}
+		// ANTI_TANGENT_PLAN_ROOTS is a security-narrowing setting: nil
+		// PlanRoots means "no restriction" (see withinRoots), so a value
+		// that is set but yields zero usable entries (e.g. ":" alone, or a
+		// string that TrimSpaces to nothing per entry) would silently leave
+		// file access wide open instead of narrowed — fail closed instead.
+		if len(cfg.PlanRoots) == 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_ROOTS: set but contains no usable path entries: %q", v)
+		}
 	}
 	if v := env("ANTI_TANGENT_MAX_TOKENS_CEILING"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -338,4 +391,21 @@ func Load(env func(string) string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// resolvePlanRoot symlink-resolves an ANTI_TANGENT_PLAN_ROOTS entry so it
+// compares like-for-like against the candidate paths withinRoots checks it
+// against: resolveFileInput (internal/mcpsrv/file_source.go) EvalSymlinks the
+// candidate path BEFORE checking root membership, so a root left merely
+// Cleaned — rather than resolved — refuses every legitimate path under it
+// whenever an ANCESTOR of the root is itself a symlink (e.g. macOS's
+// /tmp -> /private/tmp). Falls back to the Cleaned value when the root does
+// not exist yet at server-start time: a root created later must not be a
+// startup error.
+func resolvePlanRoot(root string) string {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return filepath.Clean(root)
+	}
+	return resolved
 }

@@ -5,6 +5,133 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-08-31
+
+### Added
+- **`plan_path` on `validate_plan`.** Pass an absolute path and the server reads the plan itself.
+  A plan large enough to exceed the caller's max-output-tokens setting was previously
+  unsubmittable under the caller's output-token limit, because `plan_text` had to be emitted as
+  part of the calling model's own tool-call output. Reading from disk also guarantees the
+  reviewer sees the same document the implementing subagents will.
+- **Path inputs on `validate_completion`.** Omit a `final_files` entry's `content` to have the
+  server read its `path`, or pass `final_diff_path` instead of `final_diff`. Truncation checks
+  run on the resolved content, so a path is not a way around the evidence-shape guard.
+- **`ANTI_TANGENT_PLAN_ROOTS`** — a list of absolute directories, joined with the OS path-list
+  separator (`:` on Unix, `;` on Windows), that file-path inputs may be read from. Empty (the
+  default) is unrestricted.
+- **`ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES`** (default 1MB) — payload cap for `validate_plan` only.
+  The other tools keep the shared 200KB `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
+- **Reviewer-side prompt caching on the chunked plan path.** The first chunk call marks its
+  byte-identical plan-text prefix as an Anthropic cache breakpoint; every later chunk call reads
+  it back. Cuts input tokens on a chunked round, increasingly so as the chunk count grows. The
+  findings-only Pass 1 call sends a differing `tools` block, so it can neither write nor read
+  that cache and carries no breakpoint of its own. Single-call plans are deliberately not
+  cached, for the same reason — a breakpoint there is a write premium against zero reads.
+
+### Changed
+- The `validate_plan` too-large finding reports `plan:` rather than `plan_text:`, since the
+  content may have arrived via `plan_path`.
+- When `plan_path` is used, the summary block gains a `source:` line naming the resolved path,
+  byte count, and a short hash, so a controller can show which document cleared the gate.
+
+### Fixed
+- **`content` stayed required on `check_progress` and `extract_project_knowledge`.** Adding path
+  support to `validate_completion` gave the shared `FileArg.content` field `omitempty` so a
+  `final_files` entry could omit it and be read from disk. `check_progress`'s `changed_files` and
+  `extract_project_knowledge`'s completion-envelope `final_files` reuse the same `FileArg` type
+  but neither resolves a path — so `content` had silently become optional there too, and a caller
+  following the new "prefer paths" convention on those two tools would ship empty file bodies to
+  the reviewer with no error. `validate_completion` now has its own `CompletionFileArg` (a
+  nilable `content`); `FileArg.content` is required again, matching 0.15.0's schema exactly, and
+  `check_progress` / `extract_project_knowledge` are unchanged in schema and behaviour.
+- **`validate_completion`'s `final_files[].content: ""` is no longer treated as omitted.** An
+  explicit empty string used to be indistinguishable from "not supplied" and always triggered a
+  filesystem read of `path` — breaking a deleted-file entry submitted as `{"path": "...",
+  "content": ""}` (`EvalSymlinks` on a path that no longer exists, losing the whole call to a
+  transport error) and any relative `path` paired with empty content (a `path must be absolute`
+  error, even though this codebase's own convention is relative repo paths). `content` is now a
+  pointer on the wire: omitted/`null` reads `path` from disk, an explicit `""` is taken literally
+  as "this file is genuinely empty."
+- `ANTI_TANGENT_PLAN_ROOTS` entries are now symlink-resolved at server start (falling back to the
+  cleaned path when a root doesn't exist yet), matching the symlink-resolved candidate paths
+  `resolveFileInput` checks them against. Previously a root under a symlinked ancestor (e.g.
+  macOS's `/tmp` → `/private/tmp`) refused every legitimate path beneath it.
+- A `validate_plan` `plan_text` call whose reviewer response truncates now still carries the
+  `plan_text` deprecation notice; it previously skipped that recovery/partial path only.
+- `validate_completion`'s "referenced paths missing evidence" advisory now matches an absolute
+  `final_files` path against a relative path named in `summary` (e.g. `/repo/docs/foo.md`
+  satisfies a `summary` mention of `docs/foo.md`), instead of only exact string equality — the
+  advisory used to false-fire on every doc deliverable submitted the documented absolute-path way.
+- **`ANTI_TANGENT_PLAN_ROOTS` was unusable on Windows.** It was split on a hardcoded `:`, so a
+  Windows value like `C:\plans` parsed as `["C", "\plans"]` and the second segment's
+  not-absolute check failed `Load` at startup — no value of the variable worked on that platform.
+  Parsing now uses `filepath.SplitList` (`os.PathListSeparator`: `:` on Unix, `;` on Windows).
+- **`validate_plan`'s new payload cap silently regressed hosts that had already raised the shared
+  cap.** `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` defaulted to a flat 1MB regardless of
+  `ANTI_TANGENT_MAX_PAYLOAD_BYTES`, so an operator running the shared cap above 1MB saw
+  `validate_plan` start rejecting plans it accepted before this version, with no config change on
+  their side and an error that never named the new variable. It now defaults to
+  `max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES)`; an explicit
+  `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` still overrides in either direction.
+- **`implementer.md`'s `final_diff_path` recipe used `git rev-parse --git-dir`, which is relative
+  in a normal checkout.** A subagent following the recipe verbatim there passed a relative
+  `.git/anti-tangent-change.diff`, which `resolveFileInput` rejects as `path must be absolute` —
+  losing the whole `validate_completion` call. Switched to `git rev-parse --absolute-git-dir`,
+  which is absolute in both a normal checkout and a worktree.
+- **`ANTI_TANGENT_PLAN_ROOTS=/` (or a Windows drive root) matched nothing.** `withinRoots`'s
+  prefix test degenerated to requiring the literal string `//` when a root was the filesystem
+  root, so a root meant to allow every path refused all of them. Containment is now decided with
+  `filepath.Rel`, which handles a root-of-`/` correctly while still enforcing the
+  separator-boundary property (`/home/foo` still does not authorize `/home/foobar`).
+- The "outside `ANTI_TANGENT_PLAN_ROOTS`" error message joined the configured roots with a
+  hardcoded `:`, printing a value a Windows operator could not have typed (and that
+  `filepath.SplitList` would reject if pasted back). Now joined with
+  `os.PathListSeparator`, matching the parser.
+- **`validate_completion` could pass with literally no evidence.** The at-least-one-evidence
+  guard only checked that `final_diff_path` or a `final_files[].path` STRING was non-empty,
+  before those paths were resolved from disk. A `final_diff_path` (or path-only `final_files`
+  entry) pointing at a genuinely empty file therefore passed the guard, resolved to an empty
+  string, and reached the reviewer with nothing to review — returning `pass` with zero findings
+  instead of the rejection the README documents for evidence-poor submissions. The guard now
+  re-runs against the resolved content: when the empty path is the ONLY evidence on the call, it
+  is a structured `malformed_evidence` rejection naming the offending field (e.g.
+  `final_diff_path resolved to 0 bytes: <path>`), same as before, with no reviewer call. When
+  other real evidence is also present — non-empty `test_evidence`, or another non-empty
+  `final_files` entry — the documented "diff plus test evidence" flow, which is exactly the
+  shape `docs/protocol/implementer.md` recommends — the call now proceeds and carries an
+  `insufficient_evidence` finding naming the empty path instead of silently reviewing only the
+  other evidence. `test_evidence` alone with no path inputs supplied at all still satisfies the
+  guard with no finding, and an explicit `final_files[].content: ""` deletion marker is still
+  never treated as a resolution accident.
+- **A leftover named pipe (FIFO) at `plan_path` or `final_diff_path` hung the tool call
+  forever.** Reading a file input first opens it with `O_NOFOLLOW` to refuse a symlink swapped in
+  at the final path component between the roots check and the read — but opening a FIFO
+  `O_RDONLY` blocks until a writer connects, and that open ran before the regular-file check that
+  would have rejected it. `resolveFileInput` takes no `context.Context`, so neither
+  `ANTI_TANGENT_REQUEST_TIMEOUT` nor MCP request cancellation could unblock it — the goroutine and
+  its file descriptor leaked for the process lifetime. The open now also sets `O_NONBLOCK` (a
+  no-op for regular files), so a FIFO open returns immediately and is rejected as not a regular
+  file instead of hanging.
+- **`ANTI_TANGENT_PLAN_ROOTS` could fail open on a malformed value.** A value that was set but
+  parsed down to zero usable entries (e.g. a bare path-list separator, or all-whitespace entries)
+  left `PlanRoots` `nil` with no startup error — and `nil` roots means "unrestricted" — so an
+  operator who believed they had narrowed the server's file access had not. Setting the variable
+  to such a value is now a startup error naming `ANTI_TANGENT_PLAN_ROOTS`.
+
+### Security
+- **`docs/protocol/implementer.md`'s `final_diff_path` recipe over-captured.** It told
+  implementers to run `git add -A && git diff HEAD`, which stages and diffs every non-ignored
+  change in the worktree — unrelated tracked edits, scratch files, another task's half-finished
+  work — and everything in that diff is sent to a third-party reviewer LLM via `final_diff_path`.
+  The recipe now scopes both the `git add` and the `git diff` to the task's own paths (the task's
+  `**Files:**` list, used as a pathspec), with new files either covered by that same pathspec or
+  passed individually as `final_files[].path` entries, so completeness no longer requires
+  disclosing unrelated work.
+
+### Deprecated
+- **`plan_text` on `validate_plan`.** Still fully functional, now reporting one `minor` finding
+  pointing at `plan_path`. It will be removed in 1.0.0.
+
 ## [0.15.0] - 2026-08-17
 
 ### Added

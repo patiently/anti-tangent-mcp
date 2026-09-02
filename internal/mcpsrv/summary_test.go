@@ -136,7 +136,7 @@ func TestFormatPlanSummary_Basic(t *testing.T) {
 		NextAction:  "go",
 		PlanQuality: verdict.PlanQualityRigorous,
 	}
-	got := formatPlanSummary(pr, "anthropic:claude-opus-4-7", 5678)
+	got := formatPlanSummary(pr, planSummaryMeta{ModelUsed: "anthropic:claude-opus-4-7", ReviewMS: 5678})
 	for _, line := range []string{
 		"anti-tangent envelope (validate_plan)",
 		"  plan_verdict:  warn",
@@ -159,8 +159,27 @@ func TestFormatPlanSummary_PartialFlag_Shown(t *testing.T) {
 		NextAction:  "retry",
 		PlanQuality: verdict.PlanQualityActionable,
 	}
-	got := formatPlanSummary(pr, "anthropic:claude-opus-4-7", 100)
+	got := formatPlanSummary(pr, planSummaryMeta{ModelUsed: "anthropic:claude-opus-4-7", ReviewMS: 100})
 	if !strings.Contains(got, "partial:       true") {
 		t.Errorf("partial=true plan should show partial line:\n%s", got)
 	}
+}
+
+func TestFormatPlanSummarySource(t *testing.T) {
+	pr := verdict.PlanResult{PlanVerdict: verdict.VerdictPass, PlanQuality: "good"}
+
+	t.Run("with source", func(t *testing.T) {
+		out := formatPlanSummary(pr, planSummaryMeta{
+			ModelUsed: "anthropic:claude-sonnet-4-6",
+			ReviewMS:  1200,
+			Source:    "/abs/plan.md (170158 B, sha256 4f2a9c1e…)",
+		})
+		assert.Contains(t, out, "source:")
+		assert.Contains(t, out, "/abs/plan.md (170158 B, sha256 4f2a9c1e…)")
+	})
+
+	t.Run("without source", func(t *testing.T) {
+		out := formatPlanSummary(pr, planSummaryMeta{ModelUsed: "m", ReviewMS: 1})
+		assert.NotContains(t, out, "source:")
+	})
 }

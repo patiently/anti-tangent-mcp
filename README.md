@@ -204,6 +204,10 @@ ANTI_TANGENT_MAX_PAYLOAD_BYTES=204800
 ANTI_TANGENT_REQUEST_TIMEOUT=180s
 ANTI_TANGENT_LOG_LEVEL=info
 
+# validate_plan file-path input (design 2026-08-31)
+# ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES=1048576 # optional override; unset falls back to max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES) — raising the shared cap above raises this too; setting this always wins, even below the shared cap
+ANTI_TANGENT_PLAN_ROOTS=                      # OS path-list separator (":" on Unix, ";" on Windows) list of absolute roots; empty = unrestricted
+
 # Output budgets + chunking (v0.1.4+):
 ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion); raise if a stateful hook returns a truncation finding
 ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # output cap per reviewer call in validate_plan (single-call and per-chunk); raise if plan validation returns a truncation finding
@@ -307,6 +311,46 @@ When CodeScene MCP is configured in your host alongside anti-tangent, these call
 
 The requirement is prompt-level: the pairing stays **advisory** on the anti-tangent side — anti-tangent never enforces CodeScene findings server-side, and the calls are skipped silently when CodeScene MCP isn't configured. See [`docs/protocol/implementer.md`](docs/protocol/implementer.md)'s "CodeScene MCP companion" section for the dispatch-clause integration details.
 
+### File-path inputs and the trust model
+
+`validate_plan` accepts `plan_path`, and `validate_completion` accepts `final_diff_path` plus
+`final_files` entries with no `content`. The server reads those files itself, so a large plan or
+diff costs the calling agent no output tokens.
+
+This means the server reads files on your filesystem and sends their contents to the reviewer
+provider. It is stdio-only — the host spawns it as a child process, so it shares your container,
+mounts, and uid, and the calling agent already has unrestricted file read. The server therefore
+acquires no capability the caller lacks. If you want it narrower anyway, set
+`ANTI_TANGENT_PLAN_ROOTS` to a list of absolute directories, joined with the OS path-list
+separator (`:` on Unix, `;` on Windows — i.e. `filepath.SplitList`'s convention, the same one
+`PATH` uses); paths outside them are refused. Symlinks are resolved before the containment check,
+both for the candidate path and for each configured root itself (so a symlinked root, e.g.
+macOS's `/tmp` → `/private/tmp`, still matches legitimate paths beneath it), and the resolved path
+is then opened without following a symlink at the final component (`O_NOFOLLOW`, on Unix targets;
+plain open on Windows) as defense in depth against the path being swapped out from under the check.
+This narrows the window but does not eliminate it, and it is defense in depth rather than the
+primary guarantee either way: the trust model above already assumes the calling agent has its own
+unrestricted filesystem access, so `ANTI_TANGENT_PLAN_ROOTS` is about narrowing what the server
+reads on the caller's behalf, not sandboxing an untrusted caller. On Windows specifically, the
+final-component symlink-swap window is not closed at all — Go's syscall package exposes no
+`O_NOFOLLOW` equivalent there, so `ANTI_TANGENT_PLAN_ROOTS` on that platform is advisory against
+caller mistakes rather than enforced against a race.
+
+`ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` defaults to `max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES)`,
+computed once at startup after `ANTI_TANGENT_MAX_PAYLOAD_BYTES` is read — so raising the shared
+cap above 1MB raises the plan cap along with it, and an operator who already runs with a higher
+shared cap sees no regression on upgrade. Setting `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` itself
+always wins over that default, even to a value lower than `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
+
+The 1MB default for `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` is not itself a hard ceiling — the real
+limit is whatever context window `ANTI_TANGENT_PLAN_MODEL` has, since the chunked `validate_plan` path
+resends the full plan text on every Pass-1 and per-chunk reviewer call. That is comfortably true
+for the two Anthropic models this project defaults to (`claude-sonnet-4-6` and `claude-opus-4-7`,
+both 1M-token context), but not for `claude-haiku-4-5-20251001` (200K context) or for most of the
+allowlisted OpenAI/Google models — check that model's context window before pointing a fast/cheap
+tier at plans anywhere near the 1MB cap, and prefer `claude-sonnet-4-6` / `claude-opus-4-7` for
+those.
+
 ## Use with Claude Code (`.mcp.json`)
 
 ```json
@@ -375,7 +419,7 @@ Adding a new model is a one-line change in [`internal/providers/reviewer.go`](in
 
 ## The 7 tools
 
-- `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings and mints a `plan_run_id`.
+- `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings and mints a `plan_run_id`. Accepts `plan_path` (v0.16.0+, preferred) with an absolute path, or `plan_text` (deprecated, removed in 1.0.0) — see "File-path inputs and the trust model" above.
 - `validate_task_spec` — call once before coding. Returns findings on missing goals, weak acceptance criteria, unstated assumptions. Returns a `session_id` you thread through the next two calls. Accepts the controller's `plan_run_id` (optional, best-effort) to tie the task to its plan run.
 - `check_progress` — call at checkpoints during implementation. Catches scope drift, untouched ACs, and unaddressed prior findings.
 - `validate_completion` — call before claiming done. Walks every AC and non-goal explicitly. Accepts an optional structured `codescene` argument (see "Companion tool: CodeScene MCP" above).
@@ -409,6 +453,8 @@ The middle three (`validate_task_spec`, `check_progress`, `validate_completion`)
 `session_expires_at` and `session_ttl_remaining_seconds` are included in stateful-hook responses (v0.2.0+). If a stateful hook returns a `category: other` finding with `criterion: reviewer_response`, the reviewer response was cut off at the token budget — raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` and retry.
 
 `validate_completion` (v0.2.0+) accepts `final_diff` as an alternative or supplement to `final_files`. Pass a unified diff when the changed files are too large to inline. At least one of `final_files`, `final_diff`, or `test_evidence` must be non-empty — summary-only requests are rejected. Timeout errors (default 180s, configurable via `ANTI_TANGENT_REQUEST_TIMEOUT`) include the configured timeout value and the env-var name for self-diagnosis.
+
+`validate_completion` (v0.16.0+) also accepts `final_diff_path` (an absolute path) instead of `final_diff`, and a `final_files` entry may omit `content` and set `path` (also an absolute path) instead — the server reads the file itself, so evidence costs no output tokens. Both paths must be absolute, which `resolveFileInput` enforces; a relative path is rejected. Truncation checks (`// snip`, a bare `...` line, `(truncated)`) run on the resolved content, so a path is not a way around the evidence-shape guard; oversized path evidence returns the same structured too-large envelope as oversized inline evidence.
 
 ## Project knowledge (optional)
 

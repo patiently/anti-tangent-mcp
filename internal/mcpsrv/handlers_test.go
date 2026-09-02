@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,6 +23,11 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
+
+// strPtr returns a pointer to s — a shorthand for building CompletionFileArg
+// literals, whose Content field is *string (nil means "read Path from
+// disk"; see CompletionFileArg's doc comment in handlers.go).
+func strPtr(s string) *string { return &s }
 
 type fakeReviewer struct {
 	name        string
@@ -430,7 +438,7 @@ func TestValidateCompletion_PayloadTooLargeSuggestsFinalDiff(t *testing.T) {
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
 		Summary:    "implemented",
-		FinalFiles: []FileArg{{Path: "f.go", Content: "this is way too much"}},
+		FinalFiles: []CompletionFileArg{{Path: "f.go", Content: strPtr("this is way too much")}},
 	})
 	require.NoError(t, err)
 	require.Len(t, env.Findings, 1)
@@ -455,7 +463,7 @@ func TestValidateCompletion_HappyPath(t *testing.T) {
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
 		Summary:    "implemented X",
-		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+		FinalFiles: []CompletionFileArg{{Path: "f.go", Content: strPtr("package f\n")}},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, pre.SessionID, env.SessionID)
@@ -520,6 +528,7 @@ func TestValidateCompletion_RejectsAllEmptyEvidence(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "final_files")
 	assert.Contains(t, err.Error(), "final_diff")
+	assert.Contains(t, err.Error(), "final_diff_path", "error message must name final_diff_path too, not just final_diff")
 	assert.Contains(t, err.Error(), "test_evidence")
 }
 
@@ -586,7 +595,7 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
 		Summary:    "done",
-		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+		FinalFiles: []CompletionFileArg{{Path: "f.go", Content: strPtr("package f\n")}},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "warn", env.Verdict)
@@ -718,7 +727,7 @@ func TestValidateCompletion_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
 		Summary:    "done",
-		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+		FinalFiles: []CompletionFileArg{{Path: "f.go", Content: strPtr("package f\n")}},
 	})
 	require.NoError(t, err)
 	assert.True(t, env.Partial)
@@ -740,17 +749,23 @@ func TestValidatePlan_TruncatedResponseSurfacesWarn(t *testing.T) {
 	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict)
-	require.Len(t, pr.PlanFindings, 1)
-	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
+	// The plan_text deprecation notice must survive the truncation-recovery
+	// path too (fix-round-1 v0.16.0: handlePlanReviewErr used to return
+	// before prependPlanDeprecation was ever applied) — it leads
+	// PlanFindings, ahead of the truncation finding itself.
+	require.Len(t, pr.PlanFindings, 2)
+	assert.Equal(t, "input", pr.PlanFindings[0].Criterion, "plan_text deprecation notice must lead")
+	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[0].Severity)
+	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[1].Category)
 	// No-analysis truncation is major (not minor) so callers can't mistake it
 	// for a cosmetic concern; plan_quality drops to rough because no analysis
 	// occurred, and the suggestion / next_action are self-contained retry
 	// instructions naming all three knobs.
-	assert.Equal(t, verdict.SeverityMajor, pr.PlanFindings[0].Severity)
+	assert.Equal(t, verdict.SeverityMajor, pr.PlanFindings[1].Severity)
 	assert.Equal(t, verdict.PlanQualityRough, pr.PlanQuality)
-	assert.Contains(t, pr.PlanFindings[0].Suggestion, "ANTI_TANGENT_PLAN_MAX_TOKENS")
-	assert.Contains(t, pr.PlanFindings[0].Suggestion, "max_tokens_override")
-	assert.Contains(t, pr.PlanFindings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+	assert.Contains(t, pr.PlanFindings[1].Suggestion, "ANTI_TANGENT_PLAN_MAX_TOKENS")
+	assert.Contains(t, pr.PlanFindings[1].Suggestion, "max_tokens_override")
+	assert.Contains(t, pr.PlanFindings[1].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
 	assert.Contains(t, pr.NextAction, "max_tokens_override >= 16000")
 	assert.Contains(t, pr.NextAction, "ANTI_TANGENT_PLAN_MAX_TOKENS")
 }
@@ -789,15 +804,21 @@ func TestValidatePlan_NoTaskHeadings(t *testing.T) {
 	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: "Not a plan, no headings."})
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
-	require.Len(t, pr.PlanFindings, 1)
+	// 2 findings: the plan_text deprecation notice (prepended ahead of the
+	// no-headings envelope, safe because the critical no-headings finding
+	// already forces fail) plus the no-headings finding itself.
+	require.Len(t, pr.PlanFindings, 2)
 	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
+	assert.Equal(t, "input", pr.PlanFindings[0].Criterion)
+	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[1].Category)
+	assert.Equal(t, "structure", pr.PlanFindings[1].Criterion)
 	assert.Equal(t, 0, rv.Calls, "no provider call should be made")
 }
 
 func TestValidatePlan_PayloadTooLarge(t *testing.T) {
 	rv := &fakeReviewer{name: "openai", resp: planPassResp()}
 	d := newDeps(t, rv)
-	d.Cfg.MaxPayloadBytes = 10
+	d.Cfg.PlanMaxPayloadBytes = 10
 	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
 	d.Reviews = providers.Registry{"openai": rv}
 	h := &handlers{deps: d}
@@ -805,9 +826,14 @@ func TestValidatePlan_PayloadTooLarge(t *testing.T) {
 	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: "this plan text is far too large for the configured cap of 10 bytes; it should be rejected"})
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
-	require.Len(t, pr.PlanFindings, 1)
-	assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[0].Category)
-	assert.Equal(t, verdict.SeverityCritical, pr.PlanFindings[0].Severity)
+	// 2 findings: the plan_text deprecation notice (safe to prepend ahead of
+	// the too-large envelope's own finalizePlanResult call because the
+	// critical too-large finding already forces fail) plus the too-large
+	// finding itself.
+	require.Len(t, pr.PlanFindings, 2)
+	assert.Equal(t, verdict.CategoryOther, pr.PlanFindings[0].Category)
+	assert.Equal(t, verdict.CategoryTooLarge, pr.PlanFindings[1].Category)
+	assert.Equal(t, verdict.SeverityCritical, pr.PlanFindings[1].Severity)
 	assert.Equal(t, 0, rv.Calls)
 }
 
@@ -1108,7 +1134,7 @@ func TestMaxTokensOverride_ValidateCompletion(t *testing.T) {
 			_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 				SessionID:         pre.SessionID,
 				Summary:           "done",
-				FinalFiles:        []FileArg{{Path: "f.go", Content: "package f\n"}},
+				FinalFiles:        []CompletionFileArg{{Path: "f.go", Content: strPtr("package f\n")}},
 				MaxTokensOverride: tc.override,
 			})
 			require.NoError(t, err)
@@ -1135,7 +1161,10 @@ func TestMaxTokensOverride_ValidatePlan(t *testing.T) {
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantSent, cap.LastRequest.MaxTokens)
-			assertClampFinding(t, pr.PlanFindings, tc.wantClamp)
+			// PlanText always carries the deprecation notice ahead of any
+			// clamp finding; strip it so assertClampFinding's head-of-list
+			// check still pins the clamp finding itself.
+			assertClampFinding(t, stripPlanDeprecationFinding(pr.PlanFindings), tc.wantClamp)
 		})
 	}
 }
@@ -1172,7 +1201,7 @@ func TestMaxTokensOverride_NegativeRejected(t *testing.T) {
 			_, _, err = h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 				SessionID:         pre.SessionID,
 				Summary:           "done",
-				FinalFiles:        []FileArg{{Path: "f.go", Content: "package f\n"}},
+				FinalFiles:        []CompletionFileArg{{Path: "f.go", Content: strPtr("package f\n")}},
 				MaxTokensOverride: -1,
 			})
 			return err
@@ -1333,7 +1362,7 @@ func TestMaxTokensOverride_ClampSurvivesEarlyExits(t *testing.T) {
 		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 			SessionID:         pre.SessionID,
 			Summary:           "implemented",
-			FinalFiles:        []FileArg{{Path: "f.go", Content: "this is way too much"}},
+			FinalFiles:        []CompletionFileArg{{Path: "f.go", Content: strPtr("this is way too much")}},
 			MaxTokensOverride: 32000,
 		})
 		require.NoError(t, err)
@@ -1357,19 +1386,23 @@ func TestMaxTokensOverride_ClampSurvivesEarlyExits(t *testing.T) {
 			MaxTokensOverride: 32000,
 		})
 		require.NoError(t, err)
-		require.Len(t, pr.PlanFindings, 2, "clamp + no-headings finding")
-		assert.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion)
-		assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[0].Severity)
+		// deprecation + clamp + no-headings finding. Deprecation lands first
+		// (safe here: the critical no-headings finding already forces fail
+		// regardless of the extra minor).
+		require.Len(t, pr.PlanFindings, 3, "deprecation + clamp + no-headings finding")
+		assert.Equal(t, "input", pr.PlanFindings[0].Criterion)
+		assert.Equal(t, "max_tokens_override", pr.PlanFindings[1].Criterion)
+		assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[1].Severity)
 		// Original no-headings finding is preserved.
-		assert.Equal(t, "structure", pr.PlanFindings[1].Criterion)
-		assert.Contains(t, pr.PlanFindings[1].Evidence, "no `### Task N:` headings")
+		assert.Equal(t, "structure", pr.PlanFindings[2].Criterion)
+		assert.Contains(t, pr.PlanFindings[2].Evidence, "no `### Task N:` headings")
 	})
 
 	t.Run("ValidatePlan plan_text too large", func(t *testing.T) {
 		d := newDeps(t, &fakeReviewer{name: "anthropic"})
 		d.Cfg.PlanMaxTokens = 4096
 		d.Cfg.MaxTokensCeiling = 16384
-		d.Cfg.MaxPayloadBytes = 10
+		d.Cfg.PlanMaxPayloadBytes = 10
 		d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
 		d.Reviews["openai"] = &fakeReviewer{name: "openai"}
 		h := &handlers{deps: d}
@@ -1380,9 +1413,13 @@ func TestMaxTokensOverride_ClampSurvivesEarlyExits(t *testing.T) {
 			MaxTokensOverride: 32000,
 		})
 		require.NoError(t, err)
-		require.Len(t, pr.PlanFindings, 2, "clamp + payload_too_large finding")
-		assert.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion)
-		assert.Equal(t, "payload_too_large", string(pr.PlanFindings[1].Category))
+		// deprecation + clamp + payload_too_large finding. Deprecation lands
+		// first (safe here: the critical too-large finding already forces
+		// fail regardless of the extra minor).
+		require.Len(t, pr.PlanFindings, 3, "deprecation + clamp + payload_too_large finding")
+		assert.Equal(t, "input", pr.PlanFindings[0].Criterion)
+		assert.Equal(t, "max_tokens_override", pr.PlanFindings[1].Criterion)
+		assert.Equal(t, "payload_too_large", string(pr.PlanFindings[2].Category))
 	})
 }
 
@@ -1425,7 +1462,7 @@ func TestValidateCompletion_PopulatesSummaryBlock(t *testing.T) {
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
 		Summary:    "implemented",
-		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n"}},
+		FinalFiles: []CompletionFileArg{{Path: "f.go", Content: strPtr("package f\n")}},
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, env.SummaryBlock, "validate_completion happy-path must carry summary_block")
@@ -1536,7 +1573,7 @@ func TestValidateCompletion_EvidenceGuard_RejectsTruncationMarkerInFinalFiles(t 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
 		Summary:    "done",
-		FinalFiles: []FileArg{{Path: "f.go", Content: "package f\n// ... unchanged\nfunc Foo() {}\n"}},
+		FinalFiles: []CompletionFileArg{{Path: "f.go", Content: strPtr("package f\n// ... unchanged\nfunc Foo() {}\n")}},
 	})
 	if err != nil {
 		t.Fatalf("ValidateCompletion: %v", err)
@@ -1566,7 +1603,44 @@ func TestValidateCompletion_EvidenceGuard_RejectsEmptyFilePath(t *testing.T) {
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
 		Summary:    "done",
-		FinalFiles: []FileArg{{Path: "", Content: "anything"}},
+		FinalFiles: []CompletionFileArg{{Path: "", Content: strPtr("anything")}},
+	})
+	if err != nil {
+		t.Fatalf("ValidateCompletion: %v", err)
+	}
+	if env.Verdict != string(verdict.VerdictFail) {
+		t.Errorf("verdict = %s, want fail", env.Verdict)
+	}
+	if len(env.Findings) == 0 || env.Findings[0].Category != verdict.CategoryMalformedEvidence {
+		t.Errorf("expected malformed_evidence finding, got: %+v", env.Findings)
+	}
+	if rv.Calls != initialCalls {
+		t.Errorf("reviewer was called (%d -> %d); guard should have rejected before reviewer", initialCalls, rv.Calls)
+	}
+}
+
+// TestValidateCompletion_EvidenceGuard_RejectsWhitespaceOnlyFilePath is the
+// regression test for the mismatch between resolveCompletionInputs' skip
+// guard (f.Path == "") and checkEvidenceShape's own guard
+// (strings.TrimSpace(f.Path) == ""): a whitespace-only path with content
+// omitted used to fall through resolveCompletionInputs unskipped, reach
+// resolveFileInput, and fail its own TrimSpace check with a bare transport
+// error instead of routing back to the malformed_evidence envelope.
+func TestValidateCompletion_EvidenceGuard_RejectsWhitespaceOnlyFilePath(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC"},
+	})
+	if err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	initialCalls := rv.Calls
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []CompletionFileArg{{Path: " "}},
 	})
 	if err != nil {
 		t.Fatalf("ValidateCompletion: %v", err)
@@ -1671,7 +1745,7 @@ func TestValidateCompletion_LightweightMode_EmptySessionAccepted(t *testing.T) {
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  "",
 		Summary:    "trivial doc change",
-		FinalFiles: []FileArg{{Path: "doc.md", Content: "updated\n"}},
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n")}},
 	})
 	if err != nil {
 		t.Fatalf("ValidateCompletion (lightweight): %v", err)
@@ -1693,27 +1767,67 @@ func TestValidateCompletion_LightweightMode_OmitsMajorPreFindings(t *testing.T) 
 	_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  "",
 		Summary:    "trivial doc change",
-		FinalFiles: []FileArg{{Path: "doc.md", Content: "updated\n"}},
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n")}},
 	})
 	require.NoError(t, err)
 	assert.NotContains(t, cap.LastRequest.User, "Major pre-task findings to verify")
 }
 
 func TestReferencedPathsMissingEvidence(t *testing.T) {
-	args := ValidateCompletionArgs{
-		Summary:    "Created docs/audit.md and reports/result.yaml.",
-		FinalFiles: []FileArg{{Path: "docs/audit.md", Content: "# Audit\n"}},
-		FinalDiff:  "diff --git a/other.txt b/other.txt\n",
-	}
-	assert.Equal(t, []string{"reports/result.yaml"}, referencedPathsMissingEvidence(args))
+	files := []FileArg{{Path: "docs/audit.md", Content: "# Audit\n"}}
+	got := referencedPathsMissingEvidence(
+		"Created docs/audit.md and reports/result.yaml.", files,
+		"diff --git a/other.txt b/other.txt\n")
+	assert.Equal(t, []string{"reports/result.yaml"}, got)
 }
 
 func TestReferencedPathsMissingEvidence_DedupsRepeatedReferences(t *testing.T) {
-	args := ValidateCompletionArgs{
-		Summary:      "Created docs/audit.md. Then re-edited docs/audit.md.",
-		TestEvidence: "ran tests",
-	}
-	assert.Equal(t, []string{"docs/audit.md"}, referencedPathsMissingEvidence(args))
+	got := referencedPathsMissingEvidence(
+		"Created docs/audit.md. Then re-edited docs/audit.md.", nil, "")
+	assert.Equal(t, []string{"docs/audit.md"}, got)
+}
+
+// TestReferencedPathsMissingEvidence_AbsoluteFinalFilesPathMatchesRelativeMention
+// is the regression test for the absolute-vs-relative mismatch: docs/protocol/
+// implementer.md tells implementers to pass ABSOLUTE final_files paths, while
+// args.Summary prose still names the RELATIVE repo path — so exact-match
+// comparison used to false-fire the "referenced paths missing evidence"
+// advisory on exactly the doc deliverables it exists to catch.
+func TestReferencedPathsMissingEvidence_AbsoluteFinalFilesPathMatchesRelativeMention(t *testing.T) {
+	files := []FileArg{{Path: "/repo/docs/audit.md", Content: "# Audit\n"}}
+	got := referencedPathsMissingEvidence("Created docs/audit.md.", files, "")
+	assert.Empty(t, got, "an absolute final_files path must satisfy a relative summary mention of its tail")
+}
+
+// TestReferencedPathsMissingEvidence_SuffixMatchRequiresSeparatorBoundary
+// guards the other side of the fix: a plain suffix check without a
+// separator-boundary requirement would let "myfoo.md" on disk satisfy a
+// summary mention of "foo.md" purely because the characters line up at the
+// tail, with no real path relationship between the two files.
+func TestReferencedPathsMissingEvidence_SuffixMatchRequiresSeparatorBoundary(t *testing.T) {
+	files := []FileArg{{Path: "/repo/myfoo.md", Content: "x\n"}}
+	got := referencedPathsMissingEvidence("Created foo.md.", files, "")
+	assert.Equal(t, []string{"foo.md"}, got,
+		"myfoo.md must not satisfy a mention of the unrelated foo.md without a path-separator boundary")
+}
+
+// TestPathTailMatches_WindowsShapedAbsolutePath is the regression test for
+// FIX 5: a backslash-separated final_files path (what a Windows implementer
+// actually passes per docs/protocol/implementer.md's ABSOLUTE-path
+// convention) must satisfy a forward-slash relative mention in Summary
+// regardless of the OS this server itself runs on — comparing the boundary
+// byte against filepath.Separator alone made this fail whenever the server
+// runs on Unix, firing the "referenced path missing evidence" advisory
+// spuriously on every Windows doc deliverable submitted the documented way.
+func TestPathTailMatches_WindowsShapedAbsolutePath(t *testing.T) {
+	assert.True(t, pathTailMatches(`C:\repo\docs\foo.md`, "docs/foo.md"),
+		"a Windows-shaped absolute path must satisfy a relative forward-slash mention of its tail")
+
+	// The separator-boundary property must survive normalization too:
+	// "myfoo.md" must not satisfy "foo.md" just because backslashes became
+	// slashes.
+	assert.False(t, pathTailMatches(`C:\repo\myfoo.md`, "foo.md"),
+		"myfoo.md must not satisfy foo.md even in the backslash-normalized form")
 }
 
 func TestValidateCompletion_RendersReferencedPathEvidenceNote(t *testing.T) {
@@ -2350,7 +2464,11 @@ func TestValidatePlan_FinalizePlanVerdict_ClampParticipatesInLadder(t *testing.T
 		}
 	}
 	require.True(t, hasNoise, "plan-level noise_cluster appended")
-	require.Equal(t, "max_tokens_override", pr.PlanFindings[0].Criterion, "clamp at PlanFindings[0]")
+	// The plan_text deprecation notice is prepended AFTER the ladder runs (so
+	// it never itself contributes to the minor-finding count that triggers
+	// noise_cluster), landing at index 0 ahead of the clamp finding.
+	require.Equal(t, "input", pr.PlanFindings[0].Criterion, "deprecation at PlanFindings[0]")
+	require.Equal(t, "max_tokens_override", pr.PlanFindings[1].Criterion, "clamp at PlanFindings[1]")
 }
 
 func TestTruncatedPlanResult_SeverityIsMajor(t *testing.T) {
@@ -2390,22 +2508,13 @@ func TestCheckEvidenceShape_NewPatternsRejected(t *testing.T) {
 	}
 	for _, p := range patterns {
 		t.Run("final_diff:"+p, func(t *testing.T) {
-			args := ValidateCompletionArgs{
-				SessionID: "s",
-				Summary:   "s",
-				FinalDiff: "valid header\n" + p + "\nmore",
-			}
-			reason := checkEvidenceShape(args)
+			reason := checkEvidenceShape("valid header\n"+p+"\nmore", nil)
 			require.NotEmpty(t, reason, "must reject %q in final_diff", p)
 			require.Contains(t, reason, "final_diff")
 		})
 		t.Run("final_files:"+p, func(t *testing.T) {
-			args := ValidateCompletionArgs{
-				SessionID:  "s",
-				Summary:    "s",
-				FinalFiles: []FileArg{{Path: "foo.go", Content: "valid header\n" + p + "\nmore"}},
-			}
-			reason := checkEvidenceShape(args)
+			files := []FileArg{{Path: "foo.go", Content: "valid header\n" + p + "\nmore"}}
+			reason := checkEvidenceShape("", files)
 			require.NotEmpty(t, reason, "must reject %q in final_files[].content", p)
 			require.Contains(t, reason, "final_files")
 		})
@@ -2437,21 +2546,14 @@ func TestCheckEvidenceShape_GoPackageRecursionAccepted(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run("final_diff:"+tc.name, func(t *testing.T) {
-			args := ValidateCompletionArgs{
-				SessionID: "s",
-				Summary:   "s",
-				FinalDiff: "diff --git a/x b/x\n@@ -1,1 +1,1 @@\n" + tc.content + "\n",
-			}
-			require.Empty(t, checkEvidenceShape(args),
+			reason := checkEvidenceShape("diff --git a/x b/x\n@@ -1,1 +1,1 @@\n"+tc.content+"\n", nil)
+			require.Empty(t, reason,
 				"shape-guard must accept Go package-recursion / bare-ellipsis content: %q", tc.content)
 		})
 		t.Run("final_files:"+tc.name, func(t *testing.T) {
-			args := ValidateCompletionArgs{
-				SessionID:  "s",
-				Summary:    "s",
-				FinalFiles: []FileArg{{Path: "x_test.go", Content: tc.content}},
-			}
-			require.Empty(t, checkEvidenceShape(args),
+			files := []FileArg{{Path: "x_test.go", Content: tc.content}}
+			reason := checkEvidenceShape("", files)
+			require.Empty(t, reason,
 				"shape-guard must accept Go package-recursion / bare-ellipsis content: %q", tc.content)
 		})
 	}
@@ -2977,4 +3079,350 @@ func TestValidateCompletion_CodesceneRequired_RanTrueNoAdoptionFinding(t *testin
 	require.NoError(t, err)
 	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneNotRun))
 	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneSkipped))
+}
+
+func TestValidateCompletionPathInputs(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("final_files without content is read from disk", func(t *testing.T) {
+		p := filepath.Join(dir, "impl.go")
+		require.NoError(t, os.WriteFile(p, []byte("package x\n\nfunc F() int { return 1 }\n"), 0o644))
+
+		h := newTestHandlers(t)
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "did the thing",
+			FinalFiles: []CompletionFileArg{{Path: p}},
+		})
+		require.NoError(t, err)
+		assert.NotEqual(t, verdict.VerdictFail, verdict.Verdict(env.Verdict))
+	})
+
+	t.Run("mutually exclusive diff inputs", func(t *testing.T) {
+		h := newTestHandlers(t)
+		_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary: "s", FinalDiff: "diff --git a b", FinalDiffPath: "/tmp/x.diff",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "mutually exclusive")
+	})
+
+	t.Run("final_diff_path counts as evidence", func(t *testing.T) {
+		p := filepath.Join(dir, "change.diff")
+		require.NoError(t, os.WriteFile(p, []byte("diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n"), 0o644))
+
+		h := newTestHandlers(t)
+		_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary: "s", FinalDiffPath: p,
+		})
+		require.NoError(t, err, "must not trip the at-least-one-evidence guard")
+	})
+
+	// FIX 1 regression: an empty final_diff_path file passes the
+	// pre-resolution at-least-one-evidence check (the path STRING is
+	// non-empty) but must not sail through to a reviewer call with no
+	// actual evidence. It must come back as a structured malformed_evidence
+	// rejection, not a pass.
+	t.Run("empty final_diff_path file is rejected with a structured envelope, not a pass", func(t *testing.T) {
+		cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+		d := newDeps(t, &cap.fakeReviewer)
+		d.Reviews = providers.Registry{"anthropic": cap}
+		h := &handlers{deps: d}
+
+		p := filepath.Join(dir, "empty.diff")
+		require.NoError(t, os.WriteFile(p, []byte(""), 0o644))
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:       "did the thing",
+			FinalDiffPath: p,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
+		require.True(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryMalformedEvidence {
+				assert.Contains(t, f.Evidence, "final_diff_path")
+				assert.Contains(t, f.Evidence, p)
+			}
+		}
+		assert.Empty(t, cap.LastRequest.User, "reviewer must not have been called")
+	})
+
+	// Same bug, via final_files: a path-only entry (content omitted, so it
+	// is read from disk) whose file is empty must be rejected the same way
+	// as an empty final_diff_path.
+	t.Run("final_files entry pointing at an empty file is rejected the same way", func(t *testing.T) {
+		cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+		d := newDeps(t, &cap.fakeReviewer)
+		d.Reviews = providers.Registry{"anthropic": cap}
+		h := &handlers{deps: d}
+
+		p := filepath.Join(dir, "empty.go")
+		require.NoError(t, os.WriteFile(p, []byte(""), 0o644))
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "did the thing",
+			FinalFiles: []CompletionFileArg{{Path: p}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
+		require.True(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryMalformedEvidence {
+				assert.Contains(t, f.Evidence, "final_files[0]")
+				assert.Contains(t, f.Evidence, p)
+			}
+		}
+		assert.Empty(t, cap.LastRequest.User, "reviewer must not have been called")
+	})
+
+	// An EXPLICIT final_files content of "" (CompletionFileArg's documented
+	// deletion-notification convention — Content is a non-nil pointer to an
+	// empty string, never triggering a disk read) is a deliberate marker,
+	// not a resolution accident, and must not be caught by the new FIX 1
+	// guard even when it is the only evidence submitted.
+	t.Run("explicit empty final_files content (deletion marker) is not treated as a resolution accident", func(t *testing.T) {
+		h := newTestHandlers(t)
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "removed dead_code.go",
+			FinalFiles: []CompletionFileArg{{Path: "dead_code.go", Content: strPtr("")}},
+		})
+		require.NoError(t, err)
+		assert.False(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence),
+			"an explicit empty-content deletion marker must not be rejected as empty evidence")
+	})
+
+	// FIX 2: test_evidence alone still legitimately satisfies the guard, but
+	// the empty diff path is still a caller mistake worth surfacing — it
+	// must no longer be silently swallowed. An empty diff file plus real
+	// test_evidence must NOT be hard-rejected, but the call must carry an
+	// insufficient_evidence finding naming the empty path, and must still
+	// reach the reviewer (unlike the hard-reject case below).
+	t.Run("empty diff file but non-empty test_evidence proceeds with a finding naming the path", func(t *testing.T) {
+		p := filepath.Join(dir, "empty2.diff")
+		require.NoError(t, os.WriteFile(p, []byte(""), 0o644))
+
+		cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
+		d := newDeps(t, &cap.fakeReviewer)
+		d.Reviews = providers.Registry{"anthropic": cap}
+		h := &handlers{deps: d}
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:       "did the thing",
+			FinalDiffPath: p,
+			TestEvidence:  "go test ./... -race: ok, 42 passed",
+		})
+		require.NoError(t, err)
+		assert.NotEqual(t, string(verdict.VerdictFail), env.Verdict,
+			"real test_evidence must satisfy the guard even though the diff resolved to nothing")
+		assert.False(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence),
+			"other real evidence exists, so this must not be the hard-reject shape")
+		require.True(t, hasCategory(env.Findings, verdict.CategoryInsufficientEvidence),
+			"the empty resolved path must still be surfaced as a finding")
+		found := false
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryInsufficientEvidence {
+				assert.Contains(t, f.Evidence, "final_diff_path")
+				assert.Contains(t, f.Evidence, p)
+				found = true
+			}
+		}
+		assert.True(t, found)
+		assert.NotEmpty(t, cap.LastRequest.User, "unlike the hard-reject case, the reviewer must still have been called")
+	})
+
+	// Companion to the above: an empty final_files path alongside another,
+	// non-empty final_files entry must proceed with a finding naming only
+	// the empty one.
+	t.Run("empty final_files path alongside a non-empty one proceeds with a finding naming the empty one", func(t *testing.T) {
+		emptyPath := filepath.Join(dir, "empty3.go")
+		require.NoError(t, os.WriteFile(emptyPath, []byte(""), 0o644))
+
+		h := newTestHandlers(t)
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary: "did the thing",
+			FinalFiles: []CompletionFileArg{
+				{Path: emptyPath},
+				{Path: "real.go", Content: strPtr("package x\n")},
+			},
+		})
+		require.NoError(t, err)
+		assert.False(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence),
+			"other real evidence exists, so this must not be the hard-reject shape")
+		require.True(t, hasCategory(env.Findings, verdict.CategoryInsufficientEvidence))
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryInsufficientEvidence {
+				assert.Contains(t, f.Evidence, "final_files[0]")
+				assert.Contains(t, f.Evidence, emptyPath)
+			}
+		}
+	})
+
+	// test_evidence alone with NO path inputs supplied at all is the
+	// genuinely legitimate case FIX 2 must keep working exactly as before:
+	// no path resolved empty (none was even supplied), so no finding.
+	t.Run("test_evidence alone with no path inputs is accepted with no new finding", func(t *testing.T) {
+		h := newTestHandlers(t)
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:      "did the thing",
+			TestEvidence: "go test ./... -race: ok, 42 passed",
+		})
+		require.NoError(t, err)
+		assert.False(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
+		assert.False(t, hasCategory(env.Findings, verdict.CategoryInsufficientEvidence),
+			"no path input was supplied at all, so there is nothing to flag")
+	})
+
+	// The regression that matters most: a path must not become a way around
+	// the truncation guard.
+	t.Run("evidence shape guard runs on resolved content", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"snip":     "package x\n// snip\nfunc F() {}\n",
+			"ellipsis": "package x\n...\nfunc F() {}\n",
+		} {
+			t.Run(name, func(t *testing.T) {
+				p := filepath.Join(t.TempDir(), "trunc.go")
+				require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+
+				h := newTestHandlers(t)
+				_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+					Summary:    "s",
+					FinalFiles: []CompletionFileArg{{Path: p}},
+				})
+				require.NoError(t, err)
+				assert.Equal(t, string(verdict.VerdictFail), env.Verdict,
+					"truncated evidence via a path must be rejected exactly as inline would be")
+			})
+		}
+	})
+}
+
+// TestValidateCompletionPathInputs_TooLarge covers fix-round-1 for Task 5: an
+// oversized PATH input (final_diff_path or a final_files[i].path-only entry)
+// must render through the SAME tooLargeEnvelope shape an oversized INLINE
+// payload gets from the check at handlers.go's step 5 — not a bare Go
+// transport error. Every other resolve failure (missing file, outside
+// ANTI_TANGENT_PLAN_ROOTS) must stay a plain transport error, unchanged.
+func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
+	t.Run("oversized final_diff_path returns a structured too-large envelope, not an error", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "big.diff")
+		body := strings.Repeat("x", 100)
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+
+		h := newTestHandlers(t)
+		h.deps.Cfg.MaxPayloadBytes = 10 // smaller than the fixture; no need for a 200KB file
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:       "s",
+			FinalDiffPath: p,
+		})
+		require.NoError(t, err, "an oversized path must not surface as a transport error")
+		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
+		require.True(t, hasCategory(env.Findings, verdict.CategoryTooLarge), "expected a payload_too_large finding")
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryTooLarge {
+				assert.Contains(t, f.Evidence, fmt.Sprintf("%d", len(body)), "evidence must name the true byte count")
+			}
+		}
+	})
+
+	t.Run("oversized final_files path-only entry returns a structured too-large envelope, not an error", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "big.go")
+		body := strings.Repeat("y", 100)
+		require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
+
+		h := newTestHandlers(t)
+		h.deps.Cfg.MaxPayloadBytes = 10
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "s",
+			FinalFiles: []CompletionFileArg{{Path: p}},
+		})
+		require.NoError(t, err, "an oversized path must not surface as a transport error")
+		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
+		require.True(t, hasCategory(env.Findings, verdict.CategoryTooLarge), "expected a payload_too_large finding")
+		for _, f := range env.Findings {
+			if f.Category == verdict.CategoryTooLarge {
+				assert.Contains(t, f.Evidence, fmt.Sprintf("%d", len(body)), "evidence must name the true byte count")
+			}
+		}
+	})
+
+	t.Run("path outside ANTI_TANGENT_PLAN_ROOTS stays a plain transport error", func(t *testing.T) {
+		allowedRoot := t.TempDir()
+		outside := t.TempDir()
+		p := filepath.Join(outside, "evidence.diff")
+		require.NoError(t, os.WriteFile(p, []byte("diff --git a/x b/x\n+ok\n"), 0o644))
+
+		h := newTestHandlers(t)
+		h.deps.Cfg.PlanRoots = []string{allowedRoot}
+
+		_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:       "s",
+			FinalDiffPath: p,
+		})
+		require.Error(t, err, "outside-roots must stay a transport error, not an envelope")
+		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+	})
+
+	t.Run("missing file stays a plain transport error", func(t *testing.T) {
+		h := newTestHandlers(t)
+
+		_, _, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "s",
+			FinalFiles: []CompletionFileArg{{Path: filepath.Join(t.TempDir(), "does-not-exist.go")}},
+		})
+		require.Error(t, err, "a missing file must stay a transport error, not an envelope")
+	})
+}
+
+// TestResolveCompletionInputs_AggregateCapDuringResolution is the FIX 4
+// regression test: several final_files[].path entries, each individually
+// well under MaxPayloadBytes, must not all be read from disk before the
+// aggregate is checked. Before this fix the aggregate check only ran at
+// ValidateCompletion's step 5, AFTER every path had already been resolved
+// into memory — unbounded peak memory for enough small entries.
+func TestResolveCompletionInputs_AggregateCapDuringResolution(t *testing.T) {
+	dir := t.TempDir()
+	// 5 files at 10 bytes each == 50 bytes total, against a deliberately
+	// tiny 25-byte cap: the aggregate crosses the cap partway through the
+	// loop (after the 3rd file, at 30 bytes), well before all 5 are read.
+	const perFile = 10
+	const numFiles = 5
+	var files []CompletionFileArg
+	for i := 0; i < numFiles; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("f%d.go", i))
+		require.NoError(t, os.WriteFile(p, []byte(strings.Repeat("x", perFile)), 0o644))
+		files = append(files, CompletionFileArg{Path: p})
+	}
+
+	t.Run("bails partway through the loop rather than resolving every entry first", func(t *testing.T) {
+		h := newTestHandlers(t)
+		h.deps.Cfg.MaxPayloadBytes = 25
+
+		_, err := h.resolveCompletionInputs(&ValidateCompletionArgs{Summary: "s", FinalFiles: files})
+		require.Error(t, err)
+		var tooLarge *completionInputTooLargeError
+		require.ErrorAs(t, err, &tooLarge)
+		// The cumulative total at the point of rejection must be well
+		// short of the full 50-byte sum — proof the loop stopped reading
+		// instead of resolving every entry and checking only afterward.
+		assert.Less(t, tooLarge.bytes, perFile*numFiles, "must bail before reading every entry")
+		assert.Greater(t, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes)
+		assert.Contains(t, tooLarge.field, "final_files")
+	})
+
+	t.Run("surfaces the same structured too-large envelope as a single oversized file", func(t *testing.T) {
+		h := newTestHandlers(t)
+		h.deps.Cfg.MaxPayloadBytes = 25
+
+		_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+			Summary:    "s",
+			FinalFiles: files,
+		})
+		require.NoError(t, err, "an aggregate overflow must not surface as a transport error")
+		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
+		require.True(t, hasCategory(env.Findings, verdict.CategoryTooLarge), "expected a payload_too_large finding")
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"strings"
 	"text/template"
 
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
@@ -18,7 +19,65 @@ var templatesFS embed.FS
 
 type Output struct {
 	System string
-	User   string
+	// User is the full user prompt — always UserPrefix + UserSuffix.
+	User string
+	// UserPrefix is the cacheable shared head (reviewer ground rules, project
+	// knowledge, and the plan itself), populated only for the chunked
+	// validate_plan templates where several calls share it byte-for-byte.
+	// Empty everywhere else, which is what keeps single-call renders from
+	// paying a cache-write premium against zero reads.
+	UserPrefix string
+	// UserSuffix is the per-call remainder. Equal to User when UserPrefix is
+	// empty.
+	UserSuffix string
+}
+
+// planSuffixMarker is the first line of the per-call section in both chunked
+// plan templates. Everything before it — ground rules, project knowledge, and
+// the plan under review — is byte-identical across the findings-only call and
+// every chunk call, which is exactly the prefix worth caching.
+const planSuffixMarker = "## What to evaluate"
+
+// splitPlanPrompt divides a rendered chunked-plan prompt at planSuffixMarker.
+// If the marker is absent the whole body becomes the suffix, so a template
+// edit that removes it degrades to today's uncached behavior rather than
+// silently caching the wrong span.
+func splitPlanPrompt(body string) Output {
+	idx := planSuffixIndex(body)
+	if idx < 0 {
+		return Output{System: systemPrompt, User: body, UserSuffix: body}
+	}
+	return Output{
+		System:     systemPrompt,
+		User:       body,
+		UserPrefix: body[:idx],
+		UserSuffix: body[idx:],
+	}
+}
+
+// planSuffixIndex returns the byte offset of the LAST occurrence of
+// planSuffixMarker that begins a LINE, not any mid-line occurrence. PlanText
+// — arbitrary user-supplied markdown — is interpolated into the shared
+// region before the real "## What to evaluate" heading, so an unanchored
+// substring search would match a plan that merely discusses that heading
+// text inside a paragraph and silently shrink the cacheable prefix.
+// Line-anchoring alone only rejects a MID-LINE hit, though: a plan that
+// itself contains a "## What to evaluate" heading at the START of a line
+// (plausible for a plan about prompt templates, this repo's own included)
+// would still split at that embedded heading instead of the real one.
+// Both chunked plan templates (plan_findings_only.tmpl, plan_tasks_chunk.tmpl)
+// contain exactly one occurrence of the marker, and the interpolated plan
+// text always precedes it, so the real heading is always the LAST line-start
+// occurrence in the body — hence LastIndex here, not Index. Returns -1 if
+// the marker never starts a line.
+func planSuffixIndex(body string) int {
+	if i := strings.LastIndex(body, "\n"+planSuffixMarker); i >= 0 {
+		return i + 1 // skip the newline itself; suffix starts at "##..."
+	}
+	if strings.HasPrefix(body, planSuffixMarker) {
+		return 0
+	}
+	return -1
 }
 
 type File struct {
@@ -111,7 +170,7 @@ func RenderPre(in PreInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func RenderMid(in MidInput) (Output, error) {
@@ -119,7 +178,7 @@ func RenderMid(in MidInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func RenderPost(in PostInput) (Output, error) {
@@ -127,7 +186,7 @@ func RenderPost(in PostInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func RenderPlan(in PlanInput) (Output, error) {
@@ -135,7 +194,7 @@ func RenderPlan(in PlanInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 // PlanChunkInput is the input for one per-task chunk in chunked validate_plan.
@@ -156,7 +215,7 @@ func RenderPlanTasksChunk(in PlanChunkInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return splitPlanPrompt(body), nil
 }
 
 // RenderPlanFindingsOnly produces the Pass-1 prompt for the chunked validate_plan
@@ -166,7 +225,7 @@ func RenderPlanFindingsOnly(in PlanInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return splitPlanPrompt(body), nil
 }
 
 func RenderPrime(in PrimeInput) (Output, error) {
@@ -174,7 +233,7 @@ func RenderPrime(in PrimeInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func RenderExtract(in ExtractInput) (Output, error) {
@@ -182,7 +241,7 @@ func RenderExtract(in ExtractInput) (Output, error) {
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body}, nil
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func render(name string, data any) (string, error) {

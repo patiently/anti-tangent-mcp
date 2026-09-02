@@ -366,9 +366,37 @@ func checkProgressTool() *mcp.Tool {
 	}
 }
 
+// FileArg is the shared file-entry shape for check_progress's changed_files
+// and extract_project_knowledge's completion-envelope final_files. Content
+// is REQUIRED (matches 0.15.0's schema exactly): jsonschema-go derives
+// `required` from the absence of `omitempty`/`omitzero`, so dropping this
+// tag would silently make content optional on both of those tools too —
+// neither resolves a bare path from disk, so an omitted content would ship
+// an empty file body to the reviewer with no error. validate_completion does
+// NOT use this type for final_files; it has its own CompletionFileArg, whose
+// pointer Content field can distinguish "omitted" from "explicitly empty".
 type FileArg struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+}
+
+// CompletionFileArg is validate_completion's final_files entry — the only
+// tool whose file entries may omit content to have the server read Path from
+// disk. Content is a *pointer* so an omitted field (nil) is distinguishable
+// from an explicit empty string (""), which Go's JSON unmarshal cannot
+// otherwise tell apart: nil means "read Path from disk"; "" means "this file
+// is genuinely empty" (e.g. a deletion) and must NOT trigger a read — a read
+// would either fail EvalSymlinks on a path that no longer exists, or (for a
+// caller using this codebase's own relative-path convention) fail the
+// path-must-be-absolute check, either way losing the whole call to a
+// transport error instead of a structured envelope.
+//
+// If both Path and a non-nil Content are supplied, Content wins and Path is
+// never read — this is the pre-0.16.0 always-inline behaviour, kept for
+// backward compatibility rather than treated as an error.
+type CompletionFileArg struct {
+	Path    string  `json:"path"`
+	Content *string `json:"content,omitempty"`
 }
 
 type CheckProgressArgs struct {
@@ -625,6 +653,25 @@ func prependPlanClamp(pr verdict.PlanResult, clamp verdict.Finding) verdict.Plan
 	return pr
 }
 
+// prependPlanDeprecation prepends the plan_text deprecation notice. Minor
+// severity so it never changes a verdict — the server is advisory, and a
+// deprecated input is not a plan defect. Mirrors prependPlanClamp so it
+// survives every early-exit path.
+func prependPlanDeprecation(pr verdict.PlanResult, usedPlanText bool) verdict.PlanResult {
+	if !usedPlanText {
+		return pr
+	}
+	f := verdict.Finding{
+		Severity:   verdict.SeverityMinor,
+		Category:   verdict.CategoryOther,
+		Criterion:  "input",
+		Evidence:   "plan_text was supplied; it is deprecated and will be removed in 1.0.0",
+		Suggestion: "pass plan_path with the absolute path to the plan file instead",
+	}
+	pr.PlanFindings = append([]verdict.Finding{f}, pr.PlanFindings...)
+	return pr
+}
+
 // recoverPartialFindings attempts to extract complete findings from a
 // truncated reviewer response. Returns (result, true) when at least one
 // finding was recovered; (zero, false) when the caller should fall back to
@@ -800,26 +847,29 @@ func validateCompletionTool() *mcp.Tool {
 		Name: "validate_completion",
 		Description: "Final validation before declaring a task complete. " +
 			"The reviewer checks the full implementation against every acceptance criterion " +
-			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done.",
+			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done. " +
+			"Omit a final_files entry's content to have the server read its absolute path, and pass final_diff_path instead of final_diff, to avoid emitting large evidence as output tokens.",
 	}
 }
 
 type ValidateCompletionArgs struct {
-	SessionID             string            `json:"session_id"  jsonschema:"required"`
-	Summary               string            `json:"summary"     jsonschema:"required"`
-	FinalFiles            []FileArg         `json:"final_files,omitempty"`
-	FinalDiff             string            `json:"final_diff,omitempty"`
-	TestEvidence          string            `json:"test_evidence,omitempty"`
-	ExitContracts         []string          `json:"exit_contracts,omitempty"`
-	ExitContractsInferred bool              `json:"exit_contracts_inferred,omitempty"`
-	ModelOverride         string            `json:"model_override,omitempty"`
-	MaxTokensOverride     int               `json:"max_tokens_override,omitempty"`
-	Codescene             *codescene.Digest `json:"codescene,omitempty"`
+	SessionID             string              `json:"session_id"  jsonschema:"required"`
+	Summary               string              `json:"summary"     jsonschema:"required"`
+	FinalFiles            []CompletionFileArg `json:"final_files,omitempty"`
+	FinalDiff             string              `json:"final_diff,omitempty"`
+	FinalDiffPath         string              `json:"final_diff_path,omitempty"`
+	TestEvidence          string              `json:"test_evidence,omitempty"`
+	ExitContracts         []string            `json:"exit_contracts,omitempty"`
+	ExitContractsInferred bool                `json:"exit_contracts_inferred,omitempty"`
+	ModelOverride         string              `json:"model_override,omitempty"`
+	MaxTokensOverride     int                 `json:"max_tokens_override,omitempty"`
+	Codescene             *codescene.Digest   `json:"codescene,omitempty"`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
 type ValidatePlanArgs struct {
-	PlanText          string `json:"plan_text"      jsonschema:"required"`
+	PlanText          string `json:"plan_text,omitempty"`
+	PlanPath          string `json:"plan_path,omitempty"`
 	ProjectKnowledge  string `json:"project_knowledge,omitempty"`
 	ModelOverride     string `json:"model_override,omitempty"`
 	MaxTokensOverride int    `json:"max_tokens_override,omitempty"`
@@ -832,7 +882,9 @@ func validatePlanTool() *mcp.Tool {
 		Description: "Validate an implementation plan as a whole BEFORE dispatching subagents to implement individual tasks. " +
 			"Returns per-task findings and ready-to-paste structured headers (Goal / Acceptance criteria / Non-goals / Context) for tasks that lack them. " +
 			"Call this once at plan-handoff time; the per-task `validate_task_spec` is still called by each implementing subagent at task start. " +
-			"If repo policy has carve-outs such as docs-only commit exceptions, state them literally in plan_text — the reviewer cannot read external CLAUDE.md policy.",
+			"Pass plan_path with the ABSOLUTE path to the plan file — the server reads it, so a large plan costs the caller no output tokens. " +
+			"plan_text is deprecated and will be removed in 1.0.0. Exactly one of the two must be set. " +
+			"If repo policy has carve-outs such as docs-only commit exceptions, state them literally in the plan — the reviewer cannot read external CLAUDE.md policy.",
 	}
 }
 
@@ -876,34 +928,40 @@ var evidenceTruncationPatterns = []string{
 // surrounding whitespace). The (?m) flag anchors ^/$ to line boundaries.
 var evidenceEllipsisLine = regexp.MustCompile(`(?m)^\s*\.\.\.\s*$`)
 
-// checkEvidenceShape inspects args for malformed evidence shapes. Returns a
-// non-empty human-readable reason string when a rule fires; empty string when
-// the evidence looks structurally sound. The reason is what populates the
-// rejection finding's Evidence field.
+// checkEvidenceShape inspects finalDiff/files for malformed evidence shapes.
+// Returns a non-empty human-readable reason string when a rule fires; empty
+// string when the evidence looks structurally sound. The reason is what
+// populates the rejection finding's Evidence field.
+//
+// Decoupled from ValidateCompletionArgs (rather than taking the whole args
+// struct) so it works identically for validate_completion's resolved
+// []FileArg AND for extract_project_knowledge's per-envelope
+// CompletionEnvelopeArg{FinalDiff, FinalFiles []FileArg} — both just pass
+// their diff string and file slice directly.
 //
 // Order of checks (fail-fast on the first hit so the reason points at the
 // most-likely cause):
 //  1. final_diff substring + ellipsis-line scan
 //  2. final_files empty Path
 //  3. final_files content substring + ellipsis-line scan
-func checkEvidenceShape(args ValidateCompletionArgs) string {
-	if args.FinalDiff != "" {
-		lower := strings.ToLower(args.FinalDiff)
+func checkEvidenceShape(finalDiff string, files []FileArg) string {
+	if finalDiff != "" {
+		lower := strings.ToLower(finalDiff)
 		for _, p := range evidenceTruncationPatterns {
 			if idx := strings.Index(lower, p); idx >= 0 {
 				return fmt.Sprintf("final_diff contains truncation marker %q at offset %d", p, idx)
 			}
 		}
-		if loc := evidenceEllipsisLine.FindStringIndex(args.FinalDiff); loc != nil {
+		if loc := evidenceEllipsisLine.FindStringIndex(finalDiff); loc != nil {
 			return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", loc[0])
 		}
 	}
-	for i, f := range args.FinalFiles {
+	for i, f := range files {
 		if strings.TrimSpace(f.Path) == "" {
 			return fmt.Sprintf("final_files[%d].path is empty", i)
 		}
 	}
-	for i, f := range args.FinalFiles {
+	for i, f := range files {
 		lower := strings.ToLower(f.Content)
 		for _, p := range evidenceTruncationPatterns {
 			if idx := strings.Index(lower, p); idx >= 0 {
@@ -915,6 +973,128 @@ func checkEvidenceShape(args ValidateCompletionArgs) string {
 		}
 	}
 	return ""
+}
+
+// completionInputTooLargeError distinguishes an oversized final_diff_path or
+// final_files[i].path from every other resolveCompletionInputs failure. Only
+// this case gets mapped to the tooLargeEnvelope shape in ValidateCompletion;
+// every other error (missing file, non-regular file, outside
+// ANTI_TANGENT_PLAN_ROOTS) stays a plain transport error. bytes is the
+// file's TRUE size (from fileSource.Bytes, populated even on the errTooLarge
+// return — see resolveFileInput), not the configured cap.
+type completionInputTooLargeError struct {
+	field string // e.g. "final_diff_path" or "final_files[2].path"
+	bytes int
+	err   error // wraps errTooLarge
+}
+
+func (e *completionInputTooLargeError) Error() string {
+	return fmt.Sprintf("%s: %s", e.field, e.err)
+}
+
+func (e *completionInputTooLargeError) Unwrap() error { return e.err }
+
+// resolveCompletionInputs fills in args.FinalDiff from disk when
+// final_diff_path was supplied, and returns args.FinalFiles converted to
+// plain []FileArg with Content resolved from disk for every entry whose
+// Content was omitted (nil).
+//
+// Content is resolved ONLY when nil — see CompletionFileArg: an explicit ""
+// means "this file is genuinely empty" (e.g. a deletion) and must NOT
+// trigger a read, unlike pre-0.16.0's string-based Content, whose empty
+// string was indistinguishable from omitted and always triggered one
+// (breaking a deleted-file entry, whose read would fail EvalSymlinks, and
+// any relative path, which would fail the path-must-be-absolute check).
+//
+// Returns the resolved slice rather than mutating args.FinalFiles in place,
+// since ValidateCompletionArgs.FinalFiles is wire-typed []CompletionFileArg
+// (path + nilable content) while every downstream consumer —
+// totalCompletionBytes, checkEvidenceShape, evidenceCacheKey, toPromptFiles,
+// referencedPathsMissingEvidence — needs plain []FileArg with Content always
+// populated. Every later stage — payload cap, evidence-shape guard, evidence
+// cache key, prompt render — must read this resolved slice, never
+// args.FinalFiles directly.
+//
+// Uses the shared MaxPayloadBytes, never PlanMaxPayloadBytes: completion
+// evidence did not gain the headroom validate_plan did.
+//
+// FIX 4: `diskTotal` tracks the running total of bytes actually READ FROM
+// DISK during this call, and bails as soon as it crosses maxBytes. Before
+// this, the aggregate was only checked AFTER every input had been fully
+// resolved (the caller's step 5) — each of e.g. 500 final_files[].path
+// entries at ~200KB passes THIS function's per-file resolveFileInput cap
+// individually, so all ~100MB gets read into memory before the aggregate
+// check downstream ever runs. Bailing here, the moment the running total
+// crosses maxBytes, keeps peak memory bounded by the cap regardless of how
+// many path entries remain unresolved.
+//
+// diskTotal deliberately does NOT count inline final_diff / final_files
+// content (an explicit Content, or final_diff supplied directly rather
+// than via final_diff_path): that content arrives already fully resident
+// in memory in this one request (bounded by the client's own output
+// ceiling, same as before this release — see the doc comment above), so
+// there is no peak-memory reason to bail on it mid-loop, and doing so would
+// only replace step 5's existing, more specific tooLargeEnvelope guidance
+// with this function's generic one. It is still caught by the aggregate
+// check at step 5 exactly as before.
+func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) ([]FileArg, error) {
+	maxBytes := h.deps.Cfg.MaxPayloadBytes
+	roots := h.deps.Cfg.PlanRoots
+	diskTotal := 0
+
+	if args.FinalDiffPath != "" {
+		content, src, err := resolveFileInput(args.FinalDiffPath, roots, maxBytes)
+		if errors.Is(err, errTooLarge) {
+			return nil, &completionInputTooLargeError{field: "final_diff_path", bytes: src.Bytes, err: err}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("final_diff_path: %w", err)
+		}
+		args.FinalDiff = content
+		diskTotal += len(content)
+	}
+
+	files := make([]FileArg, len(args.FinalFiles))
+	for i, f := range args.FinalFiles {
+		files[i] = FileArg{Path: f.Path}
+		// Content wins over Path when both are supplied — see
+		// CompletionFileArg's doc comment. Only a nil Content (never an
+		// explicit "") triggers a disk read.
+		if f.Content != nil {
+			files[i].Content = *f.Content
+			continue // inline — not a disk read, not counted in diskTotal
+		}
+		// Matches checkEvidenceShape's own strings.TrimSpace(f.Path) == ""
+		// check on the empty-Path guard below (see its case 2 comment). A
+		// bare f.Path == "" check here let a whitespace-only path (content
+		// omitted) fall through to resolveFileInput, whose own TrimSpace
+		// guard then returned a bare transport error instead of routing back
+		// to the malformed_evidence envelope checkEvidenceShape produces.
+		if strings.TrimSpace(f.Path) == "" {
+			continue
+		}
+		content, src, err := resolveFileInput(f.Path, roots, maxBytes)
+		if errors.Is(err, errTooLarge) {
+			return nil, &completionInputTooLargeError{field: fmt.Sprintf("final_files[%d].path", i), bytes: src.Bytes, err: err}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("final_files[%d].path: %w", i, err)
+		}
+		files[i].Content = content
+		diskTotal += len(content)
+		if diskTotal > maxBytes {
+			// The aggregate of what's been READ FROM DISK so far crossed
+			// the cap on this entry's read, even though it individually
+			// passed resolveFileInput's own per-file cap above — bail now
+			// rather than reading every remaining path entry into memory
+			// first. bytes carries the cumulative total (not just this
+			// entry's size) so the resulting tooLargeEnvelope's "payload N
+			// bytes exceeds cap" evidence line is accurate.
+			return nil, &completionInputTooLargeError{
+				field: fmt.Sprintf("final_files[%d].path (combined disk-read payload)", i), bytes: diskTotal, err: errTooLarge}
+		}
+	}
+	return files, nil
 }
 
 // rejectionCacheEntry is one cached rejection envelope keyed by canonical
@@ -936,13 +1116,14 @@ var (
 const rejectionCacheTTL = 5 * time.Minute
 
 // evidenceCacheKey returns a deterministic SHA-256 over a canonical JSON
-// encoding of the rejection-relevant args. final_files is pre-sorted by Path
-// so that an order-only difference between two otherwise-identical submissions
-// still hits the cache. Plain string concatenation would risk collisions
-// (e.g. SessionID="a" + FinalDiff="bc" vs SessionID="ab" + FinalDiff="c");
+// encoding of the rejection-relevant inputs. files is the RESOLVED slice
+// (see resolveCompletionInputs), pre-sorted here by Path so that an
+// order-only difference between two otherwise-identical submissions still
+// hits the cache. Plain string concatenation would risk collisions (e.g.
+// sessionID="a" + finalDiff="bc" vs sessionID="ab" + finalDiff="c");
 // JSON-encoded boundaries make those distinct.
-func evidenceCacheKey(args ValidateCompletionArgs) [32]byte {
-	sortedFiles := append([]FileArg(nil), args.FinalFiles...)
+func evidenceCacheKey(sessionID, finalDiff string, files []FileArg, testEvidence string) [32]byte {
+	sortedFiles := append([]FileArg(nil), files...)
 	sort.Slice(sortedFiles, func(i, j int) bool { return sortedFiles[i].Path < sortedFiles[j].Path })
 	keyInput := struct {
 		SessionID    string    `json:"session_id"`
@@ -950,10 +1131,10 @@ func evidenceCacheKey(args ValidateCompletionArgs) [32]byte {
 		FinalFiles   []FileArg `json:"final_files"`
 		TestEvidence string    `json:"test_evidence"`
 	}{
-		SessionID:    args.SessionID,
-		FinalDiff:    args.FinalDiff,
+		SessionID:    sessionID,
+		FinalDiff:    finalDiff,
 		FinalFiles:   sortedFiles,
-		TestEvidence: args.TestEvidence,
+		TestEvidence: testEvidence,
 	}
 	keyJSON, _ := json.Marshal(keyInput)
 	return sha256.Sum256(keyJSON)
@@ -1010,6 +1191,78 @@ func malformedEvidenceEnvelope(sessionID, reason, modelUsed string) Envelope {
 	}
 }
 
+// resolvedEmptyPathInputs identifies every SUPPLIED path input —
+// final_diff_path, or a final_files[i] entry whose content was read from
+// disk rather than given inline — that resolved to 0 bytes. This catches
+// the case the pre-resolution check at step 2b cannot see: a
+// final_diff_path or final_files[i].path whose STRING is non-empty but
+// whose file on disk is empty.
+//
+// This is FIX 2: a caller who supplied a path plainly intended to send that
+// file, so a 0-byte resolution is always worth surfacing — regardless of
+// what other evidence the call also carries. What differs by case is
+// whether that surfacing is a hard rejection or a finding on an otherwise-
+// proceeding call; see the two call sites in ValidateCompletion's step 2e.
+//
+// A final_files[i] entry whose Content was an EXPLICIT "" (never nil — see
+// CompletionFileArg's doc comment) is a deliberate deletion marker, not a
+// resolution accident, so it is never included here even when it is the
+// only final_files entry present; only content this function can tell was
+// actually read from disk and came back empty counts. A whitespace-only
+// Path is left for checkEvidenceShape's own dedicated empty-path check
+// downstream, which produces a clearer reason string for that specific
+// case.
+//
+// Returns nil when no supplied path input resolved empty. Otherwise one
+// reason string per offending field, each suitable for either the
+// malformed_evidence envelope's Evidence field (hard-reject case) or an
+// insufficient_evidence finding's Evidence field (soft case) — see
+// ValidateCompletion.
+func resolvedEmptyPathInputs(args *ValidateCompletionArgs, resolvedFiles []FileArg) []string {
+	var reasons []string
+	if args.FinalDiffPath != "" && args.FinalDiff == "" {
+		reasons = append(reasons, fmt.Sprintf("final_diff_path resolved to 0 bytes: %s", args.FinalDiffPath))
+	}
+	for i, f := range resolvedFiles {
+		if f.Content != "" {
+			continue
+		}
+		if strings.TrimSpace(f.Path) == "" {
+			continue
+		}
+		if i >= len(args.FinalFiles) || args.FinalFiles[i].Content != nil {
+			// Not a disk-resolved entry: either out of range (shouldn't
+			// happen — resolvedFiles is built 1:1 from args.FinalFiles) or
+			// an explicit "" deletion marker, not a resolution accident.
+			continue
+		}
+		reasons = append(reasons, fmt.Sprintf("final_files[%d].path resolved to 0 bytes: %s", i, args.FinalFiles[i].Path))
+	}
+	return reasons
+}
+
+// hasNonEmptyEvidence reports whether args/resolvedFiles carry any evidence
+// content BESIDES path inputs that resolved to empty: non-empty
+// test_evidence, a non-empty final_diff (which is already "" when
+// final_diff_path resolved to nothing — see resolveCompletionInputs), or at
+// least one final_files entry (disk-resolved or explicit) with non-empty
+// content. An explicit "" deletion marker never counts as evidence here,
+// same as it never counts as an "empty path input mistake" in
+// resolvedEmptyPathInputs — it is simply absent from consideration either
+// way, matching step 2b's original at-least-one-evidence semantics for that
+// case.
+func hasNonEmptyEvidence(args *ValidateCompletionArgs, resolvedFiles []FileArg) bool {
+	if args.TestEvidence != "" || args.FinalDiff != "" {
+		return true
+	}
+	for _, f := range resolvedFiles {
+		if f.Content != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func majorFindings(findings []verdict.Finding) []verdict.Finding {
 	var major []verdict.Finding
 	for _, finding := range findings {
@@ -1024,9 +1277,33 @@ func majorFindings(findings []verdict.Finding) []verdict.Finding {
 // ordering (preserved here to keep the AC-mapping legible):
 //
 //  1. summary required check
-//  2. at-least-one-evidence check
+//  2. final_diff / final_diff_path mutual-exclusivity check
+//     2b. at-least-one-evidence check (final_diff_path counts, pre-resolution)
+//     2c. effectiveMaxTokens + clampFinding — computed here (moved ahead of its
+//     old step-4 slot) so a too-large PATH input, detected next, can render
+//     through the same clamped tooLargeEnvelope shape as the inline
+//     payload-cap check below. Independent of evidence, so reordering it
+//     changes nothing else.
+//     2d. resolveCompletionInputs — materializes final_diff_path and any
+//     final_files[].path entries BEFORE the payload cap, evidence-shape
+//     guard, and evidence cache key see them. An oversized path input
+//     returns the SAME tooLargeEnvelope an oversized inline payload would;
+//     every other resolve failure (missing file, non-regular file, outside
+//     ANTI_TANGENT_PLAN_ROOTS) stays a plain transport error, matching how
+//     validate_plan's plan_path treats those cases.
+//     2e. resolved-empty-path check — 2b only sees path STRINGS, so a
+//     final_diff_path or final_files[i].path that resolves to an empty file
+//     on disk sails past it. A path input resolving to 0 bytes is always a
+//     caller mistake worth surfacing (they plainly intended to send that
+//     file). When it is the ONLY evidence, this is a hard structured
+//     malformed_evidence rejection, same as before — no paid reviewer call
+//     with nothing to review. When other real evidence exists (non-empty
+//     test_evidence, or another non-empty file), the call proceeds and
+//     carries an insufficient_evidence finding naming the empty path
+//     instead, so the gap is visible rather than silently reviewed around.
+//     test_evidence alone with no path inputs supplied is unaffected either
+//     way — see resolvedEmptyPathInputs / hasNonEmptyEvidence.
 //  3. lightweight marker (empty session_id + non-empty evidence)
-//  4. effectiveMaxTokens + clampFinding
 //  5. payload-cap check
 //  6. evidence-shape guard (with rejection cache) — runs BEFORE session lookup
 //  7. session lookup (skipped in lightweight mode)
@@ -1041,10 +1318,95 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, errors.New("summary is required")
 	}
 
-	// 2. at-least-one-evidence: rejects the "totally empty call" case
-	// regardless of whether session_id is set.
-	if len(args.FinalFiles) == 0 && args.FinalDiff == "" && args.TestEvidence == "" {
-		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, or test_evidence must be non-empty")
+	// 2. final_diff / final_diff_path are mutually exclusive.
+	if args.FinalDiff != "" && args.FinalDiffPath != "" {
+		return nil, Envelope{}, errors.New("final_diff and final_diff_path are mutually exclusive")
+	}
+
+	// 2b. at-least-one-evidence: rejects the "totally empty call" case
+	// regardless of whether session_id is set. final_diff_path counts as
+	// evidence even before it is resolved.
+	if len(args.FinalFiles) == 0 && args.FinalDiff == "" && args.FinalDiffPath == "" && args.TestEvidence == "" {
+		return nil, Envelope{}, errors.New("validate_completion: at least one of final_files, final_diff, final_diff_path, or test_evidence must be non-empty")
+	}
+
+	// 2c. max-tokens override + clamp finding. Computed before resolution so
+	// an oversized path input (below) can be rendered through the same
+	// clamped tooLargeEnvelope shape the inline payload-cap check uses.
+	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PerTaskMaxTokens, h.deps.Cfg.MaxTokensCeiling)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+
+	// 2d. Resolve path inputs BEFORE the payload cap, the evidence-shape
+	// guard, and the evidence cache key. checkEvidenceShape must see resolved
+	// content: otherwise a caller could bypass the truncation guard entirely
+	// by passing a path to a file full of elided content. See design §2.1.
+	//
+	// An oversized path input surfaces as the SAME tooLargeEnvelope shape an
+	// oversized inline payload gets from the check at step 5 below — a
+	// caller shouldn't get useful structured guidance one way and a bare
+	// transport error the other. Every other resolve failure (missing file,
+	// non-regular file, outside ANTI_TANGENT_PLAN_ROOTS) is a caller mistake,
+	// not a size problem, and stays a plain transport error — consistent
+	// with validate_plan's plan_path (see the errors.Is(rerr, errTooLarge)
+	// branch there).
+	resolvedFiles, err := h.resolveCompletionInputs(&args)
+	if err != nil {
+		var tooLarge *completionInputTooLargeError
+		if errors.As(err, &tooLarge) {
+			env := prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes,
+				fmt.Sprintf("%s is %d bytes, over the %d-byte cap; shrink it or split the evidence into smaller chunks.",
+					tooLarge.field, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes)), clamp)
+			h.recordStat(statParams{
+				tool:         "validate_completion",
+				verdict:      env.Verdict,
+				findings:     env.Findings,
+				modelUsed:    env.ModelUsed,
+				sessionID:    env.SessionID,
+				payloadBytes: tooLarge.bytes,
+			})
+			return envelopeResult(env)
+		}
+		return nil, Envelope{}, err
+	}
+
+	// 2e. Check the RESOLVED content for path inputs that came back empty.
+	// See resolvedEmptyPathInputs' doc comment for why this can't just
+	// reuse the 2b check verbatim.
+	var emptyPathFindings []verdict.Finding
+	if emptyPathReasons := resolvedEmptyPathInputs(&args, resolvedFiles); len(emptyPathReasons) > 0 {
+		if !hasNonEmptyEvidence(&args, resolvedFiles) {
+			// The empty-resolved path is the ONLY evidence on the call:
+			// hard reject, exactly as before FIX 2 — no paid reviewer call
+			// with nothing to review.
+			env := malformedEvidenceEnvelope(args.SessionID, emptyPathReasons[0], h.deps.Cfg.PostModel.String())
+			clamped := prependClamp(env, clamp)
+			h.recordStat(statParams{
+				tool:         "validate_completion",
+				verdict:      clamped.Verdict,
+				findings:     clamped.Findings,
+				modelUsed:    clamped.ModelUsed,
+				sessionID:    clamped.SessionID,
+				payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
+			})
+			return envelopeResult(clamped)
+		}
+		// Other real evidence exists (non-empty test_evidence, or another
+		// non-empty file): FIX 2 — do not reject the call, but don't let
+		// the gap go unremarked either. Merged into result.Findings once
+		// the reviewer call returns (alongside clamp/codescene findings
+		// below), so both the caller and whoever reads the envelope see
+		// exactly which path came back empty.
+		for _, reason := range emptyPathReasons {
+			emptyPathFindings = append(emptyPathFindings, verdict.Finding{
+				Severity:   verdict.SeverityMajor,
+				Category:   verdict.CategoryInsufficientEvidence,
+				Criterion:  "evidence_shape",
+				Evidence:   reason,
+				Suggestion: "Re-submit with non-empty content for this path, or drop the field if it was included by mistake.",
+			})
+		}
 	}
 
 	if args.Codescene != nil {
@@ -1054,15 +1416,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// 3. lightweight marker.
 	lightweight := args.SessionID == ""
 
-	// 4. max-tokens override + clamp finding.
-	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PerTaskMaxTokens, h.deps.Cfg.MaxTokensCeiling)
-	if err != nil {
-		return nil, Envelope{}, err
-	}
-
 	// 5. payload-cap check. In lightweight mode the surfaced session_id stays
 	// empty; otherwise we don't have the session yet, so use args.SessionID.
-	if size := totalCompletionBytes(args.FinalFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
+	if size := totalCompletionBytes(resolvedFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
 		env := prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
 			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp)
 		h.recordStat(statParams{
@@ -1087,7 +1443,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// 6. evidence-shape guard. Runs BEFORE session lookup so a broken payload
 	// rejects fast regardless of session state. Cache hit → return the same
 	// envelope without re-running the guard or hitting the reviewer.
-	cacheKey := evidenceCacheKey(args)
+	cacheKey := evidenceCacheKey(args.SessionID, args.FinalDiff, resolvedFiles, args.TestEvidence)
 	if cached, ok := lookupCachedRejection(cacheKey); ok {
 		c := prependClamp(cached, clamp)
 		h.recordStat(statParams{
@@ -1097,11 +1453,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			modelUsed:    c.ModelUsed,
 			sessionID:    c.SessionID,
 			cached:       true,
-			payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+			payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 		})
 		return envelopeResult(c)
 	}
-	if reason := checkEvidenceShape(args); reason != "" {
+	if reason := checkEvidenceShape(args.FinalDiff, resolvedFiles); reason != "" {
 		env := malformedEvidenceEnvelope(args.SessionID, reason, h.deps.Cfg.PostModel.String())
 		storeRejection(cacheKey, env)
 		clamped := prependClamp(env, clamp)
@@ -1111,7 +1467,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			findings:     clamped.Findings,
 			modelUsed:    clamped.ModelUsed,
 			sessionID:    clamped.SessionID,
-			payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+			payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 		})
 		return envelopeResult(clamped)
 	}
@@ -1138,7 +1494,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				findings:     env.Findings,
 				modelUsed:    env.ModelUsed,
 				sessionID:    env.SessionID,
-				payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+				payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 			})
 			return envelopeResult(env)
 		}
@@ -1154,11 +1510,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			return prompts.RenderPost(prompts.PostInput{
 				Spec:                           spec,
 				Summary:                        args.Summary,
-				Files:                          toPromptFiles(args.FinalFiles),
+				Files:                          toPromptFiles(resolvedFiles),
 				FinalDiff:                      args.FinalDiff,
 				TestEvidence:                   args.TestEvidence,
 				MajorPreFindings:               majorPreFindings,
-				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args),
+				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args.Summary, resolvedFiles, args.FinalDiff),
 				ExitContracts:                  exitContracts,
 				ExitContractsInferred:          args.ExitContractsInferred,
 				Codescene:                      args.Codescene,
@@ -1191,7 +1547,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				reviewMS:     env.ReviewMS,
 				partial:      env.Partial,
 				sessionID:    env.SessionID,
-				payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+				payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 			})
 		}
 		return r, env, retErr
@@ -1199,6 +1555,13 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 
 	if clamp.Severity != "" {
 		result.Findings = append([]verdict.Finding{clamp}, result.Findings...)
+	}
+	if len(emptyPathFindings) > 0 {
+		// FIX 2's soft case: merged in here (same pattern as clamp/
+		// codescene below) rather than sent through to the reviewer
+		// prompt, so this stays a server-computed finding independent of
+		// what the reviewer LLM says.
+		result.Findings = append(emptyPathFindings, result.Findings...)
 	}
 	result = verdict.FinalizeVerdict(result)
 
@@ -1280,14 +1643,17 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		reviewMS:     env.ReviewMS,
 		partial:      env.Partial,
 		sessionID:    env.SessionID,
-		payloadBytes: totalCompletionBytes(args.FinalFiles, args.FinalDiff),
+		payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 	})
 	return envelopeResult(env)
 }
 
 func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, args ValidatePlanArgs) (*mcp.CallToolResult, verdict.PlanResult, error) {
-	if args.PlanText == "" {
-		return nil, verdict.PlanResult{}, errors.New("plan_text is required")
+	if args.PlanText == "" && args.PlanPath == "" {
+		return nil, verdict.PlanResult{}, errors.New("plan_text or plan_path is required")
+	}
+	if args.PlanText != "" && args.PlanPath != "" {
+		return nil, verdict.PlanResult{}, errors.New("plan_text and plan_path are mutually exclusive")
 	}
 	if args.Mode != "" && args.Mode != "quick" && args.Mode != "thorough" {
 		return nil, verdict.PlanResult{}, errors.New(`mode must be "quick" or "thorough"`)
@@ -1299,10 +1665,37 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}
 
 	projectKnowledge := strings.TrimSpace(args.ProjectKnowledge)
-	planBytes := len(args.PlanText)
 	pkBytes := len(projectKnowledge)
-	if total := planBytes + pkBytes; total > h.deps.Cfg.MaxPayloadBytes {
-		pr := prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, h.deps.Cfg.MaxPayloadBytes), clamp)
+
+	planText := args.PlanText
+	var planSrc fileSource
+	if args.PlanPath != "" {
+		var rerr error
+		planText, planSrc, rerr = resolveFileInput(
+			args.PlanPath, h.deps.Cfg.PlanRoots, h.deps.Cfg.PlanMaxPayloadBytes)
+		if errors.Is(rerr, errTooLarge) {
+			total := planSrc.Bytes + pkBytes
+			pr := prependPlanClamp(
+				tooLargePlanResult(total, planSrc.Bytes, pkBytes, h.deps.Cfg.PlanMaxPayloadBytes), clamp)
+			h.recordStat(statParams{
+				tool:         "validate_plan",
+				verdict:      string(pr.PlanVerdict),
+				findings:     planFindings(pr),
+				modelUsed:    h.deps.Cfg.PlanModel.String(),
+				payloadBytes: total,
+			})
+			return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
+		}
+		if rerr != nil {
+			return nil, verdict.PlanResult{}, rerr
+		}
+	}
+
+	planBytes := len(planText)
+	if total := planBytes + pkBytes; total > h.deps.Cfg.PlanMaxPayloadBytes {
+		pr := prependPlanDeprecation(
+			prependPlanClamp(tooLargePlanResult(total, planBytes, pkBytes, h.deps.Cfg.PlanMaxPayloadBytes), clamp),
+			args.PlanText != "")
 		h.recordStat(statParams{
 			tool:         "validate_plan",
 			verdict:      string(pr.PlanVerdict),
@@ -1310,9 +1703,9 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			modelUsed:    h.deps.Cfg.PlanModel.String(),
 			payloadBytes: total,
 		})
-		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
+		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
 	}
-	tasks, _ := planparser.SplitTasks(args.PlanText)
+	tasks, _ := planparser.SplitTasks(planText)
 	tasksTotal := len(tasks)
 	tasksWithHeader := 0
 	for _, rt := range tasks {
@@ -1321,7 +1714,8 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		}
 	}
 	if len(tasks) == 0 {
-		pr := prependPlanClamp(noHeadingsPlanResult(), clamp)
+		pr := prependPlanDeprecation(
+			prependPlanClamp(noHeadingsPlanResult(), clamp), args.PlanText != "")
 		h.recordStat(statParams{
 			tool:            "validate_plan",
 			verdict:         string(pr.PlanVerdict),
@@ -1331,7 +1725,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			tasksTotal:      tasksTotal,
 			tasksWithHeader: tasksWithHeader,
 		})
-		return planEnvelopeResult(pr, h.deps.Cfg.PlanModel.String(), 0)
+		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
 	}
 
 	// Adaptive plan budget: apply only when no override was supplied. The
@@ -1347,7 +1741,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return nil, verdict.PlanResult{}, err
 	}
 	rendered, err := renderPlanReview(renderPlanReviewInputs{
-		PlanText:         args.PlanText,
+		PlanText:         planText,
 		ProjectKnowledge: projectKnowledge,
 		Tasks:            tasks,
 		ChunkSize:        h.deps.Cfg.PlanTasksPerChunk,
@@ -1356,8 +1750,21 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}
-	cacheKey := planPassCacheKey(args.PlanText, projectKnowledge, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
-	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey); ok {
+	cacheKey := planPassCacheKey(planText, projectKnowledge, args.Mode, model.String(), maxTokens, args.MaxTokensOverride, rendered)
+	if cached, cachedModelUsed, ok := h.planCache().lookup(cacheKey, planSrc.String()); ok {
+		// Deprecation is a property of THIS call's input (plan_text vs.
+		// plan_path), not of the cached plan content, so it is applied here
+		// rather than stored on the entry — a plan_path call must not
+		// inherit a deprecation finding left by an earlier plan_text call
+		// (or vice versa) that happened to produce the same cache key.
+		// lookup() already recomputed SummaryBlock (with THIS call's
+		// provenance, never the stored entry's) without the deprecation
+		// finding; recompute it again now that the finding may have been
+		// added, so SummaryBlock's count/list stays consistent with
+		// PlanFindings.
+		cached = prependPlanDeprecation(cached, args.PlanText != "")
+		cachedMeta := planSummaryMeta{ModelUsed: cachedModelUsed, ReviewMS: 0, Source: planSrc.String()}
+		cached.SummaryBlock = formatPlanSummary(cached, cachedMeta)
 		// The cache key uses the configured model ref. cachedModelUsed is the
 		// provider-reported model from the original review being reused.
 		h.recordStat(statParams{
@@ -1372,7 +1779,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			tasksTotal:      tasksTotal,
 			tasksWithHeader: tasksWithHeader,
 		})
-		return planEnvelopeResultFinalized(cached, cachedModelUsed, 0)
+		return planEnvelopeResultFinalized(cached, cachedMeta)
 	}
 
 	var pr verdict.PlanResult
@@ -1390,13 +1797,15 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// `prior` ensures those aren't dropped if the truncating chunk's bytes
 	// yield further recovery.
 	if r, p, handled, retErr := h.handlePlanReviewErr(planReviewErrInputs{
-		Err:        err,
-		Model:      model,
-		ModelUsed:  modelUsed,
-		ReviewMS:   ms,
-		PartialRaw: partialRaw,
-		Clamp:      clamp,
-		Prior:      pr,
+		Err:          err,
+		Model:        model,
+		ModelUsed:    modelUsed,
+		ReviewMS:     ms,
+		PartialRaw:   partialRaw,
+		Clamp:        clamp,
+		Prior:        pr,
+		Source:       planSrc.String(),
+		UsedPlanText: args.PlanText != "",
 	}); handled {
 		if retErr == nil {
 			h.recordStat(statParams{
@@ -1415,13 +1824,40 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	}
 	populateNormativeTestBodies(&pr, tasks)
 	pr = prependPlanClamp(pr, clamp)
-	pr = finalizePlanResult(pr, modelUsed, ms)
+	// finalizePlanVerdict (not finalizePlanResult) here: it runs the
+	// normalize/calibrate/FinalizePlanVerdict ladder without touching
+	// SummaryBlock, so the PlanRunID assignment and deprecation prepend
+	// below can both land before SummaryBlock is computed — once,
+	// authoritatively — rather than three times across this path.
+	finalizePlanVerdict(&pr)
+	// Deprecation is added AFTER the ladder, not before: it is a minor
+	// CategoryOther finding, and the ladder (verdict.FinalizeVerdict) treats
+	// a 3rd minor finding as a noise_cluster trigger that lifts the verdict
+	// to warn. Feeding it through the ladder would violate "the deprecation
+	// finding MUST NOT change any verdict" for any plan_text caller that
+	// already had two other minor findings. The two early-exit envelopes
+	// below are safe to prepend before their own finalizePlanResult call
+	// because they always carry a critical finding, which already forces
+	// fail regardless of minor count.
 	if pr.PlanRunID == "" {
 		run := h.deps.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
 		pr.PlanRunID = run.ID
-		pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
 	}
+	// Cache the result WITHOUT the deprecation finding: the finding is a
+	// property of which argument THIS call used, not of the plan content,
+	// so a plan_text call and a plan_path call with byte-identical content
+	// correctly share one cache entry. Keying on "which input arg" would
+	// split the cache in two for no benefit. Deprecation is applied per-call
+	// below, after the entry is stored — see the mirrored comment on the
+	// cache-hit branch above.
 	h.planCache().store(cacheKey, pr, modelUsed)
+	pr = prependPlanDeprecation(pr, args.PlanText != "")
+	// Single authoritative SummaryBlock computation for this path: it runs
+	// after both the PlanRunID assignment and the deprecation prepend, so
+	// the summary's plan_run_id line, provenance, and findings count/list
+	// all reflect the final state exactly once.
+	meta := planSummaryMeta{ModelUsed: modelUsed, ReviewMS: ms, Source: planSrc.String()}
+	pr.SummaryBlock = formatPlanSummary(pr, meta)
 	h.recordStat(statParams{
 		tool:            "validate_plan",
 		verdict:         string(pr.PlanVerdict),
@@ -1433,7 +1869,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		tasksTotal:      tasksTotal,
 		tasksWithHeader: tasksWithHeader,
 	})
-	return planEnvelopeResultFinalized(pr, modelUsed, ms)
+	return planEnvelopeResultFinalized(pr, meta)
 }
 
 type renderedPlanChunk struct {
@@ -1448,17 +1884,20 @@ type renderedPlanReview struct {
 }
 
 func (r renderedPlanReview) cachePrompts() []planCachePrompt {
-	if r.Single != nil {
-		return []planCachePrompt{{System: r.Single.System, User: r.Single.User}}
+	toPrompt := func(o prompts.Output) planCachePrompt {
+		return planCachePrompt{System: o.System, UserPrefix: o.UserPrefix, UserSuffix: o.UserSuffix}
 	}
-	prompts := make([]planCachePrompt, 0, 1+len(r.Chunks))
+	if r.Single != nil {
+		return []planCachePrompt{toPrompt(*r.Single)}
+	}
+	out := make([]planCachePrompt, 0, 1+len(r.Chunks))
 	if r.FindingsOnly != nil {
-		prompts = append(prompts, planCachePrompt{System: r.FindingsOnly.System, User: r.FindingsOnly.User})
+		out = append(out, toPrompt(*r.FindingsOnly))
 	}
 	for _, chunk := range r.Chunks {
-		prompts = append(prompts, planCachePrompt{System: chunk.Prompt.System, User: chunk.Prompt.User})
+		out = append(out, toPrompt(chunk.Prompt))
 	}
-	return prompts
+	return out
 }
 
 // renderPlanReviewInputs bundles the inputs to renderPlanReview. Carrying
@@ -1607,10 +2046,10 @@ func noHeadingsPlanResult() verdict.PlanResult {
 }
 
 // tooLargePlanResult builds the rejection PlanResult for a cumulative
-// payload-too-large hit on (plan_text + project_knowledge). The evidence
-// names both contributors so the caller can tell which input to shrink.
-// Critical so the ladder derives fail from one critical, matching the
-// explicit Verdict: fail.
+// payload-too-large hit on (plan content, from either plan_text or plan_path,
+// + project_knowledge). The evidence names both contributors so the caller
+// can tell which input to shrink. Critical so the ladder derives fail from
+// one critical, matching the explicit Verdict: fail.
 func tooLargePlanResult(total, planBytes, pkBytes, limit int) verdict.PlanResult {
 	return verdict.PlanResult{
 		PlanVerdict: verdict.VerdictFail,
@@ -1618,11 +2057,11 @@ func tooLargePlanResult(total, planBytes, pkBytes, limit int) verdict.PlanResult
 			Severity:   verdict.SeverityCritical,
 			Category:   verdict.CategoryTooLarge,
 			Criterion:  "payload",
-			Evidence:   fmt.Sprintf("payload %d bytes > cap %d (plan_text: %d, project_knowledge: %d)", total, limit, planBytes, pkBytes),
+			Evidence:   fmt.Sprintf("payload %d bytes > cap %d (plan: %d, project_knowledge: %d)", total, limit, planBytes, pkBytes),
 			Suggestion: "Split the plan into smaller chunks or pass a unified diff.",
 		}},
 		Tasks:      []verdict.PlanTaskResult{},
-		NextAction: "Reduce plan_text size and retry.",
+		NextAction: "Reduce plan size and retry.",
 	}
 }
 
@@ -1636,34 +2075,46 @@ func tooLargePlanResult(total, planBytes, pkBytes, limit int) verdict.PlanResult
 //     unverifiable-only calibration, and FinalizePlanVerdict (per-task +
 //     plan-level severity ladder + noise_cluster + plan-quality sanity).
 //  2. SummaryBlock is populated with the rendered paste-ready text block.
-func planEnvelopeResult(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
-	return planEnvelopeResultFinalized(finalizePlanResult(pr, modelUsed, ms), modelUsed, ms)
+func planEnvelopeResult(pr verdict.PlanResult, meta planSummaryMeta) (*mcp.CallToolResult, verdict.PlanResult, error) {
+	return planEnvelopeResultFinalized(finalizePlanResult(pr, meta), meta)
 }
 
-func finalizePlanResult(pr verdict.PlanResult, modelUsed string, ms int64) verdict.PlanResult {
-	// Order is load-bearing:
-	//   1. rollup unverifiable-codebase-claim findings (else calibration sees
-	//      noise);
-	//   2. calibrate verdict for the unverifiable-only case (preserves the
-	//      v0.4.0 verdict→quality mapping for plans whose only findings are
-	//      unverifiable claims);
-	//   3. FinalizePlanVerdict (per-task + plan-level severity ladder +
-	//      noise_cluster + ApplyPlanQualitySanity rerun).
-	// FinalizePlanVerdict's ApplyPlanQualitySanity rerun replaces the
-	// stand-alone call this function previously made.
-	normalizePlanUnverifiableFindings(&pr)
-	calibratePlanVerdictForUnverifiableOnly(&pr)
-	verdict.FinalizePlanVerdict(&pr)
-	pr.SummaryBlock = formatPlanSummary(pr, modelUsed, ms)
+// finalizePlanVerdict runs the shared normalize/calibrate/FinalizePlanVerdict
+// ladder without touching SummaryBlock. Split out of finalizePlanResult so
+// ValidatePlan's fresh-review happy path can run the ladder before the final
+// PlanRunID / deprecation-finding state is known, then compute
+// formatPlanSummary exactly once after those are settled, instead of the
+// three redundant computations this used to produce.
+//
+// Order is load-bearing:
+//  1. rollup unverifiable-codebase-claim findings (else calibration sees
+//     noise);
+//  2. calibrate verdict for the unverifiable-only case (preserves the
+//     v0.4.0 verdict→quality mapping for plans whose only findings are
+//     unverifiable claims);
+//  3. FinalizePlanVerdict (per-task + plan-level severity ladder +
+//     noise_cluster + ApplyPlanQualitySanity rerun).
+//
+// FinalizePlanVerdict's ApplyPlanQualitySanity rerun replaces the
+// stand-alone call this function previously made.
+func finalizePlanVerdict(pr *verdict.PlanResult) {
+	normalizePlanUnverifiableFindings(pr)
+	calibratePlanVerdictForUnverifiableOnly(pr)
+	verdict.FinalizePlanVerdict(pr)
+}
+
+func finalizePlanResult(pr verdict.PlanResult, meta planSummaryMeta) verdict.PlanResult {
+	finalizePlanVerdict(&pr)
+	pr.SummaryBlock = formatPlanSummary(pr, meta)
 	return pr
 }
 
-func planEnvelopeResultFinalized(pr verdict.PlanResult, modelUsed string, ms int64) (*mcp.CallToolResult, verdict.PlanResult, error) {
+func planEnvelopeResultFinalized(pr verdict.PlanResult, meta planSummaryMeta) (*mcp.CallToolResult, verdict.PlanResult, error) {
 	body, err := json.MarshalIndent(struct {
 		verdict.PlanResult
 		ModelUsed string `json:"model_used"`
 		ReviewMS  int64  `json:"review_ms"`
-	}{pr, modelUsed, ms}, "", "  ")
+	}{pr, meta.ModelUsed, meta.ReviewMS}, "", "  ")
 	if err != nil {
 		return nil, verdict.PlanResult{}, err
 	}
@@ -1702,6 +2153,17 @@ func (h *handlers) reviewPlanChunked(
 	var modelUsed string
 
 	// ----- Pass 1: plan-findings only -----
+	// Deliberately NO CachePrefix here. Anthropic keys a cache entry on the
+	// full request prefix — tools, then system, then the cached message
+	// content — and this call's tools block is verdict.PlanFindingsOnlySchema(),
+	// while every chunk call below sends verdict.TasksOnlySchema(). Those
+	// differ, so an entry Pass 1 wrote could never be read by a chunk call:
+	// it would just pay the ~1.25x cache-write premium for zero reads.
+	// Sending the full rendered.FindingsOnly.User as plain text costs the
+	// same 1.0x as before this feature existed. Chunk 1 (reviewOnePlanChunk)
+	// is the one that actually writes the shared prefix; chunks 2+ read it.
+	// Do not add CachePrefix back here without re-deriving the economics in
+	// the design doc — see docs/superpowers/specs (0.16.0 caching section).
 	req := providers.Request{
 		Model:      model.Model,
 		System:     rendered.FindingsOnly.System,
@@ -1794,12 +2256,21 @@ func (h *handlers) reviewOnePlanChunk(
 	chunkTasks []planparser.RawTask,
 	maxTokens int,
 ) (verdict.TasksOnly, int64, []byte, error) {
+	// CachePrefix is set once here, outside the attempt closure below. Pass 1
+	// (reviewPlanChunked) deliberately sends no breakpoint of its own — its
+	// tools block differs from this one, so its entry could never be read
+	// here — which makes THIS the first call to actually write the shared
+	// head to the cache: chunk 1 pays the ~1.25x write, chunks 2+ read it
+	// back at ~0.1x input price instead of re-billing the whole plan. The
+	// values passed to attempt() are the SUFFIX only — never the full
+	// rendered.User — or the prefix would be duplicated into the body and
+	// the cache would never match.
 	req := providers.Request{
-		Model:      model.Model,
-		System:     rendered.System,
-		User:       rendered.User,
-		MaxTokens:  maxTokens,
-		JSONSchema: verdict.TasksOnlySchema(),
+		Model:       model.Model,
+		System:      rendered.System,
+		CachePrefix: rendered.UserPrefix,
+		MaxTokens:   maxTokens,
+		JSONSchema:  verdict.TasksOnlySchema(),
 	}
 
 	// attempt mutates req.User in place; each call overwrites it before
@@ -1826,7 +2297,7 @@ func (h *handlers) reviewOnePlanChunk(
 		return parsed, ms, nil, nil
 	}
 
-	parsed, ms, partialRaw, err := attempt(rendered.User)
+	parsed, ms, partialRaw, err := attempt(rendered.UserSuffix)
 	if err == nil {
 		return parsed, ms, nil, nil
 	}
@@ -1836,7 +2307,7 @@ func (h *handlers) reviewOnePlanChunk(
 		return verdict.TasksOnly{}, ms, partialRaw, err
 	}
 	// Schema or identity failure → retry once with hint.
-	parsed2, ms2, partialRaw2, err2 := attempt(rendered.User + "\n\n" + verdict.RetryHint())
+	parsed2, ms2, partialRaw2, err2 := attempt(rendered.UserSuffix + "\n\n" + verdict.RetryHint())
 	if err2 != nil {
 		if errors.Is(err2, providers.ErrResponseTruncated) {
 			return verdict.TasksOnly{}, ms + ms2, partialRaw2, err2
