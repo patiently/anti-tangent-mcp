@@ -37,12 +37,25 @@ func main() {
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
 	slog.SetDefault(logger)
+	// The two context_paths caps are logged as their EFFECTIVE values, after
+	// config.Load has applied the "per-file cap must be <= whole-set cap"
+	// cross-check. When the per-file cap is still the 131072 default and the
+	// operator lowered ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES below it, Load
+	// silently CLAMPS the per-file cap down (see config.go's cross-check: an
+	// error there would be a startup-denial bug over a value the operator
+	// never set). That clamp was previously invisible — nothing anywhere
+	// reported the value actually in force. config.go's own reasoning for not
+	// warning at clamp time ("Load runs before the JSON logger is installed,
+	// so the warning would go nowhere") genuinely does not apply here: this
+	// line is emitted four lines AFTER slog.SetDefault.
 	logger.Info("starting", "version", version,
 		"pre_model", cfg.PreModel.String(),
 		"mid_model", cfg.MidModel.String(),
 		"post_model", cfg.PostModel.String(),
 		"plan_model", cfg.PlanModel.String(),
-		"session_ttl", cfg.SessionTTL.String())
+		"session_ttl", cfg.SessionTTL.String(),
+		"context_max_file_bytes", cfg.ContextMaxFileBytes,
+		"context_max_payload_bytes", cfg.ContextMaxPayloadBytes)
 
 	if err := providers.ValidateModel(cfg.PreModel); err != nil {
 		fail(logger, "pre model invalid", err)

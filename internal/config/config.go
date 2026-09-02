@@ -42,6 +42,16 @@ type Config struct {
 	// and the calling agent already has unrestricted file read, so the server
 	// acquires no capability the caller lacks. See design §3.1 / §3.2.
 	PlanRoots []string
+	// ContextMaxFileBytes caps each individual file attached to
+	// validate_plan via context_paths. ContextMaxPayloadBytes caps the
+	// attached set as a whole. Both are separate from PlanMaxPayloadBytes so
+	// an oversized attachment set is refused with its own actionable
+	// message rather than being blamed on the plan. Oversized attachments
+	// are REFUSED, never truncated: the reviewer is told attached files are
+	// complete, and a silently-shortened file turns that promise into a
+	// source of false contradicted_codebase_claim findings. See design §3.2.
+	ContextMaxFileBytes    int
+	ContextMaxPayloadBytes int
 	// Stats subsystem (opt-in; see spec 2026-06-02). StatsDir == "" disables
 	// it entirely.
 	StatsDir              string
@@ -88,24 +98,26 @@ func ParseModelRef(s string) (ModelRef, error) {
 // Pass os.Getenv in production; pass a map-backed function in tests.
 func Load(env func(string) string) (Config, error) {
 	cfg := Config{
-		AnthropicKey:          env("ANTHROPIC_API_KEY"),
-		OpenAIKey:             env("OPENAI_API_KEY"),
-		GoogleKey:             env("GOOGLE_API_KEY"),
-		SessionTTL:            4 * time.Hour,
-		MaxPayloadBytes:       204800,
-		RequestTimeout:        180 * time.Second,
-		LogLevel:              slog.LevelInfo,
-		PerTaskMaxTokens:      4096,
-		PlanMaxTokens:         4096,
-		PrimeMaxTokens:        4096,
-		ExtractMaxTokens:      8192,
-		PlanTasksPerChunk:     8,
-		MaxTokensCeiling:      16384,
-		PlanMaxPayloadBytes:   1048576,
-		StatsSummaryInterval:  24 * time.Hour,
-		StatsSummaryThreshold: 50,
-		StatsRetentionDays:    30,
-		StatsMaxTokens:        2048,
+		AnthropicKey:           env("ANTHROPIC_API_KEY"),
+		OpenAIKey:              env("OPENAI_API_KEY"),
+		GoogleKey:              env("GOOGLE_API_KEY"),
+		SessionTTL:             4 * time.Hour,
+		MaxPayloadBytes:        204800,
+		RequestTimeout:         180 * time.Second,
+		LogLevel:               slog.LevelInfo,
+		PerTaskMaxTokens:       4096,
+		PlanMaxTokens:          4096,
+		PrimeMaxTokens:         4096,
+		ExtractMaxTokens:       8192,
+		PlanTasksPerChunk:      8,
+		MaxTokensCeiling:       16384,
+		PlanMaxPayloadBytes:    1048576,
+		ContextMaxFileBytes:    131072,
+		ContextMaxPayloadBytes: 524288,
+		StatsSummaryInterval:   24 * time.Hour,
+		StatsSummaryThreshold:  50,
+		StatsRetentionDays:     30,
+		StatsMaxTokens:         2048,
 	}
 
 	if cfg.AnthropicKey == "" && cfg.OpenAIKey == "" && cfg.GoogleKey == "" {
@@ -282,6 +294,63 @@ func Load(env func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES: must be positive, got %d", n)
 		}
 		cfg.PlanMaxPayloadBytes = n
+	}
+	// fileCapExplicit distinguishes "the operator set a per-file cap" from
+	// "the default is still in place" — the cross-check below treats the two
+	// cases differently, and by then the value alone cannot tell them apart.
+	fileCapExplicit := false
+	if v := env("ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES: must be positive, got %d", n)
+		}
+		cfg.ContextMaxFileBytes = n
+		fileCapExplicit = true
+	}
+	if v := env("ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES: must be positive, got %d", n)
+		}
+		cfg.ContextMaxPayloadBytes = n
+	}
+	// Cross-check, after BOTH have been read: a per-file cap above the
+	// whole-set cap is unreachable configuration. Every file that passes the
+	// per-file check would then trip the set check.
+	//
+	// Which of the two responses is right depends on whether the operator
+	// ASKED for the per-file cap they got:
+	//
+	//   - Explicitly set above the payload cap → hard error naming both
+	//     variables. Raising ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES to "allow a
+	//     big file" would otherwise achieve nothing at all, the operator's
+	//     intent silently defeated by a limit they did not think to raise.
+	//     Failing at startup naming both beats failing at review time naming
+	//     one.
+	//   - Still the DEFAULT (131072) and merely larger than a payload cap
+	//     the operator lowered → clamp it down. Erroring here made
+	//     ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES below 131072 refuse to boot
+	//     at all: Load returns an error, main exits 1, and every
+	//     anti-tangent tool vanishes from the host — a startup-denial bug
+	//     for a value the operator never touched.
+	//
+	// Deliberately NOT "clamp always, with a warning": Load runs before the
+	// JSON logger is installed, so the warning would go nowhere, and an
+	// unconditional clamp reintroduces exactly the silent defeat the error
+	// exists to stop.
+	if cfg.ContextMaxFileBytes > cfg.ContextMaxPayloadBytes {
+		if fileCapExplicit {
+			return Config{}, fmt.Errorf(
+				"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES (%d) must be <= ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES (%d): a per-file cap above the whole-set cap can never be reached",
+				cfg.ContextMaxFileBytes, cfg.ContextMaxPayloadBytes)
+		}
+		cfg.ContextMaxFileBytes = cfg.ContextMaxPayloadBytes
 	}
 	if v := env("ANTI_TANGENT_PLAN_ROOTS"); v != "" {
 		for _, p := range filepath.SplitList(v) {

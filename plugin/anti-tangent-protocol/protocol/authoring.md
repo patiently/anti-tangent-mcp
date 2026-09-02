@@ -79,3 +79,40 @@ When a plan snippet is wrapped in `.trimIndent()` (or any equivalent raw-string 
 ### 3.8 Harness shape attestations (v0.5.2+)
 
 `harness_shape_attestation` is a structured optional input on `validate_task_spec`. Each entry is `{harness: string, path: string, assertions: []string}`. Use it when ACs depend on a test harness's stated capabilities (or non-capabilities). The reviewer treats each attestation as authoritative caller-attested context (no independent verification) and flags ACs that EXPLICITLY contradict an entry — e.g. an AC asking for behavior a `does not …` assertion forbids, or asserting a state directly contradicting a positive assertion — as `attestation_contradiction` findings. Absence of a capability is NOT a contradiction; do not list things to forbid them.
+
+### 3.9 `**Files:**` bullet syntax (what the Create/Modify check parses)
+
+`validate_plan` runs a deterministic, reviewer-free check that a task's `Modify:` targets can
+exist when that task runs. It reads ONE structure and nothing else: a literal `**Files:**` line,
+followed by bullets naming a verb and a path.
+
+```markdown
+**Files:**
+- Create: `internal/planparser/filerefs.go`
+- Modify: `internal/mcpsrv/handlers.go`
+- Modify: `internal/verdict/parser.go:57-70`
+- Create/Modify: `internal/prompts/templates/plan.tmpl`
+- Delete: `internal/legacy/shim.go`
+- Modify: internal/config/config.go (the roots parsing)
+```
+
+Rules the parser actually applies:
+
+- The heading must be a line of its own reading `**Files:**` (case-insensitive).
+- Bullets may use `-` or `*`. A space after the marker is OPTIONAL for a recognized verb —
+  `-Create: path` parses. The space governs the UNRECOGNIZED-VERB fallback: a bullet whose
+  verb is not Create/Modify/Delete is skipped and collection continues only when it starts
+  `-` or `*` followed by one space; without it, collection stops at that line.
+- The verb is `Create`, `Modify`, or `Delete`, case-insensitive. Two verbs may be joined with
+  `/` (`Create/Modify:`) for a file one task creates and another edits; both are recorded.
+- The path may be backtick-quoted or bare. Bare takes the first whitespace-delimited token.
+- A trailing parenthetical (`(the roots parsing)`) is dropped, and so is a trailing line anchor
+  — `:57`, `:57-70`, `:57,70`, and repeated forms like `:57:12` — so anchoring a `Modify:` to
+  the lines you are editing is safe.
+- Paths are repo-relative. Collection stops at the first line that is neither a bullet nor
+  blank, so a following `**Steps:**` section is never harvested.
+
+The section is OPTIONAL. A task without it yields no file operations and no findings — the check
+guards plans that opt into the structure, it does not demand that they do. The `json:metadata`
+fence's `files` array is a flat list with no verb, so it cannot drive this check; the bullets are
+the only source.

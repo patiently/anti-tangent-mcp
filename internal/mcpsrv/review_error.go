@@ -7,6 +7,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planparser"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
@@ -76,6 +78,159 @@ func (h *handlers) resolveModelAndRender(
 	return model, rendered, nil
 }
 
+// planCallContext bundles everything the three validate_plan exit paths —
+// the fresh-review path, the truncation-recovery path, and the cache-hit
+// path — need to assemble the SAME post-review tail.
+//
+// It exists because that tail was hand-assembled at all three sites and the
+// recovery site kept missing steps: across three review rounds it was found
+// to be missing prependRepoRootUnusable, populateNormativeTestBodies, and
+// the PlanRunID mint. The last of those is functional, not cosmetic —
+// controller.md §5.1 tells the controller to capture plan_run_id from a
+// passing validate_plan response, a truncated-but-recovered review CAN
+// return pass, and plan_run_report hard-requires the id. Most of the fields
+// below used to live on planReviewErrInputs solely to feed the duplicated
+// tail, one field added per review round; that growth WAS the failure mode.
+//
+// The verdict ladder (finalizePlanVerdict) is deliberately NOT a method
+// here. The cache-hit path must never re-run it on an already-finalized
+// entry — normalizePlanUnverifiableFindings is not proven idempotent — so
+// the ladder stays at the call sites, which is exactly where the three
+// orders differ:
+//
+//	fresh review = applyPreLadder -> ladder -> mintPlanRunID -> store -> finish
+//	recovery     = applyPreLadder -> ladder ->                            finish
+//	cache hit    =                                                        finish
+//
+// The fresh-review path hoists the mint above store() so the cached entry
+// carries the plan_run_id: a cache hit must reuse the original call's run
+// rather than mint a second one (design §, and
+// TestValidatePlan_CachePassingResult). finish()'s own mint is guarded on
+// PlanRunID == "" and is therefore a no-op both there and on the cache-hit
+// path, which reads an entry that already carries one.
+//
+// Two divergences on the cache-hit path are DELIBERATE, not omissions, and
+// must not be "fixed" into parity:
+//
+//   - it never runs checkFileConsistency, so FileConsistency is nil there
+//     (design §3.9). store() caches only a `pass` result (plan_cache.go),
+//     and repo_root — the argument that gates the disk tier — is part of the
+//     cache key, so a hit reproduces a run in which the check found nothing.
+//   - it never calls store(), because the entry it is reading is the entry
+//     it would write.
+type planCallContext struct {
+	// PlanRuns is the run store the PlanRunID mint draws from. Carried on the
+	// context rather than reached through *handlers so finish() stays a method
+	// on the context and all three sites construct one identical thing.
+	PlanRuns *planrun.Store
+	// Source is the caller's pre-rendered provenance string (planSrc.String()),
+	// empty when plan_text was used. Threaded through so every envelope —
+	// recovery and cache hit included — carries the same source line a
+	// successful fresh review would have.
+	Source string
+	// ModelUsed is the provider-reported model for the reviewer call that
+	// produced this result: the real identifier on the fresh path, the value
+	// captured before truncation on the recovery path (falling back to the
+	// configured ref when Pass 1 failed before reporting one), and the stored
+	// entry's model on a cache hit.
+	ModelUsed string
+	// ReviewMS is the elapsed reviewer time, 0 on a cache hit (no call made).
+	ReviewMS int64
+	// UsedPlanText is args.PlanText != "" for THIS call, so every path gets
+	// the plan_text deprecation notice — see prependPlanDeprecation.
+	UsedPlanText bool
+	// RepoRootUnusable is the reason a supplied repo_root could not be
+	// resolved, empty when it was usable or was never supplied. Per-call, like
+	// the deprecation notice, and never stored on a cache entry.
+	RepoRootUnusable string
+	// Clamp is the max_tokens clamp finding, zero when nothing was clamped.
+	// Read by applyPreLadder only, so it is unset on the cache-hit path: the
+	// clamp is already baked into the stored entry (max_tokens_override is
+	// part of the cache key).
+	Clamp verdict.Finding
+	// ContextFiles is THIS call's attached set. Without it a truncated
+	// review's summary block omitted the `context:` provenance list entirely
+	// while the same call's stats counted every attached byte — the human
+	// reading the envelope could not see what the reviewer had been given. It
+	// is also the attached set DemoteUnattachedContradictions tests against,
+	// and both paths MUST pass the same one: a divergence there is exactly how
+	// the demotion would go all-or-nothing again on one path only.
+	ContextFiles []fileSource
+	// FileConsistency is the deterministic, reviewer-free Create/Modify
+	// finding for this plan, or nil. It is computed by the CALLER and carried
+	// here because it must survive truncation: the check needs no reviewer and
+	// cannot itself be truncated, so a truncated reviewer response silently
+	// dropping it was the one failure mode that lost a finding the server
+	// already knew for certain. Nil on the cache-hit path by design — see the
+	// type comment.
+	FileConsistency *verdict.Finding
+	// Tasks is the parsed plan, used to re-attach normative test bodies to the
+	// reviewer's per-task results (populateNormativeTestBodies).
+	Tasks []planparser.RawTask
+}
+
+// meta projects the context down to the summary inputs. One place, so the
+// three paths cannot drift on what the `source:`/`context:`/`model_used:`
+// lines say.
+func (c planCallContext) meta() planSummaryMeta {
+	return planSummaryMeta{
+		ModelUsed:    c.ModelUsed,
+		ReviewMS:     c.ReviewMS,
+		Source:       c.Source,
+		ContextFiles: c.ContextFiles,
+	}
+}
+
+// applyPreLadder runs the post-review, PRE-verdict-ladder steps shared by the
+// fresh-review and truncation-recovery paths. Everything here can change a
+// verdict, which is why it must run before finalizePlanVerdict and why the
+// ladder itself is not folded in (see the type comment).
+func (c planCallContext) applyPreLadder(pr *verdict.PlanResult) {
+	populateNormativeTestBodies(pr, c.Tasks)
+	// Server-side suppression, independent of reviewer compliance: a
+	// contradicted_codebase_claim that no attached file backs has nothing to
+	// refute with, so the category (which deliberately carries no severity
+	// floor) would let an unverifiable claim fail the gate at major or
+	// critical. Per finding, not per call — with ANY file attached, a
+	// contradiction about some OTHER, unattached file used to keep its
+	// unfloored severity. The prompt already forbids both shapes; this is the
+	// enforcement point.
+	verdict.DemoteUnattachedContradictions(pr, fileSourcePaths(c.ContextFiles))
+	if c.FileConsistency != nil {
+		pr.PlanFindings = append(pr.PlanFindings, *c.FileConsistency)
+	}
+	*pr = prependPlanClamp(*pr, c.Clamp)
+}
+
+// mintPlanRunID assigns a plan_run_id when pr does not already carry one.
+// Idempotent by that guard, which is what lets finish() call it
+// unconditionally while the fresh-review path hoists it above store().
+func (c planCallContext) mintPlanRunID(pr *verdict.PlanResult) {
+	if pr.PlanRunID != "" {
+		return
+	}
+	run := c.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
+	pr.PlanRunID = run.ID
+}
+
+// finish runs the post-ladder tail every validate_plan exit path shares:
+// mint the plan_run_id if none exists, add the two per-call advisories, then
+// compute SummaryBlock exactly once with both of those already in place.
+//
+// The advisories land AFTER the ladder and after store() on purpose. Both are
+// minor CategoryOther findings, and verdict.FinalizeVerdict treats a 3rd minor
+// finding as a noise_cluster trigger that lifts the verdict to warn — running
+// either through the ladder would let an advisory about THIS call's arguments
+// flip a plan's verdict. Both also describe this call, not the plan content,
+// so neither may be stored on a cache entry. Order puts deprecation first
+// because it has been PlanFindings[0] since it existed.
+func (c planCallContext) finish(pr *verdict.PlanResult) {
+	c.mintPlanRunID(pr)
+	*pr = prependRepoRootUnusable(*pr, c.RepoRootUnusable)
+	*pr = prependPlanDeprecation(*pr, c.UsedPlanText)
+	pr.SummaryBlock = formatPlanSummary(*pr, c.meta())
+}
+
 // planReviewErrInputs bundles the inputs to handlePlanReviewErr. Carrying
 // these on a struct keeps the helper signature narrow (1 arg vs. 5) and
 // matches CodeScene's "max arguments = 4" code-health threshold.
@@ -83,26 +238,15 @@ type planReviewErrInputs struct {
 	Err        error
 	Model      config.ModelRef
 	PartialRaw []byte
-	Clamp      verdict.Finding
-	// ModelUsed and ReviewMS preserve the real reviewer identifier and elapsed
-	// time captured before the truncation. The chunked path can record these
-	// from earlier successful reviewer calls (Pass-1 + completed chunks); when
-	// non-empty they survive the recovery envelope. Pre-truncation Pass-1
-	// failures leave them empty/zero and the helper falls back to Model.String().
-	ModelUsed string
-	ReviewMS  int64
 	// Prior carries any partial state already collected before the truncation
 	// point (for the chunked path: Pass-1 plan_findings plus complete chunks).
 	// See recoverPartialPlanFindings for the merge semantics.
 	Prior verdict.PlanResult
-	// Source is the caller's pre-rendered provenance string (planSrc.String()),
-	// empty when plan_text was used. Threaded through so the recovery envelope's
-	// summary carries the same source line a successful review would have.
-	Source string
-	// UsedPlanText is args.PlanText != "" from the ValidatePlan call. Threaded
-	// through so the truncation-recovery envelope gets the plan_text
-	// deprecation notice too — see prependPlanDeprecation's doc comment.
-	UsedPlanText bool
+	// Call is the shared post-review tail context, built once by ValidatePlan
+	// and used by BOTH the recovery path here and the fresh-review path there.
+	// Call.ModelUsed may be empty when Pass 1 failed before the provider
+	// reported a model; handlePlanReviewErr falls back to Model.String().
+	Call planCallContext
 }
 
 // handlePlanReviewErr is the ValidatePlan analog of handlePerTaskReviewErr.
@@ -129,26 +273,17 @@ func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolRes
 	if !ok {
 		pr = truncatedPlanResult()
 	}
-	pr = prependPlanClamp(pr, in.Clamp)
-	modelUsed := in.ModelUsed
-	if modelUsed == "" {
-		modelUsed = in.Model.String()
+	call := in.Call
+	if call.ModelUsed == "" {
+		// Pass 1 failed before the provider reported a model.
+		call.ModelUsed = in.Model.String()
 	}
-	meta := planSummaryMeta{ModelUsed: modelUsed, ReviewMS: in.ReviewMS, Source: in.Source}
-	// Mirrors ValidatePlan's fresh-review path (handlers.go): run the
-	// ladder BEFORE the deprecation prepend, not after — prependPlanDeprecation
-	// is a minor CategoryOther finding, and the ladder's noise_cluster
-	// (3rd-minor) trigger must never fire BECAUSE of the deprecation notice.
-	// Feeding it through the ladder first would let a plan_text caller whose
-	// truncation-recovery already carries two other minor findings get
-	// bumped to warn by the deprecation notice alone. finalizePlanVerdict
-	// runs the ladder without touching SummaryBlock, so the deprecation
-	// prepend and the one authoritative formatPlanSummary call can both land
-	// after it, exactly as the non-truncation path does.
+	// Same tail, same order, as ValidatePlan's fresh-review path — minus the
+	// store(), because a truncated result is never cached. See planCallContext.
+	call.applyPreLadder(&pr)
 	finalizePlanVerdict(&pr)
-	pr = prependPlanDeprecation(pr, in.UsedPlanText)
-	pr.SummaryBlock = formatPlanSummary(pr, meta)
-	r, p, err := planEnvelopeResultFinalized(pr, meta)
+	call.finish(&pr)
+	r, p, err := planEnvelopeResultFinalized(pr, call.meta())
 	return r, p, true, err
 }
 

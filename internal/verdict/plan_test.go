@@ -606,3 +606,206 @@ func TestParseTasksOnly_RejectsEmptyFindingStrings(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "criterion is required")
 }
+
+// contradictionResult builds a PlanResult carrying one
+// contradicted_codebase_claim at plan level and one on a task, both at
+// SeverityCritical, with the supplied evidence strings. Critical is
+// deliberate: the category carries no severity floor while it is backed, so
+// a demotion is visible as a drop to minor rather than as a no-op.
+func contradictionResult(planEvidence, taskEvidence string) PlanResult {
+	f := func(evidence string) Finding {
+		return Finding{
+			Severity:   SeverityCritical,
+			Category:   CategoryContradictedCodebaseClaim,
+			Criterion:  "crit",
+			Evidence:   evidence,
+			Suggestion: "sugg",
+		}
+	}
+	return PlanResult{
+		PlanFindings: []Finding{f(planEvidence)},
+		Tasks:        []PlanTaskResult{{TaskIndex: 1, TaskTitle: "Task 1: t1", Findings: []Finding{f(taskEvidence)}}},
+	}
+}
+
+// The demotion is PER FINDING, not per call. Gating the whole sweep on
+// "nothing was attached" meant a single attached file re-armed the unfloored
+// critical severity for a contradiction about a file the reviewer had never
+// been shown — the category carries no severity floor precisely because an
+// attached file is ground truth, so an unbacked one can fail a plan gate over
+// code nobody saw.
+func TestDemoteUnattachedContradictions_IsPerFinding(t *testing.T) {
+	pr := contradictionResult(
+		"/repo/internal/mcpsrv/handlers.go line 12 says otherwise", // backed
+		"internal/other/other.go has no such field",                // NOT backed
+	)
+	DemoteUnattachedContradictions(&pr, []string{"/repo/internal/mcpsrv/handlers.go"})
+
+	assert.Equal(t, CategoryContradictedCodebaseClaim, pr.PlanFindings[0].Category,
+		"a contradiction naming an attached file must survive")
+	assert.Equal(t, SeverityCritical, pr.PlanFindings[0].Severity,
+		"a backed contradiction keeps its unfloored severity")
+
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.Tasks[0].Findings[0].Category,
+		"a contradiction naming no attached file must be demoted even though something was attached")
+	assert.Equal(t, SeverityMinor, pr.Tasks[0].Findings[0].Severity)
+}
+
+// Basename containment is the match, deliberately: the ground rules ask the
+// reviewer to quote the attached file's ABSOLUTE path, but reviewers
+// routinely quote the repo-relative form. Failing open there keeps a
+// legitimate contradiction rather than silently minor-ing it.
+func TestDemoteUnattachedContradictions_MatchesRepoRelativeQuoting(t *testing.T) {
+	pr := contradictionResult("internal/mcpsrv/handlers.go defines no such symbol", "handlers.go:12 disagrees")
+	DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/mcpsrv/handlers.go"})
+
+	assert.Equal(t, CategoryContradictedCodebaseClaim, pr.PlanFindings[0].Category)
+	assert.Equal(t, CategoryContradictedCodebaseClaim, pr.Tasks[0].Findings[0].Category)
+}
+
+// An empty attached set demotes everything — the original all-or-nothing
+// behavior, which is still correct when nothing at all was attached.
+func TestDemoteUnattachedContradictions_EmptyAttachedSetDemotesAll(t *testing.T) {
+	pr := contradictionResult("internal/mcpsrv/handlers.go", "internal/verdict/verdict.go")
+	DemoteUnattachedContradictions(&pr, nil)
+
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.PlanFindings[0].Category)
+	assert.Equal(t, SeverityMinor, pr.PlanFindings[0].Severity)
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.Tasks[0].Findings[0].Category)
+	assert.Equal(t, SeverityMinor, pr.Tasks[0].Findings[0].Severity)
+}
+
+// The path a reviewer names often lands in `criterion`, not `evidence` — the
+// sibling guard suppressUnverifiableCodebaseClaim has read both fields since
+// it existed. Reading evidence alone made a correct, ground-truth refutation
+// vanish from the gate verdict: demoted to a minor unverifiable claim, then
+// force-passed by calibratePlanVerdictForUnverifiableOnly, which rewrites
+// next_action to "No blocking plan-quality findings remain".
+func TestDemoteUnattachedContradictions_MatchesPathInCriterion(t *testing.T) {
+	pr := contradictionResult("the plan's claim is refuted", "the plan's claim is refuted")
+	pr.PlanFindings[0].Criterion = "internal/mcpsrv/handlers.go"
+	pr.Tasks[0].Findings[0].Criterion = "handlers.go:57"
+	DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/mcpsrv/handlers.go"})
+
+	assert.Equal(t, CategoryContradictedCodebaseClaim, pr.PlanFindings[0].Category,
+		"a path in criterion must back the finding just as one in evidence does")
+	assert.Equal(t, SeverityCritical, pr.PlanFindings[0].Severity)
+	assert.Equal(t, CategoryContradictedCodebaseClaim, pr.Tasks[0].Findings[0].Category,
+		"a line-anchored path in criterion must back the finding too")
+}
+
+// The match is on the WHOLE filename. Raw containment accepted a longer name
+// that merely starts with an attached basename — `config.golden` for an
+// attached `config.go` — so a contradiction about a file nobody attached kept
+// its unfloored severity and could fail the gate.
+func TestDemoteUnattachedContradictions_RejectsBasenamePrefixOfLongerName(t *testing.T) {
+	pr := contradictionResult(
+		"testdata/config.golden pins a different value",
+		"the fixture config.golden disagrees",
+	)
+	DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/config/config.go"})
+
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.PlanFindings[0].Category,
+		"config.golden is not config.go: the char AFTER the basename is what rejects it")
+	assert.Equal(t, SeverityMinor, pr.PlanFindings[0].Severity)
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.Tasks[0].Findings[0].Category)
+	assert.Equal(t, SeverityMinor, pr.Tasks[0].Findings[0].Severity)
+}
+
+// The other edge: a longer name ENDING in the attached basename must not
+// match either. `myconfig.go` is not `config.go`.
+func TestDemoteUnattachedContradictions_RejectsBasenameSuffixOfLongerName(t *testing.T) {
+	pr := contradictionResult("myconfig.go has no such field", "src/oldconfig.go disagrees")
+	DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/config/config.go"})
+
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.PlanFindings[0].Category)
+	assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.Tasks[0].Findings[0].Category)
+}
+
+// Fail-open is the design stance, so every quoting style a reviewer actually
+// uses must still bind. Each of these names the attached file at both
+// boundaries and must keep its unfloored severity.
+func TestDemoteUnattachedContradictions_QuotingStylesStillBind(t *testing.T) {
+	for _, evidence := range []string{
+		"/abs/repo/internal/config/config.go says otherwise",
+		"internal/config/config.go says otherwise",
+		"config.go says otherwise",
+		"see `config.go` for the real value",
+		"see \"config.go\" for the real value",
+		"config.go:57 disagrees",
+		"the value lives in config.go.",
+		"config.go, not the plan's file, defines it",
+		"defined in (config.go) already",
+		"the file is config.go",
+	} {
+		pr := contradictionResult(evidence, evidence)
+		DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/config/config.go"})
+		assert.Equal(t, CategoryContradictedCodebaseClaim, pr.PlanFindings[0].Category,
+			"evidence %q must bind to the attached config.go", evidence)
+	}
+}
+
+// The boundary test used to be an ALLOWLIST of the punctuation reviewers had
+// been observed using, which made every character nobody enumerated a false
+// negative — the expensive direction. Each of these forms bound under the
+// pre-inversion raw containment, then stopped binding under the allowlist,
+// and must bind again now that a boundary holds unless the adjacent rune is
+// a filename-token rune.
+func TestDemoteUnattachedContradictions_MarkdownAndPunctuationStillBind(t *testing.T) {
+	for _, evidence := range []string{
+		"**config.go** contradicts the plan",              // bold emphasis
+		"[config.go] contradicts the plan",                // bracketed
+		"config.go#L42 contradicts the plan",              // fragment anchor
+		"config.go; the plan says otherwise",              // semicolon
+		"<config.go> contradicts the plan",                // angle brackets
+		"config.go\u2014line 42 contradicts the plan",     // em-dash, no space
+		"see [config.go](internal/config/config.go) here", // markdown link
+	} {
+		pr := contradictionResult(evidence, evidence)
+		DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/config/config.go"})
+		assert.Equal(t, CategoryContradictedCodebaseClaim, pr.PlanFindings[0].Category,
+			"evidence %q must bind to the attached config.go", evidence)
+		assert.Equal(t, SeverityCritical, pr.PlanFindings[0].Severity,
+			"a backed contradiction keeps its unfloored severity: %q", evidence)
+	}
+}
+
+// The inversion is a denylist of filename-token runes, and `_`/`-` are on it
+// on purpose: this repository's Go files are snake_case, so admitting `_` as
+// a boundary would bind a mention of `plan_parser.go` to an attached
+// `parser.go`. These must therefore still be rejected — including markdown
+// UNDERSCORE emphasis, which is the one quoting style the inversion does not
+// recover. Asterisk emphasis, which is what reviewers actually emit, does
+// bind (see the test above).
+func TestDemoteUnattachedContradictions_FilenameTokenRunesStillReject(t *testing.T) {
+	for _, evidence := range []string{
+		"plan_config.go has no such field",   // `_` before
+		"config.go_old has no such field",    // `_` after
+		"my-config.go has no such field",     // `-` before
+		"config.go-orig has no such field",   // `-` after
+		"_config.go_ has no such field",      // markdown underscore emphasis
+		"config.golden pins another value",   // the original false positive
+		"see myconfig.go for the real value", // letter before
+	} {
+		pr := contradictionResult(evidence, evidence)
+		DemoteUnattachedContradictions(&pr, []string{"/abs/repo/internal/config/config.go"})
+		assert.Equal(t, CategoryUnverifiableCodebaseClaim, pr.PlanFindings[0].Category,
+			"evidence %q must NOT bind to the attached config.go", evidence)
+		assert.Equal(t, SeverityMinor, pr.PlanFindings[0].Severity)
+	}
+}
+
+// Demotion rewrites category and severity ONLY. The observation is still
+// worth surfacing, so the reviewer's prose must survive untouched — an
+// implementation that blanked it would pass a category+severity-only test.
+func TestDemoteUnattachedContradictions_PreservesFindingProse(t *testing.T) {
+	pr := contradictionResult("unbacked evidence text", "other unbacked evidence")
+	DemoteUnattachedContradictions(&pr, nil)
+
+	for _, f := range []Finding{pr.PlanFindings[0], pr.Tasks[0].Findings[0]} {
+		assert.Equal(t, "crit", f.Criterion, "criterion must survive demotion")
+		assert.Equal(t, "sugg", f.Suggestion, "suggestion must survive demotion")
+	}
+	assert.Equal(t, "unbacked evidence text", pr.PlanFindings[0].Evidence)
+	assert.Equal(t, "other unbacked evidence", pr.Tasks[0].Findings[0].Evidence)
+}

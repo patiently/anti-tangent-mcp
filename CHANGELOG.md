@@ -5,6 +5,271 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2026-09-02
+
+### Added
+- **`context_paths` on `validate_plan`.** Absolute paths to source files the plan makes claims
+  about. The server reads them whole and renders them ahead of the plan, and the reviewer's
+  ground rules are rewritten to enumerate exactly what is attached: for those files absence is
+  evidence, and everything else stays black-box. The reviewer verifies codebase claims instead
+  of emitting `unverifiable_codebase_claim` for each one. **Opt-in and materially expensive** —
+  a 170KB plan with ~100K tokens of attachments runs roughly $1.31 per round on the default
+  plan model, against cents without them. Attach only the files the plan actually touches.
+  Oversized attachments are refused, never truncated: the reviewer is told attached files are
+  complete, and a silently-shortened file would turn that promise into false findings.
+- **`contradicted_codebase_claim`.** A new finding category for a plan claim an attached file
+  refutes. When an attached file backs it, it carries no severity floor — the file is ground truth
+  read from disk, so the reviewer's chosen severity stands — and it is neither rolled into the
+  `codebase_reference_checklist` nor force-passed by the unverifiable-only verdict calibration. A
+  contradiction the attached set does NOT back is demoted server-side to
+  `unverifiable_codebase_claim`, and from there it is floored to minor, rolled up and force-passable
+  like any other unverifiable claim. `docs/protocol/core.md` states the rule with that
+  qualification.
+- **Order-aware Create/Modify consistency check.** Deterministic and reviewer-free, with two
+  independently-gated tiers rather than one combined AND check. Order tier (always runs): a
+  `Modify:` target whose earliest `Create:` bullet in the plan belongs to a later task is
+  flagged from plan text alone, regardless of what's on disk — an already-implemented worktree
+  does not excuse a genuine ordering bug. Disk tier (needs `repo_root`): reached only for a
+  `Modify:` target that no task creates at all, and flags it if it also doesn't exist on disk.
+  Either tier emits one plan-level `task_order_contradiction` finding. The mirror check —
+  flagging a `Create:` target that already exists — is deliberately absent: measured on a real
+  plan it produced 9 false positives, every one of them because an earlier task had already been
+  implemented in the worktree, which is a legitimate state for a resumed plan run.
+- **`repo_root` on `validate_plan`** — optional absolute path that enables the disk tier of that
+  check. Without it the order tier still runs.
+- **`ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES`** (default 131072) and
+  **`ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES`** (default 524288) — per-file and whole-set byte
+  caps for `validate_plan`'s new `context_paths` attachments. Separate from the plan cap so an
+  oversized attachment set is refused with its own actionable message.
+
+### Changed
+- `docs/protocol/controller.md`'s per-call cost figure for the plan gate was stale — it
+  advertised ~$0.01–$0.02, which was already wrong for a large plan and off by roughly 50× with
+  attachments. It now carries real numbers for both cases, and `core.md`'s FAQ (which still
+  quoted the old figure) points at it.
+- `docs/protocol/authoring.md` gains §3.9, documenting the literal `**Files:**` bullet syntax the
+  Create/Modify check parses — verbs, backticked or bare paths, `Create/Modify:`, trailing
+  parentheticals and line anchors. The check has always keyed on that structure and it was
+  documented nowhere authors look.
+- `core.md`'s `payload_too_large` FAQ names the `validate_plan` and `context_paths` caps, not just
+  the shared `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
+- `docs/protocol/controller.md` §5.8 says what an unusable `repo_root` produces — a minor
+  `criterion: repo_root` finding, verdict unchanged, disk tier skipped. Controllers act on the
+  findings list, and an unexplained entry there is an operational question at gate time.
+- Three stale doc claims corrected: `authoring.md` §3.9 said `**Files:**` bullets "MUST have a
+  space after the marker" (the parser accepts `-Create:`; the space governs only the
+  unrecognized-verb fallback); `.claude-plugin/marketplace.json` still advertised the plugin as
+  loading "the full INTEGRATION.md ... instead of ~10k tokens", stale since the role-scoped
+  split; and README hardcoded "the chunked (>8-task) path" where
+  `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` is documented as tunable. README's env table also now
+  documents the relation between the two `context_paths` caps.
+- README's prompt-caching claim was wrong in both directions: only the Anthropic client sends a
+  cache breakpoint, and only on the chunked path — single-call plans and the OpenAI/Google clients
+  re-send the whole attached set every call. README's context-window sizing guidance now accounts
+  for the attachment bytes re-sent alongside the plan.
+- `plugin/anti-tangent-protocol` is version 0.2.0 (bundled protocol content changed). Nothing in
+  the release workflow bumps it, so it is bumped by hand here, together with its
+  `.claude-plugin/marketplace.json` entry.
+- **`stats` `payload_bytes` changed meaning on `validate_plan` events in 0.17.0**, with no events
+  schema version marker (a schema bump is deliberately out of scope for this release). It now
+  includes the `context_paths` bytes, and on a chunked round those bytes are multiplied by the
+  number of reviewer calls, because the whole attached set is re-sent on every call. A cache HIT
+  makes no reviewer call, so it bills the attached set exactly once. Plan text is
+  deliberately NOT multiplied, so rows from calls without `context_paths` stay comparable with
+  pre-0.17.0 history. Treat `payload_bytes` on rows carrying attachments as a new series.
+- A bad `repo_root` no longer kills the review. It resolves BEFORE any attachment is read (a typo
+  used to throw away every file the server had just read off disk) and, on failure, degrades to
+  skipping the Create/Modify disk tier instead of failing the whole call over an optional
+  argument. That degradation is now **visible in-band**: the response carries a minor
+  `repo_root unusable (<reason>); Create/Modify disk tier skipped` finding as well as the stderr
+  warning. Without it the envelope, summary and findings were byte-identical to a call that never
+  passed `repo_root` — including for a plain relative path, which is an ordinary caller bug — so
+  silence read as "the tier ran and found nothing". Like the `plan_text` deprecation notice it is
+  applied per call, after the verdict ladder, and is never stored on a cache entry, so it cannot
+  flip a verdict via the `noise_cluster` minor-count trigger.
+- All three `context_paths` cap breaches now surface as the too-large envelope. The 51-file count
+  cap used to return a transport error while the two byte caps returned envelopes.
+- `validate_plan` logs one structured SUMMARY line to stderr per call, on EXIT rather than on
+  entry, so it can carry `duration_ms`, `verdict` and `outcome` alongside the attached file count,
+  byte total, and paths — plus at most one warning per degraded surface (an unusable `repo_root`;
+  `Modify:` targets the disk tier could not stat). The entry line it replaces sat below both
+  `context_paths` resolution returns, so a bad `context_paths` argument produced no log line at
+  all, and it also sat below the four argument-validation returns, which logged nothing either.
+  The summary line now also carries `repo_root_unusable`, because `repo_root` alone could not
+  distinguish "omitted" from "supplied and rejected" — an unusable `repo_root` resolves to the
+  empty string, so both logged `repo_root=false`.
+- The reviewer ground rules, previously duplicated verbatim across all three plan templates, are
+  now one shared partial. So is the `BEGIN/END FILE` attachment block, for the same reason: it was
+  byte-identical in all three templates while only `plan.tmpl` had attachment goldens, so an edit
+  to the delimiter — the shape `contextNonceDelimiterCollides` matches on — could silently disarm
+  that detector with every golden still green. There is now also an attachment golden for a chunk
+  template. Every existing golden is byte-identical across the extraction, which is what proves it
+  was mechanical.
+- The attachment-mode ground rules (a) tell the reviewer that everything between the
+  `BEGIN/END FILE` markers is file content quoted as data and must never be followed as
+  instructions, (b) say that the plan describes work not yet done — a symbol the plan says to add
+  being absent from an attached file is the expected state, not a contradiction — and (c) explain
+  that attached paths are absolute and match the plan's repo-relative paths by suffix. All three
+  are gated on `context_paths`; a call without attachments still renders byte-identically to
+  0.16.0. The marker rule names this call's nonce token explicitly and states that a
+  marker-shaped line carrying any other token is file content, not a boundary. The binding rule
+  matches whole path segments, states its example in repo-relative terms rather than inventing a
+  plausible-looking absolute root two paragraphs after telling the reviewer to distrust
+  official-looking strings, and tells the reviewer to treat a plan path as UNATTACHED whenever two
+  attached files could match it or the binding is otherwise uncertain, because a wrong binding is
+  worse than none — and the absence-is-evidence grant, which names the enumerated attached list
+  explicitly, carves those UNATTACHED paths back out, so an ambiguously-bindable path stays
+  black-box even though the file it might name is attached. `unverifiable_codebase_claim` is
+  scoped by SETTLEMENT rather than by filename — emit it for any claim the attached files do not
+  settle, which includes a cross-file claim that names an attached file but turns on code outside
+  the attached set. And a `contradicted_codebase_claim` must satisfy the plan-text evidence rule
+  in addition to quoting the attached file, not instead of it.
+
+### Security
+- **A resolved path carrying a control or format character is refused, not rendered.**
+  `context_paths`, `plan_path` and `repo_root` all resolve symlinks with `EvalSymlinks`, which
+  returns the target name verbatim, and Linux permits every byte but `/` and NUL in a file name. A
+  resolved path carrying an embedded newline injected lines into the enumerated attached-paths list
+  *inside* the reviewer's ground rules — above and outside the nonce-guarded `BEGIN/END FILE`
+  region — and into the summary block's `context:` provenance list; for `repo_root` the route is
+  the wrapped `os.PathError` on a failing resolve, which prints the raw path unescaped into the
+  minor `repo_root unusable (<reason>)` finding. A resolved path is now rejected outright when it
+  carries any C0 control (`< 0x20`), DEL (`0x7f`), U+2028 or U+2029 (which are line breaks to a
+  model reading the prompt), or any Unicode format character — which covers U+202E
+  RIGHT-TO-LEFT OVERRIDE, the Trojan-Source class (CVE-2021-42574), and the invisible U+200B. The
+  refusal names the offending code point (`disallowed control or format character U+XXXX`) and the
+  remedy — rename the file, or drop it from `context_paths` — because "control character" alone is
+  a misnomer for a category that includes format characters such as a soft hyphen, and `%q` alone
+  left the operator decoding an escape by hand. README documents the refusal.
+  For `repo_root` the check runs **before** `EvalSymlinks` as well as after: the wrapped
+  `*fs.PathError` from a failing resolve interpolates the path unquoted, so the post-resolution
+  check — which only runs when resolution succeeds — could never see it. The outer `%q` escapes
+  its own copy and does not help. (Reported by CodeRabbit on PR #63.)
+- **`context_paths` sends file contents verbatim to the configured reviewer vendor.** Everything
+  the caller attaches is transmitted to whichever third-party API `ANTI_TANGENT_PLAN_MODEL`
+  names, in full, on every reviewer call of the round. Attach only what the plan makes claims
+  about, and set `ANTI_TANGENT_PLAN_ROOTS` to bound what the server will read on the caller's
+  behalf. The tool description now says so at the call site.
+
+### Fixed
+- **The `Create:`/`Modify:` disk tier no longer follows a symlink out of the repository.**
+  `resolveUnderRoot` rejects lexical traversal (`../../etc/passwd`) but is purely textual, and
+  `os.Stat` follows symlinks — so a link living inside `repo_root` but pointing outside it made the
+  check answer "does this path exist anywhere on this machine" rather than "does this file exist in
+  the repository". The parent directory is now symlink-resolved and required to stay under the root
+  before the leaf is stat'd. The leaf uses `Lstat`: a symlink the repository contains *is* a file
+  the repository contains, and `Stat` reported every dangling in-repo link as missing — a false
+  positive that is now fixed as a side effect. (Reported by CodeRabbit on PR #63.)
+- **`./a.go` and `a.go` are one file in the order-aware check.** `cleanRefPath` preserved each
+  bullet's raw spelling, so `Modify: ./a.go` in an early task and `Create: a.go` in a later one
+  were unrelated map keys and the contradiction went unreported. Repo-relative paths are now
+  canonicalised with `path.Clean`. URLs and absolute paths are left untouched — `path.Clean`
+  collapses the `//` in `https://example.com/a.go`, and absolute paths are refused upstream anyway.
+  This was only ever visible without `repo_root`, since the disk tier would otherwise have caught
+  it. (Reported by CodeRabbit on PR #63.)
+- **Two roots-allowlist tests could pass without exercising the branch they pin.** The
+  outside-roots and symlink-escape tests in `context_files_test.go` passed a raw `t.TempDir()` as
+  the root while `resolveFileInput` compares the symlink-*resolved* candidate against it. Where an
+  ancestor of the temp directory is itself a symlink (macOS `/tmp` → `/private/tmp`), every path
+  failed the roots check because the root never matched — and both tests, which only assert that
+  *an* error occurred, would have passed while covering nothing. Both now resolve the root first,
+  as `TestResolveDirInput_RootsAllowlist` already did. (Reported by CodeRabbit on PR #63.)
+- **Line-anchored `Modify:` bullets no longer produce phantom "does not exist" findings.** Plans
+  routinely anchor a file reference to the lines being edited (`- Modify: internal/x.go:57-70`)
+  — the convention superpowers' task-format reference asks for. The Create/Modify consistency
+  check kept the anchor as part of the path, so the disk tier stat'd `internal/x.go:57-70`, a
+  path that can never exist, and the order tier never matched the anchored form against its
+  unanchored `Create:` twin. A trailing `:N`, `:N-M`, `:N,M`, or a repeated form such as the
+  `line:column` an editor emits (`internal/x.go:57:12`) is now stripped before either tier looks
+  at the path.
+- **The Create/Modify order tier now orders tasks by position, not by their declared number.**
+  Tasks execute in the order they appear in the plan, but nothing forces `### Task N:` headings
+  to be ascending 1..N — two corpus plans already restart numbering mid-file for phases. The
+  comparison used the declared number, so a correctly-ordered plan whose numbers restart drew a
+  bogus blocking finding, and a genuinely out-of-order plan whose numbers descend was silently
+  missed. Findings still name tasks by the plan's own numbers.
+- **The disk tier only reports "does not exist" for a genuine not-exists.** A permission or I/O
+  error from `os.Stat` now leaves the target alone instead of being reported as missing, and
+  surfaces instead as a single aggregated stderr warning per call carrying the count plus the first
+  path and error. So an unreadable `repo_root` no longer makes the whole disk tier silently inert —
+  and, because the warning is emitted once rather than from inside the nested loop over every
+  `Modify:` bullet of every task, it cannot bury stderr under hundreds of lines for one call.
+- **`contradicted_codebase_claim` is suppressed server-side unless an attached file backs it.**
+  The category deliberately carries no severity floor, because an attached file is ground truth —
+  so a reviewer emitting one about code it never saw could fail a plan gate at `major`. Any such
+  finding naming none of the attached files is demoted to `unverifiable_codebase_claim` (floored to
+  minor), independent of whether the reviewer obeyed the prompt's prohibition. The test is per
+  finding, not per call: gating it on "nothing was attached at all" meant a single attached file
+  re-armed the unfloored severity for a contradiction about some other, unattached file.
+  Both `evidence` and `criterion` are read, matching the sibling `validate_task_spec` guard —
+  reviewers routinely name the file in `criterion`, and reading `evidence` alone would demote a
+  correct, ground-truth refutation to a minor unverifiable claim, which the unverifiable-only
+  calibration then force-passes with "No blocking plan-quality findings remain". The attached file's
+  basename must be bounded at BOTH ends by something that cannot be part of a filename, so
+  `config.golden` and `myconfig.go` are not mentions of `config.go`. A boundary is anything that is
+  not a letter, digit, `_` or `-` — stated as what breaks a filename rather than as a list of the
+  punctuation reviewers were observed using, so a quoting style nobody enumerated fails OPEN
+  rather than silently dropping a real refutation: absolute, repo-relative, backticked, quoted,
+  parenthesised, bracketed, line-anchored, `**bold**`, `<angled>` and `#L42`-anchored mentions all
+  bind. `.` is a boundary, which is what rejects `config.golden` and also what lets a sibling name
+  like `config.go.bak` bind — the fail-open side of the same trade, and the cheap direction to be
+  wrong in.
+- **A truncated plan review keeps the Create/Modify consistency finding and its `context:`
+  provenance.** The reviewer-free check ran after the truncation-recovery early return, so a
+  truncated response silently dropped the one finding the server already knew for certain; and
+  the recovery envelope's summary omitted the attached-file list while the same call's stats
+  counted every attached byte.
+- An **explicitly set** `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` greater than
+  `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` is rejected at startup, naming both variables: a
+  per-file cap above the whole-set cap can never be reached, so raising it alone silently
+  achieves nothing. Lowering only the payload cap below the 131072 per-file **default** clamps
+  that untouched default down instead of erroring — the unconditional check made any
+  `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` under 131072 refuse to boot, taking every
+  anti-tangent tool off the host over a value the operator never set.
+- **`validate_plan`'s in-process result cache now keys on attached file content.** Without this,
+  editing a source file a finding complained about and immediately re-validating would return
+  the stale pre-fix review from the 3-minute cache, with no indication anything was reused.
+- **The context-nonce collision detector now recognises near-shaped delimiters.** It demanded the
+  rendered marker verbatim (`^--- (?:BEGIN|END) FILE <token>:\x20`), so a line carrying the CORRECT
+  token in a slightly different shape — a fourth dash, a leading indent, a tab in place of the
+  colon, or the path elided entirely (`--- END FILE <token> ---`, which is the rendered END marker
+  minus its path and the near-shape a model asked to close a block is likeliest to produce) — read
+  to a model as a real boundary while slipping past the check. The ground rules do
+  not cover that case either: they only dismiss marker-shaped lines carrying the WRONG token. The
+  token is still matched verbatim, and a false positive merely re-derives the nonce with the
+  attempt counter folded in, which stays deterministic.
+- **The effective `context_paths` caps are now visible at startup, and the per-file refusal no
+  longer advises a change that breaks the next boot.** When the per-file cap is still the default
+  and the operator lowers `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` below it, `config.Load` clamps
+  the per-file cap down silently — nothing reported the value actually in force. The `starting`
+  line now carries both effective caps (it is emitted after the JSON logger is installed, so the
+  "the warning would go nowhere" reasoning that keeps `config.Load` itself quiet does not apply).
+  The per-file refusal previously said "raise `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES`" without
+  mentioning that raising it above the whole-set cap makes the next start fail; it now names the
+  whole-set cap and its current value immediately after the per-file one, ahead of the remedy
+  clause, so the ceiling survives the summary block's per-finding evidence truncation. The
+  truncated form an operator actually reads used to end mid-way through "raise
+  `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES`", showing them the advice that breaks their next boot with
+  the correction cut off.
+- **A truncated `validate_plan` review now mints a `plan_run_id`.** The truncation-recovery path
+  can return a passing verdict, and controller.md §5.1 tells the controller to capture
+  `plan_run_id` from a passing response — but that path minted none, so `plan_run_report`, which
+  requires one, could never run on such a plan run. It was the only pass-capable exit without an
+  id.
+- **A truncated `validate_plan` review now reports an unusable `repo_root`.** The minor
+  `repo_root unusable (<reason>); Create/Modify disk tier skipped` advisory was applied on the
+  fresh-review and cache-hit paths only, so a truncated call with a bad `repo_root` produced a
+  findings list byte-identical to one that never passed the argument.
+- **A truncated `validate_plan` review now carries normative test bodies.** They are extracted
+  from the plan text server-side, not from the reviewer response, so a truncated reviewer reply
+  is no reason for the recovered per-task results to lose them.
+- The three post-review tails inside `validate_plan` (fresh review, truncation recovery, cache
+  hit) are now assembled from one shared `planCallContext` instead of being hand-written at each
+  site. The three fixes above were all the same defect — the recovery site drifting from the
+  other two — found one field at a time across three review rounds. The verdict ladder stays
+  deliberately outside the shared helper: the cache-hit path must never re-run it on an
+  already-finalized entry.
+
 ## [0.16.0] - 2026-08-31
 
 ### Added

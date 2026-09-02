@@ -183,3 +183,23 @@ func TestFormatPlanSummarySource(t *testing.T) {
 		assert.NotContains(t, out, "source:")
 	})
 }
+
+func TestFormatPlanSummary_ContextFiles(t *testing.T) {
+	pr := verdict.PlanResult{PlanVerdict: verdict.VerdictPass, PlanQuality: verdict.PlanQualityActionable}
+	out := formatPlanSummary(pr, planSummaryMeta{
+		ModelUsed: "anthropic:m",
+		ContextFiles: []fileSource{
+			{Path: "/repo/a.go", Bytes: 1204, SHA256: "9f2ab41c00"},
+			{Path: "/repo/b.go", Bytes: 22, SHA256: "3c1af09b00"},
+		},
+	})
+	assert.Contains(t, out, "context:       2 files, 1226 B")
+	assert.Contains(t, out, "/repo/a.go")
+	assert.Contains(t, out, "/repo/b.go")
+}
+
+func TestFormatPlanSummary_NoContextFilesOmitsLine(t *testing.T) {
+	pr := verdict.PlanResult{PlanVerdict: verdict.VerdictPass, PlanQuality: verdict.PlanQualityActionable}
+	out := formatPlanSummary(pr, planSummaryMeta{ModelUsed: "anthropic:m"})
+	assert.NotContains(t, out, "context:")
+}

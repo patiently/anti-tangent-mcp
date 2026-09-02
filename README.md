@@ -208,6 +208,15 @@ ANTI_TANGENT_LOG_LEVEL=info
 # ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES=1048576 # optional override; unset falls back to max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES) — raising the shared cap above raises this too; setting this always wins, even below the shared cap
 ANTI_TANGENT_PLAN_ROOTS=                      # OS path-list separator (":" on Unix, ";" on Windows) list of absolute roots; empty = unrestricted
 
+# validate_plan context_paths attachments (design 2026-09-01)
+ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES=131072    # per-file cap for context_paths attachments; oversized files are refused, never truncated
+ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES=524288 # cap for the attached set as a whole
+# The two are related: a per-file cap above the whole-set cap can never be reached. Setting
+# ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES explicitly above ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES
+# is a startup error (the raise would achieve nothing); lowering only the payload cap below the
+# 131072 default clamps the untouched per-file default down to it, and the server still boots.
+# context_paths also caps at 50 files total — fixed, not env-configurable
+
 # Output budgets + chunking (v0.1.4+):
 ANTI_TANGENT_PER_TASK_MAX_TOKENS=4096    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion); raise if a stateful hook returns a truncation finding
 ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # output cap per reviewer call in validate_plan (single-call and per-chunk); raise if plan validation returns a truncation finding
@@ -344,12 +353,33 @@ always wins over that default, even to a value lower than `ANTI_TANGENT_MAX_PAYL
 
 The 1MB default for `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES` is not itself a hard ceiling — the real
 limit is whatever context window `ANTI_TANGENT_PLAN_MODEL` has, since the chunked `validate_plan` path
-resends the full plan text on every Pass-1 and per-chunk reviewer call. That is comfortably true
-for the two Anthropic models this project defaults to (`claude-sonnet-4-6` and `claude-opus-4-7`,
-both 1M-token context), but not for `claude-haiku-4-5-20251001` (200K context) or for most of the
-allowlisted OpenAI/Google models — check that model's context window before pointing a fast/cheap
+resends the full plan text on every Pass-1 and per-chunk reviewer call. `context_paths` sits on top
+of that and is NOT covered by the plan cap: up to `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` (512KB by
+default) of attachments is re-sent alongside the plan on every one of those calls, so size the
+context window against plan bytes plus attachment bytes, not plan bytes alone. Both caps together
+fit comfortably in the two Anthropic models this project defaults to (`claude-sonnet-4-6` and
+`claude-opus-4-7`, both 1M-token context), but not in `claude-haiku-4-5-20251001` (200K context)
+or in most of the allowlisted OpenAI/Google models — check that model's context window before pointing a fast/cheap
 tier at plans anywhere near the 1MB cap, and prefer `claude-sonnet-4-6` / `claude-opus-4-7` for
 those.
+
+`context_paths` and `repo_root` are governed by the same `ANTI_TANGENT_PLAN_ROOTS` allowlist as
+`plan_path` — restricting one restricts all three.
+
+A file whose resolved path contains a control or Unicode format character (an embedded newline, a
+right-to-left override, a zero-width space, a soft hyphen) is **refused**, not attached: the path
+is rendered into the reviewer's ground rules and into the summary block's `context:` list, both of
+which a reader treats as server output. The error names the offending code point as `U+XXXX`;
+rename the file, or drop it from `context_paths`.
+
+**Attachments are almost never cached.** Only the Anthropic client sends an explicit cache
+breakpoint, and only on the chunked path (plans above `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK`
+tasks, default 8) — `reviewPlanSingle` sets no `CachePrefix`,
+and its parse-retry resends the whole rendered user message. So a single-call plan pays full
+price for its attachments on every call, and so does every call when `ANTI_TANGENT_PLAN_MODEL`
+names an OpenAI or Google model, since those clients have no prompt-cache support at all. Budget
+for the attached set being re-sent in full on every reviewer call unless you are on a chunked
+Anthropic round.
 
 ## Use with Claude Code (`.mcp.json`)
 
@@ -419,7 +449,7 @@ Adding a new model is a one-line change in [`internal/providers/reviewer.go`](in
 
 ## The 7 tools
 
-- `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings and mints a `plan_run_id`. Accepts `plan_path` (v0.16.0+, preferred) with an absolute path, or `plan_text` (deprecated, removed in 1.0.0) — see "File-path inputs and the trust model" above.
+- `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings and mints a `plan_run_id`. Accepts `plan_path` (v0.16.0+, preferred) with an absolute path, or `plan_text` (deprecated, removed in 1.0.0) — see "File-path inputs and the trust model" above. Also accepts `context_paths` (v0.17.0+, absolute paths to source files the plan makes claims about; opt-in and materially more expensive — see above) and `repo_root` (v0.17.0+, absolute) to enable the disk tier of a deterministic Create/Modify consistency check.
 - `validate_task_spec` — call once before coding. Returns findings on missing goals, weak acceptance criteria, unstated assumptions. Returns a `session_id` you thread through the next two calls. Accepts the controller's `plan_run_id` (optional, best-effort) to tie the task to its plan run.
 - `check_progress` — call at checkpoints during implementation. Catches scope drift, untouched ACs, and unaddressed prior findings.
 - `validate_completion` — call before claiming done. Walks every AC and non-goal explicitly. Accepts an optional structured `codescene` argument (see "Companion tool: CodeScene MCP" above).

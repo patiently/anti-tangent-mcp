@@ -121,7 +121,7 @@ Two failure modes to avoid: (1) leaking consumer code or naming into a public is
 
 ## Logging Conventions
 
-Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). One log line per hook call. Set `ANTI_TANGENT_LOG_LEVEL=debug` to also log prompts and provider responses.
+Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). `validate_plan`, `prime_project_knowledge` and `extract_project_knowledge` each emit one summary line per call, on exit so it can carry the verdict and the duration — plus, where a call degraded rather than failed, at most one warning per degraded surface. A warning must be aggregated to one line per call, never emitted from inside a per-item loop. The other four tools (`validate_task_spec`, `check_progress`, `validate_completion`, `plan_run_report`) emit no per-call line today; that is a gap, not a design choice — if you add logging to one of them, follow the same exit-line shape. Set `ANTI_TANGENT_LOG_LEVEL=debug` to also log prompts and provider responses.
 
 ## What This Repo Is Not
 

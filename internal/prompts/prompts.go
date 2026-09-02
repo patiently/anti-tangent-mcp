@@ -3,8 +3,13 @@ package prompts
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -85,6 +90,19 @@ type File struct {
 	Content string
 }
 
+// ContextFile is one source file attached to validate_plan via context_paths.
+// Path is the symlink-resolved path actually read, and SHA256Short is the
+// first 8 hex digits — the same provenance the summary block shows — so the
+// reviewer can cite a file by the identity the human will see. Content is the
+// COMPLETE file: the ground rules promise the reviewer that absence within an
+// attached file is evidence, which is only true if nothing was truncated.
+type ContextFile struct {
+	Path        string
+	Bytes       int
+	SHA256Short string
+	Content     string
+}
+
 type PreInput struct {
 	Spec             session.TaskSpec
 	ProjectKnowledge string
@@ -115,6 +133,20 @@ type PlanInput struct {
 	PlanText         string
 	ProjectKnowledge string
 	Mode             string
+	ContextFiles     []ContextFile
+	// ContextFilesNonce pairs the BEGIN/END FILE delimiters around each
+	// attached file so a decoy delimiter-shaped line inside attached content
+	// (this repo's own templates, golden files, and docs all contain literal
+	// "--- END FILE: ... ---" lines) cannot be mistaken for the real
+	// terminator. Left empty, RenderPlan/RenderPlanFindingsOnly derive one
+	// DETERMINISTICALLY from ContextFiles (see DeriveContextFilesNonce), so
+	// two renders of the SAME attachment set produce byte-identical
+	// output — required for mcpsrv's plan-pass cache to ever hit on a
+	// context_paths call, the calls that cost the most. An explicitly-set
+	// value always wins over the derived one, which is how tests pin a
+	// stable golden or exercise a nonce that deliberately does not match
+	// content (see NewContextFilesNonce).
+	ContextFilesNonce string
 }
 
 type KBIndexEntry struct {
@@ -189,7 +221,156 @@ func RenderPost(in PostInput) (Output, error) {
 	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
+// NewContextFilesNonce returns a fresh random hex token (crypto/rand-backed).
+// The production render path does NOT call this: RenderPlan,
+// RenderPlanFindingsOnly, and RenderPlanTasksChunk derive a DETERMINISTIC
+// nonce from ContextFiles via DeriveContextFilesNonce whenever
+// ContextFilesNonce is left unset, so that two separate renders of the same
+// attachment set produce byte-identical prompts (mcpsrv's plan-pass cache
+// hashes the rendered prompt text; a random per-render nonce would make
+// every validate_plan call carrying context_paths a permanent cache miss —
+// exactly the calls that cost the most). NewContextFilesNonce stays exported
+// for tests that want an explicit override which deliberately does NOT
+// match the attached content, e.g. to prove an explicitly-set
+// ContextFilesNonce always wins over the derived value.
+func NewContextFilesNonce() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failing is effectively unreachable on supported
+		// platforms; a fixed fallback keeps this usable rather than panicking.
+		return "00000000"
+	}
+	return hex.EncodeToString(b)
+}
+
+// contextNonceHexLen is the length, in hex characters, of a context-files
+// nonce — whether derived (DeriveContextFilesNonce) or random
+// (NewContextFilesNonce).
+const contextNonceHexLen = 8
+
+// contextNonceMaxAttempts bounds DeriveContextFilesNonce's belt-and-braces
+// collision retry loop. Reachable only if a derived token happens to appear,
+// verbatim, as a delimiter-shaped line inside the very content it was
+// derived from — a hash-preimage problem, not something constructible by
+// accident (or, for an attacker, without already knowing the hash they are
+// trying to produce). The cap exists so the loop cannot spin forever;
+// hitting it is a bug report, not a plan-authoring mistake.
+const contextNonceMaxAttempts = 1000
+
+// contextNonceDelimiterCollides reports whether token appears, at the start
+// of a line, as either half of the BEGIN/END FILE delimiter shape inside any
+// attached file's content — the situation DeriveContextFilesNonce's retry
+// loop exists to catch.
+//
+// The pattern is deliberately LOOSER than the shape context_files.tmpl
+// renders. What matters is not whether a line is byte-identical to a real
+// delimiter, but whether a model reading the prompt could take it for one —
+// and `----BEGIN FILE <tok>:`, a leading-indented `  --- BEGIN FILE <tok>:`,
+// or a tab in place of the colon all read as delimiters while failing an
+// exact-shape test. The ground rules tell the reviewer that a marker-shaped
+// line carrying the WRONG token is content; they say nothing that would
+// help against a near-shape carrying the RIGHT one, which is precisely the
+// case this detector has to cover.
+//
+// Widening costs almost nothing. A false positive here re-derives the nonce
+// with the attempt counter folded into the hash and tries again — still
+// deterministic, so the plan-pass cache key is unaffected — and the retry
+// loop is bounded by contextNonceMaxAttempts.
+//
+// The token itself is still matched verbatim (QuoteMeta), so a line carrying
+// any other token is not a collision at any spelling.
+//
+// What may follow the token is either the `:`/tab the rendered marker uses,
+// OR the closing dashes with nothing between — `--- END FILE <tok> ---`.
+// That last shape is the rendered END marker minus its path, which is the
+// near-shape a model asked to close a block is likeliest to produce, and it
+// carries no separator at all. It stays distinct from the deliberate
+// non-collision `--- BEGIN FILE <tok> /a.go ---`: that line has CONTENT
+// between the token and the dashes, so the alternation's `[ \t]*-{3,}[ \t]*$`
+// does not reach.
+func contextNonceDelimiterCollides(files []ContextFile, token string) bool {
+	re := regexp.MustCompile(`(?m)^[ \t]*-{3,}[ \t]*(?:BEGIN|END)[ \t]+FILE[ \t]+` + regexp.QuoteMeta(token) + `(?:[ \t]*[:\t]|[ \t]*-{3,}[ \t]*$)`)
+	for _, f := range files {
+		if re.MatchString(f.Content) {
+			return true
+		}
+	}
+	return false
+}
+
+// DeriveContextFilesNonce computes a DETERMINISTIC nonce from the attached
+// files' identity and content, so that two separate renders of the SAME
+// attachment set produce a byte-identical prompt:
+//
+//	nonce = first contextNonceHexLen hex chars of
+//	        sha256(for each file, in order: Path || 0x00 || Content || 0x00)
+//
+// Determinism matters because mcpsrv's plan-pass cache hashes the fully
+// rendered prompt text as its cache key; a nonce that varied per render
+// would make every validate_plan call carrying context_paths a permanent
+// cache miss even when the caller repeats an identical call inside the
+// cache TTL.
+//
+// Uncollidability is preserved despite determinism: the token is a hash of
+// the very content it delimits, so content cannot contain a matching
+// delimiter line except via a hash preimage — not constructible by
+// accident, and not by an attacker either, since producing a specific token
+// requires already knowing the hash of the content they are trying to
+// smuggle it into.
+//
+// Belt-and-braces: after deriving, the content is scanned
+// (contextNonceDelimiterCollides) for the token as a delimiter-shaped line.
+// On a hit — which should be unreachable — the hash input is re-derived with
+// a retry counter folded in and tried again, up to contextNonceMaxAttempts
+// times, after which an error is returned rather than looping forever.
+func DeriveContextFilesNonce(files []ContextFile) (string, error) {
+	for attempt := 0; attempt < contextNonceMaxAttempts; attempt++ {
+		h := sha256.New()
+		for _, f := range files {
+			h.Write([]byte(f.Path))
+			h.Write([]byte{0})
+			h.Write([]byte(f.Content))
+			h.Write([]byte{0})
+		}
+		if attempt > 0 {
+			h.Write([]byte(strconv.Itoa(attempt)))
+		}
+		token := hex.EncodeToString(h.Sum(nil))[:contextNonceHexLen]
+		if !contextNonceDelimiterCollides(files, token) {
+			return token, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"prompts: could not derive a collision-free context files nonce after %d attempts", contextNonceMaxAttempts)
+}
+
+func ensureContextFilesNonce(in PlanInput) (PlanInput, error) {
+	if len(in.ContextFiles) > 0 && in.ContextFilesNonce == "" {
+		nonce, err := DeriveContextFilesNonce(in.ContextFiles)
+		if err != nil {
+			return in, err
+		}
+		in.ContextFilesNonce = nonce
+	}
+	return in, nil
+}
+
+func ensureContextFilesNonceChunk(in PlanChunkInput) (PlanChunkInput, error) {
+	if len(in.ContextFiles) > 0 && in.ContextFilesNonce == "" {
+		nonce, err := DeriveContextFilesNonce(in.ContextFiles)
+		if err != nil {
+			return in, err
+		}
+		in.ContextFilesNonce = nonce
+	}
+	return in, nil
+}
+
 func RenderPlan(in PlanInput) (Output, error) {
+	in, err := ensureContextFilesNonce(in)
+	if err != nil {
+		return Output{}, err
+	}
 	body, err := render("plan.tmpl", in)
 	if err != nil {
 		return Output{}, err
@@ -205,12 +386,26 @@ type PlanChunkInput struct {
 	ProjectKnowledge string
 	ChunkTasks       []planparser.RawTask
 	Mode             string
+	ContextFiles     []ContextFile
+	// ContextFilesNonce: see PlanInput.ContextFilesNonce. The chunked
+	// validate_plan path renders one PlanInput (findings-only) plus several
+	// of these per plan review, all sharing the same ContextFiles. Because
+	// the nonce is derived deterministically from ContextFiles, every one of
+	// those calls arrives at the same value on its own — but mcpsrv still
+	// derives it once up front and passes it explicitly, to avoid repeating
+	// the derivation per chunk and to keep the byte-identical-UserPrefix
+	// invariant obvious rather than incidental.
+	ContextFilesNonce string
 }
 
 // RenderPlanTasksChunk produces a per-chunk prompt for the chunked validate_plan
 // path: full plan as context, but the reviewer is instructed to emit results
 // only for the subset of tasks in ChunkTasks.
 func RenderPlanTasksChunk(in PlanChunkInput) (Output, error) {
+	in, err := ensureContextFilesNonceChunk(in)
+	if err != nil {
+		return Output{}, err
+	}
 	body, err := render("plan_tasks_chunk.tmpl", in)
 	if err != nil {
 		return Output{}, err
@@ -221,6 +416,10 @@ func RenderPlanTasksChunk(in PlanChunkInput) (Output, error) {
 // RenderPlanFindingsOnly produces the Pass-1 prompt for the chunked validate_plan
 // path: full plan as context, plan-level findings only, no per-task data.
 func RenderPlanFindingsOnly(in PlanInput) (Output, error) {
+	in, err := ensureContextFilesNonce(in)
+	if err != nil {
+		return Output{}, err
+	}
 	body, err := render("plan_findings_only.tmpl", in)
 	if err != nil {
 		return Output{}, err
@@ -244,10 +443,18 @@ func RenderExtract(in ExtractInput) (Output, error) {
 	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
+// render parses the whole embedded template set and executes the named one.
+//
+// The full set (rather than just the named file) is parsed because the plan
+// templates share the "plan_rules" partial — the reviewer ground rules were
+// previously duplicated verbatim across all three, which is how a posture
+// edit drifts. Parsing eight small templates costs microseconds and always
+// precedes an HTTP call to a reviewer LLM, so the waste is unmeasurable next
+// to what it prevents.
 func render(name string, data any) (string, error) {
-	tmpl, err := template.New("").ParseFS(templatesFS, "templates/"+name)
+	tmpl, err := template.ParseFS(templatesFS, "templates/*.tmpl")
 	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", name, err)
+		return "", fmt.Errorf("parse templates: %w", err)
 	}
 	var buf bytes.Buffer
 	if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {

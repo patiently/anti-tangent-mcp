@@ -189,3 +189,36 @@ func TestParse_RejectsEmptyFindingStrings(t *testing.T) {
 		})
 	}
 }
+
+func TestContradictedCodebaseClaim_IsValidCategory(t *testing.T) {
+	require.True(t, validCategory(CategoryContradictedCodebaseClaim))
+}
+
+// The whole point of the category: an attached file is ground truth read from
+// disk, so a contradiction keeps the reviewer's severity. Contrast with
+// unverifiable_codebase_claim, which is floored to minor because the reviewer
+// cannot check the claim at all.
+func TestContradictedCodebaseClaim_NotSeverityFloored(t *testing.T) {
+	f := applySeverityFloor(Finding{
+		Severity: SeverityMajor,
+		Category: CategoryContradictedCodebaseClaim,
+	})
+	require.Equal(t, SeverityMajor, f.Severity)
+
+	floored := applySeverityFloor(Finding{
+		Severity: SeverityMajor,
+		Category: CategoryUnverifiableCodebaseClaim,
+	})
+	require.Equal(t, SeverityMinor, floored.Severity, "control: unverifiable IS floored")
+}
+
+func TestContradictedCodebaseClaim_InPlanSchemasOnly(t *testing.T) {
+	const cat = `"contradicted_codebase_claim"`
+	for _, s := range [][]byte{PlanSchema(), PlanFindingsOnlySchema(), TasksOnlySchema()} {
+		require.Contains(t, string(s), cat)
+	}
+	for _, s := range [][]byte{Schema(), PrimeSchema(), ExtractSchema()} {
+		require.NotContains(t, string(s), cat,
+			"the category is validate_plan-only; context_paths exists on no other tool")
+	}
+}

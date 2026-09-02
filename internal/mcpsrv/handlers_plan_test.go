@@ -3,8 +3,11 @@ package mcpsrv
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -591,6 +594,83 @@ func TestValidatePlan_PartialFindingsRecoveredOnTruncation(t *testing.T) {
 	assert.Equal(t, "pf1", pr.PlanFindings[1].Criterion)
 	assert.Equal(t, verdict.SeverityMinor, pr.PlanFindings[2].Severity)
 	assert.Contains(t, pr.PlanFindings[2].Suggestion, "max_tokens_override")
+}
+
+// truncatingPlanReviewer returns a two-task plan response cut mid-third-task,
+// so ValidatePlan always takes the truncation-recovery branch. The three
+// tests below use it to pin the behaviours that branch USED to lack: it
+// hand-assembled its own post-review tail and silently omitted them (see
+// planCallContext).
+func truncatingPlanReviewer(t *testing.T) *fakeReviewer {
+	t.Helper()
+	rawJSON := []byte(`{"plan_verdict":"pass","plan_findings":[],"tasks":[` +
+		`{"task_index":1,"task_title":"Task 1: with bodies","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":2,"task_title":"Task 2: Second","verdict":"warn","find`)
+	return &fakeReviewer{
+		name: "anthropic",
+		resp: providers.Response{RawJSON: rawJSON, Model: "claude-sonnet-4-6"},
+		err:  providers.ErrResponseTruncated,
+	}
+}
+
+// TestValidatePlan_TruncationRecoveryMintsPlanRunID is the functional half of
+// the recovery-path parity gap. A truncated-but-recovered review CAN return a
+// passing verdict, controller.md §5.1 tells the controller to capture
+// `plan_run_id` from a passing validate_plan response, and plan_run_report
+// hard-requires one — so a pass-capable exit that mints none leaves that plan
+// run unreportable for its whole life. This was the only such exit.
+func TestValidatePlan_TruncationRecoveryMintsPlanRunID(t *testing.T) {
+	rv := truncatingPlanReviewer(t)
+	h := &handlers{deps: newDeps(t, rv)}
+
+	plan := "# Plan\n\n### Task 1: with bodies\n\nbody.\n\n### Task 2: Second\n\nbody.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.True(t, pr.Partial, "test setup must exercise the truncation-recovery branch")
+	assert.NotEmpty(t, pr.PlanRunID,
+		"a truncation-recovery envelope must mint a plan_run_id like every other pass-capable exit")
+	assert.Contains(t, pr.SummaryBlock, "plan_run_id:   "+pr.PlanRunID,
+		"SummaryBlock must be computed after the mint, so the id it shows is the id the envelope carries")
+
+	_, ok := h.deps.PlanRuns.Snapshot(pr.PlanRunID)
+	assert.True(t, ok, "the minted id must name a real run, so plan_run_report can find it")
+}
+
+// TestValidatePlan_TruncationRecoveryReportsUnusableRepoRoot pins the
+// repo_root advisory on the recovery path. Without it a truncated call with a
+// bad repo_root produced findings byte-identical to a truncated call that
+// never passed one — the same silence the advisory exists to break on the
+// fresh-review path.
+func TestValidatePlan_TruncationRecoveryReportsUnusableRepoRoot(t *testing.T) {
+	rv := truncatingPlanReviewer(t)
+	h := &handlers{deps: newDeps(t, rv)}
+
+	plan := "# Plan\n\n### Task 1: with bodies\n\nbody.\n\n### Task 2: Second\n\nbody.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: plan,
+		RepoRoot: "relative/not/absolute",
+	})
+	require.NoError(t, err, "an unusable repo_root stays non-fatal on the recovery path too")
+	require.True(t, pr.Partial, "test setup must exercise the truncation-recovery branch")
+	require.True(t, hasCriterion(pr.PlanFindings, "repo_root"),
+		"a truncated review must still report that the Create/Modify disk tier was skipped")
+}
+
+// TestValidatePlan_TruncationRecoveryPopulatesNormativeTestBodies pins the
+// third missing step. The recovered task results are the reviewer's own
+// per-task entries; the normative test bodies are re-attached server-side
+// from the plan text, so there is no reason a truncation should drop them.
+func TestValidatePlan_TruncationRecoveryPopulatesNormativeTestBodies(t *testing.T) {
+	rv := truncatingPlanReviewer(t)
+	h := &handlers{deps: newDeps(t, rv)}
+
+	plan := "# Plan\n\n### Task 1: with bodies\n\n**Goal:** g\n\n**NORMATIVE TEST BODIES (verbatim):**\n\n```kotlin\n@Test fun t() { /* body */ }\n```\n\n### Task 2: Second\n\nbody.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.True(t, pr.Partial, "test setup must exercise the truncation-recovery branch")
+	require.NotEmpty(t, pr.Tasks, "the recovery must have recovered at least the first task")
+	assert.Equal(t, []string{"@Test fun t() { /* body */ }"}, pr.Tasks[0].NormativeTestBodies,
+		"normative test bodies are extracted from the plan, not the reviewer response, so truncation must not drop them")
 }
 
 // TestReviewPlanChunked_Pass2Truncation_PreservesPass1Findings exercises the
@@ -1700,7 +1780,7 @@ func TestPlanPassCacheKey_CoversBothHalves(t *testing.T) {
 		}
 	}
 	keyOf := func(r renderedPlanReview) [32]byte {
-		return planPassCacheKey("plan", "pk", "mode", "model", 100, 0, r)
+		return planPassCacheKey("plan", "pk", "mode", "model", 100, 0, r, "")
 	}
 
 	base := keyOf(build("shared-prefix", "suffix-v1"))
@@ -1719,4 +1799,741 @@ func TestPlanPassCacheKey_CoversBothHalves(t *testing.T) {
 		again := keyOf(build("shared-prefix", "suffix-v1"))
 		assert.Equal(t, base, again)
 	})
+}
+
+func TestValidatePlan_ContextPaths_ReachThePrompt(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.go")
+	require.NoError(t, os.WriteFile(f, []byte("package config\n// SENTINEL_ATTACHED\n"), 0o600))
+
+	sr := &scriptedReviewer{responses: []providers.Response{singlePlanResp(t, 1)}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{f},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, sr.requests)
+	assert.Contains(t, sr.requests[0].User, "SENTINEL_ATTACHED")
+	assert.Contains(t, sr.requests[0].User, "## Attached source files")
+}
+
+func TestValidatePlan_ContextPaths_TooLargeIsAnEnvelope(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "big.go")
+	require.NoError(t, os.WriteFile(f, []byte(strings.Repeat("x", 500)), 0o600))
+
+	sr := &scriptedReviewer{}
+	d := newDepsWithScripted(t, sr, 8)
+	d.Cfg.ContextMaxFileBytes = 100
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{f},
+	})
+	require.NoError(t, err, "a cap breach is an envelope, not a transport error")
+	assert.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
+	require.Len(t, pr.PlanFindings, 2, "the too-large finding plus the plan_text deprecation notice")
+	assert.Equal(t, 1, countPlanDeprecationFindings(pr.PlanFindings),
+		"a plan_text caller must still get the deprecation notice on this envelope, like every other too-large exit")
+
+	var tooLarge *verdict.Finding
+	for i := range pr.PlanFindings {
+		if pr.PlanFindings[i].Category == verdict.CategoryTooLarge {
+			tooLarge = &pr.PlanFindings[i]
+		}
+	}
+	require.NotNil(t, tooLarge, "the too-large finding must still be present")
+	assert.Contains(t, tooLarge.Evidence, "ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES")
+	assert.Zero(t, sr.calls, "no reviewer call is made on a refused payload")
+}
+
+// TestValidatePlan_ContextPaths_CacheHitAcrossSeparateCalls is the
+// end-to-end regression test for the plan-pass cache fix: two SEPARATE
+// ValidatePlan calls with byte-identical plan_text AND byte-identical
+// context_paths, inside the cache TTL, must produce a cache hit (the
+// reviewer call count must stay at 1). planPassCacheKey hashes the fully
+// rendered prompt text, so this is the capability a crypto/rand-backed
+// per-render nonce would have silently killed for every context_paths
+// caller — the calls that cost the most — and that a unit test on nonce
+// equality alone would not prove, since it never exercises the cache.
+func TestValidatePlan_ContextPaths_CacheHitAcrossSeparateCalls(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.go")
+	require.NoError(t, os.WriteFile(f, []byte("package config\n// SENTINEL_ATTACHED\n"), 0o600))
+
+	sr := &scriptedReviewer{responses: []providers.Response{singlePlanResp(t, 1)}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	args := ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{f},
+	}
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.Equal(t, verdict.VerdictPass, first.PlanVerdict, "must pass so it is cached")
+	require.Equal(t, 1, sr.calls)
+
+	_, second, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sr.calls,
+		"a second call with identical plan_text and identical context_paths must be a cache hit, not a fresh reviewer call")
+	assert.Contains(t, second.NextAction, "[cached",
+		"second call must be served from the shared cache entry, proving this exercises the cache-hit path")
+}
+
+func TestValidatePlan_ContextPaths_BadPathIsTransportError(t *testing.T) {
+	sr := &scriptedReviewer{}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{"/nonexistent/nope.go"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context_paths")
+	assert.Zero(t, sr.calls)
+}
+
+// Spec §11: the attachment block must land inside the CACHEABLE prefix on
+// the chunked path, not in the per-call suffix — that placement is the whole
+// reason attachments render before the plan.
+func TestValidatePlan_ContextPaths_LandInTheCachePrefix(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "config.go")
+	require.NoError(t, os.WriteFile(f, []byte("package config\n// SENTINEL_ATTACHED\n"), 0o600))
+
+	sr := &scriptedReviewer{
+		responses: []providers.Response{
+			passOneResp(),
+			chunkResp(t, titlesRange(1, 8)),
+			chunkResp(t, titlesRange(9, 9)),
+		},
+	}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(9),
+		ContextPaths: []string{f},
+	})
+	require.NoError(t, err)
+	require.Len(t, sr.requests, 3)
+
+	// Pass 1 carries no breakpoint (its tools block differs), so the
+	// attachment is in its plain User body.
+	assert.Empty(t, sr.requests[0].CachePrefix)
+	assert.Contains(t, sr.requests[0].User, "SENTINEL_ATTACHED")
+
+	// Both chunk calls carry the attachment in the SHARED prefix, and their
+	// per-call suffixes must not repeat it.
+	for i := 1; i < 3; i++ {
+		assert.Contains(t, sr.requests[i].CachePrefix, "SENTINEL_ATTACHED", "chunk %d prefix", i)
+		assert.NotContains(t, sr.requests[i].User, "SENTINEL_ATTACHED", "chunk %d suffix", i)
+	}
+	assert.Equal(t, sr.requests[1].CachePrefix, sr.requests[2].CachePrefix,
+		"the prefix must be byte-identical across chunks or nothing is ever cache-read")
+}
+
+func TestValidatePlan_NoContextPaths_PromptUnchanged(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{singlePlanResp(t, 1)}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, _, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: buildPlanWithNTasks(1),
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, sr.requests[0].User, "## Attached source files")
+	assert.Contains(t, sr.requests[0].User, "You have access ONLY to the plan markdown")
+}
+
+// A stale review after an attached file is edited is the failure this guards:
+// a caller who fixes the file a finding complained about and re-validates
+// inside the 3-minute TTL must not get the pre-fix review back.
+//
+// The key covers attachments through the RENDERED PROMPTS, which interpolate
+// each file's path, byte count, short hash and complete contents — so this
+// drives the real render rather than hand-assembling a key projection, and
+// would catch the attachment section being dropped from the template just as
+// well as the key being dropped.
+func TestPlanPassCacheKey_VariesWithAttachedContent(t *testing.T) {
+	mk := func(t *testing.T, content string) [32]byte {
+		t.Helper()
+		sum := sha256.Sum256([]byte(content))
+		files := []contextFile{{
+			Source:  fileSource{Path: "/a.go", Bytes: len(content), SHA256: hex.EncodeToString(sum[:])},
+			Content: content,
+		}}
+		plan := buildPlanWithNTasks(1)
+		tasks, _ := planparser.SplitTasks(plan)
+		rendered, err := renderPlanReview(renderPlanReviewInputs{
+			PlanText:     plan,
+			Tasks:        tasks,
+			ChunkSize:    8,
+			ContextFiles: toPromptContextFiles(files),
+		})
+		require.NoError(t, err)
+		return planPassCacheKey("plan", "", "", "m", 100, 0, rendered, "")
+	}
+	assert.NotEqual(t, mk(t, "package a\n"), mk(t, "package a\n\nfunc B() {}\n"))
+	assert.Equal(t, mk(t, "package a\n"), mk(t, "package a\n"))
+}
+
+// The mirror of the above: with no attachments at all the key must still be
+// stable across identical calls.
+
+func TestPlanPassCacheKey_NoAttachmentsIsStable(t *testing.T) {
+	rendered := renderedPlanReview{}
+	a := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, "")
+	b := planPassCacheKey("plan", "", "", "m", 100, 0, rendered, "")
+	assert.Equal(t, a, b)
+}
+
+// TestPlanPassCacheKey_VariesWithRepoRoot is the unit-level companion to
+// TestValidatePlan_RepoRootChangeBustsPlanPassCache: repo_root gates
+// checkFileConsistency's disk tier, so two calls with byte-identical plan
+// text but different repo_root can produce genuinely different results and
+// MUST NOT collide in the cache.
+func TestPlanPassCacheKey_VariesWithRepoRoot(t *testing.T) {
+	rendered := renderedPlanReview{}
+	mk := func(repoRoot string) [32]byte {
+		return planPassCacheKey("plan", "", "", "m", 100, 0, rendered, repoRoot)
+	}
+	assert.NotEqual(t, mk(""), mk("/repo/a"))
+	assert.NotEqual(t, mk("/repo/a"), mk("/repo/b"))
+	assert.Equal(t, mk("/repo/a"), mk("/repo/a"))
+}
+
+func TestValidatePlan_FileConsistencyFindingReachesTheEnvelope(t *testing.T) {
+	plan := "# Plan\n\n" +
+		"### Task 1: t1\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n\n**Files:**\n- Modify: `a.go`\n\n" +
+		"### Task 2: t2\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n\n**Files:**\n- Create: `a.go`\n\n"
+
+	sr := &scriptedReviewer{responses: []providers.Response{singlePlanResp(t, 2)}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+
+	var found bool
+	for _, f := range pr.PlanFindings {
+		if f.Criterion == "task_order_contradiction" {
+			found = true
+			assert.Equal(t, verdict.SeverityMajor, f.Severity)
+		}
+	}
+	assert.True(t, found, "the deterministic check's finding must reach the envelope")
+}
+
+// TestValidatePlan_RepoRootChangeBustsPlanPassCache is the regression test
+// for the review finding that planPassCacheKey did not key on repoRoot: a
+// caller who first validates without repo_root (order tier only; passes and
+// is cached) and then re-validates the byte-identical plan WITH repo_root
+// must get a fresh review that runs the disk tier — not the stale cached
+// pass, which would silently skip the disk tier the caller just asked for.
+// A unit test on planPassCacheKey alone cannot catch this: the bug lives in
+// the interaction between the cache-hit return at the top of ValidatePlan
+// and the checkFileConsistency call 44 lines later on the fresh path.
+func TestValidatePlan_RepoRootChangeBustsPlanPassCache(t *testing.T) {
+	plan := "# Plan\n\n" +
+		"### Task 1: t1\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n\n**Files:**\n- Modify: `a.go`\n\n"
+
+	dir := t.TempDir() // empty: a.go does not exist here
+
+	rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("Proceed with implementation.")}
+	h := &handlers{deps: newDeps(t, rv)}
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.Equal(t, verdict.VerdictPass, first.PlanVerdict, "no repo_root: order tier alone finds nothing")
+	require.Equal(t, 1, rv.Calls)
+	for _, f := range first.PlanFindings {
+		require.NotEqual(t, "task_order_contradiction", f.Criterion)
+	}
+
+	_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan, RepoRoot: dir})
+	require.NoError(t, err)
+	assert.Equal(t, 2, rv.Calls, "repo_root must change the cache key: this must be a fresh review, not a cache hit")
+	assert.NotContains(t, second.NextAction, "[cached", "must not be served from the no-repo_root entry")
+
+	var found bool
+	for _, f := range second.PlanFindings {
+		if f.Criterion == "task_order_contradiction" {
+			found = true
+			assert.Contains(t, f.Evidence, "does not exist")
+		}
+	}
+	assert.True(t, found, "the disk tier must run once repo_root is supplied, even though the plan text is byte-identical to the cached call")
+}
+
+// planRespWithContradiction is a plan response carrying one
+// contradicted_codebase_claim at plan level and one on the single task.
+// evidence is a parameter because the server-side demotion now keys on it:
+// a contradiction survives only when its evidence names an attached file.
+func planRespWithContradiction(t *testing.T, severity, evidence string) providers.Response {
+	t.Helper()
+	f := `{"severity":"` + severity + `","category":"contradicted_codebase_claim","criterion":"c","evidence":"` + evidence + `","suggestion":"s"}`
+	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[` + f + `],"tasks":[` +
+		`{"task_index":1,"task_title":"Task 1: t1","verdict":"warn","findings":[` + f + `],"suggested_header_block":"","suggested_header_reason":""}` +
+		`],"next_action":"fix it"}`)
+	return providers.Response{RawJSON: raw, Model: "claude-sonnet-4-6"}
+}
+
+// contradicted_codebase_claim exists because an attached file is ground truth,
+// which is why it alone among the codebase-claim categories carries NO
+// severity floor. With nothing attached the reviewer has no file to refute
+// anything with, so an unfloored major/critical finding can fail a plan gate
+// over code the reviewer never saw. The prompt already forbids it; suppression
+// must ALSO run server-side, independent of reviewer compliance
+// (controller.md §5.8).
+func TestValidatePlan_ContradictionWithoutAttachmentsIsDemoted(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{planRespWithContradiction(t, "major", "e")}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: buildPlanWithNTasks(1),
+	})
+	require.NoError(t, err)
+
+	all := append([]verdict.Finding{}, pr.PlanFindings...)
+	for _, tk := range pr.Tasks {
+		all = append(all, tk.Findings...)
+	}
+	var contradictions, demoted int
+	var planLevel, checklist verdict.Finding
+	for _, f := range all {
+		switch f.Category {
+		case verdict.CategoryContradictedCodebaseClaim:
+			contradictions++
+		case verdict.CategoryUnverifiableCodebaseClaim:
+			demoted++
+			assert.Equal(t, verdict.SeverityMinor, f.Severity,
+				"a demoted contradiction must land on the unverifiable floor")
+			if f.Criterion == "codebase_reference_checklist" {
+				checklist = f
+			} else {
+				planLevel = f
+			}
+		}
+	}
+	assert.Zero(t, contradictions,
+		"no contradicted_codebase_claim may survive a call with no context_paths")
+	assert.Equal(t, 2, demoted, "both the plan-level and the per-task finding must be demoted")
+
+	// Demotion is a rewrite of category+severity, NOT a redaction: the
+	// observation is still worth surfacing. Asserting category and severity
+	// alone passed just as well against an implementation that blanked the
+	// reviewer's prose, which would be a strictly worse envelope than the
+	// one this test exists to defend.
+	assert.Equal(t, "c", planLevel.Criterion, "the reviewer's criterion must survive demotion")
+	assert.Equal(t, "e", planLevel.Evidence, "the reviewer's evidence must survive demotion")
+	assert.Equal(t, "s", planLevel.Suggestion, "the reviewer's suggestion must survive demotion")
+
+	// The per-task twin is rolled up into the plan-level
+	// codebase_reference_checklist (normalizePlanUnverifiableFindings), which
+	// supplies its own criterion and suggestion — but the reviewer's evidence
+	// text must still reach the human there, verbatim, under its task number.
+	require.Equal(t, "codebase_reference_checklist", checklist.Criterion,
+		"the demoted per-task finding must roll up, not vanish")
+	assert.Equal(t, "Task 1: e", checklist.Evidence,
+		"the rolled-up entry must carry the reviewer's own evidence text")
+}
+
+// The gap between the two tests above: the demotion used to be gated on
+// "nothing was attached at all", so a SINGLE attached file re-armed the
+// unfloored major/critical severity for a contradiction about some OTHER
+// file the reviewer had never been shown. Attaching a.go must not license a
+// hard-severity contradiction about other.go.
+func TestValidatePlan_ContradictionAboutUnattachedFileIsDemotedDespiteAttachments(t *testing.T) {
+	dir := t.TempDir()
+	attached := writeTemp(t, dir, "attached.go", "package a\n")
+
+	sr := &scriptedReviewer{responses: []providers.Response{
+		planRespWithContradiction(t, "critical", "internal/other/other.go has no such field"),
+	}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{attached},
+	})
+	require.NoError(t, err)
+
+	all := append([]verdict.Finding{}, pr.PlanFindings...)
+	for _, tk := range pr.Tasks {
+		all = append(all, tk.Findings...)
+	}
+	var contradictions, demoted int
+	for _, f := range all {
+		switch f.Category {
+		case verdict.CategoryContradictedCodebaseClaim:
+			contradictions++
+		case verdict.CategoryUnverifiableCodebaseClaim:
+			demoted++
+			assert.Equal(t, verdict.SeverityMinor, f.Severity)
+		}
+	}
+	assert.Zero(t, contradictions,
+		"a contradiction naming none of the attached files must not survive just because something else was attached")
+	assert.Equal(t, 2, demoted, "both the plan-level and the per-task finding must be demoted")
+}
+
+// The fail-open half of the same rule. The ground rules ask the reviewer to
+// quote the attached file's ABSOLUTE path, but reviewers routinely quote the
+// repo-relative form instead. Matching on the basename keeps a legitimate
+// contradiction alive under loose quoting; a strict absolute-path match
+// would silently demote real findings.
+func TestValidatePlan_ContradictionQuotingRepoRelativePathSurvives(t *testing.T) {
+	dir := t.TempDir()
+	attached := writeTemp(t, dir, "handlers.go", "package a\n")
+
+	sr := &scriptedReviewer{responses: []providers.Response{
+		planRespWithContradiction(t, "major", "internal/mcpsrv/handlers.go defines no such symbol"),
+	}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{attached},
+	})
+	require.NoError(t, err)
+
+	var found bool
+	for _, f := range pr.PlanFindings {
+		if f.Category == verdict.CategoryContradictedCodebaseClaim {
+			found = true
+			assert.Equal(t, verdict.SeverityMajor, f.Severity)
+		}
+	}
+	assert.True(t, found,
+		"a contradiction quoting the repo-relative form of an attached path must survive")
+}
+
+// An unusable repo_root used to produce an envelope, a summary and a findings
+// list byte-identical to a call that never passed repo_root — including for a
+// plain relative path, which is an ordinary caller bug. controller.md §5.8
+// and the tool description both promise repo_root "enables the disk tier", so
+// silence there reads as "the tier ran and found nothing".
+func TestValidatePlan_UnusableRepoRootIsReportedInBand(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: buildPlanWithNTasks(1),
+		RepoRoot: "relative/not/absolute",
+	})
+	require.NoError(t, err, "an unusable repo_root stays non-fatal")
+
+	var found verdict.Finding
+	for _, f := range pr.PlanFindings {
+		if f.Criterion == "repo_root" {
+			found = f
+		}
+	}
+	require.NotEmpty(t, found.Criterion, "an unusable repo_root must produce a finding, not just a stderr line")
+	assert.Equal(t, verdict.SeverityMinor, found.Severity)
+	assert.Equal(t, verdict.CategoryOther, found.Category)
+	assert.Contains(t, found.Evidence, "repo_root unusable")
+	assert.Contains(t, found.Evidence, "disk tier skipped")
+	assert.Contains(t, found.Evidence, "must be absolute", "the finding must name the reason")
+	assert.NotEmpty(t, found.Suggestion)
+
+	// Post-ladder, exactly like the deprecation notice: a minor
+	// CategoryOther finding fed THROUGH verdict.FinalizeVerdict counts
+	// toward the noise_cluster (3rd-minor) trigger, so an advisory about an
+	// argument could flip a pass to warn.
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict,
+		"the advisory must not change the verdict")
+}
+
+// The advisory describes THIS call's argument, so it must never be stored on
+// the shared cache entry: a later call that omits repo_root (or passes a
+// usable one) resolves to the same cache key and must come back clean.
+func TestValidatePlan_UnusableRepoRootFindingIsNotCached(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	planText := buildPlanWithNTasks(1)
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: planText,
+		RepoRoot: "relative/not/absolute",
+	})
+	require.NoError(t, err)
+	require.True(t, hasCriterion(first.PlanFindings, "repo_root"))
+
+	// Same plan, no repo_root: a cache hit (the reviewer is scripted with a
+	// single response, so a second provider call would fail outright).
+	_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: planText,
+	})
+	require.NoError(t, err)
+	assert.False(t, hasCriterion(second.PlanFindings, "repo_root"),
+		"the advisory must not be inherited from the cache entry by a call that passed no repo_root")
+
+	// ...and the reverse direction: the cached entry still gets the advisory
+	// applied per-call when repo_root is unusable again.
+	_, third, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText: planText,
+		RepoRoot: "relative/not/absolute",
+	})
+	require.NoError(t, err)
+	assert.True(t, hasCriterion(third.PlanFindings, "repo_root"),
+		"a cache hit must still carry THIS call's repo_root advisory")
+}
+
+// planCleanPassResp is a finding-free pass response for the single task
+// buildPlanWithNTasks(1) emits, so a verdict assertion in these tests reads
+// only what the code under test added.
+func planCleanPassResp() providers.Response {
+	return providers.Response{
+		RawJSON: []byte(`{"plan_verdict":"pass","plan_quality":"rigorous","plan_findings":[],"tasks":[` +
+			`{"task_index":1,"task_title":"Task 1: t1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""}` +
+			`],"next_action":"proceed to dispatch"}`),
+		Model: "claude-sonnet-4-6",
+	}
+}
+
+func hasCriterion(fs []verdict.Finding, criterion string) bool {
+	for _, f := range fs {
+		if f.Criterion == criterion {
+			return true
+		}
+	}
+	return false
+}
+
+// The mirror: WITH an attachment the category is legitimate and must survive
+// at the reviewer's chosen severity, floor-free.
+func TestValidatePlan_ContradictionWithAttachmentsSurvives(t *testing.T) {
+	dir := t.TempDir()
+	f := writeTemp(t, dir, "a.go", "package a\n")
+
+	sr := &scriptedReviewer{responses: []providers.Response{planRespWithContradiction(t, "major", "a.go declares no such symbol")}}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     buildPlanWithNTasks(1),
+		ContextPaths: []string{f},
+	})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, pr.PlanFindings)
+	var found bool
+	for _, fd := range pr.PlanFindings {
+		if fd.Category == verdict.CategoryContradictedCodebaseClaim {
+			found = true
+			assert.Equal(t, verdict.SeverityMajor, fd.Severity,
+				"contradicted_codebase_claim has no severity floor when a file backs it")
+		}
+	}
+	assert.True(t, found, "an attached call must keep contradicted_codebase_claim")
+}
+
+// The Create/Modify consistency check needs no reviewer and cannot itself be
+// truncated, so a truncated reviewer response must not silently drop it — it
+// is the one finding the server already knows for certain. The same envelope
+// must also still name the attached files in its summary, which it did not:
+// the truncation path built planSummaryMeta with no ContextFiles while the
+// same call's stats counted every attached byte.
+func TestValidatePlan_TruncationKeepsFileConsistencyAndContextProvenance(t *testing.T) {
+	dir := t.TempDir()
+	attached := writeTemp(t, dir, "attached.go", "package a\n")
+
+	// Task 1 modifies a.go; Task 2 creates it — an order-tier contradiction
+	// provable from the plan text alone.
+	plan := "# Plan\n\n" +
+		"### Task 1: t1\n\n**Goal:** g1\n\n**Files:**\n- Modify: `a.go`\n\n" +
+		"### Task 2: t2\n\n**Goal:** g2\n\n**Files:**\n- Create: `a.go`\n\n"
+
+	rawJSON := []byte(`{"plan_verdict":"warn","plan_findings":[` +
+		`{"severity":"major","category":"other","criterion":"pf1","evidence":"e","suggestion":"s"}` +
+		`],"tasks":[` +
+		`{"task_index":1,"task_title":"Task 1: t1","verdict":"pass","findings":[],"suggested_header_block":"","suggested_header_reason":""},` +
+		`{"task_index":2,"task_title":"Task 2: t2","verdict":"warn","find`)
+
+	sr := &scriptedReviewer{
+		responses: []providers.Response{{RawJSON: rawJSON, Model: "claude-sonnet-4-6"}},
+		errors:    []error{providers.ErrResponseTruncated},
+	}
+	d := newDepsWithScripted(t, sr, 8)
+	h := &handlers{deps: d}
+
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:     plan,
+		ContextPaths: []string{attached},
+	})
+	require.NoError(t, err)
+	require.True(t, pr.Partial, "this must be the truncation-recovery path")
+
+	var gotConsistency bool
+	for _, f := range pr.PlanFindings {
+		if f.Criterion == "task_order_contradiction" {
+			gotConsistency = true
+		}
+	}
+	assert.True(t, gotConsistency,
+		"the reviewer-free Create/Modify finding must survive a truncated reviewer response")
+
+	assert.Contains(t, pr.SummaryBlock, "context:",
+		"a truncated review must still name what the reviewer was given")
+	assert.Contains(t, pr.SummaryBlock, mustEval(t, attached))
+}
+
+// validate_plan's log line used to be emitted on ENTRY, from a point BELOW
+// both resolveContextPaths returns — so a bad context_paths argument (the
+// input a caller most often gets wrong) produced no log line at all, and no
+// call ever logged its verdict or its duration.
+//
+// The contract is ONE SUMMARY LINE per call, on exit, carrying both — plus at
+// most one warning per degraded surface (an unusable repo_root; Modify:
+// targets the disk tier could not stat). The earlier "exactly one line per
+// call" wording was simply false: the repo_root Warn already made two, and
+// this test's cases never exercised either warning, so it passed while the
+// claim did not hold. wantWarnings pins that second half.
+func TestValidatePlan_EmitsOneExitLogLinePerCall(t *testing.T) {
+	cases := []struct {
+		name         string
+		setup        func(t *testing.T) (*handlers, ValidatePlanArgs)
+		wantOutcome  string
+		wantVerdict  string
+		wantUnusable bool
+		wantWarnings int
+	}{
+		{
+			name: "success",
+			setup: func(t *testing.T) (*handlers, ValidatePlanArgs) {
+				sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+				return &handlers{deps: newDepsWithScripted(t, sr, 8)},
+					ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)}
+			},
+			wantOutcome: "success",
+			wantVerdict: "pass",
+		},
+		{
+			// The regression: this return sat ABOVE the old entry log.
+			name: "unresolvable context_paths",
+			setup: func(t *testing.T) (*handlers, ValidatePlanArgs) {
+				sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+				return &handlers{deps: newDepsWithScripted(t, sr, 8)},
+					ValidatePlanArgs{
+						PlanText:     buildPlanWithNTasks(1),
+						ContextPaths: []string{filepath.Join(t.TempDir(), "no-such-file.go")},
+					}
+			},
+			wantOutcome: "context_paths_error",
+			wantVerdict: "",
+		},
+		{
+			// Four argument-validation returns used to sit ABOVE the log
+			// registration, so a caller who passed both plan_text and
+			// plan_path got a transport error and total silence — the same
+			// invisible failure the exit-line rewrite existed to remove.
+			name: "argument validation error",
+			setup: func(t *testing.T) (*handlers, ValidatePlanArgs) {
+				sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+				return &handlers{deps: newDepsWithScripted(t, sr, 8)},
+					ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), PlanPath: "/tmp/also-a-path.md"}
+			},
+			wantOutcome: "validation_error",
+			wantVerdict: "",
+		},
+		{
+			name: "bad mode is a validation error too",
+			setup: func(t *testing.T) (*handlers, ValidatePlanArgs) {
+				sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+				return &handlers{deps: newDepsWithScripted(t, sr, 8)},
+					ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), Mode: "sideways"}
+			},
+			wantOutcome: "validation_error",
+			wantVerdict: "",
+		},
+		{
+			// repo_root alone cannot tell "omitted" from "supplied and
+			// rejected": an unusable repo_root resolves to "", so both
+			// logged repo_root=false.
+			name: "unusable repo_root",
+			setup: func(t *testing.T) (*handlers, ValidatePlanArgs) {
+				sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+				return &handlers{deps: newDepsWithScripted(t, sr, 8)},
+					ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), RepoRoot: "relative/not/absolute"}
+			},
+			wantOutcome:  "success",
+			wantVerdict:  "pass",
+			wantUnusable: true,
+			wantWarnings: 1,
+		},
+		{
+			name: "cache hit",
+			setup: func(t *testing.T) (*handlers, ValidatePlanArgs) {
+				sr := &scriptedReviewer{responses: []providers.Response{planCleanPassResp()}}
+				h := &handlers{deps: newDepsWithScripted(t, sr, 8)}
+				args := ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)}
+				// Warm the cache OUTSIDE the captured window.
+				_, _, err := h.ValidatePlan(context.Background(), nil, args)
+				require.NoError(t, err)
+				return h, args
+			},
+			wantOutcome: "cache_hit",
+			wantVerdict: "pass",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, args := tc.setup(t)
+
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+			defer slog.SetDefault(prev)
+			_, _, _ = h.ValidatePlan(context.Background(), nil, args)
+
+			// NotEmpty first: an empty buffer splits to one empty string, so
+			// the Len check below would pass and the failure would surface as
+			// an opaque JSON parse error instead of "nothing was logged".
+			require.NotEmpty(t, buf.String(), "every exit path must emit its log line")
+			lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+
+			// The summary line is the one whose msg is exactly "validate_plan";
+			// every warning carries a longer, descriptive msg. Split them so
+			// the count of each can be asserted separately.
+			var summaries, warnings []map[string]any
+			for _, ln := range lines {
+				var rec map[string]any
+				require.NoError(t, json.Unmarshal([]byte(ln), &rec))
+				if rec["msg"] == "validate_plan" {
+					summaries = append(summaries, rec)
+				} else {
+					warnings = append(warnings, rec)
+				}
+			}
+			require.Len(t, summaries, 1,
+				"expected exactly one summary line, got %d:\n%s", len(summaries), buf.String())
+			assert.Len(t, warnings, tc.wantWarnings,
+				"expected %d warning line(s), got %d:\n%s", tc.wantWarnings, len(warnings), buf.String())
+
+			rec := summaries[0]
+			assert.Equal(t, "validate_plan", rec["tool"])
+			assert.Equal(t, tc.wantOutcome, rec["outcome"])
+			assert.Equal(t, tc.wantVerdict, rec["verdict"])
+			assert.Contains(t, rec, "duration_ms", "the exit line must carry the call duration")
+			assert.Contains(t, rec, "context_paths")
+			assert.Equal(t, tc.wantUnusable, rec["repo_root_unusable"],
+				"repo_root_unusable must distinguish an omitted repo_root from a rejected one")
+		})
+	}
 }

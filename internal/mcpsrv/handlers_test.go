@@ -2426,8 +2426,9 @@ func TestNotFoundEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
 }
 
 func TestTooLargePlanResult_SyntheticFindingSeverityIsCritical(t *testing.T) {
-	// Preserves pre-change semantics: total = planBytes when project_knowledge is empty.
-	pr := tooLargePlanResult(1000, 1000, 0, 500)
+	// Preserves pre-change semantics: total = planBytes when project_knowledge
+	// and context_paths are both empty.
+	pr := tooLargePlanResult(1000, 1000, 0, 0, 500)
 	require.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
 	require.Len(t, pr.PlanFindings, 1)
 	require.Equal(t, verdict.SeverityCritical, pr.PlanFindings[0].Severity)

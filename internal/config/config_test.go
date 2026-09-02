@@ -485,3 +485,99 @@ func TestPlanMaxPayloadBytesFollowsSharedCap(t *testing.T) {
 		assert.Equal(t, 1048576, cfg.PlanMaxPayloadBytes)
 	})
 }
+
+func TestLoad_ContextCaps_Defaults(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"ANTHROPIC_API_KEY": "k"}))
+	require.NoError(t, err)
+	assert.Equal(t, 131072, cfg.ContextMaxFileBytes)
+	assert.Equal(t, 524288, cfg.ContextMaxPayloadBytes)
+}
+
+func TestLoad_ContextCaps_Overrides(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                      "k",
+		"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES":    "4096",
+		"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES": "8192",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 4096, cfg.ContextMaxFileBytes)
+	assert.Equal(t, 8192, cfg.ContextMaxPayloadBytes)
+}
+
+func TestLoad_ContextCaps_Invalid(t *testing.T) {
+	for _, tc := range []struct{ env, val string }{
+		{"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES", "nope"},
+		{"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES", "0"},
+		{"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES", "-1"},
+	} {
+		t.Run(tc.env+"="+tc.val, func(t *testing.T) {
+			_, err := Load(env(map[string]string{
+				"ANTHROPIC_API_KEY": "k",
+				tc.env:              tc.val,
+			}))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.env)
+		})
+	}
+}
+
+// A per-file cap above the whole-set cap is unreachable configuration: every
+// file that passes the per-file check trips the set check, so an operator who
+// raises ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES to admit one large file silently
+// gets nothing. Fail at startup, naming BOTH variables.
+func TestLoad_ContextCaps_FileCapAbovePayloadCapIsRejected(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                      "k",
+		"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES":    "8193",
+		"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES": "8192",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES")
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES")
+
+	// Equal is fine: a single file may fill the whole set budget.
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                      "k",
+		"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES":    "8192",
+		"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES": "8192",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 8192, cfg.ContextMaxFileBytes)
+
+	// Raising only the per-file cap past the DEFAULT set cap is the shape an
+	// operator most plausibly writes, and must be caught too.
+	_, err = Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                   "k",
+		"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES": "1048576",
+	}))
+	require.Error(t, err)
+}
+
+// Lowering ONLY ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES below the 131072
+// per-file default must not prevent the server booting. The cross-check
+// above is there to stop an EXPLICIT per-file raise from being silently
+// defeated; applied to the untouched default it turned any payload cap under
+// 131072 into a startup failure — Load errors, main exits 1, and every
+// anti-tangent tool disappears from the host over a value the operator never
+// set. The default clamps down instead.
+func TestLoad_ContextCaps_LoweredPayloadCapClampsTheDefaultFileCap(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                      "k",
+		"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES": "65536",
+	}))
+	require.NoError(t, err, "a payload cap below the default per-file cap must still boot")
+	assert.Equal(t, 65536, cfg.ContextMaxPayloadBytes)
+	assert.Equal(t, 65536, cfg.ContextMaxFileBytes,
+		"the untouched default per-file cap clamps down to the payload cap")
+
+	// The clamp must NOT extend to an explicit set: that is the silent
+	// defeat the cross-check exists to prevent, and it still errors.
+	_, err = Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":                      "k",
+		"ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES":    "131072",
+		"ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES": "65536",
+	}))
+	require.Error(t, err, "an EXPLICIT per-file cap above the payload cap must still be rejected")
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES")
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES")
+}
