@@ -35,7 +35,7 @@
     {
       "id": 5,
       "subject": "Task 5: `resolveWriteTarget`",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** A write-path resolver that containment-checks the parent, refuses control characters, and opens the leaf without following symlinks.\n\n**Files:**\n- Create: `internal/mcpsrv/file_target.go`\n- Create: `internal/mcpsrv/file_target_unix.go`\n- Create: `internal/mcpsrv/file_target_windows.go`\n- Test: `internal/mcpsrv/file_target_test.go`\n- Test: `internal/mcpsrv/file_target_unix_test.go` (`//go:build !windows`; holds the leaf-symlink test only)\n\n**Acceptance Criteria:**\n- [ ] Relative, empty and whitespace-only paths are refused, each with its own table case\n- [ ] A Unicode **format** character (e.g. U+200B) is refused, not only a C0 control like a newline \u2014 the two take different branches of `rejectControlChars`\n- [ ] A parent that does not exist is refused naming the directory \u2014 no `MkdirAll`\n- [ ] A parent outside `PlanRoots` is refused\n- [ ] A resolved path containing a control or Unicode format character is refused\n- [ ] With `overwrite=false`, an existing file is refused\n- [ ] With `overwrite=true`, an existing regular file is truncated and rewritten\n- [ ] **On Unix:** a symlink at the leaf is refused under BOTH `overwrite` values\n- [ ] **On Windows:** the leaf-symlink guarantee does NOT hold. This is an accepted, documented non-goal \u2014 Go's `syscall` package exposes no `O_NOFOLLOW` equivalent there, exactly as for the existing read path's `openNoFollow`. Do not claim the unconditional contract while shipping the gap.\n- [ ] A symlinked parent inside the roots resolves and is allowed\n\n**Verify:** `go test -race ./internal/mcpsrv/... -run WriteTarget -v` \u2192 PASS\n\nFull steps with code: see Task 5 in `docs/superpowers/plans/2026-09-07-io-delegation-and-completion-guard.md`.\n\n```json:metadata\n{\"files\": [\"internal/mcpsrv/file_target.go\", \"internal/mcpsrv/file_target_unix.go\", \"internal/mcpsrv/file_target_windows.go\", \"internal/mcpsrv/file_target_test.go\", \"internal/mcpsrv/file_target_unix_test.go\"], \"verifyCommand\": \"go test -race ./internal/mcpsrv/... -run WriteTarget -v\", \"acceptanceCriteria\": [\"relative and empty paths refused\", \"missing parent refused without MkdirAll\", \"parent outside PlanRoots refused\", \"control/format characters refused\", \"existing file refused unless overwrite\", \"overwrite truncates\", \"on Unix a symlink at the leaf is refused under both overwrite values\", \"the Windows leaf-symlink gap is an accepted, documented non-goal\", \"symlinked parent inside roots allowed\"], \"modelTier\": \"standard\"}\n```"
     },
     {
@@ -141,5 +141,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-07T19:31:17.467027+00:00"
+  "lastUpdated": "2026-09-07T19:52:42.322460+00:00"
 }
