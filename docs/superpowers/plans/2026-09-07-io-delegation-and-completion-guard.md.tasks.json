@@ -62,7 +62,7 @@
     {
       "id": 8,
       "subject": "Task 8: Pin the summary_block contract",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** A test that fails the build if the substrings the guard hook greps for ever change.\n\n**Files:**\n- Create: `internal/mcpsrv/summary_contract_test.go`\n\n**Acceptance Criteria:**\n- [ ] Asserts `formatEnvelopeSummary` emits the literal `anti-tangent envelope`\n- [ ] Asserts it emits `session_id:` and `verdict:`\n- [ ] The test comment names the consuming hook file, so the coupling is discoverable from either end\n\n**Verify:** `go test -race ./internal/mcpsrv/... -run SummaryBlockContract -v` \u2192 PASS\n\nFull steps with code: see Task 8 in `docs/superpowers/plans/2026-09-07-io-delegation-and-completion-guard.md`.\n\n```json:metadata\n{\"files\": [\"internal/mcpsrv/summary_contract_test.go\"], \"verifyCommand\": \"go test -race ./internal/mcpsrv/... -run SummaryBlockContract -v\", \"acceptanceCriteria\": [\"asserts the anti-tangent envelope marker\", \"asserts session_id: and verdict:\", \"comment names the consuming hook file\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
@@ -141,5 +141,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-07T20:19:32.711029+00:00"
+  "lastUpdated": "2026-09-07T20:37:09.480080+00:00"
 }
