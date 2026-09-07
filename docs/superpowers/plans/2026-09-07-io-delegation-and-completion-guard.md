@@ -2933,7 +2933,11 @@ print(json.dumps({"error": False, "called": called,
                   "block_found": bool(blocks), "verdict": verdict}))
 '
 RESULT=$({ python3 -c "$PY" "$TRANSCRIPT" "$TASK_ID" 2>/dev/null || echo '{"error":true}'; } | tr -d '\r')
-[[ "$(echo "$RESULT" | jq -r '.error // true')" == "true" ]] && { trace "$TASK_ID" "skip" "parse-error"; exit 0; }
+# NOTE: ".error", NOT ".error // true" — jq's // substitutes on false as well
+# as null, so '.error // true' evaluates to "true" even on a clean parse and
+# the hook would exit 0 unconditionally, enforcing nothing. RESULT always
+# carries an explicit "error" key, so no default is needed.
+[[ "$(echo "$RESULT" | jq -r '.error')" == "true" ]] && { trace "$TASK_ID" "skip" "parse-error"; exit 0; }
 
 CALLED=$(echo "$RESULT" | jq -r '.called // false')
 BLOCK=$(echo "$RESULT" | jq -r '.block_found // false')

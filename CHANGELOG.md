@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ANTI_TANGENT_WORKER_MODEL`** (defaults to `ANTI_TANGENT_MID_MODEL`) and
   **`ANTI_TANGENT_WORKER_MAX_TOKENS`** (4096, clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`).
   `ANTI_TANGENT_SHUNT_MIN_LINES` (350) is read by the shunt hooks, not the server.
-- **`THIRD_PARTY_NOTICES.md`** — Apache-2.0 notice for the ported shunt hooks and eval fixtures.
+- **`THIRD_PARTY_NOTICES.md`** — Apache-2.0 notice for the ported shunt hooks and eval suites.
 
 ### Changed
 - `stats.Event` gains optional `input_tokens` / `output_tokens`; `rollup.json` gains an
