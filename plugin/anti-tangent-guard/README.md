@@ -86,6 +86,31 @@ server's un-escaped text (see "Version requirement" below); source-side
 escaping alone only protects callers running a server new enough to have
 it. Together they are what actually holds; neither is a standalone fix.
 
+### What this does not defend against
+
+Both defences above are about a *field inside a genuine block* being mistaken
+for that block's own header. Neither makes a pasted block trustworthy in
+itself. The marker pass signal accepts any `anti-tangent envelope` block that
+starts a line in the window — and a subagent writing its own report can simply
+compose one. Verified: a report whose text is a fabricated `tool:
+validate_completion` / `verdict: pass` block, with no gate call anywhere in the
+window, satisfies this guard.
+
+That is inherent to the marker path rather than an oversight in it. The hook
+reads a transcript, and nothing in a transcript distinguishes text a subagent
+pasted from the gate's real output from text it composed. Closing it would
+need the server to sign each block and the hook to verify that signature —
+far beyond an advisory guard. The direct signal (an
+`mcp__anti-tangent__validate_completion` `tool_use` in the window) is the one
+that cannot be fabricated this way; the marker path exists so a subagent that
+genuinely ran the gate in its own session still counts, and it extends that
+report the same trust the rest of anti-tangent does.
+
+So this guard raises the cost of skipping the gate from "say nothing" to
+"knowingly fabricate a gate result". It is a drift guard, not an adversarial
+control — consistent with the server being advisory throughout (see the root
+`CLAUDE.md`, "What This Repo Is Not").
+
 ### Version requirement
 
 **This hook requires an anti-tangent-mcp server >= 0.18.0.** A server older
