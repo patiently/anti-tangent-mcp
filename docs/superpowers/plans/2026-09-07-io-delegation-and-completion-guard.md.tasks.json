@@ -26,7 +26,7 @@
     {
       "id": 4,
       "subject": "Task 4: `bulk_read` tool",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** An MCP tool that reads 1\u201350 absolute paths server-side and answers a question about them, returning no file content.\n\n**Files:**\n- Create: `internal/mcpsrv/worker_handlers.go`\n- Modify: `internal/mcpsrv/server.go`\n- Test: `internal/mcpsrv/worker_handlers_test.go`\n\n**Acceptance Criteria:**\n- [ ] `bulk_read` appears in the tool catalog\n- [ ] Empty `question` or empty `paths` is a validation error\n- [ ] More than 50 paths is rejected naming the limit\n- [ ] A relative path is rejected before any provider call \u2014 the goal and tool description both promise absolute paths\n- [ ] Paths go through `resolveFileInput`, so roots containment, `O_NOFOLLOW` and control-character refusal all apply\n- [ ] The cap counts **caller-controlled bytes only**: `len(question)` + the sum of file bytes. Template scaffolding and `<file>` wrappers are excluded \u2014 server-controlled, bounded, and counting them would make the effective cap drift with every template edit. Stated in a comment so it is not re-litigated\n- [ ] A multi-file call that crosses the cap on the LAST file is refused, tested at the boundary\n- [ ] Total bytes over `MaxPayloadBytes` returns the structured too-large envelope, never a truncated read\n- [ ] Success returns `answer`, `model_used`, `review_ms`, `input_tokens`, `output_tokens`, `files_read`, `bytes_read`\n- [ ] The response contains no file content other than what the worker quoted\n\n**Verify:** `go test -race ./internal/mcpsrv/... -run BulkRead -v` \u2192 PASS\n\nFull steps with code: see Task 4 in `docs/superpowers/plans/2026-09-07-io-delegation-and-completion-guard.md`.\n\n```json:metadata\n{\"files\": [\"internal/mcpsrv/worker_handlers.go\", \"internal/mcpsrv/worker_handlers_test.go\", \"internal/mcpsrv/server.go\"], \"verifyCommand\": \"go test -race ./internal/mcpsrv/... -run BulkRead -v\", \"acceptanceCriteria\": [\"bulk_read registered in the catalog\", \"empty question or paths is a validation error\", \"more than 50 paths rejected naming the limit\", \"paths honour PLAN_ROOTS via resolveFileInput\", \"oversized payload returns a fail envelope not a truncated read\", \"success returns answer plus model, ms, tokens, files_read, bytes_read\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         3
@@ -141,5 +141,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-07T19:16:05.503851+00:00"
+  "lastUpdated": "2026-09-07T19:31:17.467027+00:00"
 }
