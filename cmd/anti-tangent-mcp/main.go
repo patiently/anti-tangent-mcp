@@ -75,6 +75,9 @@ func main() {
 	if err := providers.ValidateModel(cfg.ExtractModel); err != nil {
 		fail(logger, "extract model invalid", err)
 	}
+	if err := providers.ValidateModel(cfg.WorkerModel); err != nil {
+		fail(logger, "worker model invalid", err)
+	}
 
 	registry := providers.Registry{}
 	if cfg.AnthropicKey != "" {
