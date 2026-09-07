@@ -8,6 +8,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"regexp"
 	"strconv"
 	"strings"
@@ -429,6 +430,56 @@ func RenderPlanFindingsOnly(in PlanInput) (Output, error) {
 
 func RenderPrime(in PrimeInput) (Output, error) {
 	body, err := render("prime.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
+}
+
+// WorkerFile is one file attached to a worker call.
+type WorkerFile struct {
+	Path    string
+	Content string
+}
+
+type WorkerBulkReadInput struct {
+	Question string
+	Files    []WorkerFile
+}
+
+// escapeAttr makes a path safe inside a path="…" attribute. text/template
+// escapes nothing, so a filename containing a double quote would otherwise
+// close the attribute and have the remainder read as prompt structure. Quotes
+// and ampersands are legal in Unix filenames and are NOT covered by
+// rejectControlChars, which refuses only control and Unicode format characters.
+func escapeAttr(p string) string { return html.EscapeString(p) }
+
+type WorkerCodeWriteInput struct {
+	Spec             string
+	ReferencePath    string
+	ReferenceContent string
+}
+
+// RenderWorkerBulkRead renders the bulk_read worker prompt. UserPrefix is
+// deliberately left empty: this is a single call, and an Anthropic cache
+// breakpoint on a single call is a 1.25x write against zero reads.
+func RenderWorkerBulkRead(in WorkerBulkReadInput) (Output, error) {
+	esc := make([]WorkerFile, len(in.Files))
+	for i, f := range in.Files {
+		esc[i] = WorkerFile{Path: escapeAttr(f.Path), Content: f.Content}
+	}
+	in.Files = esc
+	body, err := render("worker_bulk_read.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
+}
+
+// RenderWorkerCodeWrite renders the code_write worker prompt.
+func RenderWorkerCodeWrite(in WorkerCodeWriteInput) (Output, error) {
+	in.ReferencePath = escapeAttr(in.ReferencePath)
+	body, err := render("worker_code_write.tmpl", in)
 	if err != nil {
 		return Output{}, err
 	}

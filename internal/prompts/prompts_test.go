@@ -1538,3 +1538,44 @@ func TestRenderPlan_AttachedFileWithDecoyEndFileLine_RemainsUnambiguous(t *testi
 	assert.NotContains(t, out.User, "END FILE "+testContextNonce+": /some/path.go",
 		"the decoy must not accidentally be treated as a nonce-bearing terminator")
 }
+
+func TestRenderWorkerBulkRead(t *testing.T) {
+	out, err := RenderWorkerBulkRead(WorkerBulkReadInput{
+		Question: "Which methods write to the database?",
+		Files: []WorkerFile{
+			{Path: "/repo/a.go", Content: "package a\n"},
+			{Path: "/repo/b.go", Content: "package b\n"},
+		},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out.System, "Output.System must carry the package's standard system prompt")
+	assert.Contains(t, out.User, `<file path="/repo/a.go">`, "missing file wrapper for a.go")
+	assert.Contains(t, out.User, "Which methods write to the database?", "missing question")
+	assert.Empty(t, out.UserPrefix, "UserPrefix should be empty on a single-call render")
+	golden(t, "worker_bulk_read", out.User)
+}
+
+func TestRenderWorkerCodeWrite(t *testing.T) {
+	out, err := RenderWorkerCodeWrite(WorkerCodeWriteInput{
+		Spec:             "A table test for Add.",
+		ReferencePath:    "/repo/ref_test.go",
+		ReferenceContent: "package ref\n",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, out.System, "Output.System must carry the package's standard system prompt")
+	assert.Contains(t, out.User, `<file path="/repo/ref_test.go">`, "missing reference wrapper")
+	assert.Contains(t, out.User, "A table test for Add.", "missing spec")
+	assert.Empty(t, out.UserPrefix, "UserPrefix should be empty on a single-call render")
+	golden(t, "worker_code_write", out.User)
+}
+
+func TestRenderWorkerBulkReadEscapesAttributes(t *testing.T) {
+	out, err := RenderWorkerBulkRead(WorkerBulkReadInput{
+		Question: "q",
+		Files:    []WorkerFile{{Path: `/repo/we"ird & <odd>.go`, Content: "package a\n"}},
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, out.User, `path="/repo/we"ird`, "an unescaped quote broke out of the path attribute")
+	assert.Contains(t, out.User, "&#34;", "quote must be escaped")
+	assert.Contains(t, out.User, "&amp;", "ampersand must be escaped")
+}
