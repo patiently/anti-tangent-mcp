@@ -198,6 +198,8 @@ type ExtractInput struct {
 
 const systemPrompt = `You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.`
 
+const workerSystemPrompt = `You return ONLY a JSON object matching the provided schema. You never invent facts about code that wasn't shown to you.`
+
 func RenderPre(in PreInput) (Output, error) {
 	body, err := render("pre.tmpl", in)
 	if err != nil {
@@ -367,6 +369,41 @@ func ensureContextFilesNonceChunk(in PlanChunkInput) (PlanChunkInput, error) {
 	return in, nil
 }
 
+// DeriveWorkerContentNonce derives a DETERMINISTIC nonce from content strings,
+// preventing content from forging delimiters in worker prompts. Similar to
+// DeriveContextFilesNonce but simpler, working with plain content strings rather
+// than file structures. Belt-and-braces retry logic matches DeriveContextFilesNonce.
+func DeriveWorkerContentNonce(contents []string) (string, error) {
+	for attempt := 0; attempt < contextNonceMaxAttempts; attempt++ {
+		h := sha256.New()
+		for _, content := range contents {
+			h.Write([]byte(content))
+			h.Write([]byte{0})
+		}
+		if attempt > 0 {
+			h.Write([]byte(strconv.Itoa(attempt)))
+		}
+		token := hex.EncodeToString(h.Sum(nil))[:contextNonceHexLen]
+		if !workerContentNonceCollides(contents, token) {
+			return token, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"prompts: could not derive a collision-free worker content nonce after %d attempts", contextNonceMaxAttempts)
+}
+
+// workerContentNonceCollides reports whether token appears in any content
+// as a delimiter-shaped line that would break prompt structure.
+func workerContentNonceCollides(contents []string, token string) bool {
+	re := regexp.MustCompile(`(?m)^[ \t]*-{3,}[ \t]*(?:BEGIN|END)[ \t]+FILE[ \t]+` + regexp.QuoteMeta(token) + `(?:[ \t]*[:\t]|[ \t]*-{3,}[ \t]*$)`)
+	for _, c := range contents {
+		if re.MatchString(c) {
+			return true
+		}
+	}
+	return false
+}
+
 func RenderPlan(in PlanInput) (Output, error) {
 	in, err := ensureContextFilesNonce(in)
 	if err != nil {
@@ -445,6 +482,7 @@ type WorkerFile struct {
 type WorkerBulkReadInput struct {
 	Question string
 	Files    []WorkerFile
+	Nonce    string // empty, derived during render if unset
 }
 
 // escapeAttr makes a path safe inside a path="…" attribute. text/template
@@ -458,6 +496,7 @@ type WorkerCodeWriteInput struct {
 	Spec             string
 	ReferencePath    string
 	ReferenceContent string
+	Nonce            string // empty, derived during render if unset
 }
 
 // RenderWorkerBulkRead renders the bulk_read worker prompt. UserPrefix is
@@ -465,25 +504,47 @@ type WorkerCodeWriteInput struct {
 // breakpoint on a single call is a 1.25x write against zero reads.
 func RenderWorkerBulkRead(in WorkerBulkReadInput) (Output, error) {
 	esc := make([]WorkerFile, len(in.Files))
+	contents := make([]string, len(in.Files))
 	for i, f := range in.Files {
 		esc[i] = WorkerFile{Path: escapeAttr(f.Path), Content: f.Content}
+		contents[i] = f.Content
 	}
 	in.Files = esc
+
+	// Derive nonce from file contents if not explicitly set
+	if in.Nonce == "" {
+		nonce, err := DeriveWorkerContentNonce(contents)
+		if err != nil {
+			return Output{}, err
+		}
+		in.Nonce = nonce
+	}
+
 	body, err := render("worker_bulk_read.tmpl", in)
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
+	return Output{System: workerSystemPrompt, User: body, UserSuffix: body}, nil
 }
 
 // RenderWorkerCodeWrite renders the code_write worker prompt.
 func RenderWorkerCodeWrite(in WorkerCodeWriteInput) (Output, error) {
 	in.ReferencePath = escapeAttr(in.ReferencePath)
+
+	// Derive nonce from reference content if not explicitly set
+	if in.Nonce == "" {
+		nonce, err := DeriveWorkerContentNonce([]string{in.ReferenceContent})
+		if err != nil {
+			return Output{}, err
+		}
+		in.Nonce = nonce
+	}
+
 	body, err := render("worker_code_write.tmpl", in)
 	if err != nil {
 		return Output{}, err
 	}
-	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
+	return Output{System: workerSystemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func RenderExtract(in ExtractInput) (Output, error) {

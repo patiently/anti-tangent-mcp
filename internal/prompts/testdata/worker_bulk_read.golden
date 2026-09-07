@@ -1,3 +1,5 @@
+You return ONLY a JSON object matching the provided schema. You never invent facts about code that wasn't shown to you.
+---USER---
 You are answering a specific question about source files that have been provided in full.
 
 Ground rules:
@@ -8,15 +10,15 @@ Ground rules:
 - If the files do not contain the answer, say so in one bullet. Do not speculate.
 - Quote code only when the exact text is the answer.
 
-<file path="/repo/a.go">
+--- BEGIN FILE de1d4904: /repo/a.go ---
 package a
 
-</file>
+--- END FILE de1d4904: /repo/a.go ---
 
-<file path="/repo/b.go">
+--- BEGIN FILE de1d4904: /repo/b.go ---
 package b
 
-</file>
+--- END FILE de1d4904: /repo/b.go ---
 
 ## Question
 

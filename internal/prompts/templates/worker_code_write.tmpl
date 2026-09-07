@@ -5,9 +5,9 @@ Ground rules:
 - Where the specification is ambiguous, resolve it toward whatever the reference file does.
 - Output ONLY the code. No explanation, no commentary, no markdown fences.
 
-<file path="{{.ReferencePath}}">
+--- BEGIN FILE {{.Nonce}}: {{.ReferencePath}} ---
 {{.ReferenceContent}}
-</file>
+--- END FILE {{.Nonce}}: {{.ReferencePath}} ---
 
 ## What to generate
 
