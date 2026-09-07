@@ -22,6 +22,8 @@
 - **All hooks fail open.** Any unexpected error exits 0. A hook that blocks because it broke is worse than the drift it prevents.
 - `go test -race ./...` must pass. Unit tests never hit the network — `httptest.Server` only.
 
+**The generated-code contract (binding on Tasks 6, 11 and 14 — state it the same way in all three).** Code produced by `code_write` with a `target_path` is **verified, not inspected**. The implementer owns choosing the reference file and proving the result works — by running the task's tests and build — and does NOT have to read the generated code. Requiring inspection would defeat the entire purpose, since the saving is precisely that the code never enters the implementer's context. Use the word *verification*; do not write "review" of generated code anywhere, because that reads as inspection and contradicts the tool's design.
+
 **User decisions (already made):**
 - Hook event is `PostToolUse` on `TaskUpdate` with `status=completed` — chosen over `SubagentStop` because it covers both `executing-plans` and `subagent-driven-development` via two pass signals.
 - The guard ships as its own plugin, **active on install**; `ANTI_TANGENT_COMPLETION_GUARD=0` disables it.
@@ -236,6 +238,7 @@ git commit -m "feat(config): worker model and token cap for bulk_read/code_write
 **Acceptance Criteria:**
 - [ ] `RenderWorkerBulkRead` wraps each file as `<file path="…">…</file>` and ends with the question
 - [ ] `RenderWorkerCodeWrite` includes the reference file and the spec
+- [ ] Both renderers return a non-empty `Output.System` carrying the package's standard system prompt — the goal promises system *and* user prompts, so `System` is part of the contract and both tests assert it
 - [ ] Both return `prompts.Output` with `UserPrefix` empty (single-call, no cache breakpoint)
 - [ ] Golden files match; `-update` regenerates them
 - [ ] Instruction wording is paraphrased, not copied from upstream
@@ -702,7 +705,7 @@ func (h *handlers) runWorker(
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `go test -race ./internal/mcpsrv/... -run Worker -v`
-Expected: PASS (4 tests)
+Expected: all five `Worker` tests pass
 
 - [ ] **Step 5: Commit**
 
@@ -750,10 +753,15 @@ package mcpsrv
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
@@ -886,13 +894,50 @@ func TestBulkReadCapCrossedOnLastFile(t *testing.T) {
 	}
 }
 
+// catalogHas connects an in-memory client to a real server and reports whether
+// the named tool is advertised. Mirrors the transport setup already used by
+// internal/mcpsrv/integration_test.go — do not invent a second mechanism.
+func catalogHas(t *testing.T, name string) bool {
+	t.Helper()
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Deps{Cfg: cfg, Reviews: providers.Registry{"anthropic": &fakeWorkerReviewer{}}})
+
+	st, ct := mcp.NewInMemoryTransports()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	go func() { _ = srv.Run(ctx, st) }()
+
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+
+	res, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range res.Tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Named so `-run BulkRead` selects it, and asserting ONLY bulk_read: code_write
 // is not registered until Task 6, so a combined assertion here would leave
 // `go test ./...` red for every task in between. Task 6 adds its own.
 func TestBulkReadRegisteredInCatalog(t *testing.T) {
-	// Enumerate the server's registered tools using whatever mechanism
-	// internal/mcpsrv/integration_test.go already uses — do not add a second one.
-	if !registeredToolNames(t).has("bulk_read") {
+	if !catalogHas(t, "bulk_read") {
 		t.Error("tool \"bulk_read\" is not registered")
 	}
 }
@@ -1221,11 +1266,31 @@ func TestWriteTargetOverwriteTruncates(t *testing.T) {
 	}
 }
 
-// NOTE: this test belongs in a build-tagged file, NOT in file_target_test.go.
-// Put it in internal/mcpsrv/file_target_unix_test.go with `//go:build !windows`
-// at the top. The acceptance criteria accept the Windows leaf-symlink gap as a
-// documented non-goal; a test that asserts the guarantee unconditionally would
-// contradict that and fail the moment anyone runs the suite on Windows.
+```
+
+**STOP — the next test goes in a DIFFERENT file.** Everything above belongs in
+`internal/mcpsrv/file_target_test.go`. The leaf-symlink test below belongs in
+`internal/mcpsrv/file_target_unix_test.go`, whose first lines are:
+
+```go
+//go:build !windows
+
+package mcpsrv
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+```
+
+`!windows` rather than an explicit Unix list because that is exactly the
+constraint the existing read path uses (`internal/mcpsrv/file_source_unix.go`);
+matching it keeps one convention rather than two. The acceptance criteria accept
+the Windows leaf-symlink gap as a documented non-goal, so a test asserting the
+guarantee unconditionally would contradict them.
+
+```go
 func TestWriteTargetRefusesSymlinkLeaf(t *testing.T) {
 	dir := t.TempDir()
 	victim := filepath.Join(dir, "victim.go")
@@ -1404,7 +1469,7 @@ Expected: PASS (8 tests)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/mcpsrv/file_target.go internal/mcpsrv/file_target_unix.go internal/mcpsrv/file_target_windows.go internal/mcpsrv/file_target_test.go
+git add internal/mcpsrv/file_target.go internal/mcpsrv/file_target_unix.go internal/mcpsrv/file_target_windows.go internal/mcpsrv/file_target_test.go internal/mcpsrv/file_target_unix_test.go
 git commit -m "feat(mcpsrv): write-target resolver with roots and O_NOFOLLOW"
 ```
 
@@ -1431,7 +1496,9 @@ git commit -m "feat(mcpsrv): write-target resolver with roots and O_NOFOLLOW"
 - [ ] A truncated worker response writes nothing
 - [ ] `lines_written` counts a final line with no trailing newline
 - [ ] **Empty generated code (after fence-stripping) is an error and nothing is written.** This is what makes the `omitempty` tags safe: on every success `code` is non-empty and `lines_written` >= 1, so neither field the acceptance criteria promise can be dropped by the encoder
-- [ ] A `Close` error on the target is reported, not discarded — a write is not done until the file closes cleanly
+- [ ] A `Close` error on the target is reported, not discarded — a write is not done until the file closes cleanly, proven by a test that injects a failing `Close` through the `openWriteTarget` seam
+- [ ] Empty, whitespace-only and fence-only worker output are each tested; for a targeted call the test asserts the target file was never created
+- [ ] `code_write` appears in the tool catalog, asserted here (Task 4 asserts only `bulk_read`, since this task is what registers `code_write`)
 
 **Verify:** `go test -race ./internal/mcpsrv/... -run 'CodeWrite|StripFences|CountLines' -v` → PASS
 
@@ -1512,6 +1579,77 @@ func TestCodeWriteTruncationWritesNothing(t *testing.T) {
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
 		t.Fatal("a truncated response must not create the target file")
+	}
+}
+
+func TestCodeWriteRegisteredInCatalog(t *testing.T) {
+	// The code_write half of the catalog assertion lives here, not in Task 4:
+	// this is the task that registers it.
+	if !catalogHas(t, "code_write") {
+		t.Error("tool \"code_write\" is not registered")
+	}
+}
+
+func TestCodeWriteEmptyOutputIsAnErrorAndWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	if err := os.WriteFile(ref, []byte("package ref\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"empty":      `{"code":""}`,
+		"whitespace": `{"code":"   \n\t"}`,
+		"fence only": "{\"code\":\"` + "```" + `go\\n` + "```" + `\"}",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			target := filepath.Join(dir, "out_"+strings.ReplaceAll(name, " ", "_")+".go")
+			f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(body)}}
+			h := &handlers{deps: workerDeps(t, f, []string{dir})}
+			if _, _, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+				Spec: "s", ReferencePath: ref, TargetPath: target,
+			}); err == nil {
+				t.Fatal("empty generated code must be an error")
+			}
+			if _, err := os.Stat(target); !os.IsNotExist(err) {
+				t.Error("nothing must be written when the worker returns no code")
+			}
+		})
+	}
+}
+
+// closeFailTarget wraps a real file and reports a Close failure, so the
+// "Close errors are reported" criterion has something to assert against.
+type closeFailTarget struct {
+	*os.File
+	err error
+}
+
+func (c closeFailTarget) Close() error { _ = c.File.Close(); return c.err }
+
+func TestCodeWriteReportsCloseError(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	if err := os.WriteFile(ref, []byte("package ref\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := openWriteTarget
+	t.Cleanup(func() { openWriteTarget = orig })
+	openWriteTarget = func(target string, roots []string, overwrite bool) (writeTarget, error) {
+		f, err := resolveWriteTarget(target, roots, overwrite)
+		if err != nil {
+			return nil, err
+		}
+		return closeFailTarget{File: f, err: errors.New("disk went away")}, nil
+	}
+
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"code":"package out\n"}`)}}
+	h := &handlers{deps: workerDeps(t, f, []string{dir})}
+	_, _, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+		Spec: "s", ReferencePath: ref, TargetPath: filepath.Join(dir, "out.go"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "disk went away") {
+		t.Fatalf("a Close error must surface, got %v", err)
 	}
 }
 
@@ -1648,7 +1786,7 @@ func (h *handlers) CodeWrite(ctx context.Context, _ *mcp.CallToolRequest, args C
 		return nil, res, nil
 	}
 
-	f, err := resolveWriteTarget(args.TargetPath, h.deps.Cfg.PlanRoots, args.Overwrite)
+	f, err := openWriteTarget(args.TargetPath, h.deps.Cfg.PlanRoots, args.Overwrite)
 	if err != nil {
 		return nil, CodeWriteResult{}, err
 	}
@@ -1666,6 +1804,23 @@ func (h *handlers) CodeWrite(ctx context.Context, _ *mcp.CallToolRequest, args C
 	res.Written = written
 	res.LinesWritten = countLines(code)
 	return nil, res, nil
+}
+
+// writeTarget is the narrow surface CodeWrite needs from an open file.
+// *os.File satisfies it. It exists solely so a test can force Close to fail —
+// there is no way to make a real *os.File's Close return an error on demand,
+// and "a Close error is reported, not discarded" is an acceptance criterion,
+// so it needs a seam.
+type writeTarget interface {
+	io.StringWriter
+	io.Closer
+	Name() string
+}
+
+// openWriteTarget is a package var for the same reason. Production always
+// resolves through Task 5's resolveWriteTarget; only tests replace it.
+var openWriteTarget = func(target string, roots []string, overwrite bool) (writeTarget, error) {
+	return resolveWriteTarget(target, roots, overwrite)
 }
 
 // stripFences removes a markdown code fence that wraps the ENTIRE body. A
@@ -1913,12 +2068,12 @@ Expected: PASS
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/stats/ internal/mcpsrv/worker_handlers.go
+git add internal/stats/ internal/mcpsrv/worker_handlers.go internal/mcpsrv/worker_handlers_test.go
 git commit -m "feat(stats): worker token telemetry, additive to rollup.json"
 ```
 
 ```json:metadata
-{"files": ["internal/stats/event.go", "internal/stats/rollup.go", "internal/stats/rollup_test.go", "internal/mcpsrv/worker_handlers.go"], "verifyCommand": "go test -race ./internal/stats/... ./internal/mcpsrv/... -v", "acceptanceCriteria": ["Event gains omitempty token fields", "Rollup gains a worker key absent without worker events", "worker reports per-tool counts and summed tokens", "all pre-existing rollup.json keys unchanged", "handlers record events and are nil-safe"], "modelTier": "mechanical"}
+{"files": ["internal/stats/event.go", "internal/stats/event_test.go", "internal/stats/rollup.go", "internal/stats/rollup_test.go", "internal/mcpsrv/worker_handlers.go", "internal/mcpsrv/worker_handlers_test.go"], "verifyCommand": "go test -race ./internal/stats/... ./internal/mcpsrv/... -v", "acceptanceCriteria": ["Event gains omitempty token fields", "Rollup gains a worker key absent without worker events", "worker reports per-tool counts and summed tokens", "all pre-existing rollup.json keys unchanged", "handlers record events and are nil-safe"], "modelTier": "mechanical"}
 ```
 
 ---
@@ -2068,8 +2223,14 @@ Files in this repository derived from that work:
 
 - `plugin/anti-tangent-shunt/hooks/check-file-size`
 - `plugin/anti-tangent-shunt/hooks/check-bash-read`
+- `plugin/anti-tangent-shunt/evals/run.sh`
 - `plugin/anti-tangent-shunt/evals/hook-evals.json`
 - `plugin/anti-tangent-shunt/evals/bash-hook-evals.json`
+
+Task 10 adapts `evals/run.sh` from upstream as well as the two hooks, and may
+fetch fixture files. **Task 10 reconciles this list against what it actually
+copied** — if it fetches fixtures, they are added here in the same commit. An
+attribution list that omits a copied file is the failure this exists to prevent.
 
 Each derived file carries its original licence header together with a
 modification notice. The upstream commit ported from is `3c24ca30ff63e1f5bbad1c43fe5324daff579123`. The modification in every case is the same: the
@@ -2135,8 +2296,16 @@ func TestThirdPartyNoticesPresent(t *testing.T) {
 			t.Errorf("THIRD_PARTY_NOTICES.md must contain %q", want)
 		}
 	}
-	if !strings.Contains(body, "check-file-size") || !strings.Contains(body, "check-bash-read") {
-		t.Error("THIRD_PARTY_NOTICES.md must list the derived hook files by path")
+	for _, path := range []string{
+		"plugin/anti-tangent-shunt/hooks/check-file-size",
+		"plugin/anti-tangent-shunt/hooks/check-bash-read",
+		"plugin/anti-tangent-shunt/evals/run.sh",
+		"plugin/anti-tangent-shunt/evals/hook-evals.json",
+		"plugin/anti-tangent-shunt/evals/bash-hook-evals.json",
+	} {
+		if !strings.Contains(body, path) {
+			t.Errorf("THIRD_PARTY_NOTICES.md must list the derived file %s", path)
+		}
 	}
 }
 ```
@@ -2170,7 +2339,8 @@ git commit -m "docs: Apache-2.0 attribution for the ported shunt hooks"
 - Create: `plugin/anti-tangent-shunt/evals/run.sh`
 - Create: `plugin/anti-tangent-shunt/evals/hook-evals.json`
 - Create: `plugin/anti-tangent-shunt/evals/bash-hook-evals.json`
-- Create: `plugin/anti-tangent-shunt/evals/fixtures/`
+- Modify: `THIRD_PARTY_NOTICES.md` (reconcile the derived-file list with what was actually copied)
+- Create (CONDITIONAL): `plugin/anti-tangent-shunt/evals/fixtures/` — created ONLY if the pinned suites reference fixture paths (Step 5 enumerates them). If they synthesise their own inputs, this directory is not created and should be dropped from this list.
 
 **Acceptance Criteria:**
 - [ ] Both scripts keep their upstream Apache-2.0 header plus the modification notice
@@ -2180,11 +2350,12 @@ git commit -m "docs: Apache-2.0 attribution for the ported shunt hooks"
 - [ ] Bash hook passes: pipes, redirections, `head`/`tail` with a count flag, non-read commands
 - [ ] **Any parse ambiguity results in allow, never block**
 - [ ] All 34 ported cases pass; `evals/run.sh` exits non-zero on any failure
+- [ ] `THIRD_PARTY_NOTICES.md` is reconciled against what this task actually copied — `run.sh` and any fetched fixtures included — in the same commit
 - [ ] Every upstream file is fetched from the **pinned commit `3c24ca30ff63e1f5bbad1c43fe5324daff579123`**, never `main`, and that SHA is recorded in `THIRD_PARTY_NOTICES.md`
 - [ ] `evals/fixtures/` contains exactly the files the two JSON suites reference — enumerated from the suites themselves, not guessed. If the suites synthesise their own inputs, the directory is not created at all
 - [ ] No **operational** Portal/AiKA references remain. Attribution must SURVIVE: the modification notice, licence headers, README acknowledgement and benchmark comparison all legitimately name Portal/AiKA. The check asserts matches occur only on allowlisted lines — never that the grep is empty.
 
-**Verify:** `bash plugin/anti-tangent-shunt/evals/run.sh` → all cases pass, exit 0
+**Verify:** `bash plugin/anti-tangent-shunt/evals/run.sh` → all 34 cases pass, exit 0. `run.sh` must ALSO run the operational-reference check from Step 6, so the allowlist rule is enforced by the same command CI runs rather than living only in a manual step.
 
 **Steps:**
 
@@ -2316,7 +2487,7 @@ replaced with mcp__anti-tangent__bulk_read. 34 upstream hook cases ported."
 ```
 
 ```json:metadata
-{"files": ["plugin/anti-tangent-shunt/hooks/hooks.json", "plugin/anti-tangent-shunt/hooks/check-file-size", "plugin/anti-tangent-shunt/hooks/check-bash-read", "plugin/anti-tangent-shunt/evals/run.sh", "plugin/anti-tangent-shunt/evals/hook-evals.json", "plugin/anti-tangent-shunt/evals/bash-hook-evals.json"], "verifyCommand": "bash plugin/anti-tangent-shunt/evals/run.sh", "acceptanceCriteria": ["Apache-2.0 headers preserved plus modification notice", "ANTI_TANGENT_SHUNT_MIN_LINES rename with default 350", "block messages name mcp__anti-tangent__bulk_read with an example", "read hook passes targeted/small/missing files", "bash hook passes pipes, redirections, count flags, non-read commands", "ambiguity allows rather than blocks", "34 ported cases pass", "no Portal/AiKA references remain"], "modelTier": "standard"}
+{"files": ["plugin/anti-tangent-shunt/hooks/hooks.json", "plugin/anti-tangent-shunt/hooks/check-file-size", "plugin/anti-tangent-shunt/hooks/check-bash-read", "plugin/anti-tangent-shunt/evals/run.sh", "plugin/anti-tangent-shunt/evals/hook-evals.json", "plugin/anti-tangent-shunt/evals/bash-hook-evals.json"], "verifyCommand": "bash plugin/anti-tangent-shunt/evals/run.sh", "acceptanceCriteria": ["Apache-2.0 headers preserved plus modification notice", "ANTI_TANGENT_SHUNT_MIN_LINES rename with default 350", "block messages name mcp__anti-tangent__bulk_read with an example", "read hook passes targeted/small/missing files", "bash hook passes pipes, redirections, count flags, non-read commands", "ambiguity allows rather than blocks", "34 ported cases pass", "all fetches use the pinned SHA recorded in THIRD_PARTY_NOTICES.md", "fixtures enumerated from the suites, not guessed", "no operational Portal/AiKA references remain; attribution, licence headers and benchmark comparison survive in the documented allowlisted locations"], "modelTier": "standard"}
 ```
 
 ---
@@ -2448,8 +2619,12 @@ pattern is already decided and only the filling changes.
 
 ## Verify what you generated
 
-Generated code is unreviewed by you. Run the tests or the build before treating
-it as done — and remember `validate_completion` still applies to the task.
+You have not read this code, and you do not need to — that is the saving. What
+you DO owe is proof it works: run the task's tests and its build before treating
+it as done, and `validate_completion` still applies to the task as a whole.
+
+Verification, not inspection. If a change genuinely needs your eyes on the text,
+it was not boilerplate and should not have been delegated.
 ```
 
 - [ ] **Step 4: Write the plugin README**
@@ -2727,7 +2902,7 @@ Same shape as Task 11's, `name: anti-tangent-guard`, version `0.1.0`, descriptio
 
 - [ ] **Step 4: Write the evals**
 
-`evals/guard-evals.json` — each case is a stdin payload plus a synthetic transcript and an expected exit code. Cover all nine:
+`evals/guard-evals.json` — each case is a stdin payload plus a synthetic transcript and an expected exit code. Cover all fifteen:
 
 | Case | Expect |
 |---|---|
@@ -2810,6 +2985,14 @@ In `.github/workflows/ci.yml`, after the `protocol-docs` job:
 
       - name: Completion guard evals
         run: bash plugin/anti-tangent-guard/evals/run.sh
+
+      - name: Eval suites make no provider or network calls
+        run: |
+          # The no-network contract is an acceptance criterion, so assert it
+          # statically rather than inferring it from a green run.
+          ! grep -rnE 'curl|wget|nc |ANTHROPIC_API_KEY|OPENAI_API_KEY|GOOGLE_API_KEY' \
+              plugin/anti-tangent-shunt/evals plugin/anti-tangent-guard/evals \
+              plugin/anti-tangent-shunt/hooks plugin/anti-tangent-guard/hooks
 ```
 
 - [ ] **Step 2: Gate the Go job on it**
@@ -2848,7 +3031,7 @@ git commit -m "ci: gate on plugin hook eval suites"
 
 **Acceptance Criteria:**
 - [ ] `core.md` gains an unnumbered "What is never delegated" section covering both loops
-- [ ] That section does **not** contradict `code_write`: it must distinguish judgement-bearing changes to existing code (never delegated) from pattern-following generation of new files (delegable, with the implementer still owning reference choice, review and verification)
+- [ ] That section does **not** contradict `code_write`: it must distinguish judgement-bearing changes to existing code (never delegated) from pattern-following generation of new files (delegable, with the implementer owning reference choice and **verification**). It must say "verification", never "review", of generated code — see the generated-code contract in Global Constraints
 - [ ] Its wording is **ours**, not upstream's Apache-2.0 prose
 - [ ] `implementer.md` gains an unnumbered "Large reads" clause: call `bulk_read` with a question; targeted `Read` before editing
 - [ ] `controller.md` documents the guard, both block messages and the kill switch
@@ -2883,8 +3066,11 @@ generates boilerplate). Both stop at the same line.
 - **Changes to existing code stay with the implementer.** A worker's answer
   carries no reliable line anchors: use it to locate a region, then read that
   region directly and edit it yourself. Generating a NEW file that follows an
-  existing pattern is different, and is delegable — but choosing the reference,
-  reviewing the result, and proving it works remain yours.
+  existing pattern is different, and is delegable — but choosing the reference
+  and proving the result works remain yours. Generated code is **verified, not
+  inspected**: run the tests and the build. You are not required to read it,
+  which is the whole point — reading it would put back exactly the context the
+  delegation removed.
 - **Judgement stays with the implementer.** Delegating the reading is not
   delegating the deciding.
 - **Small inputs are not worth delegating.** Below the threshold the round
@@ -3003,7 +3189,10 @@ Bump `version` to `0.9.0`, extend the description, and add both entries followin
 - [ ] **Step 5: Verify and commit**
 
 ```bash
-jq -e '.plugins | length == 4' .claude-plugin/marketplace.json && echo "4 plugins listed"
+jq -e '.version == "0.9.0"
+  and (.plugins | length == 4)
+  and ([.plugins[].name] | index("anti-tangent-shunt") != null and index("anti-tangent-guard") != null)' \
+  .claude-plugin/marketplace.json && echo "marketplace ok"
 git grep -nE 'seven tools|seven registered|three handlers' && echo "STALE COUNT REMAINS" || echo "counts updated"
 bash scripts/check-protocol-docs.sh
 git add README.md CLAUDE.md .claude-plugin/marketplace.json
@@ -3036,7 +3225,8 @@ git commit -m "docs: document the I/O tools, both plugins, and the write trust m
 - [ ] The README table is labelled as ours, next to upstream's for comparison
 - [ ] The method is written down well enough for someone else to re-run it
 - [ ] The **exact prompt** for every scenario is fixed BEFORE measuring and reproduced verbatim in `benchmarks.md` — answer size, and therefore the savings figure, depends materially on the question asked
-- [ ] Corpus eligibility is objective (see Step 1), not "boring enough"
+- [ ] Corpus eligibility is objective (see Step 1), not "boring enough" — and package count is measured with `go list`, not by counting unique directories
+- [ ] The corpus licence file and its SPDX identifier are recorded in `benchmarks.md`, with OSI-approved status confirmed rather than assumed
 - [ ] Upstream's comparison figures are cited to the pinned source `spotify/portal-ai-plugins@3c24ca30ff63e1f5bbad1c43fe5324daff579123` `plugins/shunt/README.md`, which is where they were read — the accompanying blog post is unreachable from this environment and must not be cited as if read
 - [ ] The verify command compares the README table **row by row** against `benchmarks.tsv` — matching scenario labels and every cell — not merely that each number appears somewhere
 - [ ] The checker runs in CI (`hook-evals`) and in the whole-plan gate, so later documentation drift is caught
@@ -3075,7 +3265,10 @@ git -C /tmp/bench-corpus ls-files '*.go' \
 
 wc -l < /tmp/bench-files.txt                                          # eligible files
 (cd /tmp/bench-corpus && xargs -a /tmp/bench-files.txt cat | wc -l)   # must be 120000-200000
-(cd /tmp/bench-corpus && xargs -a /tmp/bench-files.txt -n1 dirname | sort -u | wc -l)  # must be >= 20
+(cd /tmp/bench-corpus && go list ./... | grep -v '/vendor/' | wc -l)   # Go PACKAGES, must be >= 20
+ls /tmp/bench-corpus/LICEN[CS]E* /tmp/bench-corpus/COPYING* 2>/dev/null  # record the licence file
+# Record its SPDX identifier in benchmarks.md and confirm that identifier is
+# listed at https://opensource.org/licenses. "It looked open source" is not a record.
 (cd /tmp/bench-corpus && go build ./...) && echo "corpus builds"
 ```
 
@@ -3102,7 +3295,7 @@ Tokens the file(s) would occupy in the implementer's context. Use the same token
 
 - [ ] **Step 4: Measure "with"**
 
-Run each scenario through `bulk_read` against the configured worker model and record: `input_tokens`, `output_tokens`, `review_ms`, and the token size of the returned `answer`. **`answer` is the "with" figure** — that is what actually lands in the implementer's context. `input_tokens` is the worker's consumption and belongs in its own column.
+Scenarios 1–3 run through `bulk_read`; **scenario 4 runs through `code_write`**, which is what it measures. For 1–3 record `input_tokens`, `output_tokens`, `review_ms` and the token size of the returned `answer`. For 4 record `input_tokens`, `output_tokens`, `review_ms` and `lines_written` — there is no `answer` and no savings ratio, because generated lines and context tokens are different units. **`answer` is the "with" figure** — that is what actually lands in the implementer's context. `input_tokens` is the worker's consumption and belongs in its own column.
 
 ```bash
 export ANTI_TANGENT_STATS_DIR=/tmp/bench-stats   # gives per-call rows for free
@@ -3115,11 +3308,16 @@ Write TWO files.
 `plugin/anti-tangent-shunt/evals/benchmarks.tsv` — machine-readable, one row per scenario, tab-separated, header first:
 
 ```
-scenario	lines	without_tokens	with_tokens	savings_pct	worker_in	worker_out	runs	statistic
-single_large_file	4014	33684	5737	82	31200	640	3	median
+scenario_id	label	lines	without_tokens	with_value	with_unit	savings_pct	worker_in	worker_out	runs	statistic
+single_large_file	Single large file	4014	33684	5737	tokens	82	31200	640	3	median
+code_write	Code-write	3667	40614	833	lines		5100	2900	3	median
 ```
 
 `plugin/anti-tangent-shunt/evals/benchmarks.md` — the human record: corpus repo + SHA, per-scenario file lists with line counts, the **verbatim prompt** for each scenario, the worker model id, the tokenizer (or the disclosed approximation), all three runs per scenario, and the commands to re-run.
+
+`with_unit` is what lets scenario 4 report lines without pretending they are tokens; its `savings_pct` is deliberately EMPTY, and the checker must enforce that rather than compute a ratio across units.
+
+`scenario_id` is the canonical key. The README table carries the same id in its first column (with the human `label` beside it), so the checker matches on the id and never on prose. Ids must be unique; the checker fails if any id appears twice, or in one file but not the other.
 
 The TSV exists so the README table can be checked mechanically. Comparing rendered prose against rendered prose is how the two drift apart.
 
@@ -3197,7 +3395,8 @@ for f in docs/protocol/*.md; do b=$(wc -c < "$f"); echo "$f=$b"; [ "$b" -ge 1600
 bash plugin/anti-tangent-shunt/evals/run.sh
 bash plugin/anti-tangent-guard/evals/run.sh
 bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh
-jq -e '.plugins | length == 4' .claude-plugin/marketplace.json
+jq -e '.version == "0.9.0" and (.plugins | length == 4)' .claude-plugin/marketplace.json
+! git grep -nE 'seven tools|seven registered|three handlers'
 git diff --name-only origin/main -- VERSION | grep -q . && echo "VERSION MUST NOT CHANGE" && exit 1
 grep -q '^## \[0.18.0\]' CHANGELOG.md
 ```
