@@ -10,7 +10,7 @@
     {
       "id": 2,
       "subject": "Task 2: Worker prompt templates",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Two embedded templates and their render functions, with golden tests, producing the worker system + user prompts.\n\n**Files:**\n- Create: `internal/prompts/templates/worker_bulk_read.tmpl`\n- Create: `internal/prompts/templates/worker_code_write.tmpl`\n- Modify: `internal/prompts/prompts.go`\n- Test: `internal/prompts/prompts_test.go`\n- Create: `internal/prompts/testdata/worker_bulk_read.golden`, `internal/prompts/testdata/worker_code_write.golden`\n\n**Acceptance Criteria:**\n- [ ] `RenderWorkerBulkRead` wraps each file as `<file path=\"\u2026\">\u2026</file>` and ends with the question\n- [ ] `RenderWorkerCodeWrite` includes the reference file and the spec\n- [ ] Both renderers return a non-empty `Output.System` carrying the package's standard system prompt \u2014 the goal promises system *and* user prompts, so `System` is part of the contract and both tests assert it\n- [ ] Both return `prompts.Output` with `UserPrefix` empty (single-call, no cache breakpoint)\n- [ ] Golden files match; `-update` regenerates them\n- [ ] Instruction wording is paraphrased, not copied from upstream\n\n**Verify:** `go test -race ./internal/prompts/... -run Worker -v` \u2192 PASS\n\nFull steps with code: see Task 2 in `docs/superpowers/plans/2026-09-07-io-delegation-and-completion-guard.md`.\n\n```json:metadata\n{\"files\": [\"internal/prompts/templates/worker_bulk_read.tmpl\", \"internal/prompts/templates/worker_code_write.tmpl\", \"internal/prompts/prompts.go\", \"internal/prompts/prompts_test.go\", \"internal/prompts/testdata/worker_bulk_read.golden\", \"internal/prompts/testdata/worker_code_write.golden\"], \"verifyCommand\": \"go test -race ./internal/prompts/... -run Worker -v\", \"acceptanceCriteria\": [\"bulk_read prompt wraps files in <file path=...> and ends with the question\", \"code_write prompt carries reference file and spec\", \"UserPrefix empty on both\", \"both tests assert a non-empty Output.System\", \"goldens match and -update regenerates\", \"instruction wording paraphrased not copied\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
@@ -141,5 +141,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-07T18:36:12.060982+00:00"
+  "lastUpdated": "2026-09-07T19:08:38.139261+00:00"
 }
