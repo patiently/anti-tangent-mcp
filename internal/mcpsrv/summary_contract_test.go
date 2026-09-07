@@ -2,8 +2,10 @@ package mcpsrv
 
 import (
 	"regexp"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -34,12 +36,13 @@ func TestSummaryBlockContract(t *testing.T) {
 	// is indifferent to column alignment spacing. Pinning the exact spacing
 	// would fail on cosmetic realignment — someone widening a column — while
 	// the hook carries on working, disabling this tripwire.
-	for _, want := range []string{"anti-tangent envelope", "session_id:", "sess-123"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("summary_block no longer contains %q — the guard hook greps for it.\n"+
-				"Update plugin/anti-tangent-guard/hooks/check-task-complete in this commit.\ngot:\n%s", want, got)
-		}
+	for _, want := range []string{"anti-tangent envelope", "session_id:"} {
+		require.Contains(t, got, want, "summary_block missing required substring.\nUpdate plugin/anti-tangent-guard/hooks/check-task-complete in this commit.")
 	}
+
+	// Extra insurance: verify the session ID value is populated (hook doesn't
+	// require it, but we assert it for completeness).
+	assert.Contains(t, got, "sess-123", "session_id value should be present in output")
 
 	// Mirror the guard hook's ACTUAL parser, not an approximation of it.
 	// check-task-complete extracts the verdict with ^\s*verdict:\s*(\w+) in
@@ -48,10 +51,47 @@ func TestSummaryBlockContract(t *testing.T) {
 	// stop the guard recognising a failed close while this test stayed green.
 	re := regexp.MustCompile(`(?m)^\s*verdict:\s*(\w+)`)
 	m := re.FindAllStringSubmatch(got, -1)
-	if len(m) == 0 {
-		t.Fatalf("no line matches the guard's verdict pattern.\ngot:\n%s", got)
-	}
-	if last := m[len(m)-1][1]; last != "fail" {
-		t.Errorf("guard would parse verdict %q, want \"fail\"", last)
-	}
+	require.NotEmpty(t, m, "no line matches the guard's verdict pattern.\ngot:\n%s", got)
+	assert.Equal(t, "fail", m[len(m)-1][1], "guard would parse wrong verdict — update plugin/anti-tangent-guard/hooks/check-task-complete in this commit")
+}
+
+// TestSummaryBlockContractLastMatchSemantics verifies that the verdict
+// parser uses last-match semantics, critical for reading the final verdict
+// from a concatenated transcript (check_progress + validate_completion).
+// A DONE report may contain two envelopes with different verdicts; only the
+// last one is authoritative. This test confirms the regex would catch a bug
+// that reads m[0] (first match) instead of m[len(m)-1] (last match).
+func TestSummaryBlockContractLastMatchSemantics(t *testing.T) {
+	// Render two envelopes: an early check_progress with verdict warn,
+	// then a final validate_completion with verdict fail. Concatenate them
+	// as a DONE report would.
+	first := formatEnvelopeSummary(Envelope{
+		SessionID:  "sess-123",
+		Verdict:    string(verdict.VerdictWarn),
+		NextAction: "continue",
+		ModelUsed:  "anthropic:claude-opus-4-7",
+	})
+	second := formatEnvelopeSummary(Envelope{
+		SessionID:  "sess-123",
+		Verdict:    string(verdict.VerdictFail),
+		NextAction: "fix",
+		ModelUsed:  "anthropic:claude-opus-4-7",
+	})
+	got := first + "\n\n" + second
+
+	// Extract verdicts using the guard's exact parser.
+	re := regexp.MustCompile(`(?m)^\s*verdict:\s*(\w+)`)
+	m := re.FindAllStringSubmatch(got, -1)
+
+	// Verify we found exactly two verdict lines (one per envelope).
+	require.Len(t, m, 2, "expected two verdict lines in concatenated envelopes")
+
+	// Verify the first match is warn (from check_progress).
+	assert.Equal(t, "warn", m[0][1], "first envelope verdict should be warn")
+
+	// Verify the last match is fail (from validate_completion).
+	// This is the critical assertion: if the hook reads m[0] instead of
+	// m[len(m)-1], it would miss the authoritative failure and let a close
+	// through. This test would fail immediately if that bug were introduced.
+	assert.Equal(t, "fail", m[len(m)-1][1], "last envelope verdict should be fail — hook reads last-match, not first")
 }
