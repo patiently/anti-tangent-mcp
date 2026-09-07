@@ -69,6 +69,24 @@
 # (README.md, "How much to trust each pass signal"). Across blocks, the LAST
 # one still wins (Task 8's pinned re-validation semantics) — only the
 # extraction WITHIN a block changed.
+#
+# THE DIRECT-CALL RESULT IS ALSO READ FOR ITS VERDICT (final review
+# Important #1): a real MCP tool result arrives JSON-MARSHALLED
+# (envelopeResult, internal/mcpsrv/handlers.go) — summary_block's newlines
+# survive only as "\n" escapes inside one JSON string, on one physical line,
+# so HEADER_RE below can never match a validate_completion tool_result's raw
+# text. Without more, that left the direct-call path — the one signal that
+# cannot be fabricated — blind to `verdict: fail`: `called` would be true
+# and the close would pass regardless of what the gate actually returned.
+# The script below matches each validate_completion tool_use to its
+# tool_result by `tool_use_id`, parses that result as JSON, and — on
+# success — synthesizes a minimal textual envelope block from its
+# tool/session_id/verdict fields and feeds it through the SAME
+# positional-extraction / tool-scoping / last-block-wins code path a pasted
+# marker block goes through, rather than a second, parallel algorithm. A
+# result that fails to parse as JSON, or whose "tool" field is not
+# "validate_completion", contributes nothing — the pre-existing `called`
+# signal still covers that case.
 set -uo pipefail
 
 TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
@@ -109,6 +127,7 @@ except Exception:
 
 last_inprogress = -1
 called_idx, texts = [], []   # (idx) of direct calls; (idx, text) of tool_result chunks
+call_ids = {}                # tool_use id -> idx, for validate_completion calls only
 
 for idx, line in enumerate(lines):
     try: entry = json.loads(line)
@@ -122,6 +141,9 @@ for idx, line in enumerate(lines):
                 name, inp = c.get("name", ""), (c.get("input") or {})
                 if name == "mcp__anti-tangent__validate_completion":
                     called_idx.append(idx)
+                    tuid = c.get("id")
+                    if tuid:
+                        call_ids[tuid] = idx
                 elif name == "TaskUpdate":
                     tid = str(inp.get("taskId", ""))
                     if tid == task_id and inp.get("status") == "in_progress":
@@ -137,6 +159,23 @@ for idx, line in enumerate(lines):
                 for t in chunks:
                     if t and "anti-tangent envelope" in t:
                         texts.append((idx, t))
+                # Direct-call verdict (see header comment above this PY
+                # block): match this tool_result to a validate_completion
+                # tool_use by id, parse its JSON body, and synthesize a
+                # textual block that flows through the same header-anchored
+                # extraction as a pasted marker.
+                tuid = c.get("tool_use_id")
+                if tuid in call_ids:
+                    try:
+                        parsed = json.loads("".join(chunks))
+                    except Exception:
+                        parsed = None
+                    if isinstance(parsed, dict) and parsed.get("tool") == "validate_completion" and parsed.get("verdict"):
+                        synth = ("anti-tangent envelope\n"
+                                 "  tool:          validate_completion\n"
+                                 "  session_id:    " + str(parsed.get("session_id", "")) + "\n"
+                                 "  verdict:       " + str(parsed.get("verdict", "")) + "\n")
+                        texts.append((idx, synth))
 
 scan_from = last_inprogress if last_inprogress >= 0 else 0
 called = any(i >= scan_from for i in called_idx)

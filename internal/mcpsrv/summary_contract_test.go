@@ -70,12 +70,21 @@ func TestSummaryBlockContract(t *testing.T) {
 	assert.Equal(t, "fail", m[len(m)-1][1], "guard would parse wrong verdict — update plugin/anti-tangent-guard/hooks/check-task-complete in this commit")
 }
 
-// TestSummaryBlockContractLastMatchSemantics verifies that the verdict
-// parser uses last-match semantics, critical for reading the final verdict
-// from a concatenated transcript (check_progress + validate_completion).
-// A DONE report may contain two envelopes with different verdicts; only the
-// last one is authoritative. This test confirms the regex would catch a bug
-// that reads m[0] (first match) instead of m[len(m)-1] (last match).
+// TestSummaryBlockContractLastMatchSemantics documents, in Go, that
+// `(?m)^\s*verdict:\s*(\w+)` applied via FindAllStringSubmatch has
+// last-match semantics: m[len(m)-1] is the final verdict in a concatenated
+// transcript (check_progress + validate_completion), critical since a DONE
+// report may contain two envelopes with different verdicts and only the
+// last one is authoritative.
+//
+// WHAT THIS TEST DOES NOT COVER: it defines and runs this regex itself —
+// it never invokes plugin/anti-tangent-guard/hooks/check-task-complete, so
+// a regression in the HOOK's own last-block-wins logic would not turn this
+// red. That regression is caught by the shell eval suite instead:
+// plugin/anti-tangent-guard/evals/guard-evals.json case 7
+// ("fail-then-pass-last-wins") runs the real hook binary and was the one
+// that caught it when the hook was flipped to first-block-wins during the
+// v0.18.0 final review — this Go test stayed green throughout that flip.
 func TestSummaryBlockContractLastMatchSemantics(t *testing.T) {
 	// Render two envelopes: an early check_progress with verdict warn,
 	// then a final validate_completion with verdict fail. Concatenate them
@@ -104,10 +113,12 @@ func TestSummaryBlockContractLastMatchSemantics(t *testing.T) {
 	// Verify the first match is warn (from check_progress).
 	assert.Equal(t, "warn", m[0][1], "first envelope verdict should be warn")
 
-	// Verify the last match is fail (from validate_completion).
-	// This is the critical assertion: if the hook reads m[0] instead of
-	// m[len(m)-1], it would miss the authoritative failure and let a close
-	// through. This test would fail immediately if that bug were introduced.
+	// Verify the last match is fail (from validate_completion). This pins
+	// Go's regexp last-match semantics, which is what the hook's own
+	// algorithm relies on — but this assertion is against the regex run
+	// HERE, not against the hook binary, so it would NOT catch a bug in the
+	// hook's own last-match logic. See the function doc above for the eval
+	// case that does.
 	assert.Equal(t, "fail", m[len(m)-1][1], "last envelope verdict should be fail — hook reads last-match, not first")
 }
 
@@ -124,9 +135,18 @@ func TestSummaryBlockContractLastMatchSemantics(t *testing.T) {
 // reads pass, but a LATER check_progress envelope in the same transcript
 // window reads fail. A naive last-match-anywhere read (the old behavior)
 // would report fail — wrongly reading the guard's fail-block message off a
-// tool it was never scoped to. The guard's fix scopes both the pass signal
-// and the verdict read to blocks carrying `tool: validate_completion`; this
-// test proves that scoping, not just the raw regex's last-match behavior.
+// tool it was never scoped to. It then mirrors, in Go, the guard's fix —
+// scoping both the pass signal and the verdict read to blocks carrying
+// `tool: validate_completion` — and shows that mirrored algorithm produces
+// the right answer on this fixture.
+//
+// WHAT THIS TEST DOES NOT COVER: the scoping logic below is this test's OWN
+// reimplementation, run in Go against a string it built — it never invokes
+// the hook binary, so a regression in the hook's actual scoping would not
+// turn this red. plugin/anti-tangent-guard/evals/guard-evals.json cases 16
+// ("check-progress-block-does-not-satisfy") and 17
+// ("check-progress-fail-verdict-not-fail-block") run the real hook and are
+// what caught this class of regression during the v0.18.0 final review.
 func TestSummaryBlockContractToolScoping(t *testing.T) {
 	completion := formatEnvelopeSummary(Envelope{
 		Tool:       "validate_completion",
@@ -262,18 +282,27 @@ func TestSummaryBlockContractCriterionAndNextActionCannotForgeHeader(t *testing.
 	})
 }
 
-// TestSummaryBlockContractFirstWithinBlockExtraction pins the SECOND half
-// of task-12b review Critical #1's fix — the hook's positional (first-
-// match) extraction algorithm — independent of whether the source escapes
-// multi-line fields at all. It builds text exactly as an un-escaped source
-// would render it (the shape task-12b-review.md's reproduction used, and
-// what a caller running an older anti-tangent-mcp server still sends
+// TestSummaryBlockContractFirstWithinBlockExtraction exercises, in Go, the
+// SECOND half of task-12b review Critical #1's fix — the hook's positional
+// (first-match) extraction algorithm — independent of whether the source
+// escapes multi-line fields at all. It builds text exactly as an un-escaped
+// source would render it (the shape task-12b-review.md's reproduction used,
+// and what a caller running an older anti-tangent-mcp server still sends
 // today), then mirrors plugin/anti-tangent-guard/hooks/check-task-complete's
 // algorithm in Go: split on the bare "anti-tangent envelope" header, then
 // take the FIRST tool:/verdict: line within a block rather than searching
 // the block for a fixed target pattern anywhere in it. This is what keeps
 // an un-escaped, un-upgraded caller safe — source-escaping alone protects
 // only callers on a fixed server.
+//
+// WHAT THIS TEST DOES NOT COVER: "mirrors ... in Go" above is literal — the
+// split/search logic below is reimplemented here, not invoked from the hook
+// binary, so a regression in the hook's own positional extraction would not
+// turn this red. plugin/anti-tangent-guard/evals/guard-evals.json cases 18
+// ("check-progress-forged-tool-marker-via-evidence-does-not-satisfy") and 19
+// ("validate-completion-fail-forged-pass-via-evidence-still-blocks") run the
+// real hook and are what caught this class of regression during the
+// v0.18.0 final review.
 func TestSummaryBlockContractFirstWithinBlockExtraction(t *testing.T) {
 	unescaped := "anti-tangent envelope\n" +
 		"  tool:          check_progress\n" +

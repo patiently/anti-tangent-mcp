@@ -40,8 +40,14 @@ gate becomes visible from the controller's own transcript). It blocks
 
 1. **Neither signal is present.** Nothing in the window shows the completion
    gate ran at all.
-2. **The last summary block's verdict is `fail`.** The gate ran, but its most
-   recent verdict in the window says the work is not done.
+2. **The last qualifying signal's verdict is `fail`.** The gate ran, but its
+   most recent verdict in the window says the work is not done. This is read
+   from either signal: a pasted summary block tagged `tool:
+   validate_completion`, or the direct call's own MCP result — the real
+   tool result arrives JSON-marshalled, with the summary block's newlines
+   surviving only as escapes inside one JSON string, so the hook parses that
+   JSON directly for `verdict` rather than pattern-matching the escaped
+   text.
 
 Both messages state the same recovery flow explicitly: reopen the task with
 `status=in_progress`, address whatever the gate is asking for, run
@@ -241,10 +247,13 @@ before reaching one), and the decision plus its reason (e.g.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (21 cases) against the hook and exits non-zero on
+Runs the full eval suite (22 cases) against the hook and exits non-zero on
 any mismatch. Cases 18/19 are deliberately un-escaped fixtures — they test
 positional extraction against an older server. Cases 20/21 are the current
 server's own rendering, pinned byte-for-byte to the formatters by
 `internal/mcpsrv/guard_eval_fixture_test.go`, so the escaping half is
 exercised end-to-end through the real hook rather than only through a Go
-mirror of its regexes.
+mirror of its regexes. Case 22 pairs a validate_completion tool_use with its
+tool_result exactly as the server's `envelopeResult` marshals it, so the
+direct-call verdict read (see "The two block conditions" above) is
+exercised end-to-end too.

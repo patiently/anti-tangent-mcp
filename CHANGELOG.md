@@ -13,25 +13,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementer's context. `bulk_read` reads files server-side under the same
   `ANTI_TANGENT_PLAN_ROOTS` rules as `validate_completion` and answers a question about them;
   `code_write` generates code matching a required `reference_path` and, given a `target_path`,
-  writes it and returns only a line count. Adapted from Spotify's
-  [shunt](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt) plugin
-  (Apache-2.0), described in
-  ["Portal by Spotify cut my Claude Code token usage by 90%"](https://engineering.atspotify.com/2026/9/portal-by-spotify-cut-my-claude-code-token-usage-by-90).
+  writes it and returns only a line count. The delegation pattern is inspired by Spotify's
+  [shunt](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt) plugin, described
+  in ["Portal by Spotify cut my Claude Code token usage by 90%"](https://engineering.atspotify.com/2026/9/portal-by-spotify-cut-my-claude-code-token-usage-by-90)
+  — these two Go tools are original code, not derived from it.
 - **`plugin/anti-tangent-shunt`** — two PreToolUse hooks that block oversized full-file reads
   (`Read`, and `cat`/`head`/`tail`/`less`/`more` via `Bash`) and point at `bulk_read`, plus
-  bulk-reader / code-writer skills and a key-free eval suite.
-- **`plugin/anti-tangent-guard`** — a PostToolUse hook on `TaskUpdate` that refuses a
-  `completed` close when `validate_completion` did not run, or ran and returned `fail`.
-  Active on install; `ANTI_TANGENT_COMPLETION_GUARD=0` disables it. Fails open on any error.
-  Its summary-block pass signal and verdict read are scoped to blocks tagged
-  `tool: validate_completion` — see the new `Envelope.tool` field below — so a
-  `check_progress` or `validate_task_spec` block (rendered byte-identical otherwise) cannot
-  satisfy the gate or have its verdict misread as validate_completion's. The hook reads that
-  tag, and the verdict, positionally (the first `tool:`/`verdict:` line within a block, never a
-  scan for the target value anywhere in it), and `formatEnvelopeSummary` escapes every
-  continuation line of a finding's `Evidence`/`Criterion` or an envelope's `next_action` with a
-  non-whitespace sentinel — so neither a forged tag nor a forged verdict smuggled through that
-  reviewer-authored free text can be mistaken for the genuine header line. Requires an
+  bulk-reader / code-writer skills and a key-free eval suite. Adapted from Spotify's
+  [shunt](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt) plugin
+  (Apache-2.0) — see `THIRD_PARTY_NOTICES.md`.
+- **`plugin/anti-tangent-guard`** — a PostToolUse hook on `TaskUpdate` that detects a
+  `completed` close when `validate_completion` did not run, or ran and returned `fail`, and
+  mandates a reopen-fix-revalidate recovery flow. `PostToolUse` fires after the state change
+  has already landed, so the hook cannot refuse the close itself — this is post-close detection
+  plus mandated recovery, not a block on the close. Active on install;
+  `ANTI_TANGENT_COMPLETION_GUARD=0` disables it. Fails open on any error. Its summary-block pass
+  signal and verdict read are scoped to blocks tagged `tool: validate_completion` — see the new
+  `Envelope.tool` field below — so a `check_progress` or `validate_task_spec` block (rendered
+  byte-identical otherwise) cannot satisfy the gate or have its verdict misread as
+  validate_completion's. The hook reads that tag, and the verdict, positionally (the first
+  `tool:`/`verdict:` line within a block, never a scan for the target value anywhere in it), and
+  `formatEnvelopeSummary` escapes every continuation line of a finding's `Evidence`/`Criterion`
+  or an envelope's `next_action` with a non-whitespace sentinel — so neither a forged tag nor a
+  forged verdict smuggled through that reviewer-authored free text can be mistaken for the
+  genuine header line. A direct `validate_completion` call's own MCP result is JSON-marshalled,
+  so its summary block's newlines survive only as escapes inside one JSON string; the hook
+  matches that result back to its call and parses the JSON directly for `verdict`, so a `fail`
+  is caught on the direct-call path too, not only on a pasted marker block. Requires an
   anti-tangent-mcp server >= 0.18.0; an untagged block from an older server does not satisfy
   the guard.
 - **`ANTI_TANGENT_WORKER_MODEL`** (defaults to `ANTI_TANGENT_MID_MODEL`) and

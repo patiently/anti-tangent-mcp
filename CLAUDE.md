@@ -54,7 +54,7 @@ internal/
     worker_call.go            # worker model invocation
     file_target.go            # write-target path resolution + O_NOFOLLOW
     file_target_windows.go    # Windows symlink caveat
-  notices/     Windows filesystem trust-model documentation
+  notices/     third-party attribution, asserted by an ordinary go test run
 ```
 
 Each package has one responsibility. `cmd/` only wires; logic lives in `internal/`.

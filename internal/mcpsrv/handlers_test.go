@@ -386,6 +386,13 @@ func TestCheckProgress_HappyPath(t *testing.T) {
 	// A checkpoint was appended.
 	got, _ := d.Sessions.Get(env.SessionID)
 	require.Len(t, got.Checkpoints, 1)
+
+	// Pins handlers.go's happy-path Envelope{Tool: "check_progress", ...}
+	// literal directly — see the matching comment on
+	// TestValidateCompletion_PopulatesSummaryBlock for why this is not
+	// covered by formatEnvelopeSummary's own tests.
+	require.Equal(t, "check_progress", env.Tool)
+	require.Regexp(t, `(?m)^\s*tool:\s*check_progress\s*$`, env.SummaryBlock)
 }
 
 func TestCheckProgress_UnknownSession(t *testing.T) {
@@ -549,6 +556,10 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarn(t *testing.T) {
 
 	// No session should be created on truncation.
 	assert.Empty(t, env.SessionID)
+
+	// Pins handlePerTaskReviewErr's Tool: in.Tool assignment (review_error.go)
+	// for the truncation-recovery envelope, shared by all three per-task tools.
+	require.Equal(t, "validate_task_spec", env.Tool)
 }
 
 func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
@@ -577,6 +588,9 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
+
+	// Pins handlePerTaskReviewErr's Tool: in.Tool assignment for this tool.
+	require.Equal(t, "check_progress", env.Tool)
 }
 
 func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
@@ -604,6 +618,9 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
+
+	// Pins handlePerTaskReviewErr's Tool: in.Tool assignment for this tool.
+	require.Equal(t, "validate_completion", env.Tool)
 }
 
 func TestValidateTaskSpec_PartialFindingsRecoveredOnTruncation(t *testing.T) {
@@ -1447,6 +1464,15 @@ func TestValidateTaskSpec_PopulatesSummaryBlock(t *testing.T) {
 	assert.Contains(t, env.SummaryBlock, "anti-tangent envelope")
 	assert.Contains(t, env.SummaryBlock, env.SessionID)
 	assert.Contains(t, env.SummaryBlock, "verdict:       pass")
+
+	// Pins handlers.go's happy-path Envelope{Tool: "validate_task_spec", ...}
+	// literal directly, not just formatEnvelopeSummary given a hand-built
+	// Envelope (that half is already covered by summary_contract_test.go).
+	// Deleting the Tool field from that struct literal must turn this red:
+	// plugin/anti-tangent-guard/hooks/check-task-complete's pass signal keys
+	// on the `tool:` line this produces.
+	require.Equal(t, "validate_task_spec", env.Tool)
+	require.Regexp(t, `(?m)^\s*tool:\s*validate_task_spec\s*$`, env.SummaryBlock)
 }
 
 func TestValidateCompletion_PopulatesSummaryBlock(t *testing.T) {
@@ -1468,6 +1494,19 @@ func TestValidateCompletion_PopulatesSummaryBlock(t *testing.T) {
 	require.NotEmpty(t, env.SummaryBlock, "validate_completion happy-path must carry summary_block")
 	assert.Contains(t, env.SummaryBlock, "anti-tangent envelope")
 	assert.Contains(t, env.SummaryBlock, "verdict:       pass")
+
+	// Pins the ONE line the whole anti-tangent-guard plugin depends on
+	// (handlers.go's happy-path Envelope{Tool: "validate_completion", ...}
+	// literal) directly, not just formatEnvelopeSummary given a hand-built
+	// Envelope. Before this assertion existed, deleting that struct field
+	// left `go test ./internal/mcpsrv/...` green: nothing asserted that the
+	// HANDLER populates Tool, only that the FORMATTER renders it when told
+	// to. check-task-complete's marker pass signal requires a block whose
+	// first `tool:` line reads `validate_completion` — dropping the field
+	// silently degrades a current server to pre-0.18.0 behavior (every
+	// marker-only close blocks even though the gate ran).
+	require.Equal(t, "validate_completion", env.Tool)
+	require.Regexp(t, `(?m)^\s*tool:\s*validate_completion\s*$`, env.SummaryBlock)
 }
 
 func TestValidatePlan_PopulatesSummaryBlock(t *testing.T) {
@@ -2408,6 +2447,10 @@ func TestTooLargeEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
 	require.Len(t, env.Findings, 1)
 	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
 	require.Equal(t, verdict.CategoryTooLarge, env.Findings[0].Category)
+	// A wrong tag is as bad as a missing one: pin that the caller's tool
+	// name actually lands on Envelope.Tool, not just that a Findings slot
+	// was filled in.
+	require.Equal(t, "check_progress", env.Tool)
 }
 
 func TestMalformedEvidenceEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
@@ -2416,6 +2459,7 @@ func TestMalformedEvidenceEnvelope_SyntheticFindingSeverityIsCritical(t *testing
 	require.Len(t, env.Findings, 1)
 	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
 	require.Equal(t, verdict.CategoryMalformedEvidence, env.Findings[0].Category)
+	require.Equal(t, "validate_completion", env.Tool)
 }
 
 func TestNotFoundEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
@@ -2423,6 +2467,7 @@ func TestNotFoundEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
 	require.Equal(t, "fail", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
+	require.Equal(t, "validate_completion", env.Tool)
 }
 
 func TestTooLargePlanResult_SyntheticFindingSeverityIsCritical(t *testing.T) {

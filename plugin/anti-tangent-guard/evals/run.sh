@@ -21,14 +21,17 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 
 # The eval table this suite implements (see task-12-brief.md Step 4, the two
 # tool-scoping cases added for task-12b, the two forged-marker cases added for
-# task-12c — see task-12b-review.md Critical #1 — and the two ESCAPED cases
-# added for task-12d, which run the current server's own rendering through the
-# hook rather than a hand-written fixture, see task-12c-review.md Critical #1 /
-# Important #2) has exactly 21 rows. Both checks below must hold or the count
-# assertion is vacuous: the JSON file must declare 21 cases, AND the loop must
-# actually execute 21 of them (a silently-skipped case would satisfy the first
-# check alone).
-EXPECTED_CASE_COUNT=21
+# task-12c — see task-12b-review.md Critical #1 — the two ESCAPED cases added
+# for task-12d, which run the current server's own rendering through the hook
+# rather than a hand-written fixture (task-12c-review.md Critical #1 /
+# Important #2), and one direct-call JSON-result case added for the v0.18.0
+# final review's Important #1, which pairs a validate_completion tool_use
+# with its tool_result exactly as the server's envelopeResult marshals it)
+# has exactly 22 rows. Both checks below must hold or the count assertion is
+# vacuous: the JSON file must declare 22 cases, AND the loop must actually
+# execute 22 of them (a silently-skipped case would satisfy the first check
+# alone).
+EXPECTED_CASE_COUNT=22
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 cleanup() { rm -rf "$WORKDIR"; }
