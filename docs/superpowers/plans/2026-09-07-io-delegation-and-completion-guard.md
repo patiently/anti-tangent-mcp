@@ -433,7 +433,7 @@ git commit -m "feat(prompts): worker templates for bulk_read and code_write"
 ```
 
 ```json:metadata
-{"files": ["internal/prompts/templates/worker_bulk_read.tmpl", "internal/prompts/templates/worker_code_write.tmpl", "internal/prompts/prompts.go", "internal/prompts/prompts_test.go"], "verifyCommand": "go test -race ./internal/prompts/... -run Worker -v", "acceptanceCriteria": ["bulk_read prompt wraps files in <file path=...> and ends with the question", "code_write prompt carries reference file and spec", "UserPrefix empty on both", "goldens match and -update regenerates", "instruction wording paraphrased not copied"], "modelTier": "mechanical"}
+{"files": ["internal/prompts/templates/worker_bulk_read.tmpl", "internal/prompts/templates/worker_code_write.tmpl", "internal/prompts/prompts.go", "internal/prompts/prompts_test.go", "internal/prompts/testdata/worker_bulk_read.golden", "internal/prompts/testdata/worker_code_write.golden"], "verifyCommand": "go test -race ./internal/prompts/... -run Worker -v", "acceptanceCriteria": ["bulk_read prompt wraps files in <file path=...> and ends with the question", "code_write prompt carries reference file and spec", "UserPrefix empty on both", "goldens match and -update regenerates", "instruction wording paraphrased not copied"], "modelTier": "mechanical"}
 ```
 
 ---
@@ -493,9 +493,23 @@ func TestWorkerSchemaIsStrictOneField(t *testing.T) {
 	if err := json.Unmarshal(workerSchema("answer"), &m); err != nil {
 		t.Fatalf("schema is not valid JSON: %v", err)
 	}
+	if m["type"] != "object" {
+		t.Errorf("type = %v, want object", m["type"])
+	}
 	props, _ := m["properties"].(map[string]any)
-	if _, ok := props["answer"]; !ok {
-		t.Error("schema missing the answer property")
+	if len(props) != 1 {
+		t.Errorf("want exactly one property, got %d: %v", len(props), props)
+	}
+	prop, _ := props["answer"].(map[string]any)
+	if prop == nil {
+		t.Fatal("schema missing the answer property")
+	}
+	if prop["type"] != "string" {
+		t.Errorf("answer type = %v, want string", prop["type"])
+	}
+	req, _ := m["required"].([]any)
+	if len(req) != 1 || req[0] != "answer" {
+		t.Errorf("required = %v, want exactly [answer]", req)
 	}
 	if m["additionalProperties"] != false {
 		t.Error("schema must set additionalProperties:false")
@@ -524,6 +538,27 @@ func TestRunWorkerExtractsField(t *testing.T) {
 	}
 	if f.got.MaxTokens != 4096 {
 		t.Errorf("MaxTokens = %d, want 4096", f.got.MaxTokens)
+	}
+	if got.Model != "anthropic:claude-haiku-4-5-20251001" {
+		t.Errorf("Model = %q, want the provider's reported model", got.Model)
+	}
+	if got.ReviewMS < 0 {
+		t.Errorf("ReviewMS = %d, want >= 0", got.ReviewMS)
+	}
+}
+
+func TestRunWorkerFallsBackToConfiguredModel(t *testing.T) {
+	// An empty Response.Model must not produce an empty model_used.
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"answer":"x"}`)}}
+	h := &handlers{deps: Deps{Reviews: providers.Registry{"anthropic": f}}}
+	got, err := h.runWorker(context.Background(),
+		config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"},
+		prompts.Output{}, 10, "answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "anthropic:claude-haiku-4-5-20251001" {
+		t.Errorf("Model = %q, want the configured ref as fallback", got.Model)
 	}
 }
 
@@ -851,13 +886,22 @@ func TestBulkReadCapCrossedOnLastFile(t *testing.T) {
 	}
 }
 
-func TestToolsRegisteredInCatalog(t *testing.T) {
+// Named so `-run BulkRead` selects it, and asserting ONLY bulk_read: code_write
+// is not registered until Task 6, so a combined assertion here would leave
+// `go test ./...` red for every task in between. Task 6 adds its own.
+func TestBulkReadRegisteredInCatalog(t *testing.T) {
 	// Enumerate the server's registered tools using whatever mechanism
 	// internal/mcpsrv/integration_test.go already uses — do not add a second one.
-	for _, want := range []string{"bulk_read", "code_write"} {
-		if !registeredToolNames(t).has(want) {
-			t.Errorf("tool %q is not registered", want)
-		}
+	if !registeredToolNames(t).has("bulk_read") {
+		t.Error("tool \"bulk_read\" is not registered")
+	}
+}
+
+func TestBulkReadRejectsEmptyPaths(t *testing.T) {
+	h := &handlers{deps: workerDeps(t, &fakeWorkerReviewer{}, nil)}
+	_, _, err := h.BulkRead(context.Background(), nil, BulkReadArgs{Question: "q"})
+	if err == nil || !strings.Contains(err.Error(), "paths") {
+		t.Fatalf("want a paths validation error, got %v", err)
 	}
 }
 
@@ -1055,7 +1099,7 @@ Update `New`'s doc comment: the count is now eight (nine after Task 6).
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `go test -race ./internal/mcpsrv/... -run BulkRead -v && go build ./...`
-Expected: PASS (5 tests), build clean
+Expected: every `BulkRead` test passes, build clean. Do not assert a fixed test count here — it drifts every time a case is added.
 
 - [ ] **Step 6: Commit**
 
@@ -1079,6 +1123,7 @@ git commit -m "feat(mcpsrv): add bulk_read tool"
 - Create: `internal/mcpsrv/file_target_unix.go`
 - Create: `internal/mcpsrv/file_target_windows.go`
 - Test: `internal/mcpsrv/file_target_test.go`
+- Test: `internal/mcpsrv/file_target_unix_test.go` (`//go:build !windows`; holds the leaf-symlink test only)
 
 **Acceptance Criteria:**
 - [ ] Relative or empty paths are refused
@@ -1176,6 +1221,11 @@ func TestWriteTargetOverwriteTruncates(t *testing.T) {
 	}
 }
 
+// NOTE: this test belongs in a build-tagged file, NOT in file_target_test.go.
+// Put it in internal/mcpsrv/file_target_unix_test.go with `//go:build !windows`
+// at the top. The acceptance criteria accept the Windows leaf-symlink gap as a
+// documented non-goal; a test that asserts the guarantee unconditionally would
+// contradict that and fail the moment anyone runs the suite on Windows.
 func TestWriteTargetRefusesSymlinkLeaf(t *testing.T) {
 	dir := t.TempDir()
 	victim := filepath.Join(dir, "victim.go")
@@ -1359,7 +1409,7 @@ git commit -m "feat(mcpsrv): write-target resolver with roots and O_NOFOLLOW"
 ```
 
 ```json:metadata
-{"files": ["internal/mcpsrv/file_target.go", "internal/mcpsrv/file_target_unix.go", "internal/mcpsrv/file_target_windows.go", "internal/mcpsrv/file_target_test.go"], "verifyCommand": "go test -race ./internal/mcpsrv/... -run WriteTarget -v", "acceptanceCriteria": ["relative and empty paths refused", "missing parent refused without MkdirAll", "parent outside PlanRoots refused", "control/format characters refused", "existing file refused unless overwrite", "overwrite truncates", "symlink at leaf refused under both overwrite values", "symlinked parent inside roots allowed"], "modelTier": "standard"}
+{"files": ["internal/mcpsrv/file_target.go", "internal/mcpsrv/file_target_unix.go", "internal/mcpsrv/file_target_windows.go", "internal/mcpsrv/file_target_test.go", "internal/mcpsrv/file_target_unix_test.go"], "verifyCommand": "go test -race ./internal/mcpsrv/... -run WriteTarget -v", "acceptanceCriteria": ["relative and empty paths refused", "missing parent refused without MkdirAll", "parent outside PlanRoots refused", "control/format characters refused", "existing file refused unless overwrite", "overwrite truncates", "symlink at leaf refused under both overwrite values", "symlinked parent inside roots allowed"], "modelTier": "standard"}
 ```
 
 ---
@@ -1383,7 +1433,7 @@ git commit -m "feat(mcpsrv): write-target resolver with roots and O_NOFOLLOW"
 - [ ] **Empty generated code (after fence-stripping) is an error and nothing is written.** This is what makes the `omitempty` tags safe: on every success `code` is non-empty and `lines_written` >= 1, so neither field the acceptance criteria promise can be dropped by the encoder
 - [ ] A `Close` error on the target is reported, not discarded — a write is not done until the file closes cleanly
 
-**Verify:** `go test -race ./internal/mcpsrv/... -run CodeWrite -v` → PASS
+**Verify:** `go test -race ./internal/mcpsrv/... -run 'CodeWrite|StripFences|CountLines' -v` → PASS
 
 **Steps:**
 
@@ -1670,7 +1720,7 @@ git commit -m "feat(mcpsrv): add code_write tool with overwrite guard"
 ```
 
 ```json:metadata
-{"files": ["internal/mcpsrv/worker_handlers.go", "internal/mcpsrv/worker_handlers_test.go", "internal/mcpsrv/server.go"], "verifyCommand": "go test -race ./internal/mcpsrv/... -run CodeWrite -v", "acceptanceCriteria": ["missing reference_path rejected with an explanation", "target_path write returns written+lines_written and no code", "no target returns code and no written", "fences stripped only when wrapping the whole body", "truncation writes nothing", "countLines handles a missing trailing newline"], "modelTier": "standard"}
+{"files": ["internal/mcpsrv/worker_handlers.go", "internal/mcpsrv/worker_handlers_test.go", "internal/mcpsrv/server.go"], "verifyCommand": "go test -race ./internal/mcpsrv/... -run 'CodeWrite|StripFences|CountLines' -v", "acceptanceCriteria": ["missing reference_path rejected with an explanation", "target_path write returns written+lines_written and no code", "no target returns code and no written", "fences stripped only when wrapping the whole body", "truncation writes nothing", "countLines handles a missing trailing newline", "empty/whitespace/fence-only output errors and writes nothing", "a Close error is reported via the openWriteTarget seam", "code_write catalog registration asserted here"], "modelTier": "standard"}
 ```
 
 ---
@@ -1693,13 +1743,13 @@ git commit -m "feat(mcpsrv): add code_write tool with overwrite guard"
 - [ ] Both tools record an event when `Stats` is non-nil, and are no-ops when nil — **each proven by a handler test**, not inferred from `computeRollup`
 - [ ] `internal/stats/event_test.go` asserts the JSON omission contract directly: both token fields absent at zero, present under their exact names when non-zero
 
-**Verify:** `go test -race ./internal/stats/... -v` → PASS
+**Verify:** `go test -race ./internal/stats/... ./internal/mcpsrv/... -v` → PASS (the handler-level telemetry and nil-recorder tests live in `internal/mcpsrv`, so a stats-only command would not run them)
 
 **Steps:**
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `internal/stats/rollup_test.go`:
+Put `TestEventTokenFieldsOmittedWhenZero` in **`internal/stats/event_test.go`** (the acceptance criteria and Files block both name that file — do not append it to `rollup_test.go`). The rollup tests below go in `internal/stats/rollup_test.go`:
 
 ```go
 func TestRollupWorkerAggregates(t *testing.T) {
@@ -1868,7 +1918,7 @@ git commit -m "feat(stats): worker token telemetry, additive to rollup.json"
 ```
 
 ```json:metadata
-{"files": ["internal/stats/event.go", "internal/stats/rollup.go", "internal/stats/rollup_test.go", "internal/mcpsrv/worker_handlers.go"], "verifyCommand": "go test -race ./internal/stats/... -v", "acceptanceCriteria": ["Event gains omitempty token fields", "Rollup gains a worker key absent without worker events", "worker reports per-tool counts and summed tokens", "all pre-existing rollup.json keys unchanged", "handlers record events and are nil-safe"], "modelTier": "mechanical"}
+{"files": ["internal/stats/event.go", "internal/stats/rollup.go", "internal/stats/rollup_test.go", "internal/mcpsrv/worker_handlers.go"], "verifyCommand": "go test -race ./internal/stats/... ./internal/mcpsrv/... -v", "acceptanceCriteria": ["Event gains omitempty token fields", "Rollup gains a worker key absent without worker events", "worker reports per-tool counts and summed tokens", "all pre-existing rollup.json keys unchanged", "handlers record events and are nil-safe"], "modelTier": "mechanical"}
 ```
 
 ---
@@ -1990,10 +2040,14 @@ git commit -m "test(mcpsrv): pin summary_block substrings the guard hook parses"
 - [ ] **Step 1: Check whether upstream ships a NOTICE file**
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' https://raw.githubusercontent.com/spotify/portal-ai-plugins/main/NOTICE
+code=$(curl -sS -o /tmp/upstream-NOTICE -w '%{http_code}' \
+  https://raw.githubusercontent.com/spotify/portal-ai-plugins/3c24ca30ff63e1f5bbad1c43fe5324daff579123/NOTICE)
+echo "NOTICE probe: $code"
 ```
 
-If it returns 200, fetch it and reproduce its contents verbatim in a `## NOTICE` section — Apache-2.0 §4(d) requires it. If 404, skip that section. **Note:** `engineering.atspotify.com` is NOT reachable from this environment (403 CONNECT tunnel); do not block on it, and do not claim to have read the blog post.
+- `200` → reproduce `/tmp/upstream-NOTICE` verbatim in a `## NOTICE` section. Apache-2.0 §4(d) requires it.
+- `404` → there is no NOTICE file; skip that section.
+- **Anything else** (redirect, 403, 5xx, timeout, empty `$code`) → **stop and resolve it**. Do not treat a transient failure as absence: silently skipping a NOTICE that does exist is a licence violation, and this is the one probe where "no answer" and "no file" must not be conflated. **Note:** `engineering.atspotify.com` is NOT reachable from this environment (403 CONNECT tunnel); do not block on it, and do not claim to have read the blog post.
 
 - [ ] **Step 2: Write the notices file**
 
@@ -2228,11 +2282,14 @@ chmod +x plugin/anti-tangent-shunt/hooks/check-file-size \
          plugin/anti-tangent-shunt/evals/run.sh
 bash plugin/anti-tangent-shunt/evals/run.sh
 
-# Operational references only: drop lines where naming Portal/AiKA is REQUIRED
-# (modification notice, licence header, acknowledgement, benchmark comparison).
-grep -rin 'portal\|aika' plugin/anti-tangent-shunt/ --exclude-dir=.git \
-  | grep -vi 'modified 2026-09\|apache\|licen[cs]e\|copyright\|acknowledg\|adapted from\|upstream\|spotify' \
-  || echo "no operational Portal/AiKA references"
+# Attribution is permitted in EXACTLY these places, identified by PATH (and, in
+# the hooks, only on comment lines). Suppressing by keyword instead would let an
+# operational line survive merely by containing a word like "upstream".
+grep -rinI 'portal\|aika' plugin/anti-tangent-shunt/ --exclude-dir=.git \
+  | grep -vE '^plugin/anti-tangent-shunt/hooks/check-(file-size|bash-read):[0-9]+:[[:space:]]*#' \
+  | grep -vE '^plugin/anti-tangent-shunt/(README\.md|evals/benchmarks\.md):' \
+  && { echo "FAIL: operational Portal/AiKA reference above"; exit 1; } \
+  || echo "clean: no operational Portal/AiKA references"
 ```
 
 Expected: 34 cases pass, exit 0. The FILTERED grep prints nothing; any surviving line is a real leftover (a variable, a code path, an env var), not attribution. Do NOT "fix" a surviving attribution line by deleting it — that makes `THIRD_PARTY_NOTICES.md` untruthful.
@@ -2282,7 +2339,7 @@ replaced with mcp__anti-tangent__bulk_read. 34 upstream hook cases ported."
 - [ ] `code-writer/SKILL.md` says: `reference_path` always; prefer `target_path`; `overwrite` is deliberate
 - [ ] Both SKILL.md files have valid frontmatter with `name` and `description`
 
-**Verify:** `jq -e . plugin/anti-tangent-shunt/.claude-plugin/plugin.json && head -5 plugin/anti-tangent-shunt/skills/*/SKILL.md`
+**Verify:** `jq -e . plugin/anti-tangent-shunt/.claude-plugin/plugin.json` plus the frontmatter parse loop in Step 5 → both clean
 
 **Steps:**
 
@@ -2417,6 +2474,18 @@ Portal/AiKA transport is replaced by anti-tangent's own provider layer. See
 
 ```bash
 jq -e . plugin/anti-tangent-shunt/.claude-plugin/plugin.json >/dev/null && echo "manifest ok"
+
+# Parse the frontmatter rather than eyeballing it: printing five lines proves
+# nothing about whether name/description are present and non-empty.
+for f in plugin/anti-tangent-shunt/skills/*/SKILL.md; do
+  awk 'NR==1 && $0!="---" {print "FAIL no frontmatter: FILE"; exit 1}
+       NR>1 && $0=="---" {exit}
+       /^name:[[:space:]]*[^[:space:]]/ {n=1}
+       /^description:[[:space:]]*[^[:space:]]/ {d=1}
+       END {if (!n || !d) {print "FAIL missing name/description: FILE"; exit 1}}' \
+    FILE="$f" "$f" || exit 1
+  echo "frontmatter ok: $f"
+done
 head -5 plugin/anti-tangent-shunt/skills/bulk-reader/SKILL.md
 git add plugin/anti-tangent-shunt/
 git commit -m "feat(shunt): plugin manifest, bulk-reader and code-writer skills, README"
@@ -2455,7 +2524,9 @@ git commit -m "feat(shunt): plugin manifest, bulk-reader and code-writer skills,
 - [ ] Malformed **stdin** JSON exits 0; a malformed **transcript line** is skipped and the remaining lines still decide — different inputs, different behaviours, tested separately
 - [ ] `README.md` documents: active-on-install, both block conditions, the `jq`+`python3` dependency, the kill switch, the fail-open policy, the trace log, and how to run the evals
 
-**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all 16 cases pass, exit 0
+**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all 15 cases pass, exit 0
+
+The count is 15: the table in Step 4 is the complete enumeration. `run.sh` must assert it ran exactly 15 cases, so adding a case without updating the count fails loudly instead of silently.
 
 **Steps:**
 
@@ -2465,8 +2536,9 @@ Create `plugin/anti-tangent-guard/hooks/check-task-complete`:
 
 ```bash
 #!/usr/bin/env bash
-# PostToolUse hook: refuse a task close that skipped anti-tangent's
-# validate_completion gate, or that ran it and read `fail`.
+# PostToolUse hook: DETECT a task close that skipped anti-tangent's
+# validate_completion gate, or ran it and read `fail`, and mandate recovery
+# before the agent's next action. It does NOT prevent the close — see below.
 #
 # WHY PostToolUse ON TaskUpdate, not SubagentStop: anti-tangent's model is one
 # task = one session = one subagent, which points at SubagentStop. But plans are
@@ -2686,7 +2758,7 @@ chmod +x plugin/anti-tangent-guard/hooks/check-task-complete plugin/anti-tangent
 bash plugin/anti-tangent-guard/evals/run.sh
 ```
 
-Expected: 9 cases pass, exit 0.
+Expected: 15 cases pass, exit 0 — matching the 15 rows enumerated in Step 4.
 
 - [ ] **Step 6: Commit**
 
@@ -2884,9 +2956,9 @@ git commit -m "docs(protocol): non-delegation list, large-reads clause, completi
 - [ ] README documents both plugins and their install commands
 - [ ] `CLAUDE.md` says nine tools, lists the new files, and states that blocking lives in plugins so the server stays advisory
 - [ ] `marketplace.json` gains both plugins; its `version` bumps `0.8.0` → `0.9.0`
-- [ ] No stale "seven tools" claim remains anywhere
+- [ ] No stale catalog-count claim remains in any tracked file — the phrase `seven tools`, and the variants Step 1 already anticipates (`seven registered`, `three handlers`)
 
-**Verify:** `jq -e '.plugins | length == 4' .claude-plugin/marketplace.json && ! git grep -n 'seven tools'`
+**Verify:** `jq -e '.plugins | length == 4' .claude-plugin/marketplace.json && ! git grep -nE 'seven tools|seven registered|three handlers'`
 
 `git grep` searches every tracked file, which is what "anywhere" in the acceptance criteria means — `README.md` and `CLAUDE.md` alone would miss `internal/mcpsrv/server.go`, which Step 1 already flags.
 
@@ -2914,8 +2986,11 @@ Add Acknowledgements (same text as the plugin README) and a plugins section with
 
 ```markdown
   The v0.18.0 hooks (`anti-tangent-shunt`, `anti-tangent-guard`) **do** block —
-  a PreToolUse hook refuses an oversized read, and the completion guard refuses
-  a task close that skipped `validate_completion`. That is not a reversal of
+  a PreToolUse hook refuses an oversized read before it happens, and the
+  completion guard *detects* a task close that skipped `validate_completion`
+  after the fact and returns a blocking instruction to reopen the task,
+  validate, and re-close. (The guard cannot prevent the close: `PostToolUse`
+  fires after the state change. See the guard plugin's README.) That is not a reversal of
   this non-goal: they are Claude Code plugin hooks the operator installs
   separately, each with a kill switch. The MCP server itself still never blocks
   and never corrects. Keep it that way — enforcement belongs in a plugin.
@@ -2929,7 +3004,7 @@ Bump `version` to `0.9.0`, extend the description, and add both entries followin
 
 ```bash
 jq -e '.plugins | length == 4' .claude-plugin/marketplace.json && echo "4 plugins listed"
-git grep -n 'seven tools' && echo "STALE COUNT REMAINS" || echo "counts updated"
+git grep -nE 'seven tools|seven registered|three handlers' && echo "STALE COUNT REMAINS" || echo "counts updated"
 bash scripts/check-protocol-docs.sh
 git add README.md CLAUDE.md .claude-plugin/marketplace.json
 git commit -m "docs: document the I/O tools, both plugins, and the write trust model"
@@ -2948,6 +3023,9 @@ git commit -m "docs: document the I/O tools, both plugins, and the write trust m
 **Files:**
 - Modify: `plugin/anti-tangent-shunt/README.md`
 - Create: `plugin/anti-tangent-shunt/evals/benchmarks.md`
+- Create: `plugin/anti-tangent-shunt/evals/benchmarks.tsv`
+- Create: `plugin/anti-tangent-shunt/evals/check-benchmark-table.sh`
+- Modify: `.github/workflows/ci.yml` (run the checker in `hook-evals`)
 
 **Acceptance Criteria:**
 - [ ] All four upstream scenarios reproduced against a **Go** corpus of ~160K lines
@@ -2960,9 +3038,11 @@ git commit -m "docs: document the I/O tools, both plugins, and the write trust m
 - [ ] The **exact prompt** for every scenario is fixed BEFORE measuring and reproduced verbatim in `benchmarks.md` — answer size, and therefore the savings figure, depends materially on the question asked
 - [ ] Corpus eligibility is objective (see Step 1), not "boring enough"
 - [ ] Upstream's comparison figures are cited to the pinned source `spotify/portal-ai-plugins@3c24ca30ff63e1f5bbad1c43fe5324daff579123` `plugins/shunt/README.md`, which is where they were read — the accompanying blog post is unreachable from this environment and must not be cited as if read
-- [ ] The verify command checks the README numbers against `benchmarks.md`, not merely that a heading exists
+- [ ] The verify command compares the README table **row by row** against `benchmarks.tsv` — matching scenario labels and every cell — not merely that each number appears somewhere
+- [ ] The checker runs in CI (`hook-evals`) and in the whole-plan gate, so later documentation drift is caught
+- [ ] The corpus file set comes from a command that actually applies the exclusion rules (vendored and generated files pruned), and every scenario file is drawn from it
 
-**Verify:** `bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh` → exits 0, confirming every number in the README table appears in `benchmarks.md`
+**Verify:** `bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh` → exits 0, confirming every README table row matches its `benchmarks.tsv` row cell for cell
 
 **Steps:**
 
@@ -2979,10 +3059,27 @@ Objective eligibility — every one of these, no judgement calls:
 Clone at a fixed SHA and measure:
 
 ```bash
-git clone --depth 1 <candidate> /tmp/bench-corpus
-cd /tmp/bench-corpus && git rev-parse HEAD
-find . -name '*.go' -not -name '*_test.go' | xargs wc -l | tail -1
+git clone <candidate> /tmp/bench-corpus
+git -C /tmp/bench-corpus rev-parse HEAD          # pin THIS sha in benchmarks.md
+
+# The eligible file set, applying every exclusion rule above. A bare
+# `find -name '*.go' -not -name '*_test.go'` does NOT implement these rules:
+# it counts vendored and generated code, inflating the line total and allowing
+# a generated file to be picked as a scenario input.
+git -C /tmp/bench-corpus ls-files '*.go' \
+  | grep -v '_test\.go$' \
+  | grep -Ev '(^|/)vendor/' \
+  | while IFS= read -r f; do
+      head -1 "/tmp/bench-corpus/$f" | grep -q '^// Code generated' || printf '%s\n' "$f"
+    done > /tmp/bench-files.txt
+
+wc -l < /tmp/bench-files.txt                                          # eligible files
+(cd /tmp/bench-corpus && xargs -a /tmp/bench-files.txt cat | wc -l)   # must be 120000-200000
+(cd /tmp/bench-corpus && xargs -a /tmp/bench-files.txt -n1 dirname | sort -u | wc -l)  # must be >= 20
+(cd /tmp/bench-corpus && go build ./...) && echo "corpus builds"
 ```
+
+Every scenario file must be drawn from `/tmp/bench-files.txt`; picking one outside it silently violates the eligibility rules.
 
 **This repo is deliberately not the corpus** — it is far too small for the multi-file scenario to mean anything. Record the SHA before measuring anything.
 
@@ -3013,7 +3110,18 @@ export ANTI_TANGENT_STATS_DIR=/tmp/bench-stats   # gives per-call rows for free
 
 - [ ] **Step 5: Write `benchmarks.md`**
 
-Corpus repo + SHA, per-scenario file lists with line counts, the worker model id, the tokenizer or approximation used, the raw numbers, and the commands to re-run. This is the reproducibility record; the README carries only the table.
+Write TWO files.
+
+`plugin/anti-tangent-shunt/evals/benchmarks.tsv` — machine-readable, one row per scenario, tab-separated, header first:
+
+```
+scenario	lines	without_tokens	with_tokens	savings_pct	worker_in	worker_out	runs	statistic
+single_large_file	4014	33684	5737	82	31200	640	3	median
+```
+
+`plugin/anti-tangent-shunt/evals/benchmarks.md` — the human record: corpus repo + SHA, per-scenario file lists with line counts, the **verbatim prompt** for each scenario, the worker model id, the tokenizer (or the disclosed approximation), all three runs per scenario, and the commands to re-run.
+
+The TSV exists so the README table can be checked mechanically. Comparing rendered prose against rendered prose is how the two drift apart.
 
 - [ ] **Step 6: Publish the table**
 
@@ -3048,17 +3156,30 @@ would overstate it. Method and per-file selections: [`evals/benchmarks.md`](eval
 
 - [ ] **Step 6b: Make the table checkable**
 
-Write `plugin/anti-tangent-shunt/evals/check-benchmark-table.sh`: extract every numeric cell from the README's "ours" table and assert each appears in `benchmarks.md`, exiting non-zero on any mismatch. Without it, the README and the reproducibility record drift the first time either is edited — and the README is the half people quote.
+Write `plugin/anti-tangent-shunt/evals/check-benchmark-table.sh`. It must compare **row by row against `benchmarks.tsv`**: parse the README's "ours" table, match each row to its TSV row by scenario label, and compare every cell (lines, without, with, savings, worker tokens). Exit non-zero naming the first mismatched scenario and column.
+
+A "does this number appear anywhere in the file" check passes when two scenarios share a number, or when a stale figure survives in unrelated prose — exactly the drift this exists to catch. It must also fail when the README has a scenario the TSV lacks, or vice versa, so a dropped row cannot pass silently.
+
+- [ ] **Step 6c: Wire the check into CI and the whole-plan gate**
+
+A checker nothing runs is not a check. Add to the `hook-evals` job in `.github/workflows/ci.yml`, after the two eval suites:
+
+```yaml
+      - name: Benchmark table consistency
+        run: bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh
+```
+
+It needs no keys and no network — it reads two files in the repo. Add the same line to the whole-plan Verification block at the end of this plan.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add plugin/anti-tangent-shunt/README.md plugin/anti-tangent-shunt/evals/benchmarks.md plugin/anti-tangent-shunt/evals/check-benchmark-table.sh
+git add plugin/anti-tangent-shunt/README.md plugin/anti-tangent-shunt/evals/benchmarks.md plugin/anti-tangent-shunt/evals/benchmarks.tsv plugin/anti-tangent-shunt/evals/check-benchmark-table.sh .github/workflows/ci.yml
 git commit -m "docs(shunt): reproduce the four savings scenarios on a Go corpus"
 ```
 
 ```json:metadata
-{"files": ["plugin/anti-tangent-shunt/README.md", "plugin/anti-tangent-shunt/evals/benchmarks.md"], "verifyCommand": "bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh", "acceptanceCriteria": ["all four scenarios reproduced on a ~160K-line Go corpus", "repo, SHA and per-scenario files pinned", "reports without/with implementer tokens and the ratio", "worker consumption separate and not netted off", "scenario 4 reports lines with no ratio", "our table labelled and shown beside upstream's", "method reproducible by someone else"], "modelTier": "standard"}
+{"files": ["plugin/anti-tangent-shunt/README.md", "plugin/anti-tangent-shunt/evals/benchmarks.md", "plugin/anti-tangent-shunt/evals/benchmarks.tsv", "plugin/anti-tangent-shunt/evals/check-benchmark-table.sh", ".github/workflows/ci.yml"], "verifyCommand": "bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh", "acceptanceCriteria": ["all four scenarios reproduced on a ~160K-line Go corpus", "repo, SHA and per-scenario files pinned", "reports without/with implementer tokens and the ratio", "worker consumption separate and not netted off", "scenario 4 reports lines with no ratio", "our table labelled and shown beside upstream's", "method reproducible by someone else"], "modelTier": "standard"}
 ```
 
 ---
@@ -3075,6 +3196,7 @@ for f in docs/protocol/*.md; do b=$(wc -c < "$f"); echo "$f=$b"; [ "$b" -ge 1600
 [ "$(wc -c < INTEGRATION.md)" -lt 2000 ] || exit 1
 bash plugin/anti-tangent-shunt/evals/run.sh
 bash plugin/anti-tangent-guard/evals/run.sh
+bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh
 jq -e '.plugins | length == 4' .claude-plugin/marketplace.json
 git diff --name-only origin/main -- VERSION | grep -q . && echo "VERSION MUST NOT CHANGE" && exit 1
 grep -q '^## \[0.18.0\]' CHANGELOG.md
