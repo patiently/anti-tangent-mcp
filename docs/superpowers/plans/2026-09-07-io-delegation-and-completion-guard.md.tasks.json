@@ -16,7 +16,7 @@
     {
       "id": 3,
       "subject": "Task 3: Worker call path",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** One shared helper that invokes the worker model with a single-field JSON schema and returns the extracted text plus token counts.\n\n**Files:**\n- Create: `internal/mcpsrv/worker_call.go`\n- Test: `internal/mcpsrv/worker_call_test.go`\n\n**Acceptance Criteria:**\n- [ ] `workerSchema(\"answer\")` produces a strict one-field object schema\n- [ ] `runWorker` returns the field's string value, model, elapsed ms, and both token counts\n- [ ] A truncated provider response surfaces `providers.ErrResponseTruncated` unwrapped by `errors.Is`\n- [ ] Malformed JSON returns an error naming the field, and the raw body is NOT echoed into it\n- [ ] No network: tests drive a `providers.Reviewer` fake\n\n**Verify:** `go test -race ./internal/mcpsrv/... -run Worker -v` \u2192 PASS\n\nFull steps with code: see Task 3 in `docs/superpowers/plans/2026-09-07-io-delegation-and-completion-guard.md`.\n\n```json:metadata\n{\"files\": [\"internal/mcpsrv/worker_call.go\", \"internal/mcpsrv/worker_call_test.go\"], \"verifyCommand\": \"go test -race ./internal/mcpsrv/... -run Worker -v\", \"acceptanceCriteria\": [\"workerSchema emits strict one-field object schema\", \"runWorker returns text plus model, ms and token counts\", \"truncation propagates for errors.Is\", \"malformed JSON errors naming the field without echoing the body\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         1,
@@ -141,5 +141,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-07T19:08:38.139261+00:00"
+  "lastUpdated": "2026-09-07T19:16:05.503851+00:00"
 }
