@@ -3,9 +3,11 @@ package mcpsrv
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,4 +202,163 @@ func TestBulkReadTooLargePayload(t *testing.T) {
 	assert.Equal(t, "fail", res.Verdict)
 	assert.NotEmpty(t, res.Findings)
 	assert.Empty(t, res.Answer, "a too-large refusal must not carry an answer")
+}
+
+func TestCodeWriteRequiresReferencePath(t *testing.T) {
+	h := &handlers{deps: workerDeps(t, &fakeWorkerReviewer{}, nil)}
+	_, _, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{Spec: "make a test"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reference_path", "want a reference_path error")
+}
+
+func TestCodeWriteWritesAndHidesCode(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
+	target := filepath.Join(dir, "out.go")
+	f := &fakeWorkerReviewer{resp: providers.Response{
+		RawJSON: []byte(`{"code":"package out\n\nfunc A() {}\n"}`), InputTokens: 5, OutputTokens: 3,
+	}}
+	h := &handlers{deps: workerDeps(t, f, []string{dir})}
+	_, res, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+		Spec: "a func", ReferencePath: ref, TargetPath: target,
+	})
+	require.NoError(t, err)
+
+	assert.Empty(t, res.Code, "a targeted write must NOT return the code")
+	assert.Equal(t, target, res.Written)
+	assert.Equal(t, 3, res.LinesWritten)
+
+	b, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "package out\n\nfunc A() {}\n", string(b))
+}
+
+func TestCodeWriteWithoutTargetReturnsCode(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"code":"func A() {}"}`)}}
+	h := &handlers{deps: workerDeps(t, f, []string{dir})}
+	_, res, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{Spec: "s", ReferencePath: ref})
+	require.NoError(t, err)
+
+	assert.Equal(t, "func A() {}", res.Code)
+	assert.Empty(t, res.Written)
+}
+
+func TestCodeWriteTruncationWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
+	target := filepath.Join(dir, "out.go")
+	f := &fakeWorkerReviewer{err: providers.ErrResponseTruncated}
+	h := &handlers{deps: workerDeps(t, f, []string{dir})}
+	_, _, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+		Spec: "s", ReferencePath: ref, TargetPath: target,
+	})
+	require.Error(t, err, "want an error on truncation")
+
+	_, statErr := os.Stat(target)
+	assert.True(t, os.IsNotExist(statErr), "a truncated response must not create the target file")
+}
+
+// Named so `-run CodeWrite` selects it. The code_write half of the catalog
+// assertion lives here, not in Task 4: this is the task that registers it.
+func TestCodeWriteRegisteredInCatalog(t *testing.T) {
+	assert.True(t, catalogHas(t, "code_write"), `tool "code_write" is not registered`)
+}
+
+func TestCodeWriteEmptyOutputIsAnErrorAndWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
+
+	// Built with json.Marshal, NOT hand-written escapes: a hand-rolled
+	// "```go\\n```" decodes to a literal backslash-n, so stripFences sees no
+	// newline, leaves the text non-empty, and the case silently stops testing
+	// what it claims to.
+	mustBody := func(code string) []byte {
+		b, err := json.Marshal(map[string]string{"code": code})
+		require.NoError(t, err)
+		return b
+	}
+	cases := map[string][]byte{
+		"empty":      mustBody(""),
+		"whitespace": mustBody("   \n\t"),
+		"fence only": mustBody("```go\n```"),
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			target := filepath.Join(dir, "out_"+strings.ReplaceAll(name, " ", "_")+".go")
+			f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: body}}
+			h := &handlers{deps: workerDeps(t, f, []string{dir})}
+			_, _, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+				Spec: "s", ReferencePath: ref, TargetPath: target,
+			})
+			require.Error(t, err, "empty generated code must be an error")
+
+			_, statErr := os.Stat(target)
+			assert.True(t, os.IsNotExist(statErr), "nothing must be written when the worker returns no code")
+		})
+	}
+}
+
+// closeFailTarget wraps a real file and reports a Close failure, so the
+// "Close errors are reported" criterion has something to assert against.
+type closeFailTarget struct {
+	*os.File
+	err error
+}
+
+func (c closeFailTarget) Close() error { _ = c.File.Close(); return c.err }
+
+func TestCodeWriteReportsCloseError(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
+
+	orig := openWriteTarget
+	t.Cleanup(func() { openWriteTarget = orig })
+	openWriteTarget = func(target string, roots []string, overwrite bool) (writeTarget, error) {
+		f, err := resolveWriteTarget(target, roots, overwrite)
+		if err != nil {
+			return nil, err
+		}
+		return closeFailTarget{File: f, err: errors.New("disk went away")}, nil
+	}
+
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"code":"package out\n"}`)}}
+	h := &handlers{deps: workerDeps(t, f, []string{dir})}
+	_, _, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+		Spec: "s", ReferencePath: ref, TargetPath: filepath.Join(dir, "out.go"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disk went away", "a Close error must surface")
+}
+
+func TestStripFences(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"wrapped with lang", "```go\nfunc A() {}\n```", "func A() {}\n"},
+		{"wrapped bare", "```\nfunc A() {}\n```", "func A() {}\n"},
+		{"trailing newline after fence", "```go\nfunc A() {}\n```\n", "func A() {}\n"},
+		{"not wrapped", "func A() {}\n", "func A() {}\n"},
+		{"fence mid-body is preserved", "func A() {\n// ```\n}\n", "func A() {\n// ```\n}\n"},
+		{"opening fence only", "```go\nfunc A() {}\n", "```go\nfunc A() {}\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, stripFences(c.in))
+		})
+	}
+}
+
+func TestCountLines(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int
+	}{{"", 0}, {"a\n", 1}, {"a\nb\n", 2}, {"a\nb", 2}, {"\n", 1}}
+	for _, c := range cases {
+		assert.Equal(t, c.want, countLines(c.in), "countLines(%q)", c.in)
+	}
 }
