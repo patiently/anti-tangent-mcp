@@ -40,7 +40,10 @@ terse one. The modification in every case is the same: the
 Portal / AiKA delegation target was replaced by this project's own MCP tools,
 and `SHUNT_MIN_LINES` was renamed to `ANTI_TANGENT_SHUNT_MIN_LINES`.
 
-The full text of the Apache License, Version 2.0 follows.
+The full text of the Apache License, Version 2.0 follows. (The license text
+ends at "END OF TERMS AND CONDITIONS"; the appendix section containing EXHIBIT
+notices is omitted intentionally as it is not part of the operative licence
+terms.)
 
 ---
 
