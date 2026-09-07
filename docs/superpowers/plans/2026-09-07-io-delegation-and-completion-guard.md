@@ -3334,7 +3334,7 @@ git commit -m "docs: document the I/O tools, both plugins, and the write trust m
 - [ ] Corpus eligibility is objective (see Step 1), not "boring enough" — and package count is measured with `go list`, not by counting unique directories
 - [ ] The corpus licence file and its SPDX identifier are recorded in `benchmarks.md`, with OSI-approved status confirmed rather than assumed
 - [ ] Upstream's comparison figures are cited to the pinned source `spotify/portal-ai-plugins@3c24ca30ff63e1f5bbad1c43fe5324daff579123` `plugins/shunt/README.md`, which is where they were read — the accompanying blog post is unreachable from this environment and must not be cited as if read
-- [ ] The verify command compares the README table **row by row** against `benchmarks.tsv` — matching scenario labels and every cell — not merely that each number appears somewhere
+- [ ] The verify command compares the README table **row by row** against `benchmarks.tsv`, joining on `scenario_id` (never on prose) and comparing every cell — not merely that each number appears somewhere
 - [ ] The checker runs in CI (`hook-evals`) and in the whole-plan gate, so later documentation drift is caught
 - [ ] The corpus file set comes from a command that actually applies the exclusion rules (vendored and generated files pruned), and every scenario file is drawn from it
 
