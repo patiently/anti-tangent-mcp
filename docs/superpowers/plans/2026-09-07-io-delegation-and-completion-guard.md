@@ -2215,7 +2215,12 @@ func TestSummaryBlockContract(t *testing.T) {
 		NextAction: "fix",
 		ModelUsed:  "anthropic:claude-opus-4-7",
 	})
-	for _, want := range []string{"anti-tangent envelope", "session_id: sess-123"} {
+	// Assert the LABEL and the VALUE separately, never `session_id: <id>` as one
+	// string. formatEnvelopeSummary column-aligns its fields (`session_id:    %s`),
+	// and the guard hook greps for the bare `session_id:` label, so pinning the
+	// exact padding would fail on a cosmetic realignment the hook survives — a
+	// tripwire that cries wolf gets disabled, which is worse than not having one.
+	for _, want := range []string{"anti-tangent envelope", "session_id:", "sess-123"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary_block no longer contains %q — the guard hook greps for it.\n"+
 				"Update plugin/anti-tangent-guard/hooks/check-task-complete in this commit.\ngot:\n%s", want, got)
