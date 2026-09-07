@@ -26,7 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Its summary-block pass signal and verdict read are scoped to blocks tagged
   `tool: validate_completion` — see the new `Envelope.tool` field below — so a
   `check_progress` or `validate_task_spec` block (rendered byte-identical otherwise) cannot
-  satisfy the gate or have its verdict misread as validate_completion's. Requires an
+  satisfy the gate or have its verdict misread as validate_completion's. The hook reads that
+  tag, and the verdict, positionally (the first `tool:`/`verdict:` line within a block, never a
+  scan for the target value anywhere in it), and `formatEnvelopeSummary` escapes every
+  continuation line of a finding's `Evidence`/`Criterion` or an envelope's `next_action` with a
+  non-whitespace sentinel — so neither a forged tag nor a forged verdict smuggled through that
+  reviewer-authored free text can be mistaken for the genuine header line. Requires an
   anti-tangent-mcp server >= 0.18.0; an untagged block from an older server does not satisfy
   the guard.
 - **`ANTI_TANGENT_WORKER_MODEL`** (defaults to `ANTI_TANGENT_MID_MODEL`) and
@@ -42,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_completion`) gains a `tool` field naming the MCP tool that produced it. Additive;
   existing fields are unchanged. `formatEnvelopeSummary` now emits a `tool:` line, which
   `plugin/anti-tangent-guard`'s hook requires to identify a `validate_completion` block.
+- The paste-ready `summary_block`'s multi-line rendering (a finding's `Evidence`/`Criterion`, or
+  an envelope's `next_action`) now prefixes every continuation line with a non-whitespace `| `
+  sentinel instead of pure whitespace. User-visible formatting change, intended: without it, a
+  reviewer-authored line that happened to read `tool: validate_completion` or `verdict: pass`
+  could be mistaken for the block's own grammar by a downstream parser — see
+  `plugin/anti-tangent-guard` above.
 - The README's filesystem trust-model section now covers writes, not only reads.
 
 ## [0.17.0] - 2026-09-02

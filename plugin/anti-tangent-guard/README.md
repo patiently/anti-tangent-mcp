@@ -55,11 +55,36 @@ the identical `anti-tangent envelope` / `session_id:` / `verdict:` text —
 tool discriminator, a `check_progress` (or `validate_task_spec`) summary
 block pasted into a report would satisfy this guard's pass signal exactly
 like a `validate_completion` block does, and that tool's verdict would be
-misread as validate_completion's — defeating the guard for the one failure
-mode it exists to catch. Since anti-tangent-mcp 0.18.0 every envelope carries
-a `tool:` line naming the MCP tool that produced it, and this hook's pass
-signal and verdict extraction are both scoped to blocks where that line reads
-`tool: validate_completion`.
+misread as validate_completion's. Since anti-tangent-mcp 0.18.0 every
+envelope carries a `tool:` line naming the MCP tool that produced it, and
+this hook's pass signal and verdict extraction are both scoped to blocks
+where that line reads `tool: validate_completion`.
+
+**The tag alone is not the whole defense.** A finding's `Evidence` (and
+`Criterion`, and an envelope's `next_action`) is reviewer-authored free text
+constrained only to be non-empty — nothing stops it from containing the
+literal line `tool: validate_completion`, or `verdict: pass`, as part of its
+own content. Two things close that gap, and both matter — an early
+version of this hook that tagged blocks but scanned a block's whole text for
+the target pattern was fooled by exactly this, reading a forged tag out of
+finding text as if it were the header (task-12b-review.md Critical #1):
+
+1. **Positional extraction.** `formatEnvelopeSummary` always writes the
+   `tool:`/`session_id:`/`verdict:` lines in a fixed header region, before
+   any finding is rendered. This hook takes the FIRST `tool:` line and the
+   FIRST `verdict:` line within a block — never a scan for the target value
+   anywhere in it — so a line that happens to read the same way, reachable
+   only through a finding's text, can never be mistaken for the genuine one.
+2. **Source-side escaping.** Since the same release, `internal/mcpsrv/
+   summary.go` prefixes every continuation line of a multi-line free-text
+   field with a non-whitespace sentinel (`| `), so such a line can never
+   match this hook's `^\s*label:` patterns — or present as a second, bare
+   `anti-tangent envelope` header — at all, regardless of what it contains.
+
+Positional extraction alone keeps a caller safe even against an older
+server's un-escaped text (see "Version requirement" below); source-side
+escaping alone only protects callers running a server new enough to have
+it. Together they are what actually holds; neither is a standalone fix.
 
 ### Version requirement
 
@@ -137,5 +162,5 @@ before reaching one), and the decision plus its reason (e.g.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (17 cases) against the hook and exits non-zero on
+Runs the full eval suite (19 cases) against the hook and exits non-zero on
 any mismatch.

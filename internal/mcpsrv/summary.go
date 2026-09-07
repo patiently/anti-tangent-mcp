@@ -47,9 +47,23 @@ func formatEnvelopeSummary(env Envelope) string {
 		fmt.Fprintf(&b, "  session_ttl_remaining_seconds: %d\n", *env.SessionTTLRemainingSeconds)
 	}
 	writeFindingsSummary(&b, env.Findings, "  ")
-	fmt.Fprintf(&b, "  next_action:   %s\n", env.NextAction)
+	// next_action is reviewer-authored free text (schema: minLength 1, no
+	// other constraint — see internal/verdict/schema.json) rendered LAST in
+	// this block, after every finding. Escaping it matters for the same
+	// reason as Criterion/Evidence below: an embedded newline here would
+	// otherwise land at true column 0 (nothing precedes a continuation line
+	// of the last field), able to forge a bare "anti-tangent envelope"
+	// header or a "verdict:"/"tool:" line unindented — a stronger version of
+	// the same hole. See escapeContinuationLines.
+	fmt.Fprintf(&b, "  next_action:   %s\n", escapeContinuationLines(env.NextAction, envelopeNextActionContIndent))
 	return b.String()
 }
+
+// envelopeNextActionContIndent aligns a multi-line next_action's
+// continuation lines under its value column ("  next_action:   "),
+// mirroring the "                 - %s (%d B)\n" convention used for
+// meta.ContextFiles in formatPlanSummary.
+const envelopeNextActionContIndent = "                 "
 
 // planSummaryMeta bundles the non-PlanResult inputs to formatPlanSummary.
 // Carried on a struct rather than as scalars so the signature stays narrow
@@ -180,7 +194,13 @@ func writeFindingsSummary(b *strings.Builder, findings []verdict.Finding, indent
 	crit, maj, min := countSeverities(findings)
 	fmt.Fprintf(b, "%sfindings:      %d total (%d critical, %d major, %d minor)\n", indent, len(findings), crit, maj, min)
 	for _, f := range findings {
-		fmt.Fprintf(b, "%s  - [%s][%s] %s — %s\n", indent, f.Severity, f.Category, f.Criterion, formatFindingEvidence(f.Evidence, indent+"    "))
+		// Criterion is reviewer-authored free text (schema: minLength 1, no
+		// other constraint), same as Evidence. Escape it too: unlike
+		// Evidence, Criterion was never truncated or re-indented, so an
+		// embedded newline in it used to land at true column 0 — a cleaner
+		// forgery vector than Evidence's (whitespace-only, pre-fix) indent.
+		criterion := escapeContinuationLines(f.Criterion, indent+"    ")
+		fmt.Fprintf(b, "%s  - [%s][%s] %s — %s\n", indent, f.Severity, f.Category, criterion, formatFindingEvidence(f.Evidence, indent+"    "))
 	}
 }
 
@@ -188,8 +208,9 @@ func writeFindingsSummary(b *strings.Builder, findings []verdict.Finding, indent
 // summary block. Single-line evidence is truncated at summaryEvidenceMax
 // runes (unchanged behavior). Multi-line evidence — used today by the
 // validate_plan unverifiable-claim rollup which lists one task per line — is
-// truncated per-line, and continuation lines are prefixed with contIndent so
-// they sit visually under the bullet text instead of flushing to column 0.
+// truncated per-line, then escaped via escapeContinuationLines so a
+// continuation line sits visually under the bullet text AND can never be
+// mistaken for one of the block's own label lines.
 func formatFindingEvidence(evidence, contIndent string) string {
 	if !strings.Contains(evidence, "\n") {
 		return truncate(evidence, summaryEvidenceMax)
@@ -198,7 +219,47 @@ func formatFindingEvidence(evidence, contIndent string) string {
 	for i, ln := range lines {
 		lines[i] = truncate(ln, summaryEvidenceMax)
 	}
-	return strings.Join(lines, "\n"+contIndent)
+	return escapeContinuationLines(strings.Join(lines, "\n"), contIndent)
+}
+
+// escapeContinuationLines guards a reviewer-authored free-text field against
+// forging the envelope's own line-based grammar. plugin/anti-tangent-guard/
+// hooks/check-task-complete recognizes the block by three kinds of line: a
+// bare "anti-tangent envelope" header, and "label: value" lines matched with
+// ^\s*label: (any amount of LEADING WHITESPACE tolerated, e.g. "tool:",
+// "verdict:", "session_id:"). Every field this package renders into the
+// block is schema-constrained only to be non-empty (internal/verdict/
+// schema.json) — nothing stops a reviewer's Evidence, Criterion, or
+// next_action from containing an embedded newline whose second physical
+// line reads, verbatim, "verdict: pass" or "anti-tangent envelope".
+//
+// If s has no newline, it is returned unchanged: a single-line value is
+// always inlined mid-line after its own field's label (e.g. "  - [minor]
+// [quality] <criterion> — <evidence>", "  next_action:   <value>"), so it
+// can never independently start a physical line — nothing to escape.
+//
+// If s spans multiple lines, every line AFTER the first is prefixed with
+// contIndent followed by a non-whitespace sentinel ("| "). The sentinel is
+// the load-bearing part: contIndent alone is pure whitespace, so
+// "<contIndent>tool: validate_completion" still matches ^\s*tool:. With the
+// sentinel it renders "<contIndent>| tool: validate_completion" — the first
+// non-whitespace character is "|", not "t"/"v"/"a", so ^\s*label: (and a
+// header check anchored to zero leading whitespace) can never match it,
+// regardless of what the reviewer put in the field.
+func escapeContinuationLines(s, contIndent string) string {
+	if !strings.Contains(s, "\n") {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	var b strings.Builder
+	b.WriteString(lines[0])
+	for _, ln := range lines[1:] {
+		b.WriteString("\n")
+		b.WriteString(contIndent)
+		b.WriteString("| ")
+		b.WriteString(ln)
+	}
+	return b.String()
 }
 
 // countSeverities tallies critical/major/minor findings. Any other severity

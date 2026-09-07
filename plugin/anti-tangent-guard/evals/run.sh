@@ -19,12 +19,13 @@ PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 HOOK="$PLUGIN_DIR/hooks/check-task-complete"
 EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 
-# The eval table this suite implements (see task-12-brief.md Step 4, plus the
-# two tool-scoping cases added for task-12b) has exactly 17 rows. Both checks
-# below must hold or the count assertion is vacuous: the JSON file must
-# declare 17 cases, AND the loop must actually execute 17 of them (a
+# The eval table this suite implements (see task-12-brief.md Step 4, the two
+# tool-scoping cases added for task-12b, and the two forged-marker cases added
+# for task-12c — see task-12b-review.md Critical #1) has exactly 19 rows. Both
+# checks below must hold or the count assertion is vacuous: the JSON file must
+# declare 19 cases, AND the loop must actually execute 19 of them (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=17
+EXPECTED_CASE_COUNT=19
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 cleanup() { rm -rf "$WORKDIR"; }

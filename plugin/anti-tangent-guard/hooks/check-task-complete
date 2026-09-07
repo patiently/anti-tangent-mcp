@@ -34,6 +34,29 @@
 # pass signal, and that tool's verdict would be misread as validate_completion's.
 # An untagged block (no tool: line at all — e.g. from a pre-0.18.0 server)
 # does NOT satisfy the guard; see README.md's version note.
+#
+# POSITIONAL EXTRACTION, NOT FREE SCAN (task-12b review, Critical #1): the
+# tool:/verdict: lines are read from a FIXED position — the first line
+# matching each pattern WITHIN one envelope block — never by searching a
+# block's full text for the pattern anywhere in it. A finding's Evidence (or
+# Criterion, or next_action) is reviewer-authored free text constrained only
+# to be non-empty; multi-line values are deliberately supported and rendered
+# verbatim, just re-indented. Without positional extraction, a check_progress
+# block whose Evidence happened to contain the literal line
+# "tool: validate_completion" would satisfy this guard's pass signal, and a
+# real "verdict: fail" could be overridden by a forged "verdict: pass" the
+# same way. Both are unreachable now: formatEnvelopeSummary always emits
+# tool:/session_id:/verdict: in the header region, before any finding is
+# rendered — so within a genuine block the FIRST match is always the real
+# one — and the server also escapes every continuation line of a
+# multi-line field with a non-whitespace "| " sentinel
+# (internal/mcpsrv/summary.go's escapeContinuationLines) so it can never
+# match ^\s*label: or a bare header line at all, closing the same hole even
+# if a forged line were somehow positioned before the genuine one. Both
+# fixes matter: source-escaping alone only protects callers on a server new
+# enough to have it; positional extraction alone still trusts whatever text
+# a block contains. Across blocks, the LAST one still wins (Task 8's pinned
+# re-validation semantics) — only the extraction WITHIN a block changed.
 set -uo pipefail
 
 TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
@@ -73,7 +96,7 @@ except Exception:
     print(json.dumps({"error": True})); sys.exit(0)
 
 last_inprogress = -1
-called_idx, block_texts = [], []   # (idx) of direct calls; (idx, text) of summary blocks
+called_idx, texts = [], []   # (idx) of direct calls; (idx, text) of tool_result chunks
 
 for idx, line in enumerate(lines):
     try: entry = json.loads(line)
@@ -100,26 +123,57 @@ for idx, line in enumerate(lines):
                 chunks = [inner] if isinstance(inner, str) else [
                     ic.get("text", "") for ic in (inner or []) if isinstance(ic, dict) and ic.get("type") == "text"]
                 for t in chunks:
-                    # The tool: marker is what separates a validate_completion
-                    # block from a check_progress / validate_task_spec block —
-                    # formatEnvelopeSummary renders them identically otherwise.
-                    # An untagged block (no tool: line) does NOT match here.
-                    if (t and "anti-tangent envelope" in t and "session_id:" in t
-                            and re.search(r"^\s*tool:\s*validate_completion\s*$", t, re.MULTILINE)):
-                        block_texts.append((idx, t))
+                    if t and "anti-tangent envelope" in t:
+                        texts.append((idx, t))
 
 scan_from = last_inprogress if last_inprogress >= 0 else 0
 called = any(i >= scan_from for i in called_idx)
-blocks = [t for (i, t) in block_texts if i >= scan_from]
 
-# LAST block wins: a re-validation after fixing findings is the whole point.
+# Positional block extraction (task-12b review, Critical #1). A genuine
+# envelope always starts with a bare "anti-tangent envelope" header line --
+# no leading whitespace, nothing else on the line; formatEnvelopeSummary
+# writes exactly that -- followed, before any finding is rendered, by
+# session_id:, then tool:, then verdict:. Split the in-window transcript
+# text on that anchored header to get one block per envelope; within each
+# qualifying block, the FIRST tool: line and FIRST verdict: line are always
+# the genuine ones -- a later line spelled the same way, reachable only
+# through a finding Evidence/Criterion or next_action, can never win a
+# first-match search over a block whose header always comes first.
+HEADER_RE = re.compile(r"(?m)^anti-tangent envelope$")
+TOOL_RE = re.compile(r"(?m)^\s*tool:\s*(\S+)\s*$")
+VERDICT_RE = re.compile(r"(?m)^\s*verdict:\s*(\w+)")
+
+in_window = [t for (i, t) in texts if i >= scan_from]
+combined = "\n".join(in_window)
+
+starts = [m.start() for m in HEADER_RE.finditer(combined)]
+blocks = []
+for i, s in enumerate(starts):
+    e = starts[i + 1] if i + 1 < len(starts) else len(combined)
+    blocks.append(combined[s:e])
+
+# A block only qualifies as the validate_completion pass signal when its
+# FIRST tool: line names it -- not merely when that string appears
+# somewhere in the block. A check_progress block whose Evidence happens to
+# contain the literal line "tool: validate_completion" must NOT qualify.
+qualifying = []
+for b in blocks:
+    if "session_id:" not in b:
+        continue
+    tm = TOOL_RE.search(b)
+    if tm and tm.group(1) == "validate_completion":
+        qualifying.append(b)
+
+# LAST qualifying block wins: a re-validation after fixing findings is the
+# whole point. Its verdict is the FIRST verdict: line within that block --
+# the genuine one, always emitted before any finding.
 verdict = ""
-if blocks:
-    m = re.findall(r"^\s*verdict:\s*(\w+)", blocks[-1], re.MULTILINE)
-    if m: verdict = m[-1]
+if qualifying:
+    vm = VERDICT_RE.search(qualifying[-1])
+    if vm: verdict = vm.group(1)
 
 print(json.dumps({"error": False, "called": called,
-                  "block_found": bool(blocks), "verdict": verdict}))
+                  "block_found": bool(qualifying), "verdict": verdict}))
 '
 RESULT=$({ python3 -c "$PY" "$TRANSCRIPT" "$TASK_ID" 2>/dev/null || echo '{"error":true}'; } | tr -d '\r')
 # NOTE: deliberately ".error", not ".error // true" — jq's // operator
