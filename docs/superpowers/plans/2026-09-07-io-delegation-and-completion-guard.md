@@ -279,7 +279,17 @@ git commit -m "feat(config): worker model and token cap for bulk_read/code_write
 - [ ] `RenderWorkerBulkRead` wraps each file as `<file path="…">…</file>` and ends with the question
 - [ ] `RenderWorkerCodeWrite` includes the reference file and the spec
 - [ ] Both renderers return a non-empty `Output.System` carrying a NEW `workerSystemPrompt` const — **not** the shared `systemPrompt`. That one opens "You are an exacting reviewer… You give specific, evidence-backed findings", which is the wrong persona for a worker that answers a question or emits bare code. KEEP its two sentences that ARE right for a worker — "You return ONLY a JSON object matching the provided schema" (correct: §3.2 wraps worker output in a one-field schema) and "You never invent facts about code that wasn't shown to you" — and replace the reviewer framing. Both tests assert `System` is non-empty AND is the worker prompt, not the reviewer one
-- [ ] File content is delimited with a **per-render nonce**, so content cannot forge the terminator. `bulk_read` attaches arbitrary repo files and `code_write`'s reference file becomes code written to disk, so a file containing a literal closing delimiter plus injected instructions is a path from repo content to written code. Mirror the existing pattern — `DeriveContextFilesNonce` (`internal/prompts/prompts.go`) derives a collision-free token from the content and retries on collision, and `context_files.tmpl` wraps with `--- BEGIN FILE {{nonce}}: path ---` / `--- END FILE {{nonce}}: path ---`. Generalise that helper or add a sibling; do NOT duplicate its logic, and do not hand-roll a nonce
+- [ ] File content is delimited with a **per-render nonce**, so content cannot forge the terminator. `bulk_read` attaches arbitrary repo files and `code_write`'s reference file becomes code written to disk, so a file containing a literal closing delimiter plus injected instructions is a path from repo content to written code. The delimiter shape is **fixed by design spec line 228** (`Each file is rendered as \`<file path="…">…</file>\``) and must NOT be replaced with the repo's `--- BEGIN FILE …` form. Use:
+
+```
+<file path="{{escaped path}}" nonce="{{nonce}}">
+{{content}}
+</file nonce="{{nonce}}">
+```
+
+Content containing a bare `</file>` no longer terminates, because the real terminator carries the nonce. Keeping the attribute shape also keeps `escapeAttr` meaningful: HTML-escaping a path is correct **inside an attribute** and incoherent in a line-oriented delimiter, where the only forging character is a newline — which HTML escaping does not touch, while it mangles legitimate paths into `&#34;` that the worker is then shown and may quote back.
+
+Mirror the existing pattern — `DeriveContextFilesNonce` (`internal/prompts/prompts.go`) derives a collision-free token from the content and retries on collision, and `context_files.tmpl` wraps with `--- BEGIN FILE {{nonce}}: path ---` / `--- END FILE {{nonce}}: path ---`. Generalise that helper or add a sibling; do NOT duplicate its logic, and do not hand-roll a nonce
 - [ ] Both goldens snapshot `out.System+"\n---USER---\n"+out.User`, matching the 6+ existing goldens in this file — not `out.User` alone. This pins the new system prompt rather than leaving it asserted only by a `NotEmpty` check
 - [ ] The escaping test covers **both** renderers — `RenderWorkerCodeWrite`'s `ReferencePath` as well as `RenderWorkerBulkRead`'s `Path`
 - [ ] Both return `prompts.Output` with `UserPrefix` empty (single-call, no cache breakpoint)
