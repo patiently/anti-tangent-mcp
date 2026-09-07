@@ -3332,7 +3332,7 @@ git commit -m "docs: document the I/O tools, both plugins, and the write trust m
 ```
 
 ```json:metadata
-{"files": ["README.md", "CLAUDE.md", ".claude-plugin/marketplace.json"], "verifyCommand": "jq -e '.plugins | length == 4' .claude-plugin/marketplace.json", "acceptanceCriteria": ["README documents both tools with full field lists", "README documents the worker vars and notes SHUNT_MIN_LINES is hook-only", "README filesystem section covers writes and the Windows gap", "README gains Acknowledgements", "CLAUDE.md says nine tools and records the plugin-vs-server blocking distinction", "marketplace.json lists four plugins at version 0.9.0", "no stale catalog-count claim on the live surface (docs/superpowers historical records excluded)"], "modelTier": "mechanical"}
+{"files": ["README.md", "CLAUDE.md", ".claude-plugin/marketplace.json"], "verifyCommand": "jq -e '.plugins | length == 4' .claude-plugin/marketplace.json", "acceptanceCriteria": ["README documents both tools with full field lists", "README documents the worker vars and notes SHUNT_MIN_LINES is hook-only", "README filesystem section covers writes and the Windows gap", "README gains Acknowledgements", "CLAUDE.md says nine tools and records the plugin-vs-server blocking distinction", "marketplace.json lists four plugins; its top-level version is 0.9.0 while each entry keeps its own plugin.json version", "no stale catalog-count claim on the live surface (docs/superpowers historical records excluded)"], "modelTier": "mechanical"}
 ```
 
 ---
