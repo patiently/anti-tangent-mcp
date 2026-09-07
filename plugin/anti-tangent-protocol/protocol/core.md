@@ -6,7 +6,7 @@ catch, when the protocol applies at all, and the FAQ. Then read the part for you
 (writing the code), [`controller.md`](controller.md) (dispatching subagents or running a plan
 end to end).
 
-`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It exposes seven tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`), an optional project-knowledge pair (`prime_project_knowledge` / `extract_project_knowledge`), and a deterministic plan-run report (`plan_run_report`). The reviewer LLM is intentionally a different model from the implementer, so reviews are not blind to the implementer's blind spots. See [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md) for the tool surface and [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md) for the authoritative design.
+`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It exposes nine tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`), an optional project-knowledge pair (`prime_project_knowledge` / `extract_project_knowledge`), a deterministic plan-run report (`plan_run_report`), and an I/O-delegation pair (`bulk_read` / `code_write`) that routes large reads and boilerplate generation to a cheap worker model. The first six use a reviewer LLM deliberately different from the implementer, so review isn't blind to the implementer's own blind spots; the delegation pair sends nothing for review — it moves volume, not judgement. See [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md) for the tool surface and [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md) for the authoritative design.
 
 **Install and configure:** see [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md). This document covers the using-the-MCP protocol.
 
@@ -66,6 +66,32 @@ nobody attached has no ground truth behind it.
 - **`context`** — background a fresh implementer needs (constraints, repo carve-outs, prior decisions). Helps the reviewer judge ambiguity; not a code-reference claim.
 - **`pinned_by`** — existing tests, docs, commands, or static checks pinning a terse AC like "retry behavior remains unchanged." Caller-supplied anchors, not verified facts.
 - **`controller_verified_references`** — code refs the controller already grep-verified (paths, symbols, anchors). Pre-task reviewer suppresses `unverifiable_codebase_claim` on deterministic substring match only; contradictions, missing ACs, ambiguity, `convention_deviation` findings are NOT suppressed. `testability_extractions` suppresses `scope_drift` on intentional extractions; `codebase_conventions` triggers `convention_deviation` findings.
+
+---
+
+## What is never delegated
+
+Two loops hand work to another model: the review loop (a reviewer LLM judges
+a task) and the I/O loop (a worker model reads files or generates
+boilerplate). Both stop at the same line.
+
+- **Reasoning stays with the implementer.** Debugging, architecture, any
+  correctness argument — a digest doesn't substitute for reading the file
+  when the question is *why* something misbehaves.
+- **Changes to existing code stay with the implementer.** A worker's answer
+  has no reliable line anchors: use it to find the region, then read and edit
+  it yourself. Generating a NEW file from an existing pattern differs and is
+  delegable — but picking the reference and proving the result work remain
+  yours. Generated code is **verified, not inspected**: run the tests and
+  the build. You needn't read it back — that's the saving.
+- **Judgement stays with the implementer.** Delegating the reading is not
+  delegating the deciding.
+- **Small inputs aren't worth delegating.** Below threshold the round trip
+  costs more than it saves.
+
+Delegation moves *volume* off the implementer's context, never
+responsibility: the implementer still answers for the result at
+`validate_completion`.
 
 ---
 
