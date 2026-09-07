@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship two MCP tools that route I/O-heavy implementer work to a cheap worker model, and two Claude Code plugins whose hooks make implementers actually use them and refuse a task close that skipped `validate_completion`.
+**Goal:** Ship two MCP tools that route I/O-heavy implementer work to a cheap worker model, and two Claude Code plugins whose hooks make implementers actually use them and refuse to let a task close STAND when it skipped `validate_completion`.
 
 **Architecture:** The server gains `bulk_read` / `code_write`, which reuse the existing provider layer by passing a one-field JSON schema (`{"answer"}` / `{"code"}`) so free-text output rides the structured-output path unchanged and truncation fails closed. Reads reuse `resolveFileInput`; writes get a new `resolveWriteTarget` because the read path symlink-resolves a full path that does not exist yet. Three new hooks live in two plugins, never in the server — the server stays advisory.
 
@@ -246,6 +246,8 @@ git commit -m "feat(config): worker model and token cap for bulk_read/code_write
 
 - [ ] **Step 1: Write the templates**
 
+`{{.Path}}` and `{{.ReferencePath}}` are pre-escaped by the render function (Step 4). `text/template` escapes nothing, and an unescaped `"` in a path would close the attribute and let a filename forge prompt structure. `rejectControlChars` does NOT cover quotes or ampersands — both are legal in a Unix filename.
+
 `internal/prompts/templates/worker_bulk_read.tmpl`:
 
 ```gotemplate
@@ -330,7 +332,26 @@ func TestRenderWorkerCodeWrite(t *testing.T) {
 	if !strings.Contains(out.User, "A table test for Add.") {
 		t.Error("missing spec")
 	}
+	if out.UserPrefix != "" {
+		t.Errorf("UserPrefix should be empty on a single-call render, got %q", out.UserPrefix)
+	}
 	golden(t, "worker_code_write.golden", out.User)
+}
+
+func TestRenderWorkerBulkReadEscapesAttributes(t *testing.T) {
+	out, err := RenderWorkerBulkRead(WorkerBulkReadInput{
+		Question: "q",
+		Files:    []WorkerFile{{Path: `/repo/we"ird & <odd>.go`, Content: "package a\n"}},
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(out.User, `path="/repo/we"ird`) {
+		t.Error("an unescaped quote broke out of the path attribute")
+	}
+	if !strings.Contains(out.User, "&#34;") || !strings.Contains(out.User, "&amp;") {
+		t.Errorf("quote and ampersand must be escaped, got:\n%s", out.User)
+	}
 }
 ```
 
@@ -357,6 +378,13 @@ type WorkerBulkReadInput struct {
 	Files    []WorkerFile
 }
 
+// escapeAttr makes a path safe inside a path="…" attribute. text/template
+// escapes nothing, so a filename containing a double quote would otherwise
+// close the attribute and have the remainder read as prompt structure. Quotes
+// and ampersands are legal in Unix filenames and are NOT covered by
+// rejectControlChars, which refuses only control and Unicode format characters.
+func escapeAttr(p string) string { return html.EscapeString(p) }
+
 type WorkerCodeWriteInput struct {
 	Spec             string
 	ReferencePath    string
@@ -367,6 +395,11 @@ type WorkerCodeWriteInput struct {
 // deliberately left empty: this is a single call, and an Anthropic cache
 // breakpoint on a single call is a 1.25x write against zero reads.
 func RenderWorkerBulkRead(in WorkerBulkReadInput) (Output, error) {
+	esc := make([]WorkerFile, len(in.Files))
+	for i, f := range in.Files {
+		esc[i] = WorkerFile{Path: escapeAttr(f.Path), Content: f.Content}
+	}
+	in.Files = esc
 	body, err := renderTemplate("worker_bulk_read.tmpl", in)
 	if err != nil {
 		return Output{}, err
@@ -376,6 +409,7 @@ func RenderWorkerBulkRead(in WorkerBulkReadInput) (Output, error) {
 
 // RenderWorkerCodeWrite renders the code_write worker prompt.
 func RenderWorkerCodeWrite(in WorkerCodeWriteInput) (Output, error) {
+	in.ReferencePath = escapeAttr(in.ReferencePath)
 	body, err := renderTemplate("worker_code_write.tmpl", in)
 	if err != nil {
 		return Output{}, err
@@ -662,6 +696,8 @@ git commit -m "feat(mcpsrv): worker call path with one-field JSON schema"
 - [ ] Empty `question` or empty `paths` is a validation error
 - [ ] More than 50 paths is rejected naming the limit
 - [ ] Paths go through `resolveFileInput`, so roots containment, `O_NOFOLLOW` and control-character refusal all apply
+- [ ] The cap counts **caller-controlled bytes only**: `len(question)` + the sum of file bytes. Template scaffolding and `<file>` wrappers are excluded — server-controlled, bounded, and counting them would make the effective cap drift with every template edit. Stated in a comment so it is not re-litigated
+- [ ] A multi-file call that crosses the cap on the LAST file is refused, tested at the boundary
 - [ ] Total bytes over `MaxPayloadBytes` returns the structured too-large envelope, never a truncated read
 - [ ] Success returns `answer`, `model_used`, `review_ms`, `input_tokens`, `output_tokens`, `files_read`, `bytes_read`
 - [ ] The response contains no file content other than what the worker quoted
@@ -758,6 +794,70 @@ func TestBulkReadHappyPath(t *testing.T) {
 	}
 	if res.InputTokens != 42 || res.OutputTokens != 7 {
 		t.Errorf("tokens = %d/%d", res.InputTokens, res.OutputTokens)
+	}
+}
+
+func TestBulkReadRefusesControlCharPath(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a\nb.go")
+	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+		t.Skipf("filesystem rejects the name: %v", err)
+	}
+	h := &handlers{deps: workerDeps(t, &fakeWorkerReviewer{}, []string{dir})}
+	_, _, err := h.BulkRead(context.Background(), nil, BulkReadArgs{Question: "q", Paths: []string{p}})
+	if err == nil || !strings.Contains(err.Error(), "U+") {
+		t.Fatalf("want a control-character refusal naming the code point, got %v", err)
+	}
+}
+
+func TestBulkReadAnswerCarriesNoUnquotedSource(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.go")
+	const sentinel = "SENTINEL_NOT_IN_ANSWER_9f3a"
+	if err := os.WriteFile(p, []byte("package a // "+sentinel+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"answer":"- a.go: package a"}`)}}
+	h := &handlers{deps: workerDeps(t, f, []string{dir})}
+	_, res, err := h.BulkRead(context.Background(), nil, BulkReadArgs{Question: "q", Paths: []string{p}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(res)
+	if strings.Contains(string(b), sentinel) {
+		t.Error("file content the worker did not quote leaked into the response")
+	}
+}
+
+func TestBulkReadCapCrossedOnLastFile(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for i := 0; i < 3; i++ {
+		fp := filepath.Join(dir, fmt.Sprintf("f%d.go", i))
+		if err := os.WriteFile(fp, make([]byte, 40), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, fp)
+	}
+	d := workerDeps(t, &fakeWorkerReviewer{}, []string{dir})
+	d.Cfg.MaxPayloadBytes = 100 // question(1) + 40 + 40 fits; the third crosses
+	h := &handlers{deps: d}
+	_, res, err := h.BulkRead(context.Background(), nil, BulkReadArgs{Question: "q", Paths: paths})
+	if err != nil {
+		t.Fatalf("want an envelope, got transport error: %v", err)
+	}
+	if res.Verdict != "fail" {
+		t.Errorf("crossing the cap on the last file must refuse, got %+v", res)
+	}
+}
+
+func TestToolsRegisteredInCatalog(t *testing.T) {
+	// Enumerate the server's registered tools using whatever mechanism
+	// internal/mcpsrv/integration_test.go already uses — do not add a second one.
+	for _, want := range []string{"bulk_read", "code_write"} {
+		if !registeredToolNames(t).has(want) {
+			t.Errorf("tool %q is not registered", want)
+		}
 	}
 }
 
@@ -874,6 +974,11 @@ func (h *handlers) BulkRead(ctx context.Context, _ *mcp.CallToolRequest, args Bu
 	// Read every file first, accumulating against the shared payload cap. The
 	// cap is checked as we go so an oversized SET is refused before any
 	// provider call is made, not after paying for one.
+	//
+	// WHAT COUNTS toward the cap: caller-controlled bytes only — the question
+	// plus file contents. Template scaffolding and <file> wrappers are excluded
+	// deliberately; they are server-controlled and bounded, and counting them
+	// would make the effective cap drift whenever the template is edited.
 	files := make([]prompts.WorkerFile, 0, len(args.Paths))
 	total := len(args.Question)
 	for _, p := range args.Paths {
@@ -982,7 +1087,8 @@ git commit -m "feat(mcpsrv): add bulk_read tool"
 - [ ] A resolved path containing a control or Unicode format character is refused
 - [ ] With `overwrite=false`, an existing file is refused
 - [ ] With `overwrite=true`, an existing regular file is truncated and rewritten
-- [ ] A **symlink** at the leaf is refused under BOTH `overwrite` values
+- [ ] **On Unix:** a symlink at the leaf is refused under BOTH `overwrite` values
+- [ ] **On Windows:** the leaf-symlink guarantee does NOT hold. This is an accepted, documented non-goal — Go's `syscall` package exposes no `O_NOFOLLOW` equivalent there, exactly as for the existing read path's `openNoFollow`. Do not claim the unconditional contract while shipping the gap.
 - [ ] A symlinked parent inside the roots resolves and is allowed
 
 **Verify:** `go test -race ./internal/mcpsrv/... -run WriteTarget -v` → PASS
@@ -1274,6 +1380,8 @@ git commit -m "feat(mcpsrv): write-target resolver with roots and O_NOFOLLOW"
 - [ ] Markdown fences are stripped when the whole body is fence-wrapped, and NOT stripped mid-body
 - [ ] A truncated worker response writes nothing
 - [ ] `lines_written` counts a final line with no trailing newline
+- [ ] **Empty generated code (after fence-stripping) is an error and nothing is written.** This is what makes the `omitempty` tags safe: on every success `code` is non-empty and `lines_written` >= 1, so neither field the acceptance criteria promise can be dropped by the encoder
+- [ ] A `Close` error on the target is reported, not discarded — a write is not done until the file closes cleanly
 
 **Verify:** `go test -race ./internal/mcpsrv/... -run CodeWrite -v` → PASS
 
@@ -1473,6 +1581,12 @@ func (h *handlers) CodeWrite(ctx context.Context, _ *mcp.CallToolRequest, args C
 	}
 
 	code := stripFences(wr.Text)
+	// Empty output is an error, never a zero-line write. This also keeps the
+	// omitempty tags on Code / LinesWritten honest: on success both are always
+	// non-zero, so neither field the tool promises can vanish from the JSON.
+	if strings.TrimSpace(code) == "" {
+		return nil, CodeWriteResult{}, errors.New("worker returned no code; nothing was written")
+	}
 	res := CodeWriteResult{
 		ModelUsed:    wr.Model,
 		ReviewMS:     wr.ReviewMS,
@@ -1488,11 +1602,18 @@ func (h *handlers) CodeWrite(ctx context.Context, _ *mcp.CallToolRequest, args C
 	if err != nil {
 		return nil, CodeWriteResult{}, err
 	}
-	defer func() { _ = f.Close() }()
+	written := f.Name()
 	if _, err := f.WriteString(code); err != nil {
-		return nil, CodeWriteResult{}, fmt.Errorf("write %q: %w", args.TargetPath, err)
+		_ = f.Close()
+		return nil, CodeWriteResult{}, fmt.Errorf("write %q: %w", written, err)
 	}
-	res.Written = f.Name()
+	// Closed explicitly, not deferred: a deferred Close discards its error, and
+	// on a write path that error is where a failed flush surfaces. Reporting
+	// success for a file that did not close cleanly would be a lie.
+	if err := f.Close(); err != nil {
+		return nil, CodeWriteResult{}, fmt.Errorf("close %q: %w", written, err)
+	}
+	res.Written = written
 	res.LinesWritten = countLines(code)
 	return nil, res, nil
 }
@@ -1569,7 +1690,8 @@ git commit -m "feat(mcpsrv): add code_write tool with overwrite guard"
 - [ ] `Rollup` gains a `worker` key, absent when the window holds no worker events
 - [ ] `worker` reports per-tool call counts and summed input/output tokens
 - [ ] **Every pre-existing `rollup.json` key is unchanged** — asserted explicitly
-- [ ] Both tools record an event when `Stats` is non-nil, and are no-ops when nil
+- [ ] Both tools record an event when `Stats` is non-nil, and are no-ops when nil — **each proven by a handler test**, not inferred from `computeRollup`
+- [ ] `internal/stats/event_test.go` asserts the JSON omission contract directly: both token fields absent at zero, present under their exact names when non-zero
 
 **Verify:** `go test -race ./internal/stats/... -v` → PASS
 
@@ -1605,6 +1727,27 @@ func TestRollupWorkerAbsentWithoutWorkerEvents(t *testing.T) {
 	r := computeRollup([]Event{{Ts: now, Tool: "check_progress"}}, now)
 	if r.Worker != nil {
 		t.Error("Worker must be nil when the window holds no worker events — absence means no data")
+	}
+}
+
+func TestEventTokenFieldsOmittedWhenZero(t *testing.T) {
+	b, err := json.Marshal(Event{Ts: time.Now(), Tool: "check_progress"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"input_tokens", "output_tokens"} {
+		if strings.Contains(string(b), k) {
+			t.Errorf("%s must be omitted when zero, got %s", k, b)
+		}
+	}
+	b, err = json.Marshal(Event{Ts: time.Now(), Tool: "bulk_read", InputTokens: 5, OutputTokens: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{`"input_tokens":5`, `"output_tokens":7`} {
+		if !strings.Contains(string(b), k) {
+			t.Errorf("expected %s in %s", k, b)
+		}
 	}
 }
 
@@ -1708,6 +1851,10 @@ In `internal/mcpsrv/worker_handlers.go`, immediately before each successful `ret
 
 (and the `code_write` equivalent, with `PayloadBytes: refSrc.Bytes`). `Record` is nil-safe by construction (`internal/stats/recorder.go` opens with `if r == nil { return }`), so no `h.deps.Stats != nil` guard is needed — verified, do not add one.
 
+- [ ] **Step 5b: Prove the recording paths in the handlers**
+
+Add to `internal/mcpsrv/worker_handlers_test.go` a test per tool that points `Deps.Stats` at a recorder backed by `t.TempDir()`, runs the successful path, and asserts exactly one row was appended to `events.jsonl` carrying the right `tool` and token counts. Then repeat each with `Stats: nil` and assert the call still succeeds and does not panic. The rollup test alone does not exercise either handler, so without this the recording code is untested.
+
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `go test -race ./internal/stats/... ./internal/mcpsrv/... && go build ./...`
@@ -1750,6 +1897,7 @@ Create `internal/mcpsrv/summary_contract_test.go`:
 package mcpsrv
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -1777,14 +1925,25 @@ func TestSummaryBlockContract(t *testing.T) {
 		NextAction: "fix",
 		ModelUsed:  "anthropic:claude-opus-4-7",
 	})
-	for _, want := range []string{"anti-tangent envelope", "session_id:", "verdict:"} {
+	for _, want := range []string{"anti-tangent envelope", "session_id: sess-123"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary_block no longer contains %q — the guard hook greps for it.\n"+
 				"Update plugin/anti-tangent-guard/hooks/check-task-complete in this commit.\ngot:\n%s", want, got)
 		}
 	}
-	if !strings.Contains(got, "fail") {
-		t.Error("the verdict value must be present verbatim; the guard parses it to block a failed close")
+
+	// Mirror the guard hook's ACTUAL parser, not an approximation of it.
+	// check-task-complete extracts the verdict with ^\s*verdict:\s*(\w+) in
+	// MULTILINE mode. Asserting "verdict:" and "fail" independently would pass
+	// even if the value moved to another line — precisely the drift that would
+	// stop the guard recognising a failed close while this test stayed green.
+	re := regexp.MustCompile(`(?m)^\s*verdict:\s*(\w+)`)
+	m := re.FindAllStringSubmatch(got, -1)
+	if len(m) == 0 {
+		t.Fatalf("no line matches the guard's verdict pattern.\ngot:\n%s", got)
+	}
+	if last := m[len(m)-1][1]; last != "fail" {
+		t.Errorf("guard would parse verdict %q, want \"fail\"", last)
 	}
 }
 ```
@@ -1859,7 +2018,7 @@ Files in this repository derived from that work:
 - `plugin/anti-tangent-shunt/evals/bash-hook-evals.json`
 
 Each derived file carries its original licence header together with a
-modification notice. The modification in every case is the same: the
+modification notice. The upstream commit ported from is `3c24ca30ff63e1f5bbad1c43fe5324daff579123`. The modification in every case is the same: the
 Portal / AiKA delegation target was replaced by this project's own MCP tools,
 and `SHUNT_MIN_LINES` was renamed to `ANTI_TANGENT_SHUNT_MIN_LINES`.
 
@@ -1906,9 +2065,20 @@ func TestThirdPartyNoticesPresent(t *testing.T) {
 			"plugin/anti-tangent-shunt/ are Apache-2.0 and must carry attribution: %v", err)
 	}
 	body := string(b)
-	for _, want := range []string{"Spotify AB", "Apache"} {
+	// Substantive check, not a keyword check: a notice gutted down to the word
+	// "Apache" would satisfy a naive test while failing the licence obligation.
+	for _, want := range []string{
+		"Spotify AB",
+		"https://github.com/spotify/portal-ai-plugins",
+		"MIT License",
+		// Stable markers from three separate parts of the Apache-2.0 text.
+		"Apache License",
+		"TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
+		"Version 2.0, January 2004",
+		"WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND",
+	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("THIRD_PARTY_NOTICES.md must name %q", want)
+			t.Errorf("THIRD_PARTY_NOTICES.md must contain %q", want)
 		}
 	}
 	if !strings.Contains(body, "check-file-size") || !strings.Contains(body, "check-bash-read") {
@@ -1956,7 +2126,9 @@ git commit -m "docs: Apache-2.0 attribution for the ported shunt hooks"
 - [ ] Bash hook passes: pipes, redirections, `head`/`tail` with a count flag, non-read commands
 - [ ] **Any parse ambiguity results in allow, never block**
 - [ ] All 34 ported cases pass; `evals/run.sh` exits non-zero on any failure
-- [ ] No Portal/AiKA references remain (`grep -ri 'portal\|aika'` finds nothing but attribution)
+- [ ] Every upstream file is fetched from the **pinned commit `3c24ca30ff63e1f5bbad1c43fe5324daff579123`**, never `main`, and that SHA is recorded in `THIRD_PARTY_NOTICES.md`
+- [ ] `evals/fixtures/` contains exactly the files the two JSON suites reference — enumerated from the suites themselves, not guessed. If the suites synthesise their own inputs, the directory is not created at all
+- [ ] No **operational** Portal/AiKA references remain. Attribution must SURVIVE: the modification notice, licence headers, README acknowledgement and benchmark comparison all legitimately name Portal/AiKA. The check asserts matches occur only on allowlisted lines — never that the grep is empty.
 
 **Verify:** `bash plugin/anti-tangent-shunt/evals/run.sh` → all cases pass, exit 0
 
@@ -1966,7 +2138,10 @@ git commit -m "docs: Apache-2.0 attribution for the ported shunt hooks"
 
 ```bash
 mkdir -p /tmp/shunt-upstream
-BASE=https://raw.githubusercontent.com/spotify/portal-ai-plugins/main/plugins/shunt
+# PINNED COMMIT, not main. `main` moves, and this task asserts a fixed case
+# count (17 + 17). Verified 2026-09-07: this SHA resolves and serves the files.
+SHUNT_SHA=3c24ca30ff63e1f5bbad1c43fe5324daff579123
+BASE=https://raw.githubusercontent.com/spotify/portal-ai-plugins/$SHUNT_SHA/plugins/shunt
 for f in hooks/hooks.json hooks/check-file-size hooks/check-bash-read \
          evals/run.sh evals/hook-evals.json evals/bash-hook-evals.json; do
   mkdir -p "/tmp/shunt-upstream/$(dirname "$f")"
@@ -2033,6 +2208,16 @@ Same treatment. **Do not "improve" the command parsing.** Upstream's pass-throug
 
 - [ ] **Step 5: Port the fixtures and runner**
 
+First determine what the suites actually reference, then fetch exactly that:
+
+```bash
+jq -r '.. | strings' /tmp/shunt-upstream/evals/hook-evals.json \
+       /tmp/shunt-upstream/evals/bash-hook-evals.json \
+  | grep -o 'fixtures/[A-Za-z0-9._/-]*' | sort -u
+```
+
+Fetch each listed fixture from the same pinned SHA. If that command lists nothing, the suites generate their own inputs — then do **not** create `evals/fixtures/`, and drop it from the Files list.
+
 Copy `hook-evals.json` (17) and `bash-hook-evals.json` (17) verbatim, editing ONLY the expected block-message substrings to match the new text. Do **not** port `transport-evals.sh` (17 cases) or `evals.json` (3) — both exercise the Portal CLI transport, which does not exist here. Adapt `run.sh` to drop its `--benchmark` mode and the transport suite, and to exit non-zero on any failure.
 
 - [ ] **Step 6: Verify**
@@ -2042,10 +2227,15 @@ chmod +x plugin/anti-tangent-shunt/hooks/check-file-size \
          plugin/anti-tangent-shunt/hooks/check-bash-read \
          plugin/anti-tangent-shunt/evals/run.sh
 bash plugin/anti-tangent-shunt/evals/run.sh
-grep -ri 'portal\|aika' plugin/anti-tangent-shunt/ --exclude-dir=.git
+
+# Operational references only: drop lines where naming Portal/AiKA is REQUIRED
+# (modification notice, licence header, acknowledgement, benchmark comparison).
+grep -rin 'portal\|aika' plugin/anti-tangent-shunt/ --exclude-dir=.git \
+  | grep -vi 'modified 2026-09\|apache\|licen[cs]e\|copyright\|acknowledg\|adapted from\|upstream\|spotify' \
+  || echo "no operational Portal/AiKA references"
 ```
 
-Expected: 34 cases pass, exit 0. The grep must return nothing.
+Expected: 34 cases pass, exit 0. The FILTERED grep prints nothing; any surviving line is a real leftover (a variable, a code path, an env var), not attribution. Do NOT "fix" a surviving attribution line by deleting it — that makes `THIRD_PARTY_NOTICES.md` untruthful.
 
 - [ ] **Step 7: Smoke-test the real block path**
 
@@ -2240,7 +2430,9 @@ git commit -m "feat(shunt): plugin manifest, bulk-reader and code-writer skills,
 
 ### Task 12: The completion guard plugin
 
-**Goal:** A `PostToolUse` hook that refuses a `completed` task close when `validate_completion` did not run, or ran and returned `fail`.
+**Goal:** A `PostToolUse` hook that detects a `completed` task close which skipped `validate_completion` (or read `fail`), and forces the agent to reopen the task and run the gate before doing anything else.
+
+**Enforcement contract — read this before the AC.** `PostToolUse` fires *after* the state change. It **cannot prevent** the close, and nothing here should claim it does. What `exit 2` does is return stderr to the model as something it must address before its next action. The contract is therefore **post-close detection plus a mandated recovery flow**, not prevention. That is deliberate: closing a task is legitimate; closing it without the gate is what must not stand. A `PreToolUse` hook could prevent the close but could not see the subagent's pasted `summary_block`, which only exists in the result of the very call being closed.
 
 **Files:**
 - Create: `plugin/anti-tangent-guard/.claude-plugin/plugin.json`
@@ -2259,8 +2451,11 @@ git commit -m "feat(shunt): plugin manifest, bulk-reader and code-writer skills,
 - [ ] `ANTI_TANGENT_COMPLETION_GUARD=0` short-circuits to exit 0
 - [ ] Fails open: missing/unreadable transcript, absent `jq` or `python3`, malformed JSON → exit 0
 - [ ] Window is scoped to the most recent `in_progress` for that `taskId`, whole transcript as fallback
+- [ ] Both block messages state the recovery flow explicitly: reopen with `status=in_progress`, run the gate, re-close
+- [ ] Malformed **stdin** JSON exits 0; a malformed **transcript line** is skipped and the remaining lines still decide — different inputs, different behaviours, tested separately
+- [ ] `README.md` documents: active-on-install, both block conditions, the `jq`+`python3` dependency, the kill switch, the fail-open policy, the trace log, and how to run the evals
 
-**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all cases pass, exit 0
+**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all 16 cases pass, exit 0
 
 **Steps:**
 
@@ -2450,6 +2645,10 @@ exit 2
 }
 ```
 
+- [ ] **Step 2b: Write the plugin README**
+
+`plugin/anti-tangent-guard/README.md` must state, each explicitly: that installing the plugin activates it immediately; both block conditions (gate never ran; last verdict was `fail`); that it is **post-close detection with a mandated recovery flow**, not prevention — `PostToolUse` cannot stop the close; the `jq` + `python3` dependency; `ANTI_TANGENT_COMPLETION_GUARD=0` as the kill switch; the fail-open policy; the trace-log location and how to tail it; and `bash evals/run.sh`. Also state that the server itself never blocks — enforcement lives here, in a plugin, on purpose.
+
 - [ ] **Step 3: Write `plugin.json`**
 
 Same shape as Task 11's, `name: anti-tangent-guard`, version `0.1.0`, description explaining it enforces the completion gate at task close and is active on install.
@@ -2469,6 +2668,14 @@ Same shape as Task 11's, `name: anti-tangent-guard`, version `0.1.0`, descriptio
 | block `verdict: fail` then a later block `verdict: pass` | 0 (last wins) |
 | `ANTI_TANGENT_COMPLETION_GUARD=0` with no signal | 0 |
 | `transcript_path` missing from disk | 0 (fail open) |
+| malformed **stdin** JSON | 0 (fail open) |
+| transcript with one malformed JSONL line, signal on another | 0 (bad line skipped, not fatal) |
+| `jq` absent from PATH | 0 (fail open) |
+| `python3` absent from PATH | 0 (fail open) |
+| signal present BEFORE the latest `in_progress`, none after | 2 (window scoping excludes it) |
+| no `in_progress` at all, signal present anywhere | 0 (whole-transcript fallback) |
+
+Two JSON inputs, two behaviours: malformed **stdin** means the hook cannot know what it is looking at, so it fails open. A malformed **transcript line** is skipped and the rest still decides — that is not fail-open and must not be conflated with it. Test `jq`/`python3` absence by invoking with a `PATH` that excludes them.
 
 `evals/run.sh` writes each transcript to a temp file, pipes the payload, compares the exit code, and exits non-zero on any mismatch.
 
@@ -2503,7 +2710,7 @@ git commit -m "feat(guard): PostToolUse hook enforcing validate_completion at ta
 
 **Acceptance Criteria:**
 - [ ] A `hook-evals` job runs both suites
-- [ ] It needs no provider keys and no network
+- [ ] The eval **scripts** make no provider calls and no application network calls, and need no API keys. (The CI job itself still uses the network for `actions/checkout` and installing `jq` — ordinary CI setup, not something the suites depend on.)
 - [ ] `build-test` gains `hook-evals` in its `needs` so a hook regression blocks the Go job too
 - [ ] The job installs `jq` explicitly rather than assuming the runner image
 
@@ -2563,10 +2770,13 @@ git commit -m "ci: gate on plugin hook eval suites"
 - Modify: `docs/protocol/core.md`
 - Modify: `docs/protocol/implementer.md`
 - Modify: `docs/protocol/controller.md`
-- Modify: `plugin/anti-tangent-protocol/protocol/*.md` (resync, same commit)
+- Modify: `plugin/anti-tangent-protocol/protocol/core.md` (resync, same commit)
+- Modify: `plugin/anti-tangent-protocol/protocol/implementer.md` (resync, same commit)
+- Modify: `plugin/anti-tangent-protocol/protocol/controller.md` (resync, same commit)
 
 **Acceptance Criteria:**
 - [ ] `core.md` gains an unnumbered "What is never delegated" section covering both loops
+- [ ] That section does **not** contradict `code_write`: it must distinguish judgement-bearing changes to existing code (never delegated) from pattern-following generation of new files (delegable, with the implementer still owning reference choice, review and verification)
 - [ ] Its wording is **ours**, not upstream's Apache-2.0 prose
 - [ ] `implementer.md` gains an unnumbered "Large reads" clause: call `bulk_read` with a question; targeted `Read` before editing
 - [ ] `controller.md` documents the guard, both block messages and the kill switch
@@ -2598,8 +2808,11 @@ generates boilerplate). Both stop at the same line.
 - **Reasoning stays with the implementer.** Debugging, architecture, and any
   correctness argument. A digest of a file is not a substitute for reading it
   when the question is *why* something misbehaves.
-- **Edits stay with the implementer.** A worker's answer carries no reliable
-  line anchors. Use it to locate a region, then read that region directly.
+- **Changes to existing code stay with the implementer.** A worker's answer
+  carries no reliable line anchors: use it to locate a region, then read that
+  region directly and edit it yourself. Generating a NEW file that follows an
+  existing pattern is different, and is delegable — but choosing the reference,
+  reviewing the result, and proving it works remain yours.
 - **Judgement stays with the implementer.** Delegating the reading is not
   delegating the deciding.
 - **Small inputs are not worth delegating.** Below the threshold the round
@@ -2673,7 +2886,9 @@ git commit -m "docs(protocol): non-delegation list, large-reads clause, completi
 - [ ] `marketplace.json` gains both plugins; its `version` bumps `0.8.0` → `0.9.0`
 - [ ] No stale "seven tools" claim remains anywhere
 
-**Verify:** `jq -e '.plugins | length == 4' .claude-plugin/marketplace.json && ! grep -rn 'seven tools' README.md CLAUDE.md`
+**Verify:** `jq -e '.plugins | length == 4' .claude-plugin/marketplace.json && ! git grep -n 'seven tools'`
+
+`git grep` searches every tracked file, which is what "anywhere" in the acceptance criteria means — `README.md` and `CLAUDE.md` alone would miss `internal/mcpsrv/server.go`, which Step 1 already flags.
 
 **Steps:**
 
@@ -2714,7 +2929,7 @@ Bump `version` to `0.9.0`, extend the description, and add both entries followin
 
 ```bash
 jq -e '.plugins | length == 4' .claude-plugin/marketplace.json && echo "4 plugins listed"
-grep -rn 'seven tools' README.md CLAUDE.md && echo "STALE COUNT REMAINS" || echo "counts updated"
+git grep -n 'seven tools' && echo "STALE COUNT REMAINS" || echo "counts updated"
 bash scripts/check-protocol-docs.sh
 git add README.md CLAUDE.md .claude-plugin/marketplace.json
 git commit -m "docs: document the I/O tools, both plugins, and the write trust model"
@@ -2742,14 +2957,26 @@ git commit -m "docs: document the I/O tools, both plugins, and the write trust m
 - [ ] Scenario 4 reports lines written, with no savings ratio (different unit — as upstream does)
 - [ ] The README table is labelled as ours, next to upstream's for comparison
 - [ ] The method is written down well enough for someone else to re-run it
+- [ ] The **exact prompt** for every scenario is fixed BEFORE measuring and reproduced verbatim in `benchmarks.md` — answer size, and therefore the savings figure, depends materially on the question asked
+- [ ] Corpus eligibility is objective (see Step 1), not "boring enough"
+- [ ] Upstream's comparison figures are cited to the pinned source `spotify/portal-ai-plugins@3c24ca30ff63e1f5bbad1c43fe5324daff579123` `plugins/shunt/README.md`, which is where they were read — the accompanying blog post is unreachable from this environment and must not be cited as if read
+- [ ] The verify command checks the README numbers against `benchmarks.md`, not merely that a heading exists
 
-**Verify:** `plugin/anti-tangent-shunt/README.md` contains a Benchmarks table whose numbers match `benchmarks.md`
+**Verify:** `bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh` → exits 0, confirming every number in the README table appears in `benchmarks.md`
 
 **Steps:**
 
 - [ ] **Step 1: Pick and pin the corpus**
 
-Needs ~160K lines of Go, public, and boring enough to be representative. Clone at a fixed SHA and measure:
+Objective eligibility — every one of these, no judgement calls:
+
+- **120,000–200,000 lines** of non-generated, non-vendored Go (`*.go` excluding `*_test.go`, `vendor/`, and files whose first line matches `^// Code generated`)
+- **Public** repository under an OSI-approved licence
+- **At least 20 packages**, so the multi-file cross-package scenario is real rather than synthetic
+- **Builds with `go build ./...`** at the chosen SHA, so the files are known-coherent
+- **Not** anti-tangent-mcp, and not a repo whose code appears in this project's own prompts
+
+Clone at a fixed SHA and measure:
 
 ```bash
 git clone --depth 1 <candidate> /tmp/bench-corpus
@@ -2761,7 +2988,16 @@ find . -name '*.go' -not -name '*_test.go' | xargs wc -l | tail -1
 
 - [ ] **Step 2: Select the four scenarios**
 
-Mirror upstream's shape so the tables are comparable: (1) one large file ~4,000 lines; (2) a source + test pair ~7,400 lines combined; (3) 3–4 files across package boundaries ~1,300 lines; (4) a code_write generating a test file from a large reference.
+Mirror upstream's shape so the tables are comparable: (1) one large file ~4,000 lines; (2) a source + test pair ~7,400 lines combined; (3) 3–4 files across package boundaries ~1,300 lines; (4) a `code_write` generating a test file from a large reference.
+
+**Fix the exact prompt for each before measuring** and record it verbatim in `benchmarks.md`. A vaguer question returns a longer answer and flatters the savings figure, so the prompt is part of the measurement, not an incidental detail. Use these:
+
+1. *"Which exported functions in this file mutate package-level state, and what are their receivers?"*
+2. *"Which behaviours does the test file cover that the source file's exported API exposes, and which exported functions have no test?"*
+3. *"Which functions cross package boundaries between these files, and in which direction does each call flow?"*
+4. `code_write` spec: *"A table-driven test for the exported functions in the reference file, covering the zero value, one ordinary case, and one error case per function."*
+
+Re-run each scenario **three times** and report the median. A single sample of a non-deterministic model is an anecdote, not a benchmark; state the sample count in the table caption.
 
 - [ ] **Step 3: Measure "without"**
 
@@ -2787,7 +3023,8 @@ Replace the README's Benchmarks placeholder:
 ## Benchmarks
 
 Upstream reports these figures against a 162K-line **Java** monorepo, delegating
-through Portal/AiKA:
+through Portal/AiKA (read from `spotify/portal-ai-plugins@3c24ca30ff63e1f5bbad1c43fe5324daff579123`,
+`plugins/shunt/README.md`):
 
 | Scenario | Lines | Without | With | Savings |
 |---|---|---|---|---|
@@ -2809,15 +3046,19 @@ netted off** — the claim is about implementer context, and combining the two
 would overstate it. Method and per-file selections: [`evals/benchmarks.md`](evals/benchmarks.md).
 ```
 
+- [ ] **Step 6b: Make the table checkable**
+
+Write `plugin/anti-tangent-shunt/evals/check-benchmark-table.sh`: extract every numeric cell from the README's "ours" table and assert each appears in `benchmarks.md`, exiting non-zero on any mismatch. Without it, the README and the reproducibility record drift the first time either is edited — and the README is the half people quote.
+
 - [ ] **Step 7: Commit**
 
 ```bash
-git add plugin/anti-tangent-shunt/README.md plugin/anti-tangent-shunt/evals/benchmarks.md
+git add plugin/anti-tangent-shunt/README.md plugin/anti-tangent-shunt/evals/benchmarks.md plugin/anti-tangent-shunt/evals/check-benchmark-table.sh
 git commit -m "docs(shunt): reproduce the four savings scenarios on a Go corpus"
 ```
 
 ```json:metadata
-{"files": ["plugin/anti-tangent-shunt/README.md", "plugin/anti-tangent-shunt/evals/benchmarks.md"], "verifyCommand": "grep -q 'Worker tokens' plugin/anti-tangent-shunt/README.md", "acceptanceCriteria": ["all four scenarios reproduced on a ~160K-line Go corpus", "repo, SHA and per-scenario files pinned", "reports without/with implementer tokens and the ratio", "worker consumption separate and not netted off", "scenario 4 reports lines with no ratio", "our table labelled and shown beside upstream's", "method reproducible by someone else"], "modelTier": "standard"}
+{"files": ["plugin/anti-tangent-shunt/README.md", "plugin/anti-tangent-shunt/evals/benchmarks.md"], "verifyCommand": "bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh", "acceptanceCriteria": ["all four scenarios reproduced on a ~160K-line Go corpus", "repo, SHA and per-scenario files pinned", "reports without/with implementer tokens and the ratio", "worker consumption separate and not netted off", "scenario 4 reports lines with no ratio", "our table labelled and shown beside upstream's", "method reproducible by someone else"], "modelTier": "standard"}
 ```
 
 ---
