@@ -235,17 +235,17 @@
       "name": "env-non-numeric-fallback",
       "input": {
         "tool_input": {
-          "file_path": "{{FIXTURES}}/over.txt"
+          "file_path": "{{FIXTURES}}/under.txt"
         }
       },
       "fixture": {
-        "lines": 351
+        "lines": 200
       },
       "env": {
         "ANTI_TANGENT_SHUNT_MIN_LINES": "abc"
       },
-      "expected_decision": "block",
-      "reason": "Non-numeric SHUNT_MIN_LINES falls back to 350 — 351-line file blocked"
+      "expected_decision": "allow",
+      "reason": "Non-numeric SHUNT_MIN_LINES falls back to 350 — 200-line file is under the fallback threshold and allowed; a broken fallback would error on the comparison and fall through to block, so this case can actually fail"
     }
   ]
 }

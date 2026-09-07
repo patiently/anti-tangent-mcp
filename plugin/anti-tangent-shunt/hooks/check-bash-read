@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copyright 2026 Spotify AB
+# Copyright Spotify AB
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -67,10 +67,10 @@ if [ "$lines" -le "$MIN_LINES" ]; then
   exit 0
 fi
 
-printf 'COMMAND WOULD READ TOO MUCH DIRECTLY (%d lines, threshold %d)
+printf 'COMMAND WOULD READ TOO MUCH DIRECTLY (source file has %d lines, threshold %d)
 
-Dumping this whole file into your shell output would put ~%d lines into your
-context. Ask the question instead:
+Reading directly from a file this large would put a large amount of it into
+your context, even with a count flag like head -N. Ask the question instead:
 
   mcp__anti-tangent__bulk_read
     question: "<the specific thing you need to know>"
@@ -83,5 +83,5 @@ region it names: Read(file_path="%s", offset=<n>, limit=<n>). Targeted reads
 are never blocked.
 
 (Disable: ANTI_TANGENT_SHUNT_MIN_LINES=999999)
-' "$lines" "$MIN_LINES" "$lines" "$file_path" "$file_path" >&2
+' "$lines" "$MIN_LINES" "$file_path" "$file_path" >&2
 exit 2
