@@ -4,7 +4,7 @@
     {
       "id": 1,
       "subject": "Task 1: Worker configuration",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `config.Config` carries a worker model that falls back to `MidModel`, and a worker token cap clamped by the ceiling.\n\n**Files:**\n- Modify: `internal/config/config.go`\n- Modify: `cmd/anti-tangent-mcp/main.go` (startup validation of the worker model)\n- Test: `internal/config/config_test.go`\n\n**Acceptance Criteria:**\n- [ ] `ANTI_TANGENT_WORKER_MODEL` unset resolves `WorkerModel` to the resolved `MidModel`\n- [ ] `ANTI_TANGENT_WORKER_MODEL=google:gemini-2.5-flash` overrides it\n- [ ] A malformed value returns an error naming `ANTI_TANGENT_WORKER_MODEL`\n- [ ] `WorkerMaxTokens` defaults to 4096 and is clamped to `MaxTokensCeiling`\n- [ ] A non-positive `ANTI_TANGENT_WORKER_MAX_TOKENS` is a startup error\n- [ ] A syntactically valid but non-allowlisted worker model (e.g. `anthropic:not-a-model`) fails `providers.ValidateModel`, covered by a test \u2014 Step 7 adds that call, so it needs an assertion\n\n**Verify:** `go test -race ./internal/config/... -run Worker -v` \u2192 PASS\n\nFull steps with code: see Task 1 in `docs/superpowers/plans/2026-09-07-io-delegation-and-completion-guard.md`.\n\n```json:metadata\n{\"files\": [\"internal/config/config.go\", \"internal/config/config_test.go\", \"cmd/anti-tangent-mcp/main.go\"], \"verifyCommand\": \"go test -race ./internal/config/... -run Worker -v\", \"acceptanceCriteria\": [\"WorkerModel falls back to MidModel\", \"ANTI_TANGENT_WORKER_MODEL overrides it\", \"malformed value errors naming the var\", \"WorkerMaxTokens defaults 4096 and clamps to ceiling\", \"non-positive token cap is a startup error\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
@@ -141,5 +141,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-07T18:24:56.894258+00:00"
+  "lastUpdated": "2026-09-07T18:36:12.060982+00:00"
 }
