@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# PostToolUse hook: DETECT a task close that skipped anti-tangent's
+# validate_completion gate, or ran it and read `fail`, and mandate recovery
+# before the agent's next action. It does NOT prevent the close — see below.
+#
+# WHY PostToolUse ON TaskUpdate, not SubagentStop: anti-tangent's model is one
+# task = one session = one subagent, which points at SubagentStop. But plans are
+# executed two ways — executing-plans runs tasks in the controller's own
+# session, subagent-driven-development dispatches one subagent per task. Only
+# the TaskUpdate close is common to both, and both leave a detectable trace
+# there (see the two pass signals below).
+#
+# WHY exit 2 AFTER the close rather than PreToolUse: closing the task is
+# legitimate; closing it without the gate is not. exit 2 sends stderr back as
+# something the model must address before its next action, without refusing a
+# state change that may well be correct.
+#
+# FAILS OPEN, ALWAYS. A guard that blocks work because it broke is worse than
+# the drift it prevents.
+#
+# INTERFACE CONTRACT: the two marker strings this hook greps for below
+# ("anti-tangent envelope", "session_id:") and the verdict regex are pinned by
+# internal/mcpsrv/summary_contract_test.go. That test exists precisely so a
+# future change to formatEnvelopeSummary's wording cannot silently disarm this
+# guard — update the grep patterns here in the same commit as any change there.
+set -uo pipefail
+
+TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
+mkdir -p "$(dirname "$TRACE_LOG")" 2>/dev/null || true
+trace() {
+    printf '%s | guard | task=%s | %s%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${1:-?}" "${2:-?}" "${3:+ | $3}" \
+        >> "$TRACE_LOG" 2>/dev/null || true
+}
+
+[[ "${ANTI_TANGENT_COMPLETION_GUARD:-1}" == "0" ]] && { trace "?" "skip" "guard=0"; exit 0; }
+trap 'trace "?" "error" "trap-ERR"; exit 0' ERR
+command -v jq >/dev/null 2>&1      || { trace "?" "skip" "no-jq"; exit 0; }
+command -v python3 >/dev/null 2>&1 || { trace "?" "skip" "no-python3"; exit 0; }
+
+INPUT=$(cat)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null | tr -d '\r')
+[[ "$TOOL_NAME" != "TaskUpdate" ]] && { trace "?" "skip" "tool=$TOOL_NAME"; exit 0; }
+STATUS=$(echo "$INPUT" | jq -r '.tool_input.status // empty' 2>/dev/null | tr -d '\r')
+[[ "$STATUS" != "completed" ]] && { trace "?" "skip" "status=$STATUS"; exit 0; }
+TASK_ID=$(echo "$INPUT" | jq -r '.tool_input.taskId // empty' 2>/dev/null | tr -d '\r')
+[[ -z "$TASK_ID" ]] && { trace "?" "skip" "no-task-id"; exit 0; }
+TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null | tr -d '\r')
+[[ -z "$TRANSCRIPT" || ! -f "$TRANSCRIPT" ]] && { trace "$TASK_ID" "skip" "no-transcript"; exit 0; }
+
+# Walk the transcript for the two pass signals. Python, not jq: the entries nest
+# content blocks inside tool_result inside message.content, and task ids must be
+# reconstructed by creation order because TaskCreate does not carry one.
+PY='
+import json, re, sys
+path, task_id = sys.argv[1], str(sys.argv[2])
+try:
+    lines = open(path).readlines()
+except Exception:
+    print(json.dumps({"error": True})); sys.exit(0)
+
+next_id, last_inprogress = 1, -1
+called_idx, block_texts = [], []   # (idx) of direct calls; (idx, text) of summary blocks
+
+for idx, line in enumerate(lines):
+    try: entry = json.loads(line)
+    except Exception: continue
+    etype = entry.get("type")
+    msg = entry.get("message") or {}
+    if etype == "assistant":
+        for c in msg.get("content") or []:
+            if not isinstance(c, dict): continue
+            if c.get("type") == "tool_use":
+                name, inp = c.get("name", ""), (c.get("input") or {})
+                if name == "mcp__anti-tangent__validate_completion":
+                    called_idx.append(idx)
+                elif name == "TaskCreate":
+                    next_id += 1
+                elif name == "TaskUpdate":
+                    tid = str(inp.get("taskId", ""))
+                    if tid == task_id and inp.get("status") == "in_progress":
+                        last_inprogress = idx
+                    try:
+                        if int(tid) >= next_id: next_id = int(tid) + 1
+                    except (ValueError, TypeError): pass
+    elif etype == "user":
+        content = msg.get("content")
+        if isinstance(content, list):
+            for c in content:
+                if not isinstance(c, dict) or c.get("type") != "tool_result": continue
+                inner = c.get("content")
+                chunks = [inner] if isinstance(inner, str) else [
+                    ic.get("text", "") for ic in (inner or []) if isinstance(ic, dict) and ic.get("type") == "text"]
+                for t in chunks:
+                    if t and "anti-tangent envelope" in t and "session_id:" in t:
+                        block_texts.append((idx, t))
+
+scan_from = last_inprogress if last_inprogress >= 0 else 0
+called = any(i >= scan_from for i in called_idx)
+blocks = [t for (i, t) in block_texts if i >= scan_from]
+
+# LAST block wins: a re-validation after fixing findings is the whole point.
+verdict = ""
+if blocks:
+    m = re.findall(r"^\s*verdict:\s*(\w+)", blocks[-1], re.MULTILINE)
+    if m: verdict = m[-1]
+
+print(json.dumps({"error": False, "called": called,
+                  "block_found": bool(blocks), "verdict": verdict}))
+'
+RESULT=$({ python3 -c "$PY" "$TRANSCRIPT" "$TASK_ID" 2>/dev/null || echo '{"error":true}'; } | tr -d '\r')
+# NOTE: deliberately ".error", not ".error // true" — jq's // operator
+# substitutes on false as well as null, so ".error // true" evaluates to
+# "true" for EVERY result (false // true == true in jq), which would make
+# this check fire unconditionally and disable the guard entirely. RESULT
+# always carries an explicit "error" key (the python script emits it on
+# every path, and the fallback above sets it directly), so a plain field
+# read is both correct and sufficient here.
+[[ "$(echo "$RESULT" | jq -r '.error')" == "true" ]] && { trace "$TASK_ID" "skip" "parse-error"; exit 0; }
+
+CALLED=$(echo "$RESULT" | jq -r '.called // false')
+BLOCK=$(echo "$RESULT" | jq -r '.block_found // false')
+VERDICT=$(echo "$RESULT" | jq -r '.verdict // ""')
+trace "$TASK_ID" "parsed" "called=$CALLED block=$BLOCK verdict=$VERDICT"
+
+if [[ "$VERDICT" == "fail" ]]; then
+    trace "$TASK_ID" "block" "verdict-fail"
+    {
+        echo "TASK CLOSED ON A FAILED anti-tangent VERDICT"
+        echo
+        echo "Task #$TASK_ID went to completed, but the most recent"
+        echo "validate_completion in this task's window returned verdict: fail."
+        echo
+        echo "The protocol is explicit: if the verdict is fail, or carries critical"
+        echo "or major findings, do not report DONE. Fix the findings and re-validate."
+        echo
+        echo "  1. TaskUpdate taskId=$TASK_ID status=in_progress"
+        echo "  2. Address the findings from that response"
+        echo "  3. Call mcp__anti-tangent__validate_completion again"
+        echo "  4. Re-close once the verdict is pass"
+        echo
+        echo "EXCEPTION: if the response carried submission_defect_only: true, the"
+        echo "findings are about what you SUBMITTED, not your code. Attach the"
+        echo "missing evidence (a complete final_diff, test output) and re-submit."
+        echo
+        echo "(Disable: ANTI_TANGENT_COMPLETION_GUARD=0. Trace: $TRACE_LOG)"
+    } >&2
+    exit 2
+fi
+
+if [[ "$CALLED" == "true" || "$BLOCK" == "true" ]]; then
+    trace "$TASK_ID" "pass" "called=$CALLED block=$BLOCK"
+    exit 0
+fi
+
+trace "$TASK_ID" "block" "no-validation"
+{
+    echo "TASK CLOSED WITHOUT anti-tangent validate_completion"
+    echo
+    echo "Task #$TASK_ID went to completed, but nothing in this task's window shows"
+    echo "the completion gate ran — no mcp__anti-tangent__validate_completion call,"
+    echo "and no 'anti-tangent envelope' summary_block in any subagent report."
+    echo
+    echo "Before moving on:"
+    echo "  1. TaskUpdate taskId=$TASK_ID status=in_progress"
+    echo "  2. Call mcp__anti-tangent__validate_completion with the session_id, a"
+    echo "     summary, a COMPLETE final_diff (or final_diff_path), and test evidence"
+    echo "  3. Paste the returned summary_block into your DONE report verbatim"
+    echo "  4. Re-close once the verdict is pass"
+    echo
+    echo "If a subagent did the work, it must paste its summary_block into the"
+    echo "report it returns — that is what makes the gate visible from here."
+    echo
+    echo "Do NOT simply re-close and hope this stops firing. It will not."
+    echo
+    echo "(Disable: ANTI_TANGENT_COMPLETION_GUARD=0. Trace: $TRACE_LOG)"
+} >&2
+exit 2

@@ -1,0 +1,271 @@
+{
+  "skill_name": "anti-tangent-guard",
+  "description": "Evals for the check-task-complete PostToolUse hook (15 cases)",
+  "evals": [
+    {
+      "id": 1,
+      "name": "not-taskupdate",
+      "input": {
+        "tool_name": "Read",
+        "tool_input": {
+          "file_path": "/tmp/x"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "no_transcript": true,
+      "expected_exit": 0,
+      "reason": "tool_name != TaskUpdate exits before any transcript work"
+    },
+    {
+      "id": 2,
+      "name": "status-in-progress",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "in_progress",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "no_transcript": true,
+      "expected_exit": 0,
+      "reason": "status != completed exits before any transcript work"
+    },
+    {
+      "id": 3,
+      "name": "direct-validate-completion-call",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-1\"}}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a direct mcp__anti-tangent__validate_completion call in the window is a pass signal"
+    },
+    {
+      "id": 4,
+      "name": "summary-block-in-window",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "an anti-tangent envelope / session_id: marker in a tool_result is the second pass signal"
+    },
+    {
+      "id": 5,
+      "name": "no-signal",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT anti-tangent validate_completion"
+      ],
+      "reason": "no validate_completion call and no summary block -> block, naming the tool to call"
+    },
+    {
+      "id": 6,
+      "name": "last-block-verdict-fail",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: fail\\n\"}]}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED ON A FAILED anti-tangent VERDICT"
+      ],
+      "reason": "the only summary block in the window reads verdict: fail -> block with the distinct fail message"
+    },
+    {
+      "id": 7,
+      "name": "fail-then-pass-last-wins",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: fail\\n\"}]}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a later re-validation with verdict: pass supersedes an earlier fail \u2014 LAST block wins"
+    },
+    {
+      "id": 8,
+      "name": "guard-disabled-short-circuit",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "env": {
+        "ANTI_TANGENT_COMPLETION_GUARD": "0"
+      },
+      "expected_exit": 0,
+      "reason": "the kill switch short-circuits to exit 0 even though the same transcript blocks in case 5"
+    },
+    {
+      "id": 9,
+      "name": "transcript-missing-fails-open",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "no_transcript": true,
+      "expected_exit": 0,
+      "reason": "transcript_path points nowhere on disk -> fail open, not a block"
+    },
+    {
+      "id": 10,
+      "name": "malformed-stdin-json-fails-open",
+      "stdin_raw": "{\"tool_name\": \"TaskUpdate\", \"tool_input\": {",
+      "expected_exit": 0,
+      "reason": "stdin itself is not valid JSON \u2014 the hook cannot know what it is looking at, so it fails open"
+    },
+    {
+      "id": 11,
+      "name": "malformed-transcript-line-skipped",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "one malformed JSONL line is skipped by the walker; the remaining valid lines still decide the verdict \u2014 NOT fail-open, a different behaviour from malformed stdin"
+    },
+    {
+      "id": 12,
+      "name": "jq-absent-fails-open",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "path_stub_exclude": "jq",
+      "expected_exit": 0,
+      "reason": "jq missing from PATH -> fail open before stdin is even read"
+    },
+    {
+      "id": 13,
+      "name": "python3-absent-fails-open",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "path_stub_exclude": "python3",
+      "expected_exit": 0,
+      "reason": "python3 missing from PATH -> fail open before stdin is even read"
+    },
+    {
+      "id": 14,
+      "name": "stale-signal-before-inprogress-excluded",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT anti-tangent validate_completion"
+      ],
+      "reason": "the pass signal predates the most recent in_progress \u2014 window scoping must exclude it and block"
+    },
+    {
+      "id": 15,
+      "name": "no-inprogress-whole-transcript-fallback",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "no in_progress entry exists for this task at all -> fall back to scanning the whole transcript"
+    }
+  ]
+}
