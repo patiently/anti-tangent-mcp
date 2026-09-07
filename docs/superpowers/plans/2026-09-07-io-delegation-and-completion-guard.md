@@ -43,6 +43,7 @@
 
 **Files:**
 - Modify: `internal/config/config.go`
+- Modify: `cmd/anti-tangent-mcp/main.go` (startup validation of the worker model)
 - Test: `internal/config/config_test.go`
 
 **Acceptance Criteria:**
@@ -308,6 +309,9 @@ func TestRenderWorkerBulkRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
+	if out.System == "" {
+		t.Error("Output.System must carry the package's standard system prompt")
+	}
 	if !strings.Contains(out.User, `<file path="/repo/a.go">`) {
 		t.Error("missing file wrapper for a.go")
 	}
@@ -328,6 +332,9 @@ func TestRenderWorkerCodeWrite(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
+	}
+	if out.System == "" {
+		t.Error("Output.System must carry the package's standard system prompt")
 	}
 	if !strings.Contains(out.User, `<file path="/repo/ref_test.go">`) {
 		t.Error("missing reference wrapper")
@@ -436,7 +443,7 @@ git commit -m "feat(prompts): worker templates for bulk_read and code_write"
 ```
 
 ```json:metadata
-{"files": ["internal/prompts/templates/worker_bulk_read.tmpl", "internal/prompts/templates/worker_code_write.tmpl", "internal/prompts/prompts.go", "internal/prompts/prompts_test.go", "internal/prompts/testdata/worker_bulk_read.golden", "internal/prompts/testdata/worker_code_write.golden"], "verifyCommand": "go test -race ./internal/prompts/... -run Worker -v", "acceptanceCriteria": ["bulk_read prompt wraps files in <file path=...> and ends with the question", "code_write prompt carries reference file and spec", "UserPrefix empty on both", "goldens match and -update regenerates", "instruction wording paraphrased not copied"], "modelTier": "mechanical"}
+{"files": ["internal/prompts/templates/worker_bulk_read.tmpl", "internal/prompts/templates/worker_code_write.tmpl", "internal/prompts/prompts.go", "internal/prompts/prompts_test.go", "internal/prompts/testdata/worker_bulk_read.golden", "internal/prompts/testdata/worker_code_write.golden"], "verifyCommand": "go test -race ./internal/prompts/... -run Worker -v", "acceptanceCriteria": ["bulk_read prompt wraps files in <file path=...> and ends with the question", "code_write prompt carries reference file and spec", "UserPrefix empty on both", "both tests assert a non-empty Output.System", "goldens match and -update regenerates", "instruction wording paraphrased not copied"], "modelTier": "mechanical"}
 ```
 
 ---
@@ -1474,7 +1481,7 @@ git commit -m "feat(mcpsrv): write-target resolver with roots and O_NOFOLLOW"
 ```
 
 ```json:metadata
-{"files": ["internal/mcpsrv/file_target.go", "internal/mcpsrv/file_target_unix.go", "internal/mcpsrv/file_target_windows.go", "internal/mcpsrv/file_target_test.go", "internal/mcpsrv/file_target_unix_test.go"], "verifyCommand": "go test -race ./internal/mcpsrv/... -run WriteTarget -v", "acceptanceCriteria": ["relative and empty paths refused", "missing parent refused without MkdirAll", "parent outside PlanRoots refused", "control/format characters refused", "existing file refused unless overwrite", "overwrite truncates", "symlink at leaf refused under both overwrite values", "symlinked parent inside roots allowed"], "modelTier": "standard"}
+{"files": ["internal/mcpsrv/file_target.go", "internal/mcpsrv/file_target_unix.go", "internal/mcpsrv/file_target_windows.go", "internal/mcpsrv/file_target_test.go", "internal/mcpsrv/file_target_unix_test.go"], "verifyCommand": "go test -race ./internal/mcpsrv/... -run WriteTarget -v", "acceptanceCriteria": ["relative and empty paths refused", "missing parent refused without MkdirAll", "parent outside PlanRoots refused", "control/format characters refused", "existing file refused unless overwrite", "overwrite truncates", "on Unix a symlink at the leaf is refused under both overwrite values", "the Windows leaf-symlink gap is an accepted, documented non-goal", "symlinked parent inside roots allowed"], "modelTier": "standard"}
 ```
 
 ---
@@ -1499,6 +1506,7 @@ git commit -m "feat(mcpsrv): write-target resolver with roots and O_NOFOLLOW"
 - [ ] A `Close` error on the target is reported, not discarded — a write is not done until the file closes cleanly, proven by a test that injects a failing `Close` through the `openWriteTarget` seam
 - [ ] Empty, whitespace-only and fence-only worker output are each tested; for a targeted call the test asserts the target file was never created
 - [ ] `code_write` appears in the tool catalog, asserted here (Task 4 asserts only `bulk_read`, since this task is what registers `code_write`)
+- [ ] The tool description states the generated-code contract in the same terms as Tasks 11 and 14: code written to a `target_path` is **verified, not inspected** — the implementer chooses the reference and proves the result with the task's tests and build, and is not required to read it. See Global Constraints
 
 **Verify:** `go test -race ./internal/mcpsrv/... -run 'CodeWrite|StripFences|CountLines' -v` → PASS
 
@@ -1596,10 +1604,21 @@ func TestCodeWriteEmptyOutputIsAnErrorAndWritesNothing(t *testing.T) {
 	if err := os.WriteFile(ref, []byte("package ref\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cases := map[string]string{
-		"empty":      `{"code":""}`,
-		"whitespace": `{"code":"   \n\t"}`,
-		"fence only": "{\"code\":\"` + "```" + `go\\n` + "```" + `\"}",
+	// Built with json.Marshal, NOT hand-written escapes: a hand-rolled
+	// "```go\\n```" decodes to a literal backslash-n, so stripFences sees no
+	// newline, leaves the text non-empty, and the case silently stops testing
+	// what it claims to.
+	mustBody := func(code string) []byte {
+		b, err := json.Marshal(map[string]string{"code": code})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	cases := map[string][]byte{
+		"empty":      mustBody(""),
+		"whitespace": mustBody("   \n\t"),
+		"fence only": mustBody("```go\n```"),
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1875,7 +1894,7 @@ git commit -m "feat(mcpsrv): add code_write tool with overwrite guard"
 ```
 
 ```json:metadata
-{"files": ["internal/mcpsrv/worker_handlers.go", "internal/mcpsrv/worker_handlers_test.go", "internal/mcpsrv/server.go"], "verifyCommand": "go test -race ./internal/mcpsrv/... -run 'CodeWrite|StripFences|CountLines' -v", "acceptanceCriteria": ["missing reference_path rejected with an explanation", "target_path write returns written+lines_written and no code", "no target returns code and no written", "fences stripped only when wrapping the whole body", "truncation writes nothing", "countLines handles a missing trailing newline", "empty/whitespace/fence-only output errors and writes nothing", "a Close error is reported via the openWriteTarget seam", "code_write catalog registration asserted here"], "modelTier": "standard"}
+{"files": ["internal/mcpsrv/worker_handlers.go", "internal/mcpsrv/worker_handlers_test.go", "internal/mcpsrv/server.go"], "verifyCommand": "go test -race ./internal/mcpsrv/... -run 'CodeWrite|StripFences|CountLines' -v", "acceptanceCriteria": ["missing reference_path rejected with an explanation", "target_path write returns written+lines_written and no code", "no target returns code and no written", "fences stripped only when wrapping the whole body", "truncation writes nothing", "countLines handles a missing trailing newline", "empty/whitespace/fence-only output errors and writes nothing", "a Close error is reported via the openWriteTarget seam", "code_write catalog registration asserted here", "tool description states the verified-not-inspected generated-code contract"], "modelTier": "standard"}
 ```
 
 ---
@@ -2232,8 +2251,21 @@ fetch fixture files. **Task 10 reconciles this list against what it actually
 copied** — if it fetches fixtures, they are added here in the same commit. An
 attribution list that omits a copied file is the failure this exists to prevent.
 
-Each derived file carries its original licence header together with a
-modification notice. The upstream commit ported from is `3c24ca30ff63e1f5bbad1c43fe5324daff579123`. The modification in every case is the same: the
+The upstream commit ported from is `3c24ca30ff63e1f5bbad1c43fe5324daff579123`.
+
+Attribution differs by file type, and the notice must say so rather than make a
+blanket claim the port cannot keep:
+
+- **`check-file-size`, `check-bash-read`, `evals/run.sh`** — shell scripts, so
+  each carries upstream's original licence header plus a modification notice
+  inline.
+- **`evals/hook-evals.json`, `evals/bash-hook-evals.json`, and any fetched
+  fixtures** — JSON and fixture data cannot carry comments, so they are covered
+  by this repository-level notice alone.
+
+"Each derived file carries its original header" would be false for the JSON
+suites, and a licence notice inaccurate about its own scope is worse than a
+terse one. The modification in every case is the same: the
 Portal / AiKA delegation target was replaced by this project's own MCP tools,
 and `SHUNT_MIN_LINES` was renamed to `ANTI_TANGENT_SHUNT_MIN_LINES`.
 
@@ -2479,7 +2511,7 @@ Expected: first blocks (`exit=2`, message names `mcp__anti-tangent__bulk_read`);
 - [ ] **Step 8: Commit**
 
 ```bash
-git add plugin/anti-tangent-shunt/
+git add plugin/anti-tangent-shunt/ THIRD_PARTY_NOTICES.md
 git commit -m "feat(shunt): port check-file-size and check-bash-read hooks
 
 Adapted from spotify/portal-ai-plugins (Apache-2.0); Portal/AiKA delegation
@@ -2487,7 +2519,7 @@ replaced with mcp__anti-tangent__bulk_read. 34 upstream hook cases ported."
 ```
 
 ```json:metadata
-{"files": ["plugin/anti-tangent-shunt/hooks/hooks.json", "plugin/anti-tangent-shunt/hooks/check-file-size", "plugin/anti-tangent-shunt/hooks/check-bash-read", "plugin/anti-tangent-shunt/evals/run.sh", "plugin/anti-tangent-shunt/evals/hook-evals.json", "plugin/anti-tangent-shunt/evals/bash-hook-evals.json"], "verifyCommand": "bash plugin/anti-tangent-shunt/evals/run.sh", "acceptanceCriteria": ["Apache-2.0 headers preserved plus modification notice", "ANTI_TANGENT_SHUNT_MIN_LINES rename with default 350", "block messages name mcp__anti-tangent__bulk_read with an example", "read hook passes targeted/small/missing files", "bash hook passes pipes, redirections, count flags, non-read commands", "ambiguity allows rather than blocks", "34 ported cases pass", "all fetches use the pinned SHA recorded in THIRD_PARTY_NOTICES.md", "fixtures enumerated from the suites, not guessed", "no operational Portal/AiKA references remain; attribution, licence headers and benchmark comparison survive in the documented allowlisted locations"], "modelTier": "standard"}
+{"files": ["plugin/anti-tangent-shunt/hooks/hooks.json", "plugin/anti-tangent-shunt/hooks/check-file-size", "plugin/anti-tangent-shunt/hooks/check-bash-read", "plugin/anti-tangent-shunt/evals/run.sh", "plugin/anti-tangent-shunt/evals/hook-evals.json", "plugin/anti-tangent-shunt/evals/bash-hook-evals.json", "THIRD_PARTY_NOTICES.md"], "verifyCommand": "bash plugin/anti-tangent-shunt/evals/run.sh", "acceptanceCriteria": ["Apache-2.0 headers preserved plus modification notice", "ANTI_TANGENT_SHUNT_MIN_LINES rename with default 350", "block messages name mcp__anti-tangent__bulk_read with an example", "read hook passes targeted/small/missing files", "bash hook passes pipes, redirections, count flags, non-read commands", "ambiguity allows rather than blocks", "34 ported cases pass", "all fetches use the pinned SHA recorded in THIRD_PARTY_NOTICES.md", "fixtures enumerated from the suites, not guessed", "no operational Portal/AiKA references remain; attribution, licence headers and benchmark comparison survive in the documented allowlisted locations"], "modelTier": "standard"}
 ```
 
 ---
@@ -2988,8 +3020,10 @@ In `.github/workflows/ci.yml`, after the `protocol-docs` job:
 
       - name: Eval suites make no provider or network calls
         run: |
-          # The no-network contract is an acceptance criterion, so assert it
-          # statically rather than inferring it from a green run.
+          # A limited regression tripwire, NOT proof of network isolation: it
+          # catches the obvious clients and credential names only. Something
+          # determined (python sockets, /dev/tcp, a differently-named key) slips
+          # past. The real guarantee is that these scripts read only stdin and files.
           ! grep -rnE 'curl|wget|nc |ANTHROPIC_API_KEY|OPENAI_API_KEY|GOOGLE_API_KEY' \
               plugin/anti-tangent-shunt/evals plugin/anti-tangent-guard/evals \
               plugin/anti-tangent-shunt/hooks plugin/anti-tangent-guard/hooks
@@ -3051,7 +3085,9 @@ for f in docs/protocol/*.md; do printf '%s %s (headroom %s)\n' "$(wc -c < "$f")"
 
 `core.md` has ~1,540 bytes and `implementer.md` ~1,983. Write to fit. If a section does not fit, trim existing prose in the SAME file — do not create a sixth part, which would need a `check-protocol-docs.sh` registry entry.
 
-- [ ] **Step 2: Add to `core.md`** (unnumbered heading, ~700 bytes)
+- [ ] **Step 2: Add to `core.md`** (unnumbered heading)
+
+Measure before pasting: `wc -c` the insertion and add it to core.md's current size. If the total reaches 16,000, trim core.md's existing FAQ answers — the longest prose there and the least structurally load-bearing — never a numbered section, whose identifiers `scripts/check-protocol-docs.sh` tracks.
 
 ```markdown
 ### What is never delegated
@@ -3261,10 +3297,19 @@ git -C /tmp/bench-corpus ls-files '*.go' \
   | grep -Ev '(^|/)vendor/' \
   | while IFS= read -r f; do
       head -1 "/tmp/bench-corpus/$f" | grep -q '^// Code generated' || printf '%s\n' "$f"
-    done > /tmp/bench-files.txt
+    done > /tmp/bench-prod-files.txt
 
-wc -l < /tmp/bench-files.txt                                          # eligible files
-(cd /tmp/bench-corpus && xargs -a /tmp/bench-files.txt cat | wc -l)   # must be 120000-200000
+# Scenario 2 needs a source + TEST pair, so build the matching test-file set with
+# the SAME vendor/generated exclusions. One set excluding every _test.go while a
+# scenario requires a test file is a contradiction, not an oversight.
+git -C /tmp/bench-corpus ls-files '*_test.go' \
+  | grep -Ev '(^|/)vendor/' \
+  | while IFS= read -r f; do
+      head -1 "/tmp/bench-corpus/$f" | grep -q '^// Code generated' || printf '%s\n' "$f"
+    done > /tmp/bench-test-files.txt
+
+wc -l < /tmp/bench-prod-files.txt                                          # eligible production files
+(cd /tmp/bench-corpus && xargs -a /tmp/bench-prod-files.txt cat | wc -l)   # must be 120000-200000
 (cd /tmp/bench-corpus && go list ./... | grep -v '/vendor/' | wc -l)   # Go PACKAGES, must be >= 20
 ls /tmp/bench-corpus/LICEN[CS]E* /tmp/bench-corpus/COPYING* 2>/dev/null  # record the licence file
 # Record its SPDX identifier in benchmarks.md and confirm that identifier is
@@ -3272,7 +3317,7 @@ ls /tmp/bench-corpus/LICEN[CS]E* /tmp/bench-corpus/COPYING* 2>/dev/null  # recor
 (cd /tmp/bench-corpus && go build ./...) && echo "corpus builds"
 ```
 
-Every scenario file must be drawn from `/tmp/bench-files.txt`; picking one outside it silently violates the eligibility rules.
+Scenario inputs come from `/tmp/bench-prod-files.txt`, except scenario 2's test file, which comes from `/tmp/bench-test-files.txt`. A file outside both sets silently violates the eligibility rules. The 120,000–200,000 line total is the **production** set only.
 
 **This repo is deliberately not the corpus** — it is far too small for the multi-file scenario to mean anything. Record the SHA before measuring anything.
 
@@ -3293,13 +3338,28 @@ Re-run each scenario **three times** and report the median. A single sample of a
 
 Tokens the file(s) would occupy in the implementer's context. Use the same tokenizer for both sides; if none is available, state that a `bytes/4` approximation was used and label the table accordingly. **An approximation that is disclosed is fine; an undisclosed one is not.**
 
+**Scenario 4's `without` is different and must be stated explicitly:** an implementer doing it themselves would have to read the reference file AND emit the code, so `without` = tokens(reference file) + tokens(generated code). That is how upstream reports it ("40,614 tokens + generation"), and it is the only definition under which the comparison means anything. Its `with` side is `lines_written`, in `lines`, with no savings ratio.
+
 - [ ] **Step 4: Measure "with"**
 
 Scenarios 1–3 run through `bulk_read`; **scenario 4 runs through `code_write`**, which is what it measures. For 1–3 record `input_tokens`, `output_tokens`, `review_ms` and the token size of the returned `answer`. For 4 record `input_tokens`, `output_tokens`, `review_ms` and `lines_written` — there is no `answer` and no savings ratio, because generated lines and context tokens are different units. **`answer` is the "with" figure** — that is what actually lands in the implementer's context. `input_tokens` is the worker's consumption and belongs in its own column.
 
+**Harness — do not improvise it.** Drive the tools through the built server over
+MCP stdio, exactly as a host would:
+
 ```bash
-export ANTI_TANGENT_STATS_DIR=/tmp/bench-stats   # gives per-call rows for free
+export ANTHROPIC_API_KEY=...                                            # or the provider you pin
+export ANTI_TANGENT_WORKER_MODEL=anthropic:claude-haiku-4-5-20251001    # record this exact id
+export ANTI_TANGENT_PLAN_ROOTS=/tmp/bench-corpus
+export ANTI_TANGENT_STATS_DIR=/tmp/bench-stats                          # per-call token rows, free
+go build -o /tmp/atm ./cmd/anti-tangent-mcp
 ```
+
+Per run record: the returned `answer` (1–3) or `lines_written` (4), plus
+`input_tokens`, `output_tokens` and `review_ms` from the response. Token counts
+for the *without* side and for the returned answer use ONE tokenizer, named in
+`benchmarks.md`. Median = the middle of the three recorded values, computed per
+column, with all three raw runs listed in `benchmarks.md`.
 
 - [ ] **Step 5: Write `benchmarks.md`**
 
@@ -3317,7 +3377,7 @@ code_write	Code-write	3667	40614	833	lines		5100	2900	3	median
 
 `with_unit` is what lets scenario 4 report lines without pretending they are tokens; its `savings_pct` is deliberately EMPTY, and the checker must enforce that rather than compute a ratio across units.
 
-`scenario_id` is the canonical key. The README table carries the same id in its first column (with the human `label` beside it), so the checker matches on the id and never on prose. Ids must be unique; the checker fails if any id appears twice, or in one file but not the other.
+`scenario_id` is the canonical key. The README table carries the same id in its first column (with the human `label` beside it), so the checker matches on the id and never on prose. Ids must be unique; the checker fails if any id appears twice, or appears in one file but not the other. **The README table's first column is `scenario_id`**, with the human label beside it — the checker joins on the id alone and treats the label as an ordinary cell that must also match.
 
 The TSV exists so the README table can be checked mechanically. Comparing rendered prose against rendered prose is how the two drift apart.
 
@@ -3354,7 +3414,7 @@ would overstate it. Method and per-file selections: [`evals/benchmarks.md`](eval
 
 - [ ] **Step 6b: Make the table checkable**
 
-Write `plugin/anti-tangent-shunt/evals/check-benchmark-table.sh`. It must compare **row by row against `benchmarks.tsv`**: parse the README's "ours" table, match each row to its TSV row by scenario label, and compare every cell (lines, without, with, savings, worker tokens). Exit non-zero naming the first mismatched scenario and column.
+Write `plugin/anti-tangent-shunt/evals/check-benchmark-table.sh`. It must compare **row by row against `benchmarks.tsv`**: parse the README's "ours" table, join each row to its TSV row **on `scenario_id`** (never on prose), and compare every cell — label included. Exit non-zero naming the first mismatched scenario and column.
 
 A "does this number appear anywhere in the file" check passes when two scenarios share a number, or when a stale figure survives in unrelated prose — exactly the drift this exists to catch. It must also fail when the README has a scenario the TSV lacks, or vice versa, so a dropped row cannot pass silently.
 
