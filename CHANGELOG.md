@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-09-07
+
+### Added
+- **`bulk_read` and `code_write`** — two MCP tools that route I/O-heavy implementer work to a
+  cheap worker model, so a large file corpus and generated boilerplate never enter the
+  implementer's context. `bulk_read` reads files server-side under the same
+  `ANTI_TANGENT_PLAN_ROOTS` rules as `validate_completion` and answers a question about them;
+  `code_write` generates code matching a required `reference_path` and, given a `target_path`,
+  writes it and returns only a line count. Adapted from Spotify's
+  [shunt](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt) plugin
+  (Apache-2.0), described in
+  ["Portal by Spotify cut my Claude Code token usage by 90%"](https://engineering.atspotify.com/2026/9/portal-by-spotify-cut-my-claude-code-token-usage-by-90).
+- **`plugin/anti-tangent-shunt`** — two PreToolUse hooks that block oversized full-file reads
+  (`Read`, and `cat`/`head`/`tail`/`less`/`more` via `Bash`) and point at `bulk_read`, plus
+  bulk-reader / code-writer skills and a key-free eval suite.
+- **`plugin/anti-tangent-guard`** — a PostToolUse hook on `TaskUpdate` that refuses a
+  `completed` close when `validate_completion` did not run, or ran and returned `fail`.
+  Active on install; `ANTI_TANGENT_COMPLETION_GUARD=0` disables it. Fails open on any error.
+- **`ANTI_TANGENT_WORKER_MODEL`** (defaults to `ANTI_TANGENT_MID_MODEL`) and
+  **`ANTI_TANGENT_WORKER_MAX_TOKENS`** (4096, clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`).
+  `ANTI_TANGENT_SHUNT_MIN_LINES` (350) is read by the shunt hooks, not the server.
+- **`THIRD_PARTY_NOTICES.md`** — Apache-2.0 notice for the ported shunt hooks and eval fixtures.
+
+### Changed
+- `stats.Event` gains optional `input_tokens` / `output_tokens`; `rollup.json` gains an
+  additive `worker` key. Existing keys are unchanged — the gnome-topbar consumer reads them
+  by exact name.
+- The README's filesystem trust-model section now covers writes, not only reads.
+
 ## [0.17.0] - 2026-09-02
 
 ### Added
