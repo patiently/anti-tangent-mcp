@@ -2454,7 +2454,7 @@ git commit -m "docs: Apache-2.0 attribution for the ported shunt hooks"
 - [ ] **Any parse ambiguity results in allow, never block**
 - [ ] All 34 ported cases pass; `evals/run.sh` exits non-zero on any failure, **including** when the operational-reference check finds a leftover — proven by injecting one and asserting the runner goes red
 - [ ] Every fetch uses `curl --fail` and asserts a non-empty result. Without `--fail`, a 404 writes its body into the destination file and exits 0 (measured 2026-09-07), so a missing upstream file would be silently ported as an error page
-- [ ] Each ported JSON suite is asserted to hold exactly 17 cases (`jq length`), so a partial fetch cannot masquerade as a successful port
+- [ ] Each ported JSON suite is asserted to hold exactly 17 cases with **`jq '.evals | length'`** — the suites are objects (`{skill_name, description, evals}`), so a bare `jq length` counts the three top-level KEYS, not the cases, and would silently assert nothing useful, so a partial fetch cannot masquerade as a successful port
 - [ ] `THIRD_PARTY_NOTICES.md` is reconciled against what this task actually copied — `run.sh` and any fetched fixtures included — in the same commit
 - [ ] Every upstream file is fetched from the **pinned commit `3c24ca30ff63e1f5bbad1c43fe5324daff579123`**, never `main`, and that SHA is recorded in `THIRD_PARTY_NOTICES.md`
 - [ ] `evals/fixtures/` contains exactly the files the two JSON suites reference — enumerated from the suites themselves, not guessed. If the suites synthesise their own inputs, the directory is not created at all
