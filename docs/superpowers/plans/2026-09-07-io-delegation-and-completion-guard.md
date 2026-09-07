@@ -24,6 +24,39 @@
 
 **The generated-code contract (binding on Tasks 6, 11 and 14 — state it the same way in all three).** Code produced by `code_write` with a `target_path` is **verified, not inspected**. The implementer owns choosing the reference file and proving the result works — by running the task's tests and build — and does NOT have to read the generated code. Requiring inspection would defeat the entire purpose, since the saving is precisely that the code never enters the implementer's context. Use the word *verification*; do not write "review" of generated code anywhere, because that reads as inspection and contradicts the tool's design.
 
+## Pre-flight verification (run 2026-09-07, before dispatch)
+
+`validate_plan` has no codebase access, so it flags every reference to existing
+code as `unverifiable_codebase_claim` and asks for a pre-flight. This is that
+pre-flight. Each claim below was checked against the working tree at commit
+`8a79b52`; an implementer hitting a mismatch should stop, not improvise.
+
+| Claim | Verified |
+|---|---|
+| Branch `version/0.18.0`, `## [0.18.0]` in CHANGELOG, `VERSION` untouched | yes |
+| `docs/protocol/core.md` = 14,460 B; `implementer.md` = 14,017 B | exact |
+| `marketplace.json` version `0.8.0`, 2 plugins | exact |
+| `LICENSE` is MIT | yes |
+| `golden(t, name, got)` at `internal/prompts/prompts_test.go:38` | exact |
+| `effectiveMaxTokens` `handlers.go:664`; `resolveModel` `handlers.go:263` | exact |
+| `resolveFileInput` `file_source.go:101`; `rejectControlChars` `:207`; `withinRoots` `:242` | exact |
+| `openNoFollow` `file_source_unix.go:35`; that file's tag is `//go:build !windows` | exact |
+| `formatEnvelopeSummary` `summary.go:23`; `computeRollup` `rollup.go:47` | exact |
+| All three provider clients call `json.Unmarshal(req.JSONSchema, …)` | 1 each |
+| `Recorder.Record` opens `if r == nil { return }` | yes |
+| All 14 pre-existing `rollup.json` keys present exactly once | yes |
+| `ci.yml` has a `protocol-docs` job; `build-test` is `needs: [changelog, protocol-docs]` (line 92) | exact |
+
+Two defects this pre-flight found, which the reviewer structurally could not:
+
+1. An unscoped `git grep` for stale catalog counts matches **11 files**, six of
+   them historical plans and specs under `docs/superpowers/` — including this
+   plan and its own spec, which quote the phrase while instructing its removal.
+   Task 15's check is therefore scoped to the live surface; editing the
+   historical record to satisfy a grep would be the wrong fix.
+2. `docs/protocol/core.md:9` says "seven tools" and **no task updated it**.
+   Assigned to Task 14, which is the task that edits that file.
+
 **User decisions (already made):**
 - Hook event is `PostToolUse` on `TaskUpdate` with `status=completed` — chosen over `SubagentStop` because it covers both `executing-plans` and `subagent-driven-development` via two pass signals.
 - The guard ships as its own plugin, **active on install**; `ANTI_TANGENT_COMPLETION_GUARD=0` disables it.
@@ -3069,6 +3102,7 @@ git commit -m "ci: gate on plugin hook eval suites"
 - [ ] Its wording is **ours**, not upstream's Apache-2.0 prose
 - [ ] `implementer.md` gains an unnumbered "Large reads" clause: call `bulk_read` with a question; targeted `Read` before editing
 - [ ] `controller.md` documents the guard, both block messages and the kill switch
+- [ ] **`core.md`'s own tool count is corrected**: line 9 currently reads "It exposes seven tools" and enumerates them. It must say nine and name `bulk_read` / `code_write` as the I/O-delegation pair — they send nothing for *review*, so the following sentence about the reviewer LLM needs care. No other task edits this file, so if Task 14 skips it the stale count ships in the protocol doc and its CI-compared bundle copy
 - [ ] **Every part stays strictly under 16,000 bytes**
 - [ ] The bundled copy is byte-identical to `docs/protocol/`
 - [ ] `scripts/check-protocol-docs.sh` passes (no new/duplicate `§` identifiers)
@@ -3156,7 +3190,7 @@ git commit -m "docs(protocol): non-delegation list, large-reads clause, completi
 ```
 
 ```json:metadata
-{"files": ["docs/protocol/core.md", "docs/protocol/implementer.md", "docs/protocol/controller.md", "plugin/anti-tangent-protocol/protocol/core.md", "plugin/anti-tangent-protocol/protocol/implementer.md", "plugin/anti-tangent-protocol/protocol/controller.md"], "verifyCommand": "bash scripts/check-protocol-docs.sh && diff -r docs/protocol plugin/anti-tangent-protocol/protocol", "acceptanceCriteria": ["core.md gains an unnumbered non-delegation section in our own words", "implementer.md gains a Large reads clause", "controller.md documents the guard and kill switch", "every part under 16000 bytes", "bundle byte-identical", "check-protocol-docs.sh passes"], "modelTier": "standard"}
+{"files": ["docs/protocol/core.md", "docs/protocol/implementer.md", "docs/protocol/controller.md", "plugin/anti-tangent-protocol/protocol/core.md", "plugin/anti-tangent-protocol/protocol/implementer.md", "plugin/anti-tangent-protocol/protocol/controller.md"], "verifyCommand": "bash scripts/check-protocol-docs.sh && diff -r docs/protocol plugin/anti-tangent-protocol/protocol", "acceptanceCriteria": ["core.md gains an unnumbered non-delegation section in our own words", "implementer.md gains a Large reads clause", "controller.md documents the guard and kill switch", "core.md line 9 says nine tools and names bulk_read/code_write", "every part under 16000 bytes", "bundle byte-identical", "check-protocol-docs.sh passes"], "modelTier": "standard"}
 ```
 
 ---
@@ -3178,9 +3212,10 @@ git commit -m "docs(protocol): non-delegation list, large-reads clause, completi
 - [ ] README documents both plugins and their install commands
 - [ ] `CLAUDE.md` says nine tools, lists the new files, and states that blocking lives in plugins so the server stays advisory
 - [ ] `marketplace.json` gains both plugins; its `version` bumps `0.8.0` → `0.9.0`
-- [ ] No stale catalog-count claim remains in any tracked file — the phrase `seven tools`, and the variants Step 1 already anticipates (`seven registered`, `three handlers`)
+- [ ] No stale catalog-count claim remains on the **live surface** — `README.md`, `CLAUDE.md`, `docs/protocol/`, `internal/`, `examples/`, `plugin/`. Verified 2026-09-07, the live hits are exactly: `CLAUDE.md:7`, `README.md:275`, `docs/protocol/core.md:9`, `internal/mcpsrv/server.go:38`, and the bundled `plugin/anti-tangent-protocol/protocol/core.md:9` (carried by Task 14's resync)
+- [ ] **`docs/superpowers/` is deliberately excluded.** Historical plans and specs record what was true when written — editing them to satisfy a grep would corrupt the record, and this plan and its own spec both quote the phrase while instructing its removal. An unscoped `git grep` is unsatisfiable, not merely noisy
 
-**Verify:** `jq -e '.plugins | length == 4' .claude-plugin/marketplace.json && ! git grep -nE 'seven tools|seven registered|three handlers'`
+**Verify:** `jq -e '.version == "0.9.0" and (.plugins | length == 4)' .claude-plugin/marketplace.json && ! git grep -nE 'seven tools|seven registered|three handlers' -- README.md CLAUDE.md docs/protocol internal examples plugin`
 
 `git grep` searches every tracked file, which is what "anywhere" in the acceptance criteria means — `README.md` and `CLAUDE.md` alone would miss `internal/mcpsrv/server.go`, which Step 1 already flags.
 
@@ -3189,7 +3224,7 @@ git commit -m "docs(protocol): non-delegation list, large-reads clause, completi
 - [ ] **Step 1: Find every stale count**
 
 ```bash
-grep -rn 'seven tools\|seven registered\|three handlers' README.md CLAUDE.md internal/mcpsrv/server.go
+git grep -nE 'seven tools|seven registered|three handlers' -- README.md CLAUDE.md docs/protocol internal examples plugin
 ```
 
 - [ ] **Step 2: Update the README**
@@ -3229,14 +3264,14 @@ jq -e '.version == "0.9.0"
   and (.plugins | length == 4)
   and ([.plugins[].name] | index("anti-tangent-shunt") != null and index("anti-tangent-guard") != null)' \
   .claude-plugin/marketplace.json && echo "marketplace ok"
-git grep -nE 'seven tools|seven registered|three handlers' && echo "STALE COUNT REMAINS" || echo "counts updated"
+git grep -nE 'seven tools|seven registered|three handlers' -- README.md CLAUDE.md docs/protocol internal examples plugin && echo "STALE COUNT REMAINS" || echo "counts updated"
 bash scripts/check-protocol-docs.sh
 git add README.md CLAUDE.md .claude-plugin/marketplace.json
 git commit -m "docs: document the I/O tools, both plugins, and the write trust model"
 ```
 
 ```json:metadata
-{"files": ["README.md", "CLAUDE.md", ".claude-plugin/marketplace.json"], "verifyCommand": "jq -e '.plugins | length == 4' .claude-plugin/marketplace.json", "acceptanceCriteria": ["README documents both tools with full field lists", "README documents the worker vars and notes SHUNT_MIN_LINES is hook-only", "README filesystem section covers writes and the Windows gap", "README gains Acknowledgements", "CLAUDE.md says nine tools and records the plugin-vs-server blocking distinction", "marketplace.json lists four plugins at version 0.9.0", "no stale seven-tools claim"], "modelTier": "mechanical"}
+{"files": ["README.md", "CLAUDE.md", ".claude-plugin/marketplace.json"], "verifyCommand": "jq -e '.plugins | length == 4' .claude-plugin/marketplace.json", "acceptanceCriteria": ["README documents both tools with full field lists", "README documents the worker vars and notes SHUNT_MIN_LINES is hook-only", "README filesystem section covers writes and the Windows gap", "README gains Acknowledgements", "CLAUDE.md says nine tools and records the plugin-vs-server blocking distinction", "marketplace.json lists four plugins at version 0.9.0", "no stale catalog-count claim on the live surface (docs/superpowers historical records excluded)"], "modelTier": "mechanical"}
 ```
 
 ---
@@ -3456,7 +3491,7 @@ bash plugin/anti-tangent-shunt/evals/run.sh
 bash plugin/anti-tangent-guard/evals/run.sh
 bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh
 jq -e '.version == "0.9.0" and (.plugins | length == 4)' .claude-plugin/marketplace.json
-! git grep -nE 'seven tools|seven registered|three handlers'
+! git grep -nE 'seven tools|seven registered|three handlers' -- README.md CLAUDE.md docs/protocol internal examples plugin
 git diff --name-only origin/main -- VERSION | grep -q . && echo "VERSION MUST NOT CHANGE" && exit 1
 grep -q '^## \[0.18.0\]' CHANGELOG.md
 ```
