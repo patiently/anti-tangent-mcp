@@ -133,8 +133,11 @@ func (h *handlers) BulkRead(ctx context.Context, _ *mcp.CallToolRequest, args Bu
 }
 
 // bulkReadTooLarge mirrors tooLargeEnvelope's shape (handlers.go) for a tool
-// that has no session id. Critical severity so the ladder derives fail from
-// one critical, matching the explicit Verdict: fail.
+// that has no session id. Unlike the reviewer-driven hooks, there is no
+// severity ladder here to derive a verdict from: this result short-circuits
+// before any provider call, so both Verdict and Severity are set directly.
+// Severity is Critical so a caller triaging findings by severity sees this as
+// blocking, consistent with how the ladder would have classified it anyway.
 func bulkReadTooLarge(size, limit int, model string) BulkReadResult {
 	return BulkReadResult{
 		ModelUsed: model,

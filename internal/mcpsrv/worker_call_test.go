@@ -17,10 +17,15 @@ type fakeWorkerReviewer struct {
 	resp providers.Response
 	err  error
 	got  providers.Request
+	// calls counts Review invocations. Purely additive to the fake — lets a
+	// caller assert the provider was (or was not) reached at all, distinct
+	// from asserting on the content of the last request via got.
+	calls int
 }
 
 func (f *fakeWorkerReviewer) Name() string { return "fake" }
 func (f *fakeWorkerReviewer) Review(_ context.Context, r providers.Request) (providers.Response, error) {
+	f.calls++
 	f.got = r
 	return f.resp, f.err
 }

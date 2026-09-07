@@ -59,6 +59,22 @@ func TestBulkReadRefusesOutsideRoots(t *testing.T) {
 	assert.Contains(t, err.Error(), "PLAN_ROOTS", "want a roots refusal")
 }
 
+// TestBulkReadRejectsRelativePathBeforeProviderCall pins AC4: a relative path
+// must be rejected before any provider call, not merely rejected eventually.
+// Asserting only that an error comes back would pass even if BulkRead called
+// the worker first and only noticed the bad path afterward — so this also
+// asserts f.calls stayed 0, which can only be true if resolveFileInput's
+// IsAbs check ran and failed strictly before runWorker ever reached the
+// provider.
+func TestBulkReadRejectsRelativePathBeforeProviderCall(t *testing.T) {
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"answer":"x"}`)}}
+	h := &handlers{deps: workerDeps(t, f, nil)}
+	_, _, err := h.BulkRead(context.Background(), nil, BulkReadArgs{Question: "q", Paths: []string{"relative/path.go"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be absolute", "want the path-must-be-absolute error")
+	assert.Equal(t, 0, f.calls, "provider must not be called before the relative-path check fails")
+}
+
 func TestBulkReadHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "a.go")
