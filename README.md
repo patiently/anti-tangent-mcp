@@ -230,6 +230,14 @@ ANTI_TANGENT_EXTRACT_MODEL=              # extract_project_knowledge; falls back
 ANTI_TANGENT_PRIME_MAX_TOKENS=4096       # output cap for prime_project_knowledge; raise if a prime call returns a truncation finding
 ANTI_TANGENT_EXTRACT_MAX_TOKENS=8192     # output cap for extract_project_knowledge; raise if an extract call returns a truncation finding
 
+# --- I/O delegation (bulk_read / code_write) ---
+ANTI_TANGENT_WORKER_MODEL=               # optional override; defaults to ANTI_TANGENT_MID_MODEL. Used by bulk_read (q→a translation) and code_write (spec→code generation)
+ANTI_TANGENT_WORKER_MAX_TOKENS=4096      # output cap for worker calls; clamped by ANTI_TANGENT_MAX_TOKENS_CEILING
+
+# --- Plugin hooks (anti-tangent-shunt PreToolUse filter) ---
+# NOTE: ANTI_TANGENT_SHUNT_MIN_LINES is read by the Claude Code plugin hooks ONLY, never by the server itself.
+ANTI_TANGENT_SHUNT_MIN_LINES=350         # threshold file line count; Reads exceeding this are delegated to bulk_read
+
 # --- Opt-in statistics (off unless ANTI_TANGENT_STATS_DIR is set) ---
 # Output directory; enables the subsystem. Files in ANTI_TANGENT_STATS_DIR:
 #   events.jsonl          — per-call counts (server-written)
@@ -272,7 +280,7 @@ The mid-hook (`check_progress`) is called more often — a fast/cheap tier there
 
 ### Smoke test
 
-Launch your MCP host with debug logging on and confirm all seven tools — `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`, `prime_project_knowledge`, `extract_project_knowledge`, `plan_run_report` — appear in the discovered tool catalog. Server-side configuration errors print to stderr at startup.
+Launch your MCP host with debug logging on and confirm all nine tools — `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`, `prime_project_knowledge`, `extract_project_knowledge`, `plan_run_report`, `bulk_read`, `code_write` — appear in the discovered tool catalog. Server-side configuration errors print to stderr at startup.
 
 ### Large plans (chunking)
 
@@ -381,6 +389,10 @@ names an OpenAI or Google model, since those clients have no prompt-cache suppor
 for the attached set being re-sent in full on every reviewer call unless you are on a chunked
 Anthropic round.
 
+### Writes: `code_write` and `target_path`
+
+The server also **writes** one kind of file: `code_write` with a `target_path`. The same argument holds — the calling agent already has `Write` and `Edit`, so the server acquires no capability the caller lacks — but `ANTI_TANGENT_PLAN_ROOTS` is now load-bearing for writes as well as reads. A write resolves the target's **parent** directory (the leaf does not exist yet), containment-checks that, and opens the leaf with `O_NOFOLLOW`, so a symlink planted at the target cannot redirect the write outside the roots. An existing file is refused unless `overwrite: true`, and the parent must already exist — `code_write` never creates directories. On Windows the final-component symlink-swap window is not closed, exactly as for reads.
+
 ## Use with Claude Code (`.mcp.json`)
 
 ```json
@@ -447,7 +459,7 @@ The GPT-5.6 family (`gpt-5.6-sol` heavy, `gpt-5.6-terra` balanced, `gpt-5.6-luna
 
 Adding a new model is a one-line change in [`internal/providers/reviewer.go`](internal/providers/reviewer.go) — open a PR.
 
-## The 7 tools
+## The 9 tools
 
 - `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings and mints a `plan_run_id`. Accepts `plan_path` (v0.16.0+, preferred) with an absolute path, or `plan_text` (deprecated, removed in 1.0.0) — see "File-path inputs and the trust model" above. Also accepts `context_paths` (v0.17.0+, absolute paths to source files the plan makes claims about; opt-in and materially more expensive — see above) and `repo_root` (v0.17.0+, absolute) to enable the disk tier of a deterministic Create/Modify consistency check.
 - `validate_task_spec` — call once before coding. Returns findings on missing goals, weak acceptance criteria, unstated assumptions. Returns a `session_id` you thread through the next two calls. Accepts the controller's `plan_run_id` (optional, best-effort) to tie the task to its plan run.
@@ -456,6 +468,8 @@ Adding a new model is a one-line change in [`internal/providers/reviewer.go`](in
 - `prime_project_knowledge` (v0.6.0+, optional) — stateless. Given a task spec and a Basic-Memory-style `kb_index`, returns prioritized note picks for the implementer to read before starting. Emits paste-ready `bm_commands` when `ANTI_TANGENT_KB_STORE=basic-memory`.
 - `extract_project_knowledge` (v0.6.0+, optional) — stateless. Given one or more `validate_completion` envelopes, returns structured create/update/supersede proposals for the project knowledge base. Same env gate for `bm_commands`.
 - `plan_run_report` (v0.15.0+) — deterministic, no reviewer call, no cost. Call once after the last task in a plan run reports DONE, passing the `plan_run_id` from `validate_plan`. Returns a per-task table (anti-tangent verdict + CodeScene result side by side) plus a paste-ready `summary_block`. Its own `PlanRunReportResult` shape, not the shared envelope below.
+- `bulk_read` (v0.18.0+) — answer a question about one or more source files without pulling them into your context. Passes absolute `paths` (up to 50) and a specific `question`. The server reads the files server-side and delegates the question to a cheap worker model, returning only the answer plus metadata (files read, bytes read, tokens used). Optional `model` (overrides `ANTI_TANGENT_WORKER_MODEL`) and `max_tokens_override` fields. If your intent is to then EDIT the code, follow the answer with a targeted Read of the region it names.
+- `code_write` (v0.18.0+) — generate pattern-following boilerplate with a cheap worker model. Requires `spec` (the generation request) and `reference_path` (an absolute path; the server uses this file's conventions to constrain the generated code). Optional `target_path` (absolute) to have the server write the file and return only a line count, so the generated code never enters your context. Optional `overwrite` bool (default false; existing files are refused unless true). Optional `model` and `max_tokens_override` fields. The parent directory of `target_path` must already exist — `code_write` never creates directories. Only for boilerplate that follows an existing pattern; do NOT use for logic requiring judgement.
 
 The middle three (`validate_task_spec`, `check_progress`, `validate_completion`) return the same envelope; `validate_plan` returns a richer `PlanResult` with per-task analysis (see [`docs/protocol/controller.md`](docs/protocol/controller.md) §5.5):
 
@@ -537,6 +551,47 @@ multi-task plan run and needs `plan_run_report` (see the one-shot install
 above). opencode
 loads the on-demand document via the slim pointer
 (`examples/anti-tangent-pointer.md`).
+
+## Plugins (v0.18.0+)
+
+Two Claude Code plugins extend the MCP server with installable hook enforcement:
+
+### anti-tangent-shunt
+
+Routes I/O-heavy implementer work to a cheap worker model, keeping the implementer's context small and token-efficient. This plugin provides PreToolUse hooks that intercept oversized Read and Bash calls, redirecting them to anti-tangent-mcp's `bulk_read` tool. The server reads the files server-side and delegates the question to a cheap worker model, returning only the answer.
+
+**Install:**
+
+```bash
+claude plugin marketplace add patiently/anti-tangent-mcp
+claude plugin install anti-tangent-shunt@anti-tangent-mcp
+```
+
+See [`plugin/anti-tangent-shunt/README.md`](plugin/anti-tangent-shunt/README.md) for configuration and more.
+
+### anti-tangent-guard
+
+A single `PostToolUse` hook that enforces anti-tangent-mcp's `validate_completion` gate at task close. When a task is marked completed without running `validate_completion`, the guard detects this post-close and returns a blocking instruction to reopen, validate, and re-close.
+
+**Install:**
+
+```bash
+claude plugin marketplace add patiently/anti-tangent-mcp
+claude plugin install anti-tangent-guard@anti-tangent-mcp
+```
+
+See [`plugin/anti-tangent-guard/README.md`](plugin/anti-tangent-guard/README.md) for details.
+
+## Acknowledgements
+
+The hooks in the anti-tangent-shunt plugin are adapted from Spotify's
+[shunt](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt)
+plugin (Apache-2.0), described by Dimitri Mazmanov in
+["Portal by Spotify cut my Claude Code token usage by 90%"](https://engineering.atspotify.com/2026/9/portal-by-spotify-cut-my-claude-code-token-usage-by-90)
+(Spotify Engineering, September 2026). Their hook-gated routing, the 350-line
+threshold and the explicit non-delegation list are carried over; the
+Portal/AiKA transport is replaced by anti-tangent's own provider layer. See
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## Design
 
