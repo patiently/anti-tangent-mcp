@@ -21,6 +21,11 @@
 - **Never copy Apache-2.0 prose into `docs/protocol/`.** Upstream's "What doesn't get delegated" wording must be restated in our own words, or the obligation propagates into the bundled plugin copy.
 - **All hooks fail open.** Any unexpected error exits 0. A hook that blocks because it broke is worse than the drift it prevents.
 - `go test -race ./...` must pass. Unit tests never hit the network — `httptest.Server` only.
+- **Match the target package's dominant test convention.** Test code in this plan's steps was authored without checking each package's local style, and the convention is NOT uniform — measured 2026-09-07 by call-site count:
+  `internal/config` 136 testify / 27 raw (and a shared `env(map[string]string)` helper at `config_test.go:15`) · `internal/prompts` 324 / 2 · `internal/providers` 123 / 3 · `internal/verdict` 257 / 90 · `internal/mcpsrv` 1675 / 137 — all **testify**.
+  `internal/stats` 18 testify / **75 raw** — raw `t.Errorf`/`t.Fatalf` is the local convention there; do NOT "fix" it to testify.
+  Where a plan step's test code conflicts with the target package's convention, the **package wins**: keep the assertions semantically identical and restyle. A new package (e.g. `internal/notices`) has no convention — either style is fine, pick one and be consistent.
+- **`gofmt -l internal/ cmd/` must print nothing before you commit.** The repo is currently gofmt-clean; CI does not check it, so drift is caught only here.
 
 **The generated-code contract (binding on Tasks 6, 11 and 14 — state it the same way in all three).** Code produced by `code_write` with a `target_path` is **verified, not inspected**. The implementer owns choosing the reference file and proving the result works — by running the task's tests and build — and does NOT have to read the generated code. Requiring inspection would defeat the entire purpose, since the saving is precisely that the code never enters the implementer's context. Use the word *verification*; do not write "review" of generated code anywhere, because that reads as inspection and contradicts the tool's design.
 
