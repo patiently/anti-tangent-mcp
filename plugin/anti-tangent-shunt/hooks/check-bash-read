@@ -1,0 +1,87 @@
+#!/bin/bash
+# Copyright 2026 Spotify AB
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Ported from spotify/portal-ai-plugins (plugins/shunt/hooks/check-bash-read),
+# commit 3c24ca30ff63e1f5bbad1c43fe5324daff579123. Upstream ships this licence
+# via a repository-root LICENSE file rather than a per-file header; this
+# header carries the licence and attribution with the file.
+#
+# Modified 2026-09 for anti-tangent-mcp: replaced the Portal/AiKA delegation
+# target with the anti-tangent MCP tools.
+
+# Block Bash commands that dump a large file into context (cat/head/tail/
+# less/more), catching reads that bypass the Read hook. Point the caller at
+# mcp__anti-tangent__bulk_read instead.
+#
+# PreToolUse hook for Bash. Block = exit 2 with the reason on stderr.
+# Allow = exit 0, silent. Do NOT "improve" the parsing below: pipes,
+# redirections, count flags and non-read commands are the accumulated result
+# of upstream's own eval cases, and false positives here block real shell
+# commands a caller is trying to run. Any parse ambiguity must resolve to
+# allow, never block.
+
+MIN_LINES="${ANTI_TANGENT_SHUNT_MIN_LINES:-350}"
+case "$MIN_LINES" in ''|*[!0-9]*) MIN_LINES=350 ;; esac
+
+input=$(cat)
+
+command=$(echo "$input" | jq -r '.tool_input.command // empty')
+[ -z "$command" ] && exit 0
+
+# Skip piped commands (cat file | grep) — those are targeted reads.
+echo "$command" | grep -qE '\|' && exit 0
+
+# Skip redirections (cat file > out) — not a read-into-context operation.
+echo "$command" | grep -qE '>' && exit 0
+
+# Extract file path from read commands, stripping flags (e.g. cat -n, head -100).
+file_path=""
+if echo "$command" | grep -qE '^(cat|head|tail|less|more) '; then
+  # Remove the command name, then strip any flags (-n, -100, --number, etc.)
+  args=$(echo "$command" | sed -E 's/^(cat|head|tail|less|more) +//')
+  for arg in $args; do
+    case "$arg" in
+      -*) continue ;;
+      *)  file_path=$(echo "$arg" | tr -d '"'"'"); break ;;
+    esac
+  done
+fi
+
+[ -z "$file_path" ] && exit 0
+[ ! -f "$file_path" ] && exit 0
+
+lines=$(wc -l < "$file_path" 2>/dev/null | tr -d ' ' || echo "0")
+if [ "$lines" -le "$MIN_LINES" ]; then
+  exit 0
+fi
+
+printf 'COMMAND WOULD READ TOO MUCH DIRECTLY (%d lines, threshold %d)
+
+Dumping this whole file into your shell output would put ~%d lines into your
+context. Ask the question instead:
+
+  mcp__anti-tangent__bulk_read
+    question: "<the specific thing you need to know>"
+    paths:    ["%s"]
+
+Ask a QUESTION, not "summarise this file" — you get back bullets, not prose.
+
+If you need to EDIT this file, follow the answer with a targeted read of the
+region it names: Read(file_path="%s", offset=<n>, limit=<n>). Targeted reads
+are never blocked.
+
+(Disable: ANTI_TANGENT_SHUNT_MIN_LINES=999999)
+' "$lines" "$MIN_LINES" "$lines" "$file_path" "$file_path" >&2
+exit 2

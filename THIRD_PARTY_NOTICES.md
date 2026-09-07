@@ -13,32 +13,53 @@ Files in this repository derived from that work:
 
 - `plugin/anti-tangent-shunt/hooks/check-file-size`
 - `plugin/anti-tangent-shunt/hooks/check-bash-read`
+- `plugin/anti-tangent-shunt/hooks/hooks.json`
 - `plugin/anti-tangent-shunt/evals/run.sh`
 - `plugin/anti-tangent-shunt/evals/hook-evals.json`
 - `plugin/anti-tangent-shunt/evals/bash-hook-evals.json`
 
-Task 10 adapts `evals/run.sh` from upstream as well as the two hooks, and may
-fetch fixture files. **Task 10 reconciles this list against what it actually
-copied** — if it fetches fixtures, they are added here in the same commit. An
-attribution list that omits a copied file is the failure this exists to prevent.
+The upstream commit ported from is `3c24ca30ff63e1f5bbad1c43fe5324daff579123`
+(`plugins/shunt/` in `spotify/portal-ai-plugins`), fetched with `curl --fail`
+against that pinned SHA, never `main`.
 
-The upstream commit ported from is `3c24ca30ff63e1f5bbad1c43fe5324daff579123`.
+**Task 10 reconciled this list against what it actually copied.** The upstream
+`hook-evals.json` / `bash-hook-evals.json` suites reference their fixture
+inputs only via a `{{FIXTURES}}` placeholder and a `fixture.lines` count —
+`evals/run.sh` generates those files at run time from that count. No upstream
+fixture *files* exist to fetch (checked with
+`jq -r '.. | strings' … | grep -o 'fixtures/…'` against both suites: no
+matches), so `evals/fixtures/` was not created and is not part of the port.
 
 Attribution differs by file type, and the notice must say so rather than make a
 blanket claim the port cannot keep:
 
 - **`check-file-size`, `check-bash-read`, `evals/run.sh`** — shell scripts, so
-  each carries upstream's original licence header plus a modification notice
-  inline.
-- **`evals/hook-evals.json`, `evals/bash-hook-evals.json`, and any fetched
-  fixtures** — JSON and fixture data cannot carry comments, so they are covered
-  by this repository-level notice alone.
+  each carries a licence header plus a modification notice inline. Upstream
+  itself carries **no per-file header** — the source repository licenses the
+  whole tree via a single root `LICENSE` file (confirmed by fetching it at the
+  pinned SHA) rather than per-file boilerplate, so there was no original header
+  to preserve verbatim. The header added here is the standard Apache-2.0
+  notice from that same License's own Appendix ("How to apply the Apache
+  License to your work"), naming Spotify AB as copyright holder and this
+  pinned commit as the source, so the licence travels with the file the way a
+  header normally would.
+- **`hooks/hooks.json`, `evals/hook-evals.json`, `evals/bash-hook-evals.json`**
+  — JSON cannot carry comments, so these are covered by this repository-level
+  notice alone. `hooks.json` differs from upstream in exact formatting (this
+  project quotes the `${CLAUDE_PLUGIN_ROOT}` command paths); the two eval
+  suites are otherwise byte-identical to upstream except for the rename below.
 
 "Each derived file carries its original header" would be false for the JSON
-suites, and a licence notice inaccurate about its own scope is worse than a
-terse one. The modification in every case is the same: the
+files, and a licence notice inaccurate about its own scope is worse than a
+terse one. Every derived file underwent the same two changes: the
 Portal / AiKA delegation target was replaced by this project's own MCP tools,
-and `SHUNT_MIN_LINES` was renamed to `ANTI_TANGENT_SHUNT_MIN_LINES`.
+and `SHUNT_MIN_LINES` was renamed to `ANTI_TANGENT_SHUNT_MIN_LINES` (including
+in the `env` overrides inside `hook-evals.json`). The two hook scripts and
+`evals/run.sh` additionally changed *how* a block decision is signalled: from
+upstream's `{"decision": "block", ...}` JSON on stdout to this project's own
+convention of `exit 2` with the reason on stderr (`exit 0`, silent, to allow) —
+the same mechanism the completion-guard hook in this release uses, so all of
+this release's new hooks behave identically when they refuse.
 
 The full text of the Apache License, Version 2.0 follows. (The license text
 ends at "END OF TERMS AND CONDITIONS"; the appendix section containing EXHIBIT
