@@ -48,16 +48,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing fields are unchanged. `formatEnvelopeSummary` now emits a `tool:` line, which
   `plugin/anti-tangent-guard`'s hook requires to identify a `validate_completion` block.
 - The paste-ready `summary_block`'s multi-line rendering now prefixes every continuation line
-  with a non-whitespace `| ` sentinel instead of pure whitespace, in **every** formatter that
-  emits an `anti-tangent envelope` header — `validate_plan`, `prime_project_knowledge` and
-  `extract_project_knowledge` blocks as well as the per-task envelope, and every plain-string
-  field each of them renders (`criterion`, `evidence`, `next_action`, `task_title`, a pick's
-  `permalink`/`reason`, a proposal's `permalink`/`rationale`, plus the provenance and
-  context-file paths). User-visible formatting change, intended: without it, a reviewer-authored
-  line that happened to read `tool: validate_completion` or `verdict: pass` — or a bare
-  `anti-tangent envelope` header, which starts a whole new block — could be mistaken for the
-  block's own grammar by a downstream parser. Enum-typed fields are not escaped; the parsers in
-  `internal/verdict` reject an out-of-enum value before a formatter sees it.
+  with a non-whitespace `| ` sentinel instead of pure whitespace. The rule lives in the new
+  leaf package `internal/blocktext`; `internal/mcpsrv/summary.go` applies it to the per-task
+  envelope and to the `validate_plan` / `prime_project_knowledge` / `extract_project_knowledge`
+  blocks, and `internal/planrun/report.go` applies it to `plan_run_report` — whose header is
+  deliberately different (`anti-tangent plan run report`) and which was therefore missed on the
+  first pass. Covered fields: `criterion`, `evidence`, `next_action`, `task_title`, a pick's
+  `permalink`/`reason`, a proposal's `permalink`/`rationale`, the provenance and context-file
+  paths, and, in the plan-run report, the `plan_run_id`, task title, verdict cell and the whole
+  CodeScene cell (skip reason, quality gate, and the category-count map's keys). User-visible
+  formatting change, intended: without it, a caller- or reviewer-authored line that happened to
+  read `tool: validate_completion` or `verdict: pass` — or a bare `anti-tangent envelope`
+  header, which starts a whole new block — could be mistaken for the block's own grammar by a
+  downstream parser. Enum-typed fields are not escaped; the parsers in `internal/verdict` reject
+  an out-of-enum value before a formatter sees it. This is hygiene for a machine-read format,
+  not a security boundary: an agent that wants to skip `plugin/anti-tangent-guard`'s completion
+  gate can compose a block in its own report text without going near these fields — see that
+  plugin's README, "How much to trust each pass signal".
   `internal/mcpsrv/summary_forgery_test.go` enumerates the header-emitting formatters from the
   package's own source and drives a forged payload through every free-text field of each, so a
   new formatter or a new field cannot be added without escaping and stay green. See

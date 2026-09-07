@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/patiently/anti-tangent-mcp/internal/blocktext"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -245,29 +246,27 @@ func formatFindingEvidence(evidence, contIndent string) string {
 	return escapeContinuationLines(strings.Join(lines, "\n"), contIndent)
 }
 
-// escapeContinuationLines guards a reviewer- or caller-authored free-text
-// field against forging the envelope's own line-based grammar.
-// plugin/anti-tangent-guard/hooks/check-task-complete recognizes the block by
-// three kinds of line: a bare "anti-tangent envelope" header, and
-// "label: value" lines matched with ^\s*label: (any amount of LEADING
-// WHITESPACE tolerated, e.g. "tool:", "verdict:", "session_id:"). Every field
-// this package renders into the block is schema-constrained only to be
-// non-empty (internal/verdict/schema.json) — nothing stops a reviewer's
-// Evidence, Criterion, next_action, task_title, permalink, reason or
-// rationale from containing an embedded newline whose second physical line
-// reads, verbatim, "verdict: pass" or "anti-tangent envelope".
+// escapeContinuationLines is this package's entry point to
+// blocktext.EscapeContinuationLines — see that function for the mechanic (a
+// non-whitespace "| " sentinel on every continuation line) and for why it is
+// hygiene rather than a security boundary.
 //
-// THE INVARIANT, which is wider than any one field: EVERY plain-string value
-// rendered by ANY formatter in this file that writes an "anti-tangent
-// envelope" header goes through this function. All four such formatters
-// (formatEnvelopeSummary, formatPlanSummary, formatPrimeSummary,
-// formatExtractSummary) emit a header the guard hook keys on, so escaping one
-// of them and not its siblings closes nothing — that was task-12c's defect,
-// exploited end-to-end through formatPlanSummary's Finding.Criterion.
-// summary_forgery_test.go enumerates the formatters from this package's own
-// source and drives a forged payload through every plain-string field of each
-// one's input, so neither a new formatter nor a new field can be added
-// without escaping and stay green.
+// THE INVARIANT IT SERVES, which is wider than any one field: EVERY
+// plain-string value rendered by ANY formatter in this file goes through this
+// function (usually via escapeBlockValue). All four formatters here emit a
+// header carrying the substring plugin/anti-tangent-guard's hook keys on, so
+// escaping one of them and not its siblings closes nothing — that was
+// task-12c's defect, exploited end-to-end through formatPlanSummary's
+// Finding.Criterion. The same treatment is owed by any renderer whose output
+// becomes a summary_block, in this package or not: internal/planrun's
+// plan-run report is the other one today.
+//
+// summary_forgery_test.go enumerates the summary-block producers from the
+// repository's own source — by what they are ASSIGNED TO, not by what their
+// header literal says — and drives a forged payload through every
+// plain-string field of each one's input, so neither a new producer nor a new
+// field can be added without escaping and stay green. Read that file's header
+// for what it does and does not cover.
 //
 // Named string types (verdict.Verdict, Severity, Category, PlanQuality,
 // ProposalAction, ProposalType) are deliberately NOT escaped and are
@@ -277,34 +276,8 @@ func formatFindingEvidence(evidence, contIndent string) string {
 // including server-set ones (tool, model_used, plan_run_id), where the
 // escape is a free no-op today and removes the need to re-audit if the
 // field's provenance ever changes.
-//
-// If s has no newline, it is returned unchanged: a single-line value is
-// always inlined mid-line after its own field's label (e.g. "  - [minor]
-// [quality] <criterion> — <evidence>", "  next_action:   <value>"), so it
-// can never independently start a physical line — nothing to escape.
-//
-// If s spans multiple lines, every line AFTER the first is prefixed with
-// contIndent followed by a non-whitespace sentinel ("| "). The sentinel is
-// the load-bearing part: contIndent alone is pure whitespace, so
-// "<contIndent>tool: validate_completion" still matches ^\s*tool:. With the
-// sentinel it renders "<contIndent>| tool: validate_completion" — the first
-// non-whitespace character is "|", not "t"/"v"/"a", so ^\s*label: (and a
-// header check anchored to zero leading whitespace) can never match it,
-// regardless of what the reviewer put in the field.
 func escapeContinuationLines(s, contIndent string) string {
-	if !strings.Contains(s, "\n") {
-		return s
-	}
-	lines := strings.Split(s, "\n")
-	var b strings.Builder
-	b.WriteString(lines[0])
-	for _, ln := range lines[1:] {
-		b.WriteString("\n")
-		b.WriteString(contIndent)
-		b.WriteString("| ")
-		b.WriteString(ln)
-	}
-	return b.String()
+	return blocktext.EscapeContinuationLines(s, contIndent)
 }
 
 // countSeverities tallies critical/major/minor findings. Any other severity

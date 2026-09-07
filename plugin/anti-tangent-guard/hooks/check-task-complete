@@ -58,13 +58,17 @@
 # a forged block BOUNDARY — a bare "anti-tangent envelope" at column 0 inside
 # a field starts a NEW block, which this hook then parses positionally and
 # entirely correctly out of text a reviewer wrote. Only source-side escaping
-# closes that, and only on a server new enough to have it — for one release
-# it covered formatEnvelopeSummary but not formatPlanSummary /
-# formatPrimeSummary / formatExtractSummary, whose headers carry the same
-# substring; internal/mcpsrv/summary_forgery_test.go now enumerates the
-# header-emitting formatters from the server source so that gap cannot
-# reopen quietly. Across blocks, the LAST one still wins (Task 8's pinned
-# re-validation semantics) — only the extraction WITHIN a block changed.
+# closes that, and only on a server new enough to have it.
+# internal/mcpsrv/summary_forgery_test.go enumerates the server's block
+# renderers by what their output is ASSIGNED TO (a summary_block), not by
+# what header literal they write — the earlier, header-keyed version was
+# blind to plan_run_report, whose header is honestly different and whose
+# fields shipped unescaped for a release. That test states its own blind
+# spots in its header; neither it nor this hook makes the marker path
+# trustworthy, since an agent can compose a block in its own report text
+# (README.md, "How much to trust each pass signal"). Across blocks, the LAST
+# one still wins (Task 8's pinned re-validation semantics) — only the
+# extraction WITHIN a block changed.
 set -uo pipefail
 
 TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"

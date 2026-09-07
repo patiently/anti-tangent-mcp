@@ -2789,8 +2789,7 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 				Suggestion: "Nothing to recover — report from the per-task DONE envelopes instead. " +
 					"Set ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER=1 to persist future runs.",
 			}},
-			SummaryBlock: "anti-tangent plan run report\n  plan_run_id:  " + args.PlanRunID +
-				"\n  (unknown or expired — no rows)\n",
+			SummaryBlock: formatUnknownPlanRunSummary(args.PlanRunID),
 		}
 		return planRunReportResult(res)
 	}
@@ -2807,6 +2806,23 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 		res.Tasks = []planrun.TaskRow{}
 	}
 	return planRunReportResult(res)
+}
+
+// formatUnknownPlanRunSummary renders plan_run_report's summary_block for a
+// plan_run_id this server does not know. planRunID is caller-supplied
+// (jsonschema "required", no other constraint), so it is folded through
+// escapeBlockValue for the same reason every other free-text value in a
+// summary block is: a newline in it would put the next physical line at
+// column 0, where plugin/anti-tangent-guard's line-based transcript scan can
+// read it as block grammar. Hygiene, not a security boundary — see
+// blocktext.EscapeContinuationLines.
+//
+// It is a named function rather than an expression inline in PlanRunReport so
+// summary_forgery_test.go's producer scan can see it and drive a forged
+// payload through it.
+func formatUnknownPlanRunSummary(planRunID string) string {
+	return "anti-tangent plan run report\n  plan_run_id:  " + escapeBlockValue(planRunID) +
+		"\n  (unknown or expired — no rows)\n"
 }
 
 func planRunReportResult(res PlanRunReportResult) (*mcp.CallToolResult, PlanRunReportResult, error) {

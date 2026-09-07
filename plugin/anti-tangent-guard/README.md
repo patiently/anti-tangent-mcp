@@ -75,22 +75,25 @@ finding text as if it were the header (task-12b-review.md Critical #1):
    FIRST `verdict:` line within a block — never a scan for the target value
    anywhere in it — so a line that happens to read the same way, reachable
    only through a finding's text, can never be mistaken for the genuine one.
-2. **Source-side escaping.** Since the same release, `internal/mcpsrv/
-   summary.go` prefixes every continuation line of a multi-line free-text
-   field with a non-whitespace sentinel (`| `), so such a line can never
-   match this hook's `^\s*label:` patterns — or present as a second, bare
-   `anti-tangent envelope` header — at all, regardless of what it contains.
-   This covers **every** formatter that emits an `anti-tangent envelope`
-   header, not only the three per-task tools: `validate_plan`,
-   `prime_project_knowledge` and `extract_project_knowledge` render their
-   own blocks under headers carrying the same substring, and for one release
-   they were left un-escaped while the per-task envelope was fixed — a
-   forged block smuggled through a single `validate_plan` finding's
-   `criterion` satisfied this hook with no gate call at all. What keeps that
-   from recurring is `internal/mcpsrv/summary_forgery_test.go`, which
-   enumerates the header-emitting formatters from the server's own source
-   and drives a forged payload through every free-text field of each: a new
-   formatter, or a new field, fails it until it is escaped.
+2. **Source-side escaping.** Since the same release, the server folds every
+   continuation line of a multi-line free-text field behind a non-whitespace
+   sentinel (`| `), so such a line cannot match this hook's `^\s*label:`
+   patterns — or present as a second, bare `anti-tangent envelope` header —
+   whatever it contains. `internal/blocktext` holds that one rule;
+   `internal/mcpsrv/summary.go` (the per-task envelope, and `validate_plan` /
+   `prime_project_knowledge` / `extract_project_knowledge`, whose headers
+   carry the same substring) and `internal/planrun/report.go`
+   (`plan_run_report`, whose header does not) both apply it.
+   `internal/mcpsrv/summary_forgery_test.go` is what keeps it applied: it
+   enumerates the block renderers from the server's own source — keyed on
+   what a renderer's output is **assigned to**, not on what header literal it
+   writes — and drives a forged payload through every free-text field, map
+   key and map value of each. That key changed because the earlier one, which
+   looked for an `anti-tangent envelope` header literal, was blind to
+   `plan_run_report`'s honestly-different header and let two unescaped
+   caller-supplied fields ship. Read that test file's header for what the
+   scan can and cannot see — it is not a completeness proof, and neither is
+   this bullet.
 
 The two defences cover different halves of the problem, and the split
 matters:
@@ -109,48 +112,50 @@ matters:
 
 Neither is a standalone fix, and they are not interchangeable.
 
-### What this does not defend against
+### How much to trust each pass signal
 
-**1. A block fabricated outright.** Neither defence makes a pasted block
-trustworthy in itself. The marker pass signal accepts any `anti-tangent
-envelope` block that starts a line in the window — and a subagent writing its
-own report can simply compose one. Verified: a report whose text is a
-fabricated `tool: validate_completion` / `verdict: pass` block, with no gate
-call anywhere in the window, satisfies this guard.
+Read this before relying on the guard for anything.
 
-That is inherent to the marker path rather than an oversight in it. The hook
-reads a transcript, and nothing in a transcript distinguishes text a subagent
-pasted from the gate's real output from text it composed. Closing it would
-need the server to sign each block and the hook to verify that signature —
-far beyond an advisory guard. The direct signal (an
-`mcp__anti-tangent__validate_completion` `tool_use` in the window) is the one
-that cannot be fabricated this way; the marker path exists so a subagent that
-genuinely ran the gate in its own session still counts, and it extends that
-report the same trust the rest of anti-tangent does.
+**The direct signal is the one that cannot be fabricated.** An
+`mcp__anti-tangent__validate_completion` `tool_use` entry in the window is
+written into the transcript by the harness because the model actually called
+the tool. Nothing the model writes as text can produce one.
 
-**2. A forged block boundary from a server older than 0.18.0.** Source-side
-escaping is the only thing that stops a reviewer-authored field from starting
-a new block (see the split above), so it is the half that a caller cannot
-supply locally. Against an older server, a genuine `validate_plan`,
-`prime_project_knowledge` or `extract_project_knowledge` block whose finding
-text contains a bare `anti-tangent envelope` line followed by
-`tool: validate_completion` / `verdict: pass` still satisfies this guard —
-positionally and correctly, because the forgery is a real block boundary
-rather than a misread line. The version requirement below is not only about
-the `tool:` tag; this is the other reason for it.
+**The marker path is not a security boundary.** It accepts pasted text, and
+nothing in a transcript distinguishes text a subagent copied out of a real
+tool result from text it composed. An agent that wants to skip the gate can
+simply write an `anti-tangent envelope` / `tool: validate_completion` /
+`verdict: pass` block into its own report — verified: that satisfies this
+hook, with no gate call anywhere in the window. That is inherent to reading a
+transcript rather than an oversight waiting to be patched; closing it would
+need the server to sign each block and the hook to verify the signature. The
+marker path exists so a subagent that genuinely ran the gate in its own
+session still counts, and it extends that report the same trust the rest of
+anti-tangent does.
 
-**3. Anything outside the block grammar this hook reads.** Both defences are
-scoped to the bare `anti-tangent envelope` header and the
-`tool:`/`session_id:`/`verdict:` lines. `internal/mcpsrv/summary_forgery_test.go`
-pins that scope for the server's plain-string fields; enum-typed fields
-(`verdict`, `severity`, `category`, …) are excluded there because
-`internal/verdict`'s parsers reject an out-of-enum value first. A consumer
-keying on some other line of these blocks is on its own.
+**Positional extraction and source-side escaping are defence-in-depth, not a
+completeness claim.** What they buy is that free text cannot *accidentally*
+forge the format: a reviewer's evidence that happens to contain a line
+reading `verdict: pass`, a task title with a newline pasted into it, a
+CodeScene skip reason copied off a terminal. Positional extraction is a
+within-block defence and needs nothing from the server; escaping is what
+stops a value opening a new block boundary, and only a server that has it can
+supply that (hence the version requirement below). Neither is claimed to
+cover every route by which text reaches a `tool_result`. The test that pins
+the escaping states its own blind spots in its header, and this file will not
+restate them as a finite list: an earlier version of this README claimed the
+escaping covered "every formatter that emits an `anti-tangent envelope`
+header" and listed three residual gaps; the next review found a renderer with
+a different, honest header and two unescaped fields — a fourth kind, not on
+the list. Treat a green test suite here as evidence that the known paths are
+folded, not as a closed surface.
 
-So this guard raises the cost of skipping the gate from "say nothing" to
-"knowingly fabricate a gate result". It is a drift guard, not an adversarial
-control — consistent with the server being advisory throughout (see the root
-`CLAUDE.md`, "What This Repo Is Not").
+**This is a drift guard, not an adversarial control.** It raises the cost of
+skipping the gate from "say nothing" to "knowingly fabricate a gate result",
+which catches the case it is built for: a subagent that closed a task without
+running the gate. It is consistent with the server being advisory throughout
+(see the root `CLAUDE.md`, "What This Repo Is Not"), and it should not be
+load-bearing anywhere a genuine adversary is in scope.
 
 ### Version requirement
 
@@ -163,6 +168,14 @@ call in the window — blocks with the "no-validation" message even when the
 gate genuinely ran. If you cannot upgrade the server yet, set
 `ANTI_TANGENT_COMPLETION_GUARD=0` (see "Kill switch" below) to disable this
 hook until you can.
+
+The `tool:` tag is not the only reason for the floor. Source-side escaping is
+the half a caller cannot supply locally, so against an older server a genuine
+`validate_plan`, `prime_project_knowledge` or `extract_project_knowledge`
+block whose finding text contains a bare `anti-tangent envelope` line followed
+by `tool: validate_completion` / `verdict: pass` satisfies this hook —
+positionally and entirely correctly, because that is a real block boundary
+rather than a misread line.
 
 ## Window scoping
 
