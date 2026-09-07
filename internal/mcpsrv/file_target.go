@@ -5,6 +5,15 @@
 // generated file. The parent is resolved instead, and the leaf is opened with
 // O_NOFOLLOW so a symlink planted at the leaf cannot redirect the write
 // outside the roots that were just checked. See design §5.3.
+//
+// O_NOFOLLOW only closes HALF of the resolve-then-open window, exactly as
+// file_source.go documents for the read path's openNoFollow: it guards only
+// the final path component. An ANCESTOR directory swapped for a symlink
+// between the EvalSymlinks(parent) resolution above and the open below is
+// not caught by O_NOFOLLOW at all — that flag only ever inspects the last
+// component of the path handed to open(2). This is the same residual
+// exposure the read path accepts, inherited here rather than newly
+// introduced.
 package mcpsrv
 
 import (
@@ -30,7 +39,7 @@ func resolveWriteTarget(target string, roots []string, overwrite bool) (*os.File
 	}
 
 	parent, leaf := filepath.Dir(target), filepath.Base(target)
-	if leaf == "." || leaf == string(filepath.Separator) {
+	if leaf == "." || leaf == ".." || leaf == string(filepath.Separator) {
 		return nil, fmt.Errorf("target_path %q does not name a file", target)
 	}
 

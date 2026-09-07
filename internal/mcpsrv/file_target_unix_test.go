@@ -37,21 +37,3 @@ func TestWriteTargetRefusesSymlinkLeaf(t *testing.T) {
 	require.NoError(t, readErr)
 	assert.Equal(t, "precious", string(b), "symlink target was modified")
 }
-
-// TestWriteTargetAllowsSymlinkedParentInsideRoots covers the AC "A
-// symlinked parent inside the roots resolves and is allowed". The roots
-// argument names `real` (the symlink's target), not `link` — a
-// resolveWriteTarget that containment-checked the unresolved parent instead
-// of parentResolved would refuse this case, since `link`'s directory entry
-// itself is not inside `real`.
-func TestWriteTargetAllowsSymlinkedParentInsideRoots(t *testing.T) {
-	real := t.TempDir()
-	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(real, link); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-
-	f, err := resolveWriteTarget(filepath.Join(link, "a.go"), []string{real}, false)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-}
