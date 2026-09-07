@@ -1,0 +1,100 @@
+package mcpsrv
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/prompts"
+	"github.com/patiently/anti-tangent-mcp/internal/providers"
+)
+
+type fakeWorkerReviewer struct {
+	resp providers.Response
+	err  error
+	got  providers.Request
+}
+
+func (f *fakeWorkerReviewer) Name() string { return "fake" }
+func (f *fakeWorkerReviewer) Review(_ context.Context, r providers.Request) (providers.Response, error) {
+	f.got = r
+	return f.resp, f.err
+}
+
+func TestWorkerSchemaIsStrictOneField(t *testing.T) {
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(workerSchema("answer"), &m), "schema is not valid JSON")
+
+	assert.Equal(t, "object", m["type"])
+
+	props, _ := m["properties"].(map[string]any)
+	assert.Len(t, props, 1, "want exactly one property, got %v", props)
+
+	prop, _ := props["answer"].(map[string]any)
+	require.NotNil(t, prop, "schema missing the answer property")
+	assert.Equal(t, "string", prop["type"])
+
+	req, _ := m["required"].([]any)
+	require.Len(t, req, 1, "required = %v, want exactly [answer]", req)
+	assert.Equal(t, "answer", req[0])
+
+	assert.Equal(t, false, m["additionalProperties"], "schema must set additionalProperties:false")
+}
+
+func TestRunWorkerExtractsField(t *testing.T) {
+	f := &fakeWorkerReviewer{resp: providers.Response{
+		RawJSON:      []byte(`{"answer":"- a.go: does X"}`),
+		Model:        "anthropic:claude-haiku-4-5-20251001",
+		InputTokens:  120,
+		OutputTokens: 9,
+	}}
+	h := &handlers{deps: Deps{Reviews: providers.Registry{"anthropic": f}}}
+	got, err := h.runWorker(context.Background(),
+		config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"},
+		prompts.Output{System: "sys", User: "usr"}, 4096, "answer")
+	require.NoError(t, err)
+
+	assert.Equal(t, "- a.go: does X", got.Text)
+	assert.Equal(t, 120, got.InputTokens)
+	assert.Equal(t, 9, got.OutputTokens)
+	assert.Equal(t, 4096, f.got.MaxTokens)
+	assert.Equal(t, "anthropic:claude-haiku-4-5-20251001", got.Model, "want the provider's reported model")
+	assert.GreaterOrEqual(t, got.ReviewMS, int64(0))
+}
+
+func TestRunWorkerFallsBackToConfiguredModel(t *testing.T) {
+	// An empty Response.Model must not produce an empty model_used.
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"answer":"x"}`)}}
+	h := &handlers{deps: Deps{Reviews: providers.Registry{"anthropic": f}}}
+	got, err := h.runWorker(context.Background(),
+		config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"},
+		prompts.Output{}, 10, "answer")
+	require.NoError(t, err)
+
+	assert.Equal(t, "anthropic:claude-haiku-4-5-20251001", got.Model, "want the configured ref as fallback")
+}
+
+func TestRunWorkerPropagatesTruncation(t *testing.T) {
+	f := &fakeWorkerReviewer{err: providers.ErrResponseTruncated}
+	h := &handlers{deps: Deps{Reviews: providers.Registry{"anthropic": f}}}
+	_, err := h.runWorker(context.Background(),
+		config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"},
+		prompts.Output{}, 10, "answer")
+	require.ErrorIs(t, err, providers.ErrResponseTruncated)
+}
+
+func TestRunWorkerMalformedJSONDoesNotEchoBody(t *testing.T) {
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"answer": SECRET`)}}
+	h := &handlers{deps: Deps{Reviews: providers.Registry{"anthropic": f}}}
+	_, err := h.runWorker(context.Background(),
+		config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"},
+		prompts.Output{}, 10, "answer")
+	require.Error(t, err)
+
+	assert.Contains(t, err.Error(), "answer", "error should name the field")
+	assert.NotContains(t, err.Error(), "SECRET", "error must not echo the raw body")
+}
