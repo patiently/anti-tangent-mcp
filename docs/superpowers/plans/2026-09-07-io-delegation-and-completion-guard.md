@@ -85,6 +85,7 @@ Two defects this pre-flight found, which the reviewer structurally could not:
 - [ ] A malformed value returns an error naming `ANTI_TANGENT_WORKER_MODEL`
 - [ ] `WorkerMaxTokens` defaults to 4096 and is clamped to `MaxTokensCeiling`
 - [ ] A non-positive `ANTI_TANGENT_WORKER_MAX_TOKENS` is a startup error
+- [ ] A syntactically valid but non-allowlisted worker model (e.g. `anthropic:not-a-model`) fails `providers.ValidateModel`, covered by a test — Step 7 adds that call, so it needs an assertion
 
 **Verify:** `go test -race ./internal/config/... -run Worker -v` → PASS
 
@@ -773,6 +774,7 @@ git commit -m "feat(mcpsrv): worker call path with one-field JSON schema"
 - [ ] `bulk_read` appears in the tool catalog
 - [ ] Empty `question` or empty `paths` is a validation error
 - [ ] More than 50 paths is rejected naming the limit
+- [ ] A relative path is rejected before any provider call — the goal and tool description both promise absolute paths
 - [ ] Paths go through `resolveFileInput`, so roots containment, `O_NOFOLLOW` and control-character refusal all apply
 - [ ] The cap counts **caller-controlled bytes only**: `len(question)` + the sum of file bytes. Template scaffolding and `<file>` wrappers are excluded — server-controlled, bounded, and counting them would make the effective cap drift with every template edit. Stated in a comment so it is not re-litigated
 - [ ] A multi-file call that crosses the cap on the LAST file is refused, tested at the boundary
@@ -1211,7 +1213,8 @@ git commit -m "feat(mcpsrv): add bulk_read tool"
 - Test: `internal/mcpsrv/file_target_unix_test.go` (`//go:build !windows`; holds the leaf-symlink test only)
 
 **Acceptance Criteria:**
-- [ ] Relative or empty paths are refused
+- [ ] Relative, empty and whitespace-only paths are refused, each with its own table case
+- [ ] A Unicode **format** character (e.g. U+200B) is refused, not only a C0 control like a newline — the two take different branches of `rejectControlChars`
 - [ ] A parent that does not exist is refused naming the directory — no `MkdirAll`
 - [ ] A parent outside `PlanRoots` is refused
 - [ ] A resolved path containing a control or Unicode format character is refused
@@ -1772,6 +1775,9 @@ func codeWriteTool() *mcp.Tool {
 			"reference_path is REQUIRED and absolute — the generated code matches that file's conventions. " +
 			"Set target_path (absolute) to have the server write the file and return only a line count, " +
 			"so the generated code never enters your context. " +
+			"Generated code is VERIFIED, NOT INSPECTED: you choose the reference file and prove the result " +
+			"by running the task's tests and build. You are not required to read what was generated — " +
+			"reading it would put back exactly the context this tool removes. " +
 			"An existing target is refused unless overwrite is true, and the parent directory must already exist. " +
 			"Do NOT use this for logic requiring judgement — only for boilerplate that follows an existing pattern.",
 	}
@@ -1948,6 +1954,7 @@ git commit -m "feat(mcpsrv): add code_write tool with overwrite guard"
 - [ ] `worker` reports per-tool call counts and summed input/output tokens
 - [ ] **Every pre-existing `rollup.json` key is unchanged** — asserted explicitly
 - [ ] Both tools record an event when `Stats` is non-nil, and are no-ops when nil — **each proven by a handler test**, not inferred from `computeRollup`
+- [ ] The event is recorded when the **worker call** succeeds, not when the tool call does: a `code_write` whose worker answered but whose write then failed still records its token spend. Proven by a test that forces a write failure and asserts the event exists
 - [ ] `internal/stats/event_test.go` asserts the JSON omission contract directly: both token fields absent at zero, present under their exact names when non-zero
 
 **Verify:** `go test -race ./internal/stats/... ./internal/mcpsrv/... -v` → PASS (the handler-level telemetry and nil-recorder tests live in `internal/mcpsrv`, so a stats-only command would not run them)
@@ -2106,7 +2113,15 @@ In `internal/mcpsrv/worker_handlers.go`, immediately before each successful `ret
 	})
 ```
 
-(and the `code_write` equivalent, with `PayloadBytes: refSrc.Bytes`). `Record` is nil-safe by construction (`internal/stats/recorder.go` opens with `if r == nil { return }`), so no `h.deps.Stats != nil` guard is needed — verified, do not add one.
+(and the `code_write` equivalent, with `PayloadBytes: refSrc.Bytes`).
+
+**Record immediately after `runWorker` returns successfully — BEFORE fence
+stripping, the empty-output check, and any filesystem work.** The goal is
+"record worker calls", and those tokens are spent the moment the provider
+answers. Recording at the tool's successful return instead would lose every
+event where the worker succeeded but the write failed — precisely the calls
+someone auditing spend most wants to see. Exactly one event per worker
+invocation; a call that never reached the provider records nothing. `Record` is nil-safe by construction (`internal/stats/recorder.go` opens with `if r == nil { return }`), so no `h.deps.Stats != nil` guard is needed — verified, do not add one.
 
 - [ ] **Step 5b: Prove the recording paths in the handlers**
 
@@ -2236,7 +2251,7 @@ git commit -m "test(mcpsrv): pin summary_block substrings the guard hook parses"
 - [ ] `THIRD_PARTY_NOTICES.md` states the repo is MIT except as noted
 - [ ] It names **shunt**, the upstream URL, Copyright Spotify AB, and Apache-2.0
 - [ ] It lists the derived files by path
-- [ ] It contains the full Apache-2.0 licence text
+- [ ] It contains the full Apache-2.0 licence text, and the test proves it by comparing against a checked-in canonical copy at `internal/notices/testdata/apache-2.0.txt` — substring spot-checks would pass a licence gutted down to its headings
 - [ ] A Go test asserts the file exists and contains both `Spotify AB` and `Apache`
 - [ ] `go vet ./...` stays clean (hence `doc.go`, so the package is not test-only)
 
@@ -2414,7 +2429,9 @@ git commit -m "docs: Apache-2.0 attribution for the ported shunt hooks"
 - [ ] Read hook passes: `offset`/`limit` set, sub-threshold files, nonexistent files
 - [ ] Bash hook passes: pipes, redirections, `head`/`tail` with a count flag, non-read commands
 - [ ] **Any parse ambiguity results in allow, never block**
-- [ ] All 34 ported cases pass; `evals/run.sh` exits non-zero on any failure
+- [ ] All 34 ported cases pass; `evals/run.sh` exits non-zero on any failure, **including** when the operational-reference check finds a leftover — proven by injecting one and asserting the runner goes red
+- [ ] Every fetch uses `curl --fail` and asserts a non-empty result. Without `--fail`, a 404 writes its body into the destination file and exits 0 (measured 2026-09-07), so a missing upstream file would be silently ported as an error page
+- [ ] Each ported JSON suite is asserted to hold exactly 17 cases (`jq length`), so a partial fetch cannot masquerade as a successful port
 - [ ] `THIRD_PARTY_NOTICES.md` is reconciled against what this task actually copied — `run.sh` and any fetched fixtures included — in the same commit
 - [ ] Every upstream file is fetched from the **pinned commit `3c24ca30ff63e1f5bbad1c43fe5324daff579123`**, never `main`, and that SHA is recorded in `THIRD_PARTY_NOTICES.md`
 - [ ] `evals/fixtures/` contains exactly the files the two JSON suites reference — enumerated from the suites themselves, not guessed. If the suites synthesise their own inputs, the directory is not created at all
@@ -2435,7 +2452,13 @@ BASE=https://raw.githubusercontent.com/spotify/portal-ai-plugins/$SHUNT_SHA/plug
 for f in hooks/hooks.json hooks/check-file-size hooks/check-bash-read \
          evals/run.sh evals/hook-evals.json evals/bash-hook-evals.json; do
   mkdir -p "/tmp/shunt-upstream/$(dirname "$f")"
-  curl -sS -o "/tmp/shunt-upstream/$f" "$BASE/$f" && echo "got $f"
+  # --fail is load-bearing, not hygiene. Measured 2026-09-07: without it, a 404
+  # writes the body "404: Not Found" INTO the destination file and exits 0 — the
+  # port would "succeed" with a hook script containing an error page.
+  curl --fail --location --silent --show-error -o "/tmp/shunt-upstream/$f" "$BASE/$f" \
+    || { echo "FATAL: could not fetch $f from the pinned SHA"; exit 1; }
+  [ -s "/tmp/shunt-upstream/$f" ] || { echo "FATAL: $f fetched empty"; exit 1; }
+  echo "got $f"
 done
 head -20 /tmp/shunt-upstream/hooks/check-file-size
 ```
@@ -2521,11 +2544,18 @@ bash plugin/anti-tangent-shunt/evals/run.sh
 # Attribution is permitted in EXACTLY these places, identified by PATH (and, in
 # the hooks, only on comment lines). Suppressing by keyword instead would let an
 # operational line survive merely by containing a word like "upstream".
-grep -rinI 'portal\|aika' plugin/anti-tangent-shunt/ --exclude-dir=.git \
+# Explicit if/else rather than a chained && ... || ...: the chained form does
+# work (measured), but which branch runs on a match is not obvious to a reader,
+# and this check is the one thing standing between an operational leftover and
+# a green suite. run.sh must return non-zero when a match survives.
+leftovers=$(grep -rinI 'portal\|aika' plugin/anti-tangent-shunt/ --exclude-dir=.git \
   | grep -vE '^plugin/anti-tangent-shunt/hooks/check-(file-size|bash-read):[0-9]+:[[:space:]]*#' \
-  | grep -vE '^plugin/anti-tangent-shunt/(README\.md|evals/benchmarks\.md):' \
-  && { echo "FAIL: operational Portal/AiKA reference above"; exit 1; } \
-  || echo "clean: no operational Portal/AiKA references"
+  | grep -vE '^plugin/anti-tangent-shunt/(README\.md|evals/benchmarks\.md):' || true)
+if [ -n "$leftovers" ]; then
+  printf 'FAIL: operational Portal/AiKA reference:\n%s\n' "$leftovers"
+  exit 1
+fi
+echo "clean: no operational Portal/AiKA references"
 ```
 
 Expected: 34 cases pass, exit 0. The FILTERED grep prints nothing; any surviving line is a real leftover (a variable, a code path, an env var), not attribution. Do NOT "fix" a surviving attribution line by deleting it — that makes `THIRD_PARTY_NOTICES.md` untruthful.
@@ -2987,7 +3017,11 @@ Same shape as Task 11's, `name: anti-tangent-guard`, version `0.1.0`, descriptio
 | signal present BEFORE the latest `in_progress`, none after | 2 (window scoping excludes it) |
 | no `in_progress` at all, signal present anywhere | 0 (whole-transcript fallback) |
 
-Two JSON inputs, two behaviours: malformed **stdin** means the hook cannot know what it is looking at, so it fails open. A malformed **transcript line** is skipped and the rest still decides — that is not fail-open and must not be conflated with it. Test `jq`/`python3` absence by invoking with a `PATH` that excludes them.
+Two JSON inputs, two behaviours: malformed **stdin** means the hook cannot know what it is looking at, so it fails open. A malformed **transcript line** is skipped and the rest still decides — that is not fail-open and must not be conflated with it. Test `jq`/`python3` absence with a stub directory, not by emptying `PATH` — the
+hook also needs `cat`, `tr`, `mkdir` and `date`, so a bare `PATH=` breaks
+unrelated machinery and proves nothing. Build a temp dir of symlinks to every
+utility the hook uses EXCEPT the one under test, then invoke
+`/bin/bash <hook>` with `PATH` set to just that dir.
 
 `evals/run.sh` writes each transcript to a temp file, pipes the payload, compares the exit code, and exits non-zero on any mismatch.
 
@@ -3285,6 +3319,7 @@ git commit -m "docs: document the I/O tools, both plugins, and the write trust m
 - Create: `plugin/anti-tangent-shunt/evals/benchmarks.md`
 - Create: `plugin/anti-tangent-shunt/evals/benchmarks.tsv`
 - Create: `plugin/anti-tangent-shunt/evals/check-benchmark-table.sh`
+- Create: `plugin/anti-tangent-shunt/evals/bench.sh` (the checked-in measurement harness)
 - Modify: `.github/workflows/ci.yml` (run the checker in `hook-evals`)
 
 **Acceptance Criteria:**
@@ -3375,6 +3410,12 @@ Tokens the file(s) would occupy in the implementer's context. Use the same token
 
 **Scenario 4's `without` is different and must be stated explicitly:** an implementer doing it themselves would have to read the reference file AND emit the code, so `without` = tokens(reference file) + tokens(generated code). That is how upstream reports it ("40,614 tokens + generation"), and it is the only definition under which the comparison means anything. Its `with` side is `lines_written`, in `lines`, with no savings ratio.
 
+**The TSV's `without_tokens` cell for scenario 4 is the computed SUM**, not the
+reference-file component alone. `benchmarks.md` records both components
+separately so the sum can be checked; the README shows the sum. Upstream
+displays it as "40,614 + generation", which is the same quantity written as an
+unresolved expression — we resolve it.
+
 - [ ] **Step 4: Measure "with"**
 
 Scenarios 1–3 run through `bulk_read`; **scenario 4 runs through `code_write`**, which is what it measures. For 1–3 record `input_tokens`, `output_tokens`, `review_ms` and the token size of the returned `answer`. For 4 record `input_tokens`, `output_tokens`, `review_ms` and `lines_written` — there is no `answer` and no savings ratio, because generated lines and context tokens are different units. **`answer` is the "with" figure** — that is what actually lands in the implementer's context. `input_tokens` is the worker's consumption and belongs in its own column.
@@ -3389,6 +3430,14 @@ export ANTI_TANGENT_PLAN_ROOTS=/tmp/bench-corpus
 export ANTI_TANGENT_STATS_DIR=/tmp/bench-stats                          # per-call token rows, free
 go build -o /tmp/atm ./cmd/anti-tangent-mcp
 ```
+
+Write the harness as `plugin/anti-tangent-shunt/evals/bench.sh` and check it in
+— "do not improvise" is meaningless if the procedure lives only in one person's
+shell history. It must: start `/tmp/atm` over stdio, complete the MCP
+initialize handshake, issue one `tools/call` per scenario with the exact
+payload recorded in `benchmarks.md`, capture the full response, and for
+scenario 4 delete the target between runs so all three runs write rather than
+hitting the overwrite refusal. Emit one TSV row per run to stdout.
 
 Per run record: the returned `answer` (1–3) or `lines_written` (4), plus
 `input_tokens`, `output_tokens` and `review_ms` from the response. Token counts
@@ -3437,9 +3486,16 @@ through Portal/AiKA (read from `spotify/portal-ai-plugins@3c24ca30ff63e1f5bbad1c
 Ours, against `<repo>@<sha>` (~<N>K lines of **Go**), delegating through
 `<worker model>`:
 
-| Scenario | Lines | Without | With | Savings | Worker tokens |
-|---|---|---|---|---|---|
-| … | | | | | |
+| scenario_id | Scenario | Lines | Without | With | Unit | Savings | Worker in | Worker out | Runs | Stat |
+|---|---|---|---|---|---|---|---|---|---|---|
+| single_large_file | Single large file | 4,014 | 33,684 | 5,737 | tokens | 82% | 31,200 | 640 | 3 | median |
+| code_write | Code-write | 3,667 | 44,281 | 833 | lines | — | 5,100 | 2,900 | 3 | median |
+
+The README header is **one column per TSV column, in TSV order**, so the checker
+is a straight cell-by-cell comparison with no display transformation to encode.
+Numbers may carry thousands separators and `savings_pct` renders with a `%`;
+the checker normalises both before comparing. An empty `savings_pct` renders as
+`—`.
 
 "Without" is what a direct `Read` would put in the implementer's context;
 "With" is the returned answer. **Worker tokens are shown separately and are not
