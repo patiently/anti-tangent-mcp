@@ -68,7 +68,7 @@
     {
       "id": 9,
       "subject": "Task 9: Third-party attribution",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `THIRD_PARTY_NOTICES.md` exists with the Apache-2.0 text, and a Go test fails the build if it is removed or gutted.\n\n**Files:**\n- Create: `THIRD_PARTY_NOTICES.md`\n- Create: `internal/notices/doc.go`\n- Create: `internal/notices/notices_test.go`\n\n**Acceptance Criteria:**\n- [ ] `THIRD_PARTY_NOTICES.md` states the repo is MIT except as noted\n- [ ] It names **shunt**, the upstream URL, Copyright Spotify AB, and Apache-2.0\n- [ ] It lists the derived files by path\n- [ ] It contains the full Apache-2.0 licence text, and the test proves it by comparing against a checked-in canonical copy at `internal/notices/testdata/apache-2.0.txt` \u2014 substring spot-checks would pass a licence gutted down to its headings\n- [ ] A Go test asserts the file exists and contains both `Spotify AB` and `Apache`\n- [ ] `go vet ./...` stays clean (hence `doc.go`, so the package is not test-only)\n\n**Verify:** `go test -race ./internal/notices/... -v` \u2192 PASS\n\nFull steps with code: see Task 9 in `docs/superpowers/plans/2026-09-07-io-delegation-and-completion-guard.md`.\n\n```json:metadata\n{\"files\": [\"THIRD_PARTY_NOTICES.md\", \"internal/notices/doc.go\", \"internal/notices/notices_test.go\"], \"verifyCommand\": \"go test -race ./internal/notices/... -v\", \"acceptanceCriteria\": [\"notices file states MIT-except-as-noted\", \"names shunt, Spotify AB, Apache-2.0 and the upstream URL\", \"lists derived files by path\", \"contains full Apache-2.0 text\", \"Go test asserts presence and content\", \"go vet clean\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
@@ -141,5 +141,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-07T20:37:09.480080+00:00"
+  "lastUpdated": "2026-09-07T20:49:51.866849+00:00"
 }
