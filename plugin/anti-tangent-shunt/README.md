@@ -77,10 +77,18 @@ Ours, against `prometheus/prometheus@7f48230f675e7c459398bf1d0f055f6f55caf90a`
 
 | scenario_id | Scenario | Lines | Without | With | Unit | Savings | Worker in | Worker out | Runs | Stat |
 |---|---|---|---|---|---|---|---|---|---|---|
-| single_large_file | Single large file | 4,984 | 42,993 | 36 | tokens | 100% | 46,001 | 558 | 3 | median |
+| single_large_file | Single large file | 4,984 | 42,993 | 36 | tokens | 99.9% | 46,001 | 558 | 3 | median |
 | source_test_pair | Source + test pair | 7,624 | 54,127 | 373 | tokens | 99% | 61,127 | 1,236 | 3 | median |
 | multi_file_cross_package | Multi-file cross-package | 1,302 | 10,372 | 74 | tokens | 99% | 10,864 | 357 | 3 | median |
 | code_write | Code-write | 3,142 | 28,634 | 199 | lines | — | 29,325 | 2,315 | 3 | median |
+
+**The two tables are not directly comparable, and ours being higher does not
+mean this port is better.** Different language and corpus (Go/Prometheus vs
+Java), different worker model and transport, and — the part that moves the
+number most — a different question. "With" is the size of the answer to the
+prompt *we* chose; a narrower question returns fewer tokens and scores higher
+without anything being more efficient. Read each table as that stack's result
+under its own method, never as a head-to-head.
 
 "Without" is what a direct `Read` would put in the implementer's context;
 "With" is the returned answer. **Worker tokens are shown separately and are not
