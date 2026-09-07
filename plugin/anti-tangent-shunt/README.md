@@ -60,7 +60,33 @@ The suite includes:
 
 ## Benchmarks
 
-(Placeholder for Task 16.)
+Upstream reports these figures against a 162K-line **Java** monorepo, delegating
+through Portal/AiKA (read from `spotify/portal-ai-plugins@3c24ca30ff63e1f5bbad1c43fe5324daff579123`,
+`plugins/shunt/README.md` — the accompanying blog post returns HTTP 403 from
+this environment and was not read):
+
+| Scenario | Lines | Without | With | Savings |
+|---|---|---|---|---|
+| Single large file | 4,014 | 33,684 | 5,737 | 82% |
+| Source + test pair | 7,408 | 75,990 | 4,148 | 94% |
+| Multi-file cross-service | 1,281 | 16,221 | 821 | 94% |
+| Code-write | 3,667 | 40,614 + generation | 833 lines to disk | — |
+
+Ours, against `prometheus/prometheus@7f48230f675e7c459398bf1d0f055f6f55caf90a`
+(~152K lines of **Go**), delegating through `openai:gpt-5.6-luna`:
+
+| scenario_id | Scenario | Lines | Without | With | Unit | Savings | Worker in | Worker out | Runs | Stat |
+|---|---|---|---|---|---|---|---|---|---|---|
+| single_large_file | Single large file | 4,984 | 42,993 | 36 | tokens | 100% | 46,001 | 558 | 3 | median |
+| source_test_pair | Source + test pair | 7,624 | 54,127 | 373 | tokens | 99% | 61,127 | 1,236 | 3 | median |
+| multi_file_cross_package | Multi-file cross-package | 1,302 | 10,372 | 74 | tokens | 99% | 10,864 | 357 | 3 | median |
+| code_write | Code-write | 3,142 | 28,634 | 199 | lines | — | 29,325 | 2,315 | 3 | median |
+
+"Without" is what a direct `Read` would put in the implementer's context;
+"With" is the returned answer. **Worker tokens are shown separately and are not
+netted off** — the claim is about implementer context, and combining the two
+would overstate it. Method, per-scenario file lists, verbatim prompts, and all
+raw runs: [`evals/benchmarks.md`](evals/benchmarks.md).
 
 ## Acknowledgements
 

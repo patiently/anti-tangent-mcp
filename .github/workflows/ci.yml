@@ -103,15 +103,27 @@ jobs:
       - name: Completion guard evals
         run: bash plugin/anti-tangent-guard/evals/run.sh
 
+      - name: Benchmark table consistency
+        run: bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh
+
       - name: Eval suites make no provider or network calls
         run: |
           # A limited regression tripwire, NOT proof of network isolation: it
           # catches the obvious clients and credential names only. Something
           # determined (python sockets, /dev/tcp, a differently-named key) slips
           # past. The real guarantee is that these scripts read only stdin and files.
+          #
+          # bench.sh, benchmarks.md and benchmarks.tsv are excluded on purpose:
+          # bench.sh is the Task 16 measurement harness and DOES make real
+          # provider calls (that is its entire job) — it is never run in CI,
+          # only by hand, and its usage comments and benchmarks.md's "Reproduce
+          # with" section legitimately name the provider key env vars a
+          # caller needs to set. Everything else this check covers is a hook
+          # eval suite that must stay network-free.
           ! grep -rnE 'curl|wget|nc |ANTHROPIC_API_KEY|OPENAI_API_KEY|GOOGLE_API_KEY' \
               plugin/anti-tangent-shunt/evals plugin/anti-tangent-guard/evals \
-              plugin/anti-tangent-shunt/hooks plugin/anti-tangent-guard/hooks
+              plugin/anti-tangent-shunt/hooks plugin/anti-tangent-guard/hooks \
+              --exclude=bench.sh --exclude=benchmarks.md --exclude=benchmarks.tsv
 
   build-test:
     name: Build & Test (Go)
