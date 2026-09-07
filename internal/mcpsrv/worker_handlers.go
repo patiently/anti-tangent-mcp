@@ -11,11 +11,13 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
+	"github.com/patiently/anti-tangent-mcp/internal/stats"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -123,6 +125,10 @@ func (h *handlers) BulkRead(ctx context.Context, _ *mcp.CallToolRequest, args Bu
 	for _, f := range files {
 		bytesRead += len(f.Content)
 	}
+	h.deps.Stats.Record(stats.Event{
+		Ts: time.Now(), Tool: "bulk_read", ReviewMS: wr.ReviewMS, Model: wr.Model,
+		InputTokens: wr.InputTokens, OutputTokens: wr.OutputTokens, PayloadBytes: bytesRead,
+	})
 	return nil, BulkReadResult{
 		Answer:       wr.Text,
 		ModelUsed:    wr.Model,
@@ -230,6 +236,11 @@ func (h *handlers) CodeWrite(ctx context.Context, _ *mcp.CallToolRequest, args C
 	if err != nil {
 		return nil, CodeWriteResult{}, err
 	}
+
+	h.deps.Stats.Record(stats.Event{
+		Ts: time.Now(), Tool: "code_write", ReviewMS: wr.ReviewMS, Model: wr.Model,
+		InputTokens: wr.InputTokens, OutputTokens: wr.OutputTokens, PayloadBytes: refSrc.Bytes,
+	})
 
 	code := stripFences(wr.Text)
 	// Empty output is an error, never a zero-line write. This also keeps the

@@ -127,3 +127,55 @@ func TestComputeRollup_PlanHeaders_ZeroTasksNoDivideByZero(t *testing.T) {
 	require.NotNil(t, r.PlanHeaders)
 	assert.Equal(t, 0.0, r.PlanHeaders.Adoption)
 }
+
+func TestRollupWorkerAggregates(t *testing.T) {
+	now := time.Now()
+	events := []Event{
+		{Ts: now, Tool: "bulk_read", InputTokens: 100, OutputTokens: 10},
+		{Ts: now, Tool: "bulk_read", InputTokens: 200, OutputTokens: 20},
+		{Ts: now, Tool: "code_write", InputTokens: 50, OutputTokens: 300},
+		{Ts: now, Tool: "validate_completion", Verdict: "pass"},
+	}
+	r := computeRollup(events, now)
+	if r.Worker == nil {
+		t.Fatal("Worker rollup must be present when worker events exist")
+	}
+	if r.Worker.InputTokens != 350 || r.Worker.OutputTokens != 330 {
+		t.Errorf("tokens = %d/%d, want 350/330", r.Worker.InputTokens, r.Worker.OutputTokens)
+	}
+	if r.Worker.PerTool["bulk_read"] != 2 || r.Worker.PerTool["code_write"] != 1 {
+		t.Errorf("PerTool = %v", r.Worker.PerTool)
+	}
+}
+
+func TestRollupWorkerAbsentWithoutWorkerEvents(t *testing.T) {
+	now := time.Now()
+	r := computeRollup([]Event{{Ts: now, Tool: "check_progress"}}, now)
+	if r.Worker != nil {
+		t.Error("Worker must be nil when the window holds no worker events — absence means no data")
+	}
+}
+
+func TestRollupExistingKeysUnchanged(t *testing.T) {
+	now := time.Now()
+	b, err := json.Marshal(computeRollup([]Event{{Ts: now, Tool: "bulk_read", InputTokens: 1}}, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	// The gnome-topbar consumer reads these by exact name. Adding a key is
+	// safe; renaming or dropping one is a breaking change.
+	for _, k := range []string{
+		"window_start", "window_end", "total_calls", "per_tool", "verdict_counts",
+		"findings_per_call", "severity_histogram", "category_histogram",
+		"review_ms_p50", "review_ms_p95", "cache_hit_rate", "partial_rate",
+		"model_usage", "generated_at",
+	} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("rollup.json lost the load-bearing key %q", k)
+		}
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
+	"github.com/patiently/anti-tangent-mcp/internal/stats"
 )
 
 func workerDeps(t *testing.T, rv providers.Reviewer, roots []string) Deps {
@@ -425,4 +428,190 @@ func TestCountLines(t *testing.T) {
 	for _, c := range cases {
 		assert.Equal(t, c.want, countLines(c.in), "countLines(%q)", c.in)
 	}
+}
+
+func TestBulkReadRecordsEvent(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.go")
+	require.NoError(t, os.WriteFile(p, []byte("package a\n"), 0o644))
+
+	statsDir := t.TempDir()
+	rec, err := stats.New(stats.Options{
+		Dir:              statsDir,
+		SummaryInterval:  24 * time.Hour,
+		SummaryThreshold: 1000,
+		RetentionDays:    30,
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+
+	f := &fakeWorkerReviewer{resp: providers.Response{
+		RawJSON: []byte(`{"answer":"- a.go: package a"}`), Model: "anthropic:claude-haiku-4-5-20251001",
+		InputTokens: 42, OutputTokens: 7,
+	}}
+	deps := workerDeps(t, f, []string{dir})
+	deps.Stats = rec
+	h := &handlers{deps: deps}
+	_, res, err := h.BulkRead(context.Background(), nil, BulkReadArgs{Question: "what package?", Paths: []string{p}})
+	require.NoError(t, err)
+	assert.Equal(t, 42, res.InputTokens)
+	assert.Equal(t, 7, res.OutputTokens)
+
+	// Assert exactly one event was recorded with the right tool and tokens.
+	events, err := readEventsFromDir(statsDir)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "bulk_read", events[0].Tool)
+	assert.Equal(t, 42, events[0].InputTokens)
+	assert.Equal(t, 7, events[0].OutputTokens)
+	assert.Equal(t, "anthropic:claude-haiku-4-5-20251001", events[0].Model)
+}
+
+func TestBulkReadRecordingWithNilStats(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.go")
+	require.NoError(t, os.WriteFile(p, []byte("package a\n"), 0o644))
+
+	f := &fakeWorkerReviewer{resp: providers.Response{
+		RawJSON: []byte(`{"answer":"- a.go: package a"}`), Model: "anthropic:claude-haiku-4-5-20251001",
+		InputTokens: 42, OutputTokens: 7,
+	}}
+	deps := workerDeps(t, f, []string{dir})
+	deps.Stats = nil // explicitly nil
+	h := &handlers{deps: deps}
+	_, res, err := h.BulkRead(context.Background(), nil, BulkReadArgs{Question: "what package?", Paths: []string{p}})
+	require.NoError(t, err)
+	assert.Equal(t, 42, res.InputTokens)
+	// Verify the call succeeds even with Stats: nil and doesn't panic.
+}
+
+func TestCodeWriteRecordsEvent(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
+	target := filepath.Join(dir, "new.go")
+
+	statsDir := t.TempDir()
+	rec, err := stats.New(stats.Options{
+		Dir:              statsDir,
+		SummaryInterval:  24 * time.Hour,
+		SummaryThreshold: 1000,
+		RetentionDays:    30,
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+
+	f := &fakeWorkerReviewer{resp: providers.Response{
+		RawJSON: []byte(`{"code":"package out\n"}`), Model: "anthropic:claude-haiku-4-5-20251001",
+		InputTokens: 100, OutputTokens: 50,
+	}}
+	deps := workerDeps(t, f, []string{dir})
+	deps.Stats = rec
+	h := &handlers{deps: deps}
+	_, res, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+		Spec: "spec", ReferencePath: ref, TargetPath: target,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 100, res.InputTokens)
+	assert.Equal(t, 50, res.OutputTokens)
+
+	// Assert exactly one event was recorded with the right tool and tokens.
+	events, err := readEventsFromDir(statsDir)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "code_write", events[0].Tool)
+	assert.Equal(t, 100, events[0].InputTokens)
+	assert.Equal(t, 50, events[0].OutputTokens)
+	assert.Equal(t, "anthropic:claude-haiku-4-5-20251001", events[0].Model)
+}
+
+func TestCodeWriteRecordingWithNilStats(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
+	target := filepath.Join(dir, "new.go")
+
+	f := &fakeWorkerReviewer{resp: providers.Response{
+		RawJSON: []byte(`{"code":"package out\n"}`), Model: "anthropic:claude-haiku-4-5-20251001",
+		InputTokens: 100, OutputTokens: 50,
+	}}
+	deps := workerDeps(t, f, []string{dir})
+	deps.Stats = nil // explicitly nil
+	h := &handlers{deps: deps}
+	_, res, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+		Spec: "spec", ReferencePath: ref, TargetPath: target,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 100, res.InputTokens)
+	// Verify the call succeeds even with Stats: nil and doesn't panic.
+}
+
+func TestCodeWriteRecordsEventEvenIfWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
+	target := filepath.Join(dir, "new.go")
+
+	statsDir := t.TempDir()
+	rec, err := stats.New(stats.Options{
+		Dir:              statsDir,
+		SummaryInterval:  24 * time.Hour,
+		SummaryThreshold: 1000,
+		RetentionDays:    30,
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	require.NoError(t, err)
+
+	f := &fakeWorkerReviewer{resp: providers.Response{
+		RawJSON: []byte(`{"code":"package out\n"}`), Model: "anthropic:claude-haiku-4-5-20251001",
+		InputTokens: 100, OutputTokens: 50,
+	}}
+	deps := workerDeps(t, f, []string{dir})
+	deps.Stats = rec
+	h := &handlers{deps: deps}
+
+	// Force a write failure.
+	oldOpenWriteTarget := openWriteTarget
+	defer func() { openWriteTarget = oldOpenWriteTarget }()
+	openWriteTarget = func(target string, roots []string, overwrite bool) (writeTarget, error) {
+		f, err := resolveWriteTarget(target, roots, overwrite)
+		if err != nil {
+			return nil, err
+		}
+		return writeFailTarget{File: f, err: errors.New("disk full")}, nil
+	}
+
+	_, _, err = h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+		Spec: "spec", ReferencePath: ref, TargetPath: target,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disk full")
+
+	// The event should still be recorded despite the write failure.
+	events, err := readEventsFromDir(statsDir)
+	require.NoError(t, err)
+	require.Len(t, events, 1, "event must be recorded even if the write fails")
+	assert.Equal(t, "code_write", events[0].Tool)
+	assert.Equal(t, 100, events[0].InputTokens)
+}
+
+// readEventsFromDir reads the events.jsonl file from a stats directory.
+// This is a helper for tests only.
+func readEventsFromDir(dir string) ([]stats.Event, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	var events []stats.Event
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var ev stats.Event
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			return nil, err
+		}
+		events = append(events, ev)
+	}
+	return events, nil
 }
