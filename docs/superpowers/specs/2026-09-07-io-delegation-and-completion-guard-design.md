@@ -285,6 +285,13 @@ Worker calls reuse `ANTI_TANGENT_REQUEST_TIMEOUT`, `ANTI_TANGENT_MAX_PAYLOAD_BYT
 `ANTI_TANGENT_PLAN_ROOTS` unchanged. Payloads over the cap are refused with the existing
 structured too-large envelope, never truncated.
 
+One upstream constraint we explicitly do **not** inherit: shunt caps requests at
+`SHUNT_MAX_PAYLOAD_BYTES` (400KB, 120KB on Linux) because its input travels through
+`argv` to the Portal CLI and must fit inside `ARG_MAX` or die with `E2BIG`. Our transport
+is MCP stdio into a Go process, so that limit has no analogue here and
+`ANTI_TANGENT_MAX_PAYLOAD_BYTES` governs for its own reasons. Worth recording, because a
+reader comparing the two configurations will otherwise assume the omission is an oversight.
+
 **Not** server config: `ANTI_TANGENT_SHUNT_MIN_LINES` is read only by the hook scripts and
 never enters `internal/config`. Worth stating because every other `ANTI_TANGENT_*` variable in
 this repo is server configuration, and a reader will assume this one is too.
@@ -347,6 +354,20 @@ shell command. Two mitigations are requirements, not preferences:
 - **The upstream fixture set is ported rather than reinvented** — those cases encode edge
   conditions we would otherwise discover in production.
 
+Upstream's `evals/run.sh` reports 51 tests. Only some are portable, verified against the
+real README:
+
+| Upstream file | Cases | Ported? |
+|---|---|---|
+| `hook-evals.json` (Read hook) | 17 | **yes** |
+| `bash-hook-evals.json` (Bash hook) | 17 | **yes** |
+| `transport-evals.sh` (`aika.sh` vs a stubbed CLI) | 17 | no — Portal transport we do not have |
+| `evals.json` (end-to-end skill) | 3 | no — requires Portal auth |
+| `benchmarks.json` | 4 scenarios | as methodology (§6.6) |
+
+So "34 hook cases" is 17 + 17, and the remaining 20 are Portal-specific. Our suite adds the
+guard-hook fixtures on top.
+
 ### 6.3 Skills
 
 The block message says *what* to call; the skills say *how*, and carry weight the hooks cannot:
@@ -376,6 +397,12 @@ the guard).
 3. **README "Acknowledgements"** crediting shunt and the blog post.
 4. **CHANGELOG** entry cites the same two links.
 5. Worker instruction strings are paraphrased, not copied, so no notice attaches to them.
+6. **The same applies to the "What is never delegated" list.** Upstream's README carries a
+   four-bullet "What doesn't get delegated" section (debugging, editing, small files,
+   architectural decisions). That is Apache-2.0 *documentation prose*; §7 reproduces the
+   substance in `core.md` in our own words rather than copying it, so the protocol docs stay
+   MIT-clean. Copying it verbatim would extend the Apache-2.0 obligation into `docs/protocol/`
+   and from there into the bundled plugin copy.
 
 CI asserts `THIRD_PARTY_NOTICES.md` exists and names both "Spotify AB" and "Apache". See
 §10 for a deviation note on how this is implemented.
@@ -392,6 +419,12 @@ Upstream publishes this table, measured against a 162K-line Java monorepo:
 | Code-write | 3,667 | 40,614 tokens + generation | 833 lines to disk | — |
 
 with a headline of **mean bulk-read savings 90%** across the first three.
+
+*Provenance:* this table was verified against the raw bytes of upstream's README, not a
+summary of it. The accompanying blog post is **not** reachable from this environment
+(`403 CONNECT tunnel failed`) and has not been read; it is cited as a URL only. These
+remain upstream's self-reported figures, on Java, through Portal/AiKA — which is the whole
+reason we measure our own.
 
 We reproduce all four against a Go corpus and publish our own table in
 `plugin/anti-tangent-shunt/README.md`. The point is not to confirm their number but to
@@ -508,7 +541,10 @@ asserting on a repo-root markdown file.
 2. **Worker default** → `MidModel` (§3.3).
 3. **Benchmarks** → in scope for this release, all four scenarios (§6.6).
 4. **`code_write` hook enforcement** → deferred, which is what the origin design proposed.
-   Revisit once `bulk_read` has been measured.
+   Now confirmed against upstream, whose own "Known limitations" states: *"No enforcement for
+   code-writer — only bulk-reader has hook enforcement. Code-writer relies on Claude
+   recognizing when to use it via the skill description."* So this matches shipped upstream
+   behaviour, not merely an untested intention. Revisit once `bulk_read` has been measured.
 
 **Conformance worth noting:** AC #9 is implemented literally as a Go test (§8.4). An
 earlier draft of this spec proposed a CI grep instead; that was rejected at review.
