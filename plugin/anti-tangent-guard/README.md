@@ -33,9 +33,10 @@ Every other tool call, and every other status, is a silent no-op (exit 0).
 For a matching close, the hook scans the transcript window for this task (see
 "Window scoping" below) for two possible pass signals: a direct
 `mcp__anti-tangent__validate_completion` tool call, or an `anti-tangent
-envelope` / `session_id:` summary block pasted into a `tool_result` (this is
-how a subagent's report of running the gate becomes visible from the
-controller's own transcript). It blocks (`exit 2`) in exactly two cases:
+envelope` / `session_id:` summary block, **tagged `tool: validate_completion`**,
+pasted into a `tool_result` (this is how a subagent's report of running the
+gate becomes visible from the controller's own transcript). It blocks
+(`exit 2`) in exactly two cases:
 
 1. **Neither signal is present.** Nothing in the window shows the completion
    gate ran at all.
@@ -45,6 +46,32 @@ controller's own transcript). It blocks (`exit 2`) in exactly two cases:
 Both messages state the same recovery flow explicitly: reopen the task with
 `status=in_progress`, address whatever the gate is asking for, run
 `mcp__anti-tangent__validate_completion` (again), and only then re-close.
+
+### Why the summary block must be tagged `tool: validate_completion`
+
+`validate_task_spec`, `check_progress`, and `validate_completion` all render
+the identical `anti-tangent envelope` / `session_id:` / `verdict:` text —
+`formatEnvelopeSummary` is shared verbatim by the three of them. Without a
+tool discriminator, a `check_progress` (or `validate_task_spec`) summary
+block pasted into a report would satisfy this guard's pass signal exactly
+like a `validate_completion` block does, and that tool's verdict would be
+misread as validate_completion's — defeating the guard for the one failure
+mode it exists to catch. Since anti-tangent-mcp 0.18.0 every envelope carries
+a `tool:` line naming the MCP tool that produced it, and this hook's pass
+signal and verdict extraction are both scoped to blocks where that line reads
+`tool: validate_completion`.
+
+### Version requirement
+
+**This hook requires an anti-tangent-mcp server >= 0.18.0.** A server older
+than that emits no `tool:` line at all, and an untagged block does **not**
+satisfy the guard (accepting untagged blocks would reintroduce the exact hole
+described above). Against an older server, every close with only a summary
+block as its evidence — no direct `mcp__anti-tangent__validate_completion`
+call in the window — blocks with the "no-validation" message even when the
+gate genuinely ran. If you cannot upgrade the server yet, set
+`ANTI_TANGENT_COMPLETION_GUARD=0` (see "Kill switch" below) to disable this
+hook until you can.
 
 ## Window scoping
 
@@ -110,5 +137,5 @@ before reaching one), and the decision plus its reason (e.g.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (15 cases) against the hook and exits non-zero on
+Runs the full eval suite (17 cases) against the hook and exits non-zero on
 any mismatch.

@@ -2403,7 +2403,7 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarnWithMajorFinding(t *testi
 }
 
 func TestTooLargeEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
-	env := tooLargeEnvelope("sess-1", config.ModelRef{Provider: "anthropic", Model: "x"}, 1000, 500, "trim")
+	env := tooLargeEnvelope("check_progress", "sess-1", config.ModelRef{Provider: "anthropic", Model: "x"}, 1000, 500, "trim")
 	require.Equal(t, "fail", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
@@ -2411,7 +2411,7 @@ func TestTooLargeEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
 }
 
 func TestMalformedEvidenceEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
-	env := malformedEvidenceEnvelope("sess-1", "reason", "model")
+	env := malformedEvidenceEnvelope("validate_completion", "sess-1", "reason", "model")
 	require.Equal(t, "fail", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
@@ -2419,7 +2419,7 @@ func TestMalformedEvidenceEnvelope_SyntheticFindingSeverityIsCritical(t *testing
 }
 
 func TestNotFoundEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
-	env := notFoundEnvelope("sess-1", config.ModelRef{Provider: "anthropic", Model: "x"})
+	env := notFoundEnvelope("validate_completion", "sess-1", config.ModelRef{Provider: "anthropic", Model: "x"})
 	require.Equal(t, "fail", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)

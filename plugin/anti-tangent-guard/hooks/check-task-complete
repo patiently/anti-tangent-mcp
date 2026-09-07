@@ -18,11 +18,22 @@
 # FAILS OPEN, ALWAYS. A guard that blocks work because it broke is worse than
 # the drift it prevents.
 #
-# INTERFACE CONTRACT: the two marker strings this hook greps for below
-# ("anti-tangent envelope", "session_id:") and the verdict regex are pinned by
-# internal/mcpsrv/summary_contract_test.go. That test exists precisely so a
-# future change to formatEnvelopeSummary's wording cannot silently disarm this
-# guard — update the grep patterns here in the same commit as any change there.
+# INTERFACE CONTRACT: the marker strings this hook matches below
+# ("anti-tangent envelope", "session_id:", "tool: validate_completion") and
+# the verdict regex are pinned by internal/mcpsrv/summary_contract_test.go.
+# That test exists precisely so a future change to formatEnvelopeSummary's
+# wording cannot silently disarm this guard — update the patterns here in the
+# same commit as any change there.
+#
+# THE tool: MARKER MATTERS: validate_task_spec, check_progress, and
+# validate_completion all render byte-identical "anti-tangent envelope"
+# blocks except for this line (internal/mcpsrv/summary.go's
+# formatEnvelopeSummary is shared verbatim by all three). Without requiring
+# "tool: validate_completion" specifically, a check_progress or
+# validate_task_spec block pasted into a report would satisfy this guard's
+# pass signal, and that tool's verdict would be misread as validate_completion's.
+# An untagged block (no tool: line at all — e.g. from a pre-0.18.0 server)
+# does NOT satisfy the guard; see README.md's version note.
 set -uo pipefail
 
 TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
@@ -49,8 +60,10 @@ TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null | tr 
 [[ -z "$TRANSCRIPT" || ! -f "$TRANSCRIPT" ]] && { trace "$TASK_ID" "skip" "no-transcript"; exit 0; }
 
 # Walk the transcript for the two pass signals. Python, not jq: the entries nest
-# content blocks inside tool_result inside message.content, and task ids must be
-# reconstructed by creation order because TaskCreate does not carry one.
+# content blocks inside tool_result inside message.content. Task identity is a
+# direct string comparison against TaskUpdate.input.taskId — every TaskUpdate
+# call carries its own taskId, so no reconstruction from creation order is
+# needed.
 PY='
 import json, re, sys
 path, task_id = sys.argv[1], str(sys.argv[2])
@@ -59,7 +72,7 @@ try:
 except Exception:
     print(json.dumps({"error": True})); sys.exit(0)
 
-next_id, last_inprogress = 1, -1
+last_inprogress = -1
 called_idx, block_texts = [], []   # (idx) of direct calls; (idx, text) of summary blocks
 
 for idx, line in enumerate(lines):
@@ -74,15 +87,10 @@ for idx, line in enumerate(lines):
                 name, inp = c.get("name", ""), (c.get("input") or {})
                 if name == "mcp__anti-tangent__validate_completion":
                     called_idx.append(idx)
-                elif name == "TaskCreate":
-                    next_id += 1
                 elif name == "TaskUpdate":
                     tid = str(inp.get("taskId", ""))
                     if tid == task_id and inp.get("status") == "in_progress":
                         last_inprogress = idx
-                    try:
-                        if int(tid) >= next_id: next_id = int(tid) + 1
-                    except (ValueError, TypeError): pass
     elif etype == "user":
         content = msg.get("content")
         if isinstance(content, list):
@@ -92,7 +100,12 @@ for idx, line in enumerate(lines):
                 chunks = [inner] if isinstance(inner, str) else [
                     ic.get("text", "") for ic in (inner or []) if isinstance(ic, dict) and ic.get("type") == "text"]
                 for t in chunks:
-                    if t and "anti-tangent envelope" in t and "session_id:" in t:
+                    # The tool: marker is what separates a validate_completion
+                    # block from a check_progress / validate_task_spec block —
+                    # formatEnvelopeSummary renders them identically otherwise.
+                    # An untagged block (no tool: line) does NOT match here.
+                    if (t and "anti-tangent envelope" in t and "session_id:" in t
+                            and re.search(r"^\s*tool:\s*validate_completion\s*$", t, re.MULTILINE)):
                         block_texts.append((idx, t))
 
 scan_from = last_inprogress if last_inprogress >= 0 else 0

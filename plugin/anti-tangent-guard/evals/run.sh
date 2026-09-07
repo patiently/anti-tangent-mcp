@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Eval runner for check-task-complete, the anti-tangent-guard PostToolUse hook.
 #
-# Reads guard-evals.json (shape: {skill_name, description, evals: [...]}, 15
+# Reads guard-evals.json (shape: {skill_name, description, evals: [...]}, 17
 # cases), builds each case's stdin payload and synthetic transcript, invokes
 # the hook, and compares its exit code (and, for a block, its stderr message)
 # against what the case expects.
@@ -19,12 +19,12 @@ PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 HOOK="$PLUGIN_DIR/hooks/check-task-complete"
 EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 
-# The eval table this suite implements (see task-12-brief.md Step 4) has
-# exactly 15 rows. Both checks below must hold or the count assertion is
-# vacuous: the JSON file must declare 15 cases, AND the loop must actually
-# execute 15 of them (a silently-skipped case would satisfy the first check
-# alone).
-EXPECTED_CASE_COUNT=15
+# The eval table this suite implements (see task-12-brief.md Step 4, plus the
+# two tool-scoping cases added for task-12b) has exactly 17 rows. Both checks
+# below must hold or the count assertion is vacuous: the JSON file must
+# declare 17 cases, AND the loop must actually execute 17 of them (a
+# silently-skipped case would satisfy the first check alone).
+EXPECTED_CASE_COUNT=17
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 cleanup() { rm -rf "$WORKDIR"; }

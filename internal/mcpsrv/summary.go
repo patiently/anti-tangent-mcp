@@ -16,13 +16,23 @@ const summaryEvidenceMax = 120
 
 // formatEnvelopeSummary renders a deterministic, paste-ready text block for a
 // per-task Envelope (validate_task_spec / check_progress / validate_completion).
-// It includes the session id, verdict, partial flag (when set), model + review
-// timing, optional session TTL line, findings counts plus per-finding lines,
-// and the next_action. Output is plain text and intentionally stable so
-// downstream tooling can substring-assert against it.
+// It includes the originating tool name (when set), the session id, verdict,
+// partial flag (when set), model + review timing, optional session TTL line,
+// findings counts plus per-finding lines, and the next_action. Output is
+// plain text and intentionally stable so downstream tooling can
+// substring-assert against it.
+//
+// The `tool:` line exists so a consumer that sees only this pasted text (not
+// which MCP tool produced it) can still tell the three per-task tools apart —
+// they otherwise render byte-identical envelopes. See
+// plugin/anti-tangent-guard/hooks/check-task-complete, which requires
+// `tool: validate_completion` before treating a block as its pass signal.
 func formatEnvelopeSummary(env Envelope) string {
 	var b strings.Builder
 	b.WriteString("anti-tangent envelope\n")
+	if env.Tool != "" {
+		fmt.Fprintf(&b, "  tool:          %s\n", env.Tool)
+	}
 	fmt.Fprintf(&b, "  session_id:    %s\n", env.SessionID)
 	fmt.Fprintf(&b, "  verdict:       %s\n", env.Verdict)
 	if env.Partial {

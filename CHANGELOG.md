@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`plugin/anti-tangent-guard`** — a PostToolUse hook on `TaskUpdate` that refuses a
   `completed` close when `validate_completion` did not run, or ran and returned `fail`.
   Active on install; `ANTI_TANGENT_COMPLETION_GUARD=0` disables it. Fails open on any error.
+  Its summary-block pass signal and verdict read are scoped to blocks tagged
+  `tool: validate_completion` — see the new `Envelope.tool` field below — so a
+  `check_progress` or `validate_task_spec` block (rendered byte-identical otherwise) cannot
+  satisfy the gate or have its verdict misread as validate_completion's. Requires an
+  anti-tangent-mcp server >= 0.18.0; an untagged block from an older server does not satisfy
+  the guard.
 - **`ANTI_TANGENT_WORKER_MODEL`** (defaults to `ANTI_TANGENT_MID_MODEL`) and
   **`ANTI_TANGENT_WORKER_MAX_TOKENS`** (4096, clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`).
   `ANTI_TANGENT_SHUNT_MIN_LINES` (350) is read by the shunt hooks, not the server.
@@ -32,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `stats.Event` gains optional `input_tokens` / `output_tokens`; `rollup.json` gains an
   additive `worker` key. Existing keys are unchanged — the gnome-topbar consumer reads them
   by exact name.
+- `Envelope` (the JSON returned by `validate_task_spec`, `check_progress`, and
+  `validate_completion`) gains a `tool` field naming the MCP tool that produced it. Additive;
+  existing fields are unchanged. `formatEnvelopeSummary` now emits a `tool:` line, which
+  `plugin/anti-tangent-guard`'s hook requires to identify a `validate_completion` block.
 - The README's filesystem trust-model section now covers writes, not only reads.
 
 ## [0.17.0] - 2026-09-02

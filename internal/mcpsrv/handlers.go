@@ -28,6 +28,14 @@ import (
 
 // Envelope is the JSON returned to the subagent for every hook.
 type Envelope struct {
+	// Tool is the MCP tool name (without the mcp__anti-tangent__ prefix)
+	// that produced this envelope: "validate_task_spec", "check_progress",
+	// or "validate_completion". Set at every construction site so
+	// formatEnvelopeSummary can emit a `tool:` marker line and consumers
+	// (notably plugin/anti-tangent-guard/hooks/check-task-complete) can
+	// tell a validate_completion envelope apart from the other two —
+	// they share this exact struct and summary format otherwise.
+	Tool                       string            `json:"tool"`
 	SessionID                  string            `json:"session_id"`
 	Verdict                    string            `json:"verdict"`
 	Findings                   []verdict.Finding `json:"findings"`
@@ -135,6 +143,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, cc.Model, cc.Rendered, cc.MaxTokens)
 	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
 		Err:        err,
+		Tool:       "validate_task_spec",
 		Model:      cc.Model,
 		PartialRaw: partialRaw,
 		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
@@ -171,6 +180,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}
 
 	env := Envelope{
+		Tool:       "validate_task_spec",
 		SessionID:  sess.ID,
 		Verdict:    string(result.Verdict),
 		Findings:   result.Findings,
@@ -420,7 +430,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 
 	sess, ok := h.deps.Sessions.Get(args.SessionID)
 	if !ok {
-		env := prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.MidModel), clamp)
+		env := prependClamp(notFoundEnvelope("check_progress", args.SessionID, h.deps.Cfg.MidModel), clamp)
 		h.recordStat(statParams{
 			tool:      "check_progress",
 			verdict:   env.Verdict,
@@ -432,7 +442,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 	}
 
 	if size := totalBytes(args.ChangedFiles); size > h.deps.Cfg.MaxPayloadBytes {
-		env := prependClamp(tooLargeEnvelope(sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes,
+		env := prependClamp(tooLargeEnvelope("check_progress", sess.ID, h.deps.Cfg.MidModel, size, h.deps.Cfg.MaxPayloadBytes,
 			"Send a smaller changed_files set, or split the checkpoint into smaller chunks."), clamp)
 		h.recordStat(statParams{
 			tool:         "check_progress",
@@ -466,6 +476,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
 	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
 		Err:        err,
+		Tool:       "check_progress",
 		SessionID:  sess.ID,
 		Model:      model,
 		PartialRaw: partialRaw,
@@ -516,6 +527,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 	}
 
 	env := Envelope{
+		Tool:       "check_progress",
 		SessionID:  sess.ID,
 		Verdict:    string(result.Verdict),
 		Findings:   result.Findings,
@@ -614,8 +626,9 @@ func priorFindings(s *session.Session) []verdict.Finding {
 	return out
 }
 
-func notFoundEnvelope(id string, model config.ModelRef) Envelope {
+func notFoundEnvelope(tool, id string, model config.ModelRef) Envelope {
 	return Envelope{
+		Tool:      tool,
 		SessionID: id,
 		Verdict:   string(verdict.VerdictFail),
 		Findings: []verdict.Finding{{
@@ -911,8 +924,9 @@ func recoverPartialPlanFindings(rawJSON []byte, prior verdict.PlanResult) (verdi
 
 // tooLargeEnvelope builds the rejection envelope for a payload-too-large hit.
 // Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
-func tooLargeEnvelope(id string, model config.ModelRef, size, limit int, suggestion string) Envelope {
+func tooLargeEnvelope(tool, id string, model config.ModelRef, size, limit int, suggestion string) Envelope {
 	return Envelope{
+		Tool:      tool,
 		SessionID: id,
 		Verdict:   string(verdict.VerdictFail),
 		Findings: []verdict.Finding{{
@@ -1269,8 +1283,9 @@ func storeRejection(key [32]byte, env Envelope) {
 
 // malformedEvidenceEnvelope builds the rejection envelope for a guard hit.
 // Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
-func malformedEvidenceEnvelope(sessionID, reason, modelUsed string) Envelope {
+func malformedEvidenceEnvelope(tool, sessionID, reason, modelUsed string) Envelope {
 	return Envelope{
+		Tool:      tool,
 		SessionID: sessionID,
 		Verdict:   string(verdict.VerdictFail),
 		Findings: []verdict.Finding{{
@@ -1449,7 +1464,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if err != nil {
 		var tooLarge *completionInputTooLargeError
 		if errors.As(err, &tooLarge) {
-			env := prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes,
+			env := prependClamp(tooLargeEnvelope("validate_completion", args.SessionID, h.deps.Cfg.PostModel, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes,
 				fmt.Sprintf("%s is %d bytes, over the %d-byte cap; shrink it or split the evidence into smaller chunks.",
 					tooLarge.field, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes)), clamp)
 			h.recordStat(statParams{
@@ -1474,7 +1489,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			// The empty-resolved path is the ONLY evidence on the call:
 			// hard reject, exactly as before FIX 2 — no paid reviewer call
 			// with nothing to review.
-			env := malformedEvidenceEnvelope(args.SessionID, emptyPathReasons[0], h.deps.Cfg.PostModel.String())
+			env := malformedEvidenceEnvelope("validate_completion", args.SessionID, emptyPathReasons[0], h.deps.Cfg.PostModel.String())
 			clamped := prependClamp(env, clamp)
 			h.recordStat(statParams{
 				tool:         "validate_completion",
@@ -1513,7 +1528,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// 5. payload-cap check. In lightweight mode the surfaced session_id stays
 	// empty; otherwise we don't have the session yet, so use args.SessionID.
 	if size := totalCompletionBytes(resolvedFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
-		env := prependClamp(tooLargeEnvelope(args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
+		env := prependClamp(tooLargeEnvelope("validate_completion", args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
 			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp)
 		h.recordStat(statParams{
 			tool:         "validate_completion",
@@ -1552,7 +1567,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return envelopeResult(c)
 	}
 	if reason := checkEvidenceShape(args.FinalDiff, resolvedFiles); reason != "" {
-		env := malformedEvidenceEnvelope(args.SessionID, reason, h.deps.Cfg.PostModel.String())
+		env := malformedEvidenceEnvelope("validate_completion", args.SessionID, reason, h.deps.Cfg.PostModel.String())
 		storeRejection(cacheKey, env)
 		clamped := prependClamp(env, clamp)
 		h.recordStat(statParams{
@@ -1581,7 +1596,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		var ok bool
 		sess, ok = h.deps.Sessions.Get(args.SessionID)
 		if !ok {
-			env := prependClamp(notFoundEnvelope(args.SessionID, h.deps.Cfg.PostModel), clamp)
+			env := prependClamp(notFoundEnvelope("validate_completion", args.SessionID, h.deps.Cfg.PostModel), clamp)
 			h.recordStat(statParams{
 				tool:         "validate_completion",
 				verdict:      env.Verdict,
@@ -1625,6 +1640,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// otherwise sess carries the resolved session and TTL fields are filled in.
 	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
 		Err:        err,
+		Tool:       "validate_completion",
 		SessionID:  sessID,
 		Model:      model,
 		PartialRaw: partialRaw,
@@ -1674,6 +1690,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	}
 
 	env := Envelope{
+		Tool:       "validate_completion",
 		SessionID:  sessID,
 		Verdict:    string(result.Verdict),
 		Findings:   result.Findings,

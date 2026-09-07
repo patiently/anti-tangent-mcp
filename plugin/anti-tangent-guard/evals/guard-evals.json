@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook (15 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook (17 cases)",
   "evals": [
     {
       "id": 1,
@@ -8,13 +8,18 @@
       "input": {
         "tool_name": "Read",
         "tool_input": {
-          "file_path": "/tmp/x"
+          "file_path": "/tmp/x",
+          "status": "completed",
+          "taskId": "1"
         },
         "transcript_path": "{{TRANSCRIPT}}"
       },
-      "no_transcript": true,
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
       "expected_exit": 0,
-      "reason": "tool_name != TaskUpdate exits before any transcript work"
+      "reason": "tool_name != TaskUpdate exits before any transcript work — the fixture also carries status=completed, taskId=1, and a real signal-free transcript, so if the TOOL_NAME check were deleted the flow would instead reach the no-validation block (exit 2), making this case red rather than vacuously green"
     },
     {
       "id": 2,
@@ -27,9 +32,12 @@
         },
         "transcript_path": "{{TRANSCRIPT}}"
       },
-      "no_transcript": true,
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
       "expected_exit": 0,
-      "reason": "status != completed exits before any transcript work"
+      "reason": "status != completed exits before any transcript work — the fixture also carries taskId=1 and a real signal-free transcript, so if the STATUS check were deleted the flow would instead reach the no-validation block (exit 2), making this case red rather than vacuously green"
     },
     {
       "id": 3,
@@ -62,10 +70,10 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 0,
-      "reason": "an anti-tangent envelope / session_id: marker in a tool_result is the second pass signal"
+      "reason": "an anti-tangent envelope / session_id: marker tagged tool: validate_completion in a tool_result is the second pass signal"
     },
     {
       "id": 5,
@@ -101,13 +109,13 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: fail\\n\"}]}]}}"
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: fail\\n\"}]}]}}"
       ],
       "expected_exit": 2,
       "expected_stderr_contains": [
         "TASK CLOSED ON A FAILED anti-tangent VERDICT"
       ],
-      "reason": "the only summary block in the window reads verdict: fail -> block with the distinct fail message"
+      "reason": "the only summary block in the window is tagged tool: validate_completion and reads verdict: fail -> block with the distinct fail message"
     },
     {
       "id": 7,
@@ -122,8 +130,8 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: fail\\n\"}]}]}}",
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: fail\\n\"}]}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 0,
       "reason": "a later re-validation with verdict: pass supersedes an earlier fail \u2014 LAST block wins"
@@ -185,7 +193,7 @@
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
         "{\"type\": \"assistant\", \"message\": {",
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 0,
       "reason": "one malformed JSONL line is skipped by the walker; the remaining valid lines still decide the verdict \u2014 NOT fail-open, a different behaviour from malformed stdin"
@@ -240,7 +248,7 @@
         "transcript_path": "{{TRANSCRIPT}}"
       },
       "transcript_raw_lines": [
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}",
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
       ],
@@ -262,10 +270,52 @@
         "transcript_path": "{{TRANSCRIPT}}"
       },
       "transcript_raw_lines": [
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 0,
       "reason": "no in_progress entry exists for this task at all -> fall back to scanning the whole transcript"
+    },
+    {
+      "id": 16,
+      "name": "check-progress-block-does-not-satisfy",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: check_progress\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT anti-tangent validate_completion"
+      ],
+      "reason": "a summary block tagged tool: check_progress must NOT satisfy the marker pass signal — only tool: validate_completion counts, so this falls through to the no-validation block despite the envelope/session_id text being present"
+    },
+    {
+      "id": 17,
+      "name": "check-progress-fail-verdict-not-fail-block",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: check_progress\\nsession_id: sess-1\\nverdict: fail\\n\"}]}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT anti-tangent validate_completion"
+      ],
+      "reason": "a tool: check_progress block reading verdict: fail must NOT trigger the verdict-fail block message — that reading is scoped to tool: validate_completion blocks only, so this falls through to the no-validation block (a different stderr message) instead"
     }
   ]
 }
