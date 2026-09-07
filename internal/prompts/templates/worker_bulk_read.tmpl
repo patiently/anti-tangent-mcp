@@ -8,9 +8,9 @@ Ground rules:
 - If the files do not contain the answer, say so in one bullet. Do not speculate.
 - Quote code only when the exact text is the answer.
 
-{{range .Files}}--- BEGIN FILE {{$.Nonce}}: {{.Path}} ---
+{{range .Files}}<file path="{{.Path}}" nonce="{{$.Nonce}}">
 {{.Content}}
---- END FILE {{$.Nonce}}: {{.Path}} ---
+</file nonce="{{$.Nonce}}">
 
 {{end}}## Question
 

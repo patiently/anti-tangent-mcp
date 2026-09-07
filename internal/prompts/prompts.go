@@ -8,6 +8,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"html"
 	"regexp"
 	"strconv"
@@ -301,6 +302,25 @@ func contextNonceDelimiterCollides(files []ContextFile, token string) bool {
 	return false
 }
 
+// deriveNonce computes a DETERMINISTIC collision-free nonce through retry.
+// hashFunc writes the bytes to hash for this attempt; collisionFunc reports
+// whether token would collide. Attempts are retried with attempt counter
+// folded into the hash up to contextNonceMaxAttempts times.
+func deriveNonce(hashFunc func(h hash.Hash), collisionFunc func(token string) bool, what string) (string, error) {
+	for attempt := 0; attempt < contextNonceMaxAttempts; attempt++ {
+		h := sha256.New()
+		hashFunc(h)
+		if attempt > 0 {
+			h.Write([]byte(strconv.Itoa(attempt)))
+		}
+		token := hex.EncodeToString(h.Sum(nil))[:contextNonceHexLen]
+		if !collisionFunc(token) {
+			return token, nil
+		}
+	}
+	return "", fmt.Errorf("prompts: could not derive a collision-free %s nonce after %d attempts", what, contextNonceMaxAttempts)
+}
+
 // DeriveContextFilesNonce computes a DETERMINISTIC nonce from the attached
 // files' identity and content, so that two separate renders of the SAME
 // attachment set produce a byte-identical prompt:
@@ -327,24 +347,18 @@ func contextNonceDelimiterCollides(files []ContextFile, token string) bool {
 // a retry counter folded in and tried again, up to contextNonceMaxAttempts
 // times, after which an error is returned rather than looping forever.
 func DeriveContextFilesNonce(files []ContextFile) (string, error) {
-	for attempt := 0; attempt < contextNonceMaxAttempts; attempt++ {
-		h := sha256.New()
-		for _, f := range files {
-			h.Write([]byte(f.Path))
-			h.Write([]byte{0})
-			h.Write([]byte(f.Content))
-			h.Write([]byte{0})
-		}
-		if attempt > 0 {
-			h.Write([]byte(strconv.Itoa(attempt)))
-		}
-		token := hex.EncodeToString(h.Sum(nil))[:contextNonceHexLen]
-		if !contextNonceDelimiterCollides(files, token) {
-			return token, nil
-		}
-	}
-	return "", fmt.Errorf(
-		"prompts: could not derive a collision-free context files nonce after %d attempts", contextNonceMaxAttempts)
+	return deriveNonce(
+		func(h hash.Hash) {
+			for _, f := range files {
+				h.Write([]byte(f.Path))
+				h.Write([]byte{0})
+				h.Write([]byte(f.Content))
+				h.Write([]byte{0})
+			}
+		},
+		func(token string) bool { return contextNonceDelimiterCollides(files, token) },
+		"context files",
+	)
 }
 
 func ensureContextFilesNonce(in PlanInput) (PlanInput, error) {
@@ -370,26 +384,18 @@ func ensureContextFilesNonceChunk(in PlanChunkInput) (PlanChunkInput, error) {
 }
 
 // DeriveWorkerContentNonce derives a DETERMINISTIC nonce from content strings,
-// preventing content from forging delimiters in worker prompts. Similar to
-// DeriveContextFilesNonce but simpler, working with plain content strings rather
-// than file structures. Belt-and-braces retry logic matches DeriveContextFilesNonce.
+// preventing content from forging delimiters in worker prompts.
 func DeriveWorkerContentNonce(contents []string) (string, error) {
-	for attempt := 0; attempt < contextNonceMaxAttempts; attempt++ {
-		h := sha256.New()
-		for _, content := range contents {
-			h.Write([]byte(content))
-			h.Write([]byte{0})
-		}
-		if attempt > 0 {
-			h.Write([]byte(strconv.Itoa(attempt)))
-		}
-		token := hex.EncodeToString(h.Sum(nil))[:contextNonceHexLen]
-		if !workerContentNonceCollides(contents, token) {
-			return token, nil
-		}
-	}
-	return "", fmt.Errorf(
-		"prompts: could not derive a collision-free worker content nonce after %d attempts", contextNonceMaxAttempts)
+	return deriveNonce(
+		func(h hash.Hash) {
+			for _, content := range contents {
+				h.Write([]byte(content))
+				h.Write([]byte{0})
+			}
+		},
+		func(token string) bool { return workerContentNonceCollides(contents, token) },
+		"worker content",
+	)
 }
 
 // workerContentNonceCollides reports whether token appears in any content

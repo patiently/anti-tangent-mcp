@@ -7,10 +7,10 @@ Ground rules:
 - Where the specification is ambiguous, resolve it toward whatever the reference file does.
 - Output ONLY the code. No explanation, no commentary, no markdown fences.
 
---- BEGIN FILE c95540c2: /repo/ref_test.go ---
+<file path="/repo/ref_test.go" nonce="c95540c2">
 package ref
 
---- END FILE c95540c2: /repo/ref_test.go ---
+</file nonce="c95540c2">
 
 ## What to generate
 

@@ -10,15 +10,15 @@ Ground rules:
 - If the files do not contain the answer, say so in one bullet. Do not speculate.
 - Quote code only when the exact text is the answer.
 
---- BEGIN FILE de1d4904: /repo/a.go ---
+<file path="/repo/a.go" nonce="de1d4904">
 package a
 
---- END FILE de1d4904: /repo/a.go ---
+</file nonce="de1d4904">
 
---- BEGIN FILE de1d4904: /repo/b.go ---
+<file path="/repo/b.go" nonce="de1d4904">
 package b
 
---- END FILE de1d4904: /repo/b.go ---
+</file nonce="de1d4904">
 
 ## Question
 
