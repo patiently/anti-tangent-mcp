@@ -583,69 +583,52 @@ func TestLoad_ContextCaps_LoweredPayloadCapClampsTheDefaultFileCap(t *testing.T)
 }
 
 func TestWorkerModelDefaultsToMidModel(t *testing.T) {
-	env := map[string]string{"ANTHROPIC_API_KEY": "k"}
-	cfg, err := Load(func(k string) string { return env[k] })
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.WorkerModel != cfg.MidModel {
-		t.Errorf("WorkerModel = %v, want MidModel %v", cfg.WorkerModel, cfg.MidModel)
-	}
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY": "k",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, cfg.MidModel, cfg.WorkerModel)
 }
 
 func TestWorkerModelOverride(t *testing.T) {
-	env := map[string]string{
-		"ANTHROPIC_API_KEY":        "k",
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":         "k",
 		"ANTI_TANGENT_WORKER_MODEL": "google:gemini-2.5-flash",
-	}
-	cfg, err := Load(func(k string) string { return env[k] })
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.WorkerModel.String() != "google:gemini-2.5-flash" {
-		t.Errorf("WorkerModel = %q", cfg.WorkerModel.String())
-	}
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, ModelRef{Provider: "google", Model: "gemini-2.5-flash"}, cfg.WorkerModel)
 }
 
 func TestWorkerModelMalformed(t *testing.T) {
-	env := map[string]string{
-		"ANTHROPIC_API_KEY":        "k",
+	_, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":         "k",
 		"ANTI_TANGENT_WORKER_MODEL": "no-colon",
-	}
-	_, err := Load(func(k string) string { return env[k] })
-	if err == nil || !strings.Contains(err.Error(), "ANTI_TANGENT_WORKER_MODEL") {
-		t.Fatalf("want error naming the var, got %v", err)
-	}
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_WORKER_MODEL")
 }
 
 func TestWorkerMaxTokensDefaultAndClamp(t *testing.T) {
-	env := map[string]string{"ANTHROPIC_API_KEY": "k"}
-	cfg, err := Load(func(k string) string { return env[k] })
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.WorkerMaxTokens != 4096 {
-		t.Errorf("default WorkerMaxTokens = %d, want 4096", cfg.WorkerMaxTokens)
-	}
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY": "k",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 4096, cfg.WorkerMaxTokens)
 
-	env["ANTI_TANGENT_WORKER_MAX_TOKENS"] = "999999"
-	env["ANTI_TANGENT_MAX_TOKENS_CEILING"] = "8192"
-	cfg, err = Load(func(k string) string { return env[k] })
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.WorkerMaxTokens != 8192 {
-		t.Errorf("clamped WorkerMaxTokens = %d, want 8192", cfg.WorkerMaxTokens)
-	}
+	cfg, err = Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":               "k",
+		"ANTI_TANGENT_WORKER_MAX_TOKENS":  "999999",
+		"ANTI_TANGENT_MAX_TOKENS_CEILING": "8192",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 8192, cfg.WorkerMaxTokens)
 }
 
 func TestWorkerMaxTokensNonPositive(t *testing.T) {
-	env := map[string]string{
+	_, err := Load(env(map[string]string{
 		"ANTHROPIC_API_KEY":              "k",
 		"ANTI_TANGENT_WORKER_MAX_TOKENS": "0",
-	}
-	_, err := Load(func(k string) string { return env[k] })
-	if err == nil || !strings.Contains(err.Error(), "ANTI_TANGENT_WORKER_MAX_TOKENS") {
-		t.Fatalf("want error naming the var, got %v", err)
-	}
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_WORKER_MAX_TOKENS")
 }

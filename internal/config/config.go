@@ -12,23 +12,23 @@ import (
 )
 
 type Config struct {
-	AnthropicKey      string
-	OpenAIKey         string
-	GoogleKey         string
-	PreModel          ModelRef
-	MidModel          ModelRef
-	PostModel         ModelRef
-	PlanModel         ModelRef
-	PrimeModel        ModelRef
-	ExtractModel      ModelRef
-	SessionTTL        time.Duration
-	MaxPayloadBytes   int
-	RequestTimeout    time.Duration
-	LogLevel          slog.Level
-	PerTaskMaxTokens  int
-	PlanMaxTokens     int
-	PrimeMaxTokens    int
-	ExtractMaxTokens  int
+	AnthropicKey     string
+	OpenAIKey        string
+	GoogleKey        string
+	PreModel         ModelRef
+	MidModel         ModelRef
+	PostModel        ModelRef
+	PlanModel        ModelRef
+	PrimeModel       ModelRef
+	ExtractModel     ModelRef
+	SessionTTL       time.Duration
+	MaxPayloadBytes  int
+	RequestTimeout   time.Duration
+	LogLevel         slog.Level
+	PerTaskMaxTokens int
+	PlanMaxTokens    int
+	PrimeMaxTokens   int
+	ExtractMaxTokens int
 	// WorkerModel drives bulk_read / code_write. Resolution is explicit env
 	// override -> MidModel. The reviewer != implementer principle does NOT
 	// apply to the worker — same-model is fine, cheap is the only criterion —
@@ -36,7 +36,7 @@ type Config struct {
 	// review tools do. Mirrors StatsModel's fallback exactly.
 	WorkerModel ModelRef
 	// WorkerMaxTokens caps worker output. Clamped by MaxTokensCeiling.
-	WorkerMaxTokens int
+	WorkerMaxTokens   int
 	PlanTasksPerChunk int
 	MaxTokensCeiling  int
 	// PlanMaxPayloadBytes caps plan content + project_knowledge for
