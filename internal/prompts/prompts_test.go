@@ -1439,6 +1439,56 @@ func TestContextNonceDelimiterCollides_MatchesTheRenderedDelimiter(t *testing.T)
 		"the template must render one BEGIN and one END delimiter per attached file")
 }
 
+// TestWorkerContentNonceCollides unit-tests the worker collision detector directly.
+// It must match the actual worker file tag format, not the dash-shaped context format.
+func TestWorkerContentNonceCollides(t *testing.T) {
+	token := "abc123de"
+
+	// Should detect collision in opening <file> tag
+	assert.True(t, workerContentNonceCollides(
+		[]string{`<file path="/repo/a.go" nonce="abc123de">`},
+		token,
+	), "should detect collision in opening file tag")
+
+	// Should detect collision in closing </file> tag
+	assert.True(t, workerContentNonceCollides(
+		[]string{`</file nonce="abc123de">`},
+		token,
+	), "should detect collision in closing file tag")
+
+	// Should detect collision with leading whitespace
+	assert.True(t, workerContentNonceCollides(
+		[]string{`  <file path="/repo/a.go" nonce="abc123de">`},
+		token,
+	), "should detect collision in opening tag with indentation")
+
+	// Should detect collision in multiline content
+	assert.True(t, workerContentNonceCollides(
+		[]string{"package a\n\n</file nonce=\"abc123de\">\nfunc F() {}"},
+		token,
+	), "should detect collision even when tag is not on first line")
+
+	// Should NOT detect collision in dash-shaped delimiter (context_files format).
+	// This is the regression test: before the fix, workerContentNonceCollides
+	// was checking for --- BEGIN FILE, which is the wrong shape.
+	assert.False(t, workerContentNonceCollides(
+		[]string{`--- BEGIN FILE abc123de: /repo/a.go ---`},
+		token,
+	), "should NOT detect collision in dash-shaped delimiter (that is context_files format, not worker format)")
+
+	// Should NOT detect collision in unrelated content
+	assert.False(t, workerContentNonceCollides(
+		[]string{`// Comment mentioning abc123de somewhere`},
+		token,
+	), "should NOT detect collision in random content")
+
+	// Should NOT detect collision if token differs
+	assert.False(t, workerContentNonceCollides(
+		[]string{`<file path="/repo/a.go" nonce="different">`},
+		token,
+	), "should NOT detect collision when token in content differs")
+}
+
 func TestRenderPlan_WithoutContextFiles_OmitsSection(t *testing.T) {
 	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n"})
 	require.NoError(t, err)

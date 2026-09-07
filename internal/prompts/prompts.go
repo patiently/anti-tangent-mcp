@@ -399,9 +399,12 @@ func DeriveWorkerContentNonce(contents []string) (string, error) {
 }
 
 // workerContentNonceCollides reports whether token appears in any content
-// as a delimiter-shaped line that would break prompt structure.
+// in the worker file tag delimiters: either <file path="…" nonce="TOKEN">
+// or </file nonce="TOKEN">. These are the shapes that would break prompt structure
+// if the token were present in the content.
 func workerContentNonceCollides(contents []string, token string) bool {
-	re := regexp.MustCompile(`(?m)^[ \t]*-{3,}[ \t]*(?:BEGIN|END)[ \t]+FILE[ \t]+` + regexp.QuoteMeta(token) + `(?:[ \t]*[:\t]|[ \t]*-{3,}[ \t]*$)`)
+	// Match both opening <file path="…" nonce="TOKEN"> and closing </file nonce="TOKEN"> tags
+	re := regexp.MustCompile(`(?m)(?:^[ \t]*<file\s+path="[^"]*"\s+nonce="|^[ \t]*</file\s+nonce=")` + regexp.QuoteMeta(token) + `"`)
 	for _, c := range contents {
 		if re.MatchString(c) {
 			return true
