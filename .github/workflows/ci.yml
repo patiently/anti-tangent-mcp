@@ -87,9 +87,35 @@ jobs:
       - name: Protocol cross-reference and section guards
         run: bash scripts/check-protocol-docs.sh
 
+  hook-evals:
+    name: Plugin hook evals
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Shunt hook evals
+        run: bash plugin/anti-tangent-shunt/evals/run.sh
+
+      - name: Completion guard evals
+        run: bash plugin/anti-tangent-guard/evals/run.sh
+
+      - name: Eval suites make no provider or network calls
+        run: |
+          # A limited regression tripwire, NOT proof of network isolation: it
+          # catches the obvious clients and credential names only. Something
+          # determined (python sockets, /dev/tcp, a differently-named key) slips
+          # past. The real guarantee is that these scripts read only stdin and files.
+          ! grep -rnE 'curl|wget|nc |ANTHROPIC_API_KEY|OPENAI_API_KEY|GOOGLE_API_KEY' \
+              plugin/anti-tangent-shunt/evals plugin/anti-tangent-guard/evals \
+              plugin/anti-tangent-shunt/hooks plugin/anti-tangent-guard/hooks
+
   build-test:
     name: Build & Test (Go)
-    needs: [changelog, protocol-docs]
+    needs: [changelog, protocol-docs, hook-evals]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
