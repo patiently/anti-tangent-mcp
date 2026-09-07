@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -255,17 +256,48 @@ func (h *handlers) CodeWrite(ctx context.Context, _ *mcp.CallToolRequest, args C
 	written := f.Name()
 	if _, err := f.WriteString(code); err != nil {
 		_ = f.Close()
-		return nil, CodeWriteResult{}, fmt.Errorf("write %q: %w", written, err)
+		return nil, CodeWriteResult{}, cleanupAfterWriteFailure(written, fmt.Errorf("write %q: %w", written, err))
 	}
 	// Closed explicitly, not deferred: a deferred Close discards its error, and
 	// on a write path that error is where a failed flush surfaces. Reporting
 	// success for a file that did not close cleanly would be a lie.
 	if err := f.Close(); err != nil {
-		return nil, CodeWriteResult{}, fmt.Errorf("close %q: %w", written, err)
+		return nil, CodeWriteResult{}, cleanupAfterWriteFailure(written, fmt.Errorf("close %q: %w", written, err))
 	}
 	res.Written = written
 	res.LinesWritten = countLines(code)
 	return nil, res, nil
+}
+
+// cleanupAfterWriteFailure runs after a WriteString or Close failure on an
+// already-opened target and reports what became of the file at written.
+//
+// resolveWriteTarget opens with O_TRUNC when overwrite is true, so by the
+// time WriteString or Close fails, any content that previously existed at
+// target_path is ALREADY gone — a mid-write failure does not fail closed on
+// its own, it leaves either an empty or a partially-written file sitting
+// where the caller's file used to be, and CodeWriteResult{} on the error
+// path carries no field that would tell a caller that. Best-effort removal
+// converts that silent corruption into a loud, named failure: the caller
+// either learns the partial file was removed, or — if removal itself
+// failed — learns exactly where a partial file may still remain, instead of
+// getting only "write failed" and finding out about the damage some other
+// way.
+//
+// Removal's own error is appended to, never substituted for, cause: a
+// failure to clean up must not mask the write/close failure that is the
+// actual reason this function is running.
+//
+// On the default (overwrite: false) path nothing pre-existing was lost —
+// O_EXCL guarantees the target did not exist before this call — so removal
+// here is pure cleanup of a file this call itself created; on the
+// overwrite path it is the best available signal short of a design change
+// (write-to-temp-then-rename) that is out of scope for this task.
+func cleanupAfterWriteFailure(written string, cause error) error {
+	if rmErr := os.Remove(written); rmErr != nil {
+		return fmt.Errorf("%w; the partial file could NOT be removed and may still be at %q: %v", cause, written, rmErr)
+	}
+	return fmt.Errorf("%w; the partial file at %q was removed", cause, written)
 }
 
 // writeTarget is the narrow surface CodeWrite needs from an open file.
