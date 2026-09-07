@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Eval runner for check-task-complete, the anti-tangent-guard PostToolUse hook.
 #
-# Reads guard-evals.json (shape: {skill_name, description, evals: [...]}, 17
+# Reads guard-evals.json (shape: {skill_name, description, evals: [...]}, 21
 # cases), builds each case's stdin payload and synthetic transcript, invokes
 # the hook, and compares its exit code (and, for a block, its stderr message)
 # against what the case expects.
@@ -20,12 +20,15 @@ HOOK="$PLUGIN_DIR/hooks/check-task-complete"
 EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 
 # The eval table this suite implements (see task-12-brief.md Step 4, the two
-# tool-scoping cases added for task-12b, and the two forged-marker cases added
-# for task-12c — see task-12b-review.md Critical #1) has exactly 19 rows. Both
-# checks below must hold or the count assertion is vacuous: the JSON file must
-# declare 19 cases, AND the loop must actually execute 19 of them (a
-# silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=19
+# tool-scoping cases added for task-12b, the two forged-marker cases added for
+# task-12c — see task-12b-review.md Critical #1 — and the two ESCAPED cases
+# added for task-12d, which run the current server's own rendering through the
+# hook rather than a hand-written fixture, see task-12c-review.md Critical #1 /
+# Important #2) has exactly 21 rows. Both checks below must hold or the count
+# assertion is vacuous: the JSON file must declare 21 cases, AND the loop must
+# actually execute 21 of them (a silently-skipped case would satisfy the first
+# check alone).
+EXPECTED_CASE_COUNT=21
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 cleanup() { rm -rf "$WORKDIR"; }

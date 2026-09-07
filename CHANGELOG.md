@@ -47,11 +47,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_completion`) gains a `tool` field naming the MCP tool that produced it. Additive;
   existing fields are unchanged. `formatEnvelopeSummary` now emits a `tool:` line, which
   `plugin/anti-tangent-guard`'s hook requires to identify a `validate_completion` block.
-- The paste-ready `summary_block`'s multi-line rendering (a finding's `Evidence`/`Criterion`, or
-  an envelope's `next_action`) now prefixes every continuation line with a non-whitespace `| `
-  sentinel instead of pure whitespace. User-visible formatting change, intended: without it, a
-  reviewer-authored line that happened to read `tool: validate_completion` or `verdict: pass`
-  could be mistaken for the block's own grammar by a downstream parser — see
+- The paste-ready `summary_block`'s multi-line rendering now prefixes every continuation line
+  with a non-whitespace `| ` sentinel instead of pure whitespace, in **every** formatter that
+  emits an `anti-tangent envelope` header — `validate_plan`, `prime_project_knowledge` and
+  `extract_project_knowledge` blocks as well as the per-task envelope, and every plain-string
+  field each of them renders (`criterion`, `evidence`, `next_action`, `task_title`, a pick's
+  `permalink`/`reason`, a proposal's `permalink`/`rationale`, plus the provenance and
+  context-file paths). User-visible formatting change, intended: without it, a reviewer-authored
+  line that happened to read `tool: validate_completion` or `verdict: pass` — or a bare
+  `anti-tangent envelope` header, which starts a whole new block — could be mistaken for the
+  block's own grammar by a downstream parser. Enum-typed fields are not escaped; the parsers in
+  `internal/verdict` reject an out-of-enum value before a formatter sees it.
+  `internal/mcpsrv/summary_forgery_test.go` enumerates the header-emitting formatters from the
+  package's own source and drives a forged payload through every free-text field of each, so a
+  new formatter or a new field cannot be added without escaping and stay green. See
   `plugin/anti-tangent-guard` above.
 - The README's filesystem trust-model section now covers writes, not only reads.
 

@@ -53,9 +53,17 @@
 # (internal/mcpsrv/summary.go's escapeContinuationLines) so it can never
 # match ^\s*label: or a bare header line at all, closing the same hole even
 # if a forged line were somehow positioned before the genuine one. Both
-# fixes matter: source-escaping alone only protects callers on a server new
-# enough to have it; positional extraction alone still trusts whatever text
-# a block contains. Across blocks, the LAST one still wins (Task 8's pinned
+# fixes matter, and they are NOT interchangeable: positional extraction is a
+# within-block defence and needs nothing from the server, but it cannot stop
+# a forged block BOUNDARY — a bare "anti-tangent envelope" at column 0 inside
+# a field starts a NEW block, which this hook then parses positionally and
+# entirely correctly out of text a reviewer wrote. Only source-side escaping
+# closes that, and only on a server new enough to have it — for one release
+# it covered formatEnvelopeSummary but not formatPlanSummary /
+# formatPrimeSummary / formatExtractSummary, whose headers carry the same
+# substring; internal/mcpsrv/summary_forgery_test.go now enumerates the
+# header-emitting formatters from the server source so that gap cannot
+# reopen quietly. Across blocks, the LAST one still wins (Task 8's pinned
 # re-validation semantics) — only the extraction WITHIN a block changed.
 set -uo pipefail
 

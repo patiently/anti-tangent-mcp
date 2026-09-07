@@ -80,21 +80,43 @@ finding text as if it were the header (task-12b-review.md Critical #1):
    field with a non-whitespace sentinel (`| `), so such a line can never
    match this hook's `^\s*label:` patterns — or present as a second, bare
    `anti-tangent envelope` header — at all, regardless of what it contains.
+   This covers **every** formatter that emits an `anti-tangent envelope`
+   header, not only the three per-task tools: `validate_plan`,
+   `prime_project_knowledge` and `extract_project_knowledge` render their
+   own blocks under headers carrying the same substring, and for one release
+   they were left un-escaped while the per-task envelope was fixed — a
+   forged block smuggled through a single `validate_plan` finding's
+   `criterion` satisfied this hook with no gate call at all. What keeps that
+   from recurring is `internal/mcpsrv/summary_forgery_test.go`, which
+   enumerates the header-emitting formatters from the server's own source
+   and drives a forged payload through every free-text field of each: a new
+   formatter, or a new field, fails it until it is escaped.
 
-Positional extraction alone keeps a caller safe even against an older
-server's un-escaped text (see "Version requirement" below); source-side
-escaping alone only protects callers running a server new enough to have
-it. Together they are what actually holds; neither is a standalone fix.
+The two defences cover different halves of the problem, and the split
+matters:
+
+- Positional extraction is a **within-block** defence. It stops a forged
+  `tool:`/`verdict:` line further down a genuine block from being read as
+  that block's header, and it needs nothing from the server — so it holds
+  even against an older server's un-escaped text (see "Version requirement"
+  below).
+- Source-side escaping is what stops a forged **block boundary**. A bare
+  `anti-tangent envelope` at column 0 inside a field does not get misread
+  within its block — it starts a *new* one, which the hook then parses
+  positionally and entirely correctly, out of text a reviewer wrote.
+  Positional extraction cannot help there; only escaping can, and only on a
+  server that has it.
+
+Neither is a standalone fix, and they are not interchangeable.
 
 ### What this does not defend against
 
-Both defences above are about a *field inside a genuine block* being mistaken
-for that block's own header. Neither makes a pasted block trustworthy in
-itself. The marker pass signal accepts any `anti-tangent envelope` block that
-starts a line in the window — and a subagent writing its own report can simply
-compose one. Verified: a report whose text is a fabricated `tool:
-validate_completion` / `verdict: pass` block, with no gate call anywhere in the
-window, satisfies this guard.
+**1. A block fabricated outright.** Neither defence makes a pasted block
+trustworthy in itself. The marker pass signal accepts any `anti-tangent
+envelope` block that starts a line in the window — and a subagent writing its
+own report can simply compose one. Verified: a report whose text is a
+fabricated `tool: validate_completion` / `verdict: pass` block, with no gate
+call anywhere in the window, satisfies this guard.
 
 That is inherent to the marker path rather than an oversight in it. The hook
 reads a transcript, and nothing in a transcript distinguishes text a subagent
@@ -105,6 +127,25 @@ far beyond an advisory guard. The direct signal (an
 that cannot be fabricated this way; the marker path exists so a subagent that
 genuinely ran the gate in its own session still counts, and it extends that
 report the same trust the rest of anti-tangent does.
+
+**2. A forged block boundary from a server older than 0.18.0.** Source-side
+escaping is the only thing that stops a reviewer-authored field from starting
+a new block (see the split above), so it is the half that a caller cannot
+supply locally. Against an older server, a genuine `validate_plan`,
+`prime_project_knowledge` or `extract_project_knowledge` block whose finding
+text contains a bare `anti-tangent envelope` line followed by
+`tool: validate_completion` / `verdict: pass` still satisfies this guard —
+positionally and correctly, because the forgery is a real block boundary
+rather than a misread line. The version requirement below is not only about
+the `tool:` tag; this is the other reason for it.
+
+**3. Anything outside the block grammar this hook reads.** Both defences are
+scoped to the bare `anti-tangent envelope` header and the
+`tool:`/`session_id:`/`verdict:` lines. `internal/mcpsrv/summary_forgery_test.go`
+pins that scope for the server's plain-string fields; enum-typed fields
+(`verdict`, `severity`, `category`, …) are excluded there because
+`internal/verdict`'s parsers reject an out-of-enum value first. A consumer
+keying on some other line of these blocks is on its own.
 
 So this guard raises the cost of skipping the gate from "say nothing" to
 "knowingly fabricate a gate result". It is a drift guard, not an adversarial
@@ -187,5 +228,10 @@ before reaching one), and the decision plus its reason (e.g.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (19 cases) against the hook and exits non-zero on
-any mismatch.
+Runs the full eval suite (21 cases) against the hook and exits non-zero on
+any mismatch. Cases 18/19 are deliberately un-escaped fixtures — they test
+positional extraction against an older server. Cases 20/21 are the current
+server's own rendering, pinned byte-for-byte to the formatters by
+`internal/mcpsrv/guard_eval_fixture_test.go`, so the escaping half is
+exercised end-to-end through the real hook rather than only through a Go
+mirror of its regexes.

@@ -31,17 +31,17 @@ func formatEnvelopeSummary(env Envelope) string {
 	var b strings.Builder
 	b.WriteString("anti-tangent envelope\n")
 	if env.Tool != "" {
-		fmt.Fprintf(&b, "  tool:          %s\n", env.Tool)
+		fmt.Fprintf(&b, "  tool:          %s\n", escapeBlockValue(env.Tool))
 	}
-	fmt.Fprintf(&b, "  session_id:    %s\n", env.SessionID)
-	fmt.Fprintf(&b, "  verdict:       %s\n", env.Verdict)
+	fmt.Fprintf(&b, "  session_id:    %s\n", escapeBlockValue(env.SessionID))
+	fmt.Fprintf(&b, "  verdict:       %s\n", escapeBlockValue(env.Verdict))
 	if env.Partial {
 		b.WriteString("  partial:       true\n")
 	}
 	if env.SubmissionDefectOnly {
 		b.WriteString("  submission_defect_only: true — re-submit with the missing evidence; no code rework implied\n")
 	}
-	fmt.Fprintf(&b, "  model_used:    %s\n", env.ModelUsed)
+	fmt.Fprintf(&b, "  model_used:    %s\n", escapeBlockValue(env.ModelUsed))
 	fmt.Fprintf(&b, "  review_ms:     %d\n", env.ReviewMS)
 	if env.SessionTTLRemainingSeconds != nil {
 		fmt.Fprintf(&b, "  session_ttl_remaining_seconds: %d\n", *env.SessionTTLRemainingSeconds)
@@ -55,15 +55,32 @@ func formatEnvelopeSummary(env Envelope) string {
 	// of the last field), able to forge a bare "anti-tangent envelope"
 	// header or a "verdict:"/"tool:" line unindented — a stronger version of
 	// the same hole. See escapeContinuationLines.
-	fmt.Fprintf(&b, "  next_action:   %s\n", escapeContinuationLines(env.NextAction, envelopeNextActionContIndent))
+	fmt.Fprintf(&b, "  next_action:   %s\n", escapeBlockValue(env.NextAction))
 	return b.String()
 }
 
-// envelopeNextActionContIndent aligns a multi-line next_action's
-// continuation lines under its value column ("  next_action:   "),
-// mirroring the "                 - %s (%d B)\n" convention used for
-// meta.ContextFiles in formatPlanSummary.
-const envelopeNextActionContIndent = "                 "
+// blockValueContIndent aligns a multi-line "  <label>: <value>" line's
+// continuation lines under its value column. Every label in every formatter
+// in this file is padded to the same width ("  next_action:   ",
+// "  session_id:    ", "  source:        ", …), so one constant serves them
+// all. It also matches the "                 - %s (%d B)\n" convention used
+// for meta.ContextFiles in formatPlanSummary.
+const blockValueContIndent = "                 "
+
+// contextFileContIndent is blockValueContIndent plus the width of the "- "
+// bullet formatPlanSummary renders each context file with, so a continuation
+// line sits under the path rather than under the bullet.
+const contextFileContIndent = blockValueContIndent + "  "
+
+// escapeBlockValue is escapeContinuationLines for the value half of a
+// "  <label>: <value>" line — see blockValueContIndent. EVERY such value in
+// EVERY formatter in this file goes through it or through
+// escapeContinuationLines directly; summary_forgery_test.go enumerates the
+// formatters straight from this package's source and fails if a new one is
+// added without that treatment.
+func escapeBlockValue(s string) string {
+	return escapeContinuationLines(s, blockValueContIndent)
+}
 
 // planSummaryMeta bundles the non-PlanResult inputs to formatPlanSummary.
 // Carried on a struct rather than as scalars so the signature stays narrow
@@ -98,10 +115,10 @@ func formatPlanSummary(pr verdict.PlanResult, meta planSummaryMeta) string {
 	fmt.Fprintf(&b, "  plan_verdict:  %s\n", pr.PlanVerdict)
 	fmt.Fprintf(&b, "  plan_quality:  %s\n", pr.PlanQuality)
 	if pr.PlanRunID != "" {
-		fmt.Fprintf(&b, "  plan_run_id:   %s\n", pr.PlanRunID)
+		fmt.Fprintf(&b, "  plan_run_id:   %s\n", escapeBlockValue(pr.PlanRunID))
 	}
 	if meta.Source != "" {
-		fmt.Fprintf(&b, "  source:        %s\n", meta.Source)
+		fmt.Fprintf(&b, "  source:        %s\n", escapeBlockValue(meta.Source))
 	}
 	if len(meta.ContextFiles) > 0 {
 		totalCtx := 0
@@ -110,29 +127,31 @@ func formatPlanSummary(pr verdict.PlanResult, meta planSummaryMeta) string {
 		}
 		fmt.Fprintf(&b, "  context:       %d files, %d B\n", len(meta.ContextFiles), totalCtx)
 		for _, f := range meta.ContextFiles {
-			fmt.Fprintf(&b, "                 - %s (%d B)\n", f.Path, f.Bytes)
+			fmt.Fprintf(&b, "                 - %s (%d B)\n", escapeContinuationLines(f.Path, contextFileContIndent), f.Bytes)
 		}
 	}
 	if pr.Partial {
 		b.WriteString("  partial:       true\n")
 	}
-	fmt.Fprintf(&b, "  model_used:    %s\n", meta.ModelUsed)
+	fmt.Fprintf(&b, "  model_used:    %s\n", escapeBlockValue(meta.ModelUsed))
 	fmt.Fprintf(&b, "  review_ms:     %d\n", meta.ReviewMS)
 	crit, maj, min := countSeverities(pr.PlanFindings)
 	fmt.Fprintf(&b, "  plan_findings: %d (%d/%d/%d)\n", len(pr.PlanFindings), crit, maj, min)
 	for _, f := range pr.PlanFindings {
-		fmt.Fprintf(&b, "    - [%s][%s] %s — %s\n", f.Severity, f.Category, f.Criterion, formatFindingEvidence(f.Evidence, "      "))
+		fmt.Fprintf(&b, "    - [%s][%s] %s — %s\n", f.Severity, f.Category,
+			escapeContinuationLines(f.Criterion, "      "), formatFindingEvidence(f.Evidence, "      "))
 	}
 	fmt.Fprintf(&b, "  tasks: %d\n", len(pr.Tasks))
 	for _, t := range pr.Tasks {
 		tCrit, tMaj, tMin := countSeverities(t.Findings)
 		fmt.Fprintf(&b, "    Task %d: %s  [%s]  findings: %d (%d/%d/%d)\n",
-			t.TaskIndex, t.TaskTitle, t.Verdict, len(t.Findings), tCrit, tMaj, tMin)
+			t.TaskIndex, escapeContinuationLines(t.TaskTitle, "      "), t.Verdict, len(t.Findings), tCrit, tMaj, tMin)
 		for _, f := range t.Findings {
-			fmt.Fprintf(&b, "      - [%s] %s — %s\n", f.Severity, f.Criterion, formatFindingEvidence(f.Evidence, "        "))
+			fmt.Fprintf(&b, "      - [%s] %s — %s\n", f.Severity,
+				escapeContinuationLines(f.Criterion, "        "), formatFindingEvidence(f.Evidence, "        "))
 		}
 	}
-	fmt.Fprintf(&b, "  next_action:   %s\n", pr.NextAction)
+	fmt.Fprintf(&b, "  next_action:   %s\n", escapeBlockValue(pr.NextAction))
 	return b.String()
 }
 
@@ -147,17 +166,19 @@ func formatPrimeSummary(r verdict.PrimeResult, modelUsed string, reviewMS int64)
 	if r.Partial {
 		b.WriteString("  partial:       true\n")
 	}
-	fmt.Fprintf(&b, "  model_used:    %s\n", modelUsed)
+	fmt.Fprintf(&b, "  model_used:    %s\n", escapeBlockValue(modelUsed))
 	fmt.Fprintf(&b, "  review_ms:     %d\n", reviewMS)
 	writeFindingsSummary(&b, r.Findings, "  ")
 	fmt.Fprintf(&b, "  picks: %d\n", len(r.Picks))
 	for _, p := range r.Picks {
-		fmt.Fprintf(&b, "    - [%s] %s — %s\n", p.Priority, p.Permalink, truncate(p.Reason, summaryEvidenceMax))
+		fmt.Fprintf(&b, "    - [%s] %s — %s\n", p.Priority,
+			escapeContinuationLines(p.Permalink, "      "),
+			escapeContinuationLines(truncate(p.Reason, summaryEvidenceMax), "      "))
 	}
 	if len(r.BMCommands) > 0 {
 		fmt.Fprintf(&b, "  bm_commands: %d\n", len(r.BMCommands))
 	}
-	fmt.Fprintf(&b, "  next_action:   %s\n", r.NextAction)
+	fmt.Fprintf(&b, "  next_action:   %s\n", escapeBlockValue(r.NextAction))
 	return b.String()
 }
 
@@ -173,17 +194,19 @@ func formatExtractSummary(r verdict.ExtractResult, modelUsed string, reviewMS in
 	if r.Partial {
 		b.WriteString("  partial:       true\n")
 	}
-	fmt.Fprintf(&b, "  model_used:    %s\n", modelUsed)
+	fmt.Fprintf(&b, "  model_used:    %s\n", escapeBlockValue(modelUsed))
 	fmt.Fprintf(&b, "  review_ms:     %d\n", reviewMS)
 	writeFindingsSummary(&b, r.Findings, "  ")
 	fmt.Fprintf(&b, "  proposals: %d\n", len(r.Proposals))
 	for _, p := range r.Proposals {
-		fmt.Fprintf(&b, "    - [%s] %s %s — %s\n", p.Action, p.Type, p.Permalink, truncate(p.Rationale, summaryEvidenceMax))
+		fmt.Fprintf(&b, "    - [%s] %s %s — %s\n", p.Action, p.Type,
+			escapeContinuationLines(p.Permalink, "      "),
+			escapeContinuationLines(truncate(p.Rationale, summaryEvidenceMax), "      "))
 	}
 	if len(r.BMCommands) > 0 {
 		fmt.Fprintf(&b, "  bm_commands: %d\n", len(r.BMCommands))
 	}
-	fmt.Fprintf(&b, "  next_action:   %s\n", r.NextAction)
+	fmt.Fprintf(&b, "  next_action:   %s\n", escapeBlockValue(r.NextAction))
 	return b.String()
 }
 
@@ -222,16 +245,38 @@ func formatFindingEvidence(evidence, contIndent string) string {
 	return escapeContinuationLines(strings.Join(lines, "\n"), contIndent)
 }
 
-// escapeContinuationLines guards a reviewer-authored free-text field against
-// forging the envelope's own line-based grammar. plugin/anti-tangent-guard/
-// hooks/check-task-complete recognizes the block by three kinds of line: a
-// bare "anti-tangent envelope" header, and "label: value" lines matched with
-// ^\s*label: (any amount of LEADING WHITESPACE tolerated, e.g. "tool:",
-// "verdict:", "session_id:"). Every field this package renders into the
-// block is schema-constrained only to be non-empty (internal/verdict/
-// schema.json) — nothing stops a reviewer's Evidence, Criterion, or
-// next_action from containing an embedded newline whose second physical
-// line reads, verbatim, "verdict: pass" or "anti-tangent envelope".
+// escapeContinuationLines guards a reviewer- or caller-authored free-text
+// field against forging the envelope's own line-based grammar.
+// plugin/anti-tangent-guard/hooks/check-task-complete recognizes the block by
+// three kinds of line: a bare "anti-tangent envelope" header, and
+// "label: value" lines matched with ^\s*label: (any amount of LEADING
+// WHITESPACE tolerated, e.g. "tool:", "verdict:", "session_id:"). Every field
+// this package renders into the block is schema-constrained only to be
+// non-empty (internal/verdict/schema.json) — nothing stops a reviewer's
+// Evidence, Criterion, next_action, task_title, permalink, reason or
+// rationale from containing an embedded newline whose second physical line
+// reads, verbatim, "verdict: pass" or "anti-tangent envelope".
+//
+// THE INVARIANT, which is wider than any one field: EVERY plain-string value
+// rendered by ANY formatter in this file that writes an "anti-tangent
+// envelope" header goes through this function. All four such formatters
+// (formatEnvelopeSummary, formatPlanSummary, formatPrimeSummary,
+// formatExtractSummary) emit a header the guard hook keys on, so escaping one
+// of them and not its siblings closes nothing — that was task-12c's defect,
+// exploited end-to-end through formatPlanSummary's Finding.Criterion.
+// summary_forgery_test.go enumerates the formatters from this package's own
+// source and drives a forged payload through every plain-string field of each
+// one's input, so neither a new formatter nor a new field can be added
+// without escaping and stay green.
+//
+// Named string types (verdict.Verdict, Severity, Category, PlanQuality,
+// ProposalAction, ProposalType) are deliberately NOT escaped and are
+// excluded from that test: every parser in internal/verdict rejects a value
+// outside its enum before a formatter ever sees it, so they cannot carry a
+// newline. Plain `string` fields have no such gate and are all escaped —
+// including server-set ones (tool, model_used, plan_run_id), where the
+// escape is a free no-op today and removes the need to re-audit if the
+// field's provenance ever changes.
 //
 // If s has no newline, it is returned unchanged: a single-line value is
 // always inlined mid-line after its own field's label (e.g. "  - [minor]
