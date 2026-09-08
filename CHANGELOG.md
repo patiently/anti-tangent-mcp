@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.1] - 2026-09-08
+
+### Fixed
+- **The GitHub Release body is no longer empty.** The release workflow extracted the matching
+  `## [X.Y.Z]` CHANGELOG section in one job and passed it to the GoReleaser job as a multiline
+  job output, where it arrived empty — so every release from **v0.11.0 through v0.18.0** shipped
+  with a 1-byte body while the workflow reported success. The GoReleaser job now extracts the
+  section from its own checkout, so only the short single-line `new_version` crosses the job
+  boundary, and the step fails loudly if the result is empty instead of publishing a blank
+  release. v0.18.0's body has been backfilled by hand.
+
 ## [0.18.0] - 2026-09-08
 
 ### Added
