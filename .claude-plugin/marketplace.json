@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "anti-tangent-mcp",
-  "version": "0.8.0",
-  "description": "Anti-tangent MCP server companions: the anti-tangent-protocol on-demand protocol plugin and the bm-scribe Basic Memory note-writing plugin.",
+  "version": "0.9.0",
+  "description": "Anti-tangent MCP server companions: the anti-tangent-protocol on-demand protocol plugin, the bm-scribe Basic Memory note-writing plugin, and I/O-delegation hooks (anti-tangent-shunt for bulk reads, anti-tangent-guard for completion enforcement).",
   "owner": {
     "name": "Patrick Gilmore",
     "email": "p@patiently.io"
@@ -21,6 +21,22 @@
       "description": "Claude Code plugin that writes Basic Memory notes per v0.7.0 project-knowledge conventions and the BM v0.21.1 three-step permalink-canonicalization pattern.",
       "version": "0.3.0",
       "source": "./plugin/bm-scribe",
+      "category": "productivity",
+      "homepage": "https://github.com/patiently/anti-tangent-mcp"
+    },
+    {
+      "name": "anti-tangent-shunt",
+      "description": "Routes I/O-heavy implementer work to a cheap worker model via PreToolUse hooks. Intercepts oversized Read and Bash calls, delegating them to anti-tangent-mcp's bulk_read tool to keep the implementer's context small and token-efficient.",
+      "version": "0.1.0",
+      "source": "./plugin/anti-tangent-shunt",
+      "category": "productivity",
+      "homepage": "https://github.com/patiently/anti-tangent-mcp"
+    },
+    {
+      "name": "anti-tangent-guard",
+      "description": "Enforces anti-tangent-mcp's validate_completion gate at task close via a PostToolUse hook. Detects when a task is marked completed without running validate_completion and returns a blocking instruction to reopen, validate, and re-close.",
+      "version": "0.1.0",
+      "source": "./plugin/anti-tangent-guard",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"
     }

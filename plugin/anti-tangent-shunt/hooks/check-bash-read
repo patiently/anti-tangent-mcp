@@ -1,0 +1,169 @@
+#!/bin/bash
+# Copyright Spotify AB
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Ported from spotify/portal-ai-plugins (plugins/shunt/hooks/check-bash-read),
+# commit 3c24ca30ff63e1f5bbad1c43fe5324daff579123. Upstream ships this licence
+# via a repository-root LICENSE file rather than a per-file header; this
+# header carries the licence and attribution with the file.
+#
+# Modified 2026-09 for anti-tangent-mcp: replaced the Portal/AiKA delegation
+# target with the anti-tangent MCP tools. Further modified 2026-09 to close a
+# confirmed bypass: `head -n 100000 file` (space-separated count) landed the
+# count itself ("100000") in $file_path instead of the real path — it isn't
+# a file, so the `-f` test below failed and the whole read sailed through
+# unblocked. See the count-parsing block below.
+
+set -uo pipefail
+
+# Block Bash commands that dump a large file into context (cat/head/tail/
+# less/more), catching reads that bypass the Read hook. Point the caller at
+# mcp__anti-tangent__bulk_read instead.
+#
+# PreToolUse hook for Bash. Block = exit 2 with the reason on stderr.
+# Allow = exit 0, silent. Do NOT "improve" the parsing below: pipes,
+# redirections, count flags and non-read commands are the accumulated result
+# of upstream's own eval cases, and false positives here block real shell
+# commands a caller is trying to run. Any parse ambiguity must resolve to
+# allow, never block.
+
+MIN_LINES="${ANTI_TANGENT_SHUNT_MIN_LINES:-350}"
+case "$MIN_LINES" in ''|*[!0-9]*) MIN_LINES=350 ;; esac
+
+input=$(cat)
+
+command=$(echo "$input" | jq -r '.tool_input.command // empty')
+[ -z "$command" ] && exit 0
+
+# Skip piped commands (cat file | grep) — those are targeted reads.
+echo "$command" | grep -qE '\|' && exit 0
+
+# Skip redirections (cat file > out) — not a read-into-context operation.
+echo "$command" | grep -qE '>' && exit 0
+
+# Extract file path from read commands, stripping flags (e.g. cat -n, head
+# -100), and — for head/tail only — an explicit line count, so it can be
+# weighed against the threshold instead of being mistaken for the path.
+file_path=""
+count=""
+if echo "$command" | grep -qE '^(cat|head|tail|less|more) '; then
+  cmd=$(echo "$command" | awk '{print $1}')
+  # Remove the command name, then strip any flags (-n, -100, --number, etc.)
+  args=$(echo "$command" | sed -E 's/^(cat|head|tail|less|more) +//')
+  # $args is intentionally unquoted below so word-splitting still separates
+  # flags from the path, but `set -f` stops that same expansion from also
+  # globbing against the hook's own cwd (e.g. `cat *.go`), which would pick
+  # up whatever the shell happened to match rather than the literal argument
+  # the command contains.
+  set -f
+  skip_next=0
+  for arg in $args; do
+    if [ "$skip_next" = 1 ]; then
+      # The value belonging to a preceding bare `-n` (only reachable for
+      # head/tail — see the case arms below that set skip_next).
+      skip_next=0
+      count="$arg"
+      continue
+    fi
+    case "$cmd:$arg" in
+      # head/tail's `-n` takes a following value — the next arg is the
+      # count, not the path. THE bypass: without this arm, `-n` fell
+      # through to the generic `-*) continue` case below (correctly
+      # skipping "-n" itself), then the very next arg — the count, e.g.
+      # "100000" — hit the catch-all and was mistaken for file_path.
+      # "100000" isn't a real file, so the `-f` test below failed and the
+      # read sailed through unblocked.
+      head:-n|tail:-n)
+        skip_next=1
+        continue
+        ;;
+      # Attached form, no space: `-n100000` / `-n+100` / `-n-100`.
+      head:-n[0-9+-]*|tail:-n[0-9+-]*)
+        count="${arg#-n}"
+        continue
+        ;;
+      # Bare `-N` form: `head -100` / `tail -100` is a historical synonym
+      # for `-n 100`. Scoped to head/tail only — `cat -n` is a boolean
+      # flag (number output lines), not a value-taking one, so this arm
+      # must never fire for cat/less/more or it would eat the file path.
+      head:-[0-9]*|tail:-[0-9]*)
+        count="${arg#-}"
+        continue
+        ;;
+      *:-*)
+        continue
+        ;;
+      *)
+        file_path=$(echo "$arg" | tr -d '"'"'")
+        break
+        ;;
+    esac
+  done
+  set +f
+fi
+
+[ -z "$file_path" ] && exit 0
+[ ! -f "$file_path" ] && exit 0
+
+# The count is what makes a read targeted, so compare it to the threshold —
+# but only when it's a plain unsigned integer. `-n +100` (tail: start at
+# line 100, read to EOF) and `-n -100` (head: all but the last 100 lines)
+# both parse a "count" above, but neither one bounds how much text comes
+# back, so they deliberately fall through to the whole-file check below,
+# same as no count at all.
+if printf '%s' "$count" | grep -qE '^[0-9]+$'; then
+  if [ "$count" -le "$MIN_LINES" ]; then
+    exit 0
+  fi
+  # An explicit large count was requested, but whether it actually reads
+  # too much still depends on the file's real size — `head -n 100000` on a
+  # 40-line file only ever reads 40 lines. Fall through to the same size
+  # gate as the no-count case rather than blocking on the requested count
+  # alone.
+fi
+
+lines=$(wc -l < "$file_path" 2>/dev/null | tr -d ' ')
+
+# Unreadable or otherwise unmeasurable file (permission denied, race with a
+# deletion, etc.): $lines is empty or non-numeric. The `|| echo "0"` a
+# previous version of this line relied on can never fire — `tr` succeeds
+# even when `wc` fails — so check the value itself instead. This hook must
+# never be the reason a legitimate (if unreadable) command fails; allow
+# through and let Bash report the real error.
+case "$lines" in
+  ''|*[!0-9]*) exit 0 ;;
+esac
+
+if [ "$lines" -le "$MIN_LINES" ]; then
+  exit 0
+fi
+
+printf 'COMMAND WOULD READ TOO MUCH DIRECTLY (source file has %d lines, threshold %d)
+
+Reading directly from a file this large would put a large amount of it into
+your context, even with a count flag like head -N. Ask the question instead:
+
+  mcp__anti-tangent__bulk_read
+    question: "<the specific thing you need to know>"
+    paths:    ["%s"]
+
+Ask a QUESTION, not "summarise this file" — you get back bullets, not prose.
+
+If you need to EDIT this file, follow the answer with a targeted read of the
+region it names: Read(file_path="%s", offset=<n>, limit=<n>). Targeted reads
+are never blocked.
+
+(Disable: ANTI_TANGENT_SHUNT_MIN_LINES=999999)
+' "$lines" "$MIN_LINES" "$file_path" "$file_path" >&2
+exit 2

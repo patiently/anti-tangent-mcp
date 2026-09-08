@@ -31,6 +31,7 @@ type Rollup struct {
 	GeneratedAt       time.Time          `json:"generated_at"`
 	Codescene         *CodesceneRollup   `json:"codescene,omitempty"`
 	PlanHeaders       *PlanHeadersRollup `json:"plan_headers,omitempty"`
+	Worker            *WorkerRollup      `json:"worker,omitempty"`
 }
 
 // PlanHeadersRollup reports structured-header adoption across the window's
@@ -41,6 +42,19 @@ type PlanHeadersRollup struct {
 	TasksWithHeader int     `json:"tasks_with_header"`
 	Adoption        float64 `json:"adoption"`
 }
+
+// WorkerRollup reports I/O-delegation volume across the window. Nil (and so
+// absent from rollup.json) when the window contains no worker events —
+// absence means "no data", not "zero delegation", matching PlanHeadersRollup.
+type WorkerRollup struct {
+	Calls        int            `json:"calls"`
+	PerTool      map[string]int `json:"per_tool"`
+	InputTokens  int            `json:"input_tokens"`
+	OutputTokens int            `json:"output_tokens"`
+}
+
+// workerTools is the set whose events feed WorkerRollup.
+var workerTools = map[string]bool{"bulk_read": true, "code_write": true}
 
 // computeRollup aggregates events into a Rollup. now stamps GeneratedAt (and the
 // window for an empty event set).
@@ -108,6 +122,20 @@ func computeRollup(events []Event, now time.Time) Rollup {
 			ph.Adoption = float64(planTasksWithHeader) / float64(planTasks)
 		}
 		r.PlanHeaders = ph
+	}
+	var w WorkerRollup
+	w.PerTool = map[string]int{}
+	for _, ev := range events {
+		if !workerTools[ev.Tool] {
+			continue
+		}
+		w.Calls++
+		w.PerTool[ev.Tool]++
+		w.InputTokens += ev.InputTokens
+		w.OutputTokens += ev.OutputTokens
+	}
+	if w.Calls > 0 {
+		r.Worker = &w
 	}
 	return r
 }

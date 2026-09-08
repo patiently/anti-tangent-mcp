@@ -581,3 +581,54 @@ func TestLoad_ContextCaps_LoweredPayloadCapClampsTheDefaultFileCap(t *testing.T)
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES")
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES")
 }
+
+func TestWorkerModelDefaultsToMidModel(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY": "k",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, cfg.MidModel, cfg.WorkerModel)
+}
+
+func TestWorkerModelOverride(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":         "k",
+		"ANTI_TANGENT_WORKER_MODEL": "google:gemini-2.5-flash",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, ModelRef{Provider: "google", Model: "gemini-2.5-flash"}, cfg.WorkerModel)
+}
+
+func TestWorkerModelMalformed(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":         "k",
+		"ANTI_TANGENT_WORKER_MODEL": "no-colon",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_WORKER_MODEL")
+}
+
+func TestWorkerMaxTokensDefaultAndClamp(t *testing.T) {
+	cfg, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY": "k",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 4096, cfg.WorkerMaxTokens)
+
+	cfg, err = Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":               "k",
+		"ANTI_TANGENT_WORKER_MAX_TOKENS":  "999999",
+		"ANTI_TANGENT_MAX_TOKENS_CEILING": "8192",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, 8192, cfg.WorkerMaxTokens)
+}
+
+func TestWorkerMaxTokensNonPositive(t *testing.T) {
+	_, err := Load(env(map[string]string{
+		"ANTHROPIC_API_KEY":              "k",
+		"ANTI_TANGENT_WORKER_MAX_TOKENS": "0",
+	}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_WORKER_MAX_TOKENS")
+}

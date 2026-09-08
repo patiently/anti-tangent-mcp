@@ -1,0 +1,19 @@
+{
+  "name": "anti-tangent-guard",
+  "description": "PostToolUse hook that enforces anti-tangent-mcp's validate_completion gate at task close: detects a TaskUpdate to status=completed whose window shows no validate_completion call (or a last verdict of fail) and mandates a reopen-fix-revalidate recovery flow. Active immediately on install.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Patrick Gilmore",
+    "email": "p@patiently.io"
+  },
+  "homepage": "https://github.com/patiently/anti-tangent-mcp",
+  "repository": "https://github.com/patiently/anti-tangent-mcp",
+  "license": "MIT",
+  "keywords": [
+    "anti-tangent",
+    "drift-protection",
+    "mcp",
+    "hooks",
+    "completion-gate"
+  ]
+}

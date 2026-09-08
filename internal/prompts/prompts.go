@@ -8,6 +8,8 @@ import (
 	"embed"
 	"encoding/hex"
 	"fmt"
+	"hash"
+	"html"
 	"regexp"
 	"strconv"
 	"strings"
@@ -197,6 +199,8 @@ type ExtractInput struct {
 
 const systemPrompt = `You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.`
 
+const workerSystemPrompt = `You return ONLY a JSON object matching the provided schema. You never invent facts about code that wasn't shown to you.`
+
 func RenderPre(in PreInput) (Output, error) {
 	body, err := render("pre.tmpl", in)
 	if err != nil {
@@ -298,6 +302,25 @@ func contextNonceDelimiterCollides(files []ContextFile, token string) bool {
 	return false
 }
 
+// deriveNonce computes a DETERMINISTIC collision-free nonce through retry.
+// hashFunc writes the bytes to hash for this attempt; collisionFunc reports
+// whether token would collide. Attempts are retried with attempt counter
+// folded into the hash up to contextNonceMaxAttempts times.
+func deriveNonce(hashFunc func(h hash.Hash), collisionFunc func(token string) bool, what string) (string, error) {
+	for attempt := 0; attempt < contextNonceMaxAttempts; attempt++ {
+		h := sha256.New()
+		hashFunc(h)
+		if attempt > 0 {
+			h.Write([]byte(strconv.Itoa(attempt)))
+		}
+		token := hex.EncodeToString(h.Sum(nil))[:contextNonceHexLen]
+		if !collisionFunc(token) {
+			return token, nil
+		}
+	}
+	return "", fmt.Errorf("prompts: could not derive a collision-free %s nonce after %d attempts", what, contextNonceMaxAttempts)
+}
+
 // DeriveContextFilesNonce computes a DETERMINISTIC nonce from the attached
 // files' identity and content, so that two separate renders of the SAME
 // attachment set produce a byte-identical prompt:
@@ -324,24 +347,18 @@ func contextNonceDelimiterCollides(files []ContextFile, token string) bool {
 // a retry counter folded in and tried again, up to contextNonceMaxAttempts
 // times, after which an error is returned rather than looping forever.
 func DeriveContextFilesNonce(files []ContextFile) (string, error) {
-	for attempt := 0; attempt < contextNonceMaxAttempts; attempt++ {
-		h := sha256.New()
-		for _, f := range files {
-			h.Write([]byte(f.Path))
-			h.Write([]byte{0})
-			h.Write([]byte(f.Content))
-			h.Write([]byte{0})
-		}
-		if attempt > 0 {
-			h.Write([]byte(strconv.Itoa(attempt)))
-		}
-		token := hex.EncodeToString(h.Sum(nil))[:contextNonceHexLen]
-		if !contextNonceDelimiterCollides(files, token) {
-			return token, nil
-		}
-	}
-	return "", fmt.Errorf(
-		"prompts: could not derive a collision-free context files nonce after %d attempts", contextNonceMaxAttempts)
+	return deriveNonce(
+		func(h hash.Hash) {
+			for _, f := range files {
+				h.Write([]byte(f.Path))
+				h.Write([]byte{0})
+				h.Write([]byte(f.Content))
+				h.Write([]byte{0})
+			}
+		},
+		func(token string) bool { return contextNonceDelimiterCollides(files, token) },
+		"context files",
+	)
 }
 
 func ensureContextFilesNonce(in PlanInput) (PlanInput, error) {
@@ -364,6 +381,36 @@ func ensureContextFilesNonceChunk(in PlanChunkInput) (PlanChunkInput, error) {
 		in.ContextFilesNonce = nonce
 	}
 	return in, nil
+}
+
+// DeriveWorkerContentNonce derives a DETERMINISTIC nonce from content strings,
+// preventing content from forging delimiters in worker prompts.
+func DeriveWorkerContentNonce(contents []string) (string, error) {
+	return deriveNonce(
+		func(h hash.Hash) {
+			for _, content := range contents {
+				h.Write([]byte(content))
+				h.Write([]byte{0})
+			}
+		},
+		func(token string) bool { return workerContentNonceCollides(contents, token) },
+		"worker content",
+	)
+}
+
+// workerContentNonceCollides reports whether token appears in any content
+// in the worker file tag delimiters: either <file path="…" nonce="TOKEN">
+// or </file nonce="TOKEN">. These are the shapes that would break prompt structure
+// if the token were present in the content.
+func workerContentNonceCollides(contents []string, token string) bool {
+	// Match both opening <file path="…" nonce="TOKEN"> and closing </file nonce="TOKEN"> tags
+	re := regexp.MustCompile(`(?m)(?:^[ \t]*<file\s+path="[^"]*"\s+nonce="|^[ \t]*</file\s+nonce=")` + regexp.QuoteMeta(token) + `"`)
+	for _, c := range contents {
+		if re.MatchString(c) {
+			return true
+		}
+	}
+	return false
 }
 
 func RenderPlan(in PlanInput) (Output, error) {
@@ -433,6 +480,80 @@ func RenderPrime(in PrimeInput) (Output, error) {
 		return Output{}, err
 	}
 	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
+}
+
+// WorkerFile is one file attached to a worker call.
+type WorkerFile struct {
+	Path    string
+	Content string
+}
+
+type WorkerBulkReadInput struct {
+	Question string
+	Files    []WorkerFile
+	Nonce    string // empty, derived during render if unset
+}
+
+// escapeAttr makes a path safe inside a path="…" attribute. text/template
+// escapes nothing, so a filename containing a double quote would otherwise
+// close the attribute and have the remainder read as prompt structure. Quotes
+// and ampersands are legal in Unix filenames and are NOT covered by
+// rejectControlChars, which refuses only control and Unicode format characters.
+func escapeAttr(p string) string { return html.EscapeString(p) }
+
+type WorkerCodeWriteInput struct {
+	Spec             string
+	ReferencePath    string
+	ReferenceContent string
+	Nonce            string // empty, derived during render if unset
+}
+
+// RenderWorkerBulkRead renders the bulk_read worker prompt. UserPrefix is
+// deliberately left empty: this is a single call, and an Anthropic cache
+// breakpoint on a single call is a 1.25x write against zero reads.
+func RenderWorkerBulkRead(in WorkerBulkReadInput) (Output, error) {
+	esc := make([]WorkerFile, len(in.Files))
+	contents := make([]string, len(in.Files))
+	for i, f := range in.Files {
+		esc[i] = WorkerFile{Path: escapeAttr(f.Path), Content: f.Content}
+		contents[i] = f.Content
+	}
+	in.Files = esc
+
+	// Derive nonce from file contents if not explicitly set
+	if in.Nonce == "" {
+		nonce, err := DeriveWorkerContentNonce(contents)
+		if err != nil {
+			return Output{}, err
+		}
+		in.Nonce = nonce
+	}
+
+	body, err := render("worker_bulk_read.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: workerSystemPrompt, User: body, UserSuffix: body}, nil
+}
+
+// RenderWorkerCodeWrite renders the code_write worker prompt.
+func RenderWorkerCodeWrite(in WorkerCodeWriteInput) (Output, error) {
+	in.ReferencePath = escapeAttr(in.ReferencePath)
+
+	// Derive nonce from reference content if not explicitly set
+	if in.Nonce == "" {
+		nonce, err := DeriveWorkerContentNonce([]string{in.ReferenceContent})
+		if err != nil {
+			return Output{}, err
+		}
+		in.Nonce = nonce
+	}
+
+	body, err := render("worker_code_write.tmpl", in)
+	if err != nil {
+		return Output{}, err
+	}
+	return Output{System: workerSystemPrompt, User: body, UserSuffix: body}, nil
 }
 
 func RenderExtract(in ExtractInput) (Output, error) {

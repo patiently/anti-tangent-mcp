@@ -167,6 +167,17 @@ Enforcement is prompt-level: the requirement to call these tools lives here and 
 
 **CodeScene stats:** CodeScene keeps no history — see [docs/team-setup/codescene-stats.md](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/codescene-stats.md) to log Code Health to `codescene-events.jsonl`.
 
+### Large reads
+
+If a `Read` is blocked for exceeding the line threshold, do not work around it
+with `cat`, and do not lower the threshold. Call `bulk_read` with a **question**
+— "which methods write to the database?", not "summarise this file". You get
+bullets led by exact identifiers.
+
+If you then need to EDIT what the answer found, take a targeted read of that
+region (`offset`/`limit`); targeted reads are never blocked. Never edit from the
+answer alone — it carries no reliable line anchors.
+
 ### 4.3 How to address findings
 
 **Address vs. push back.** Reviewer LLMs can be wrong. If a finding misreads the code, document the disagreement in the next call's `working_on` field — e.g. `working_on: "addressed all findings except F#3 which is incorrect because the helper does perform the length check, see handlers.go line 42"` — and re-validate. Don't silently ignore: the next reviewer call won't see your reasoning unless you write it.

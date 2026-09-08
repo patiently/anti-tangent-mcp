@@ -45,6 +45,39 @@ For each task you dispatch to an implementing subagent, paste the §4.2 clause v
 
 After the subagent reports DONE, you may want to require evidence that `validate_completion` was called and returned `pass` (or `warn` with all findings addressed). The simplest way: ask for the verdict + findings JSON in the subagent's DONE report. The MCP server does not enforce this; the prompt does.
 
+### Completion guard (optional, `anti-tangent-guard` plugin)
+
+The `anti-tangent-guard` plugin turns §5.3's DONE-gate into an automated
+check instead of a prompt-only convention. It installs one `PostToolUse`
+hook on `TaskUpdate`: whenever a task's status flips to `completed`, the hook
+scans the transcript window for that task for a pass signal — either a
+direct `mcp__anti-tangent__validate_completion` call, or a pasted
+`summary_block` tagged `tool: validate_completion`. **This is why
+implementers must paste the block verbatim (§4.2 step 3): a controller-side
+hook cannot see inside a subagent's own session, so the pasted block is the
+only trace it has that the gate ran.**
+
+`PostToolUse` fires after the status change has already landed, so the hook
+cannot prevent the close — this is post-close detection plus a mandated
+recovery flow, not a block on the close itself. It blocks (`exit 2`,
+returning the reason to the model as something it must address before its
+next action) in two cases: no pass signal is present anywhere in the window,
+or the most recent one carries `verdict: fail`. Both messages name the same
+recovery: reopen with `status=in_progress`, address the findings, re-run
+`validate_completion`, then re-close.
+
+Set `ANTI_TANGENT_COMPLETION_GUARD=0` to disable the hook outright — it
+short-circuits to a silent no-op before reading anything. It also fails open
+on its own errors (missing transcript, absent `jq`/`python3`, malformed
+input): it never blocks a close because the hook itself broke. Requires a
+server ≥ 0.18.0 — an older server never emits the `tool:` tag the guard keys
+on, so every close backed only by a pasted block (no direct tool call in the
+window) blocks with the no-signal message even when the gate genuinely ran.
+Like the shunt hooks, this lives in an installable plugin, not in the server
+itself: the server stays advisory (root `CLAUDE.md`, "What This Repo Is
+Not"); enforcement, where a project wants it, is opt-in at the harness
+layer.
+
 ### 5.4 Anti-pattern: don't re-validate completion from the controller
 
 Do NOT have the controller call `validate_completion` itself after the subagent reports DONE. The implementer's session was created in its own context — the controller doesn't have the `session_id`, so a fresh `validate_completion` call from the controller would either fail with a `session_not_found` finding or, if the controller passed an arbitrary id, return spurious findings. The subagent's post-hook IS the gate.

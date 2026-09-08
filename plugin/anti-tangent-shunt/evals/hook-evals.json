@@ -1,0 +1,267 @@
+{
+  "skill_name": "shunt",
+  "description": "Evals for the check-file-size PreToolUse hook",
+  "evals": [
+    {
+      "id": 1,
+      "name": "small-file",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/small.txt"
+        }
+      },
+      "fixture": {
+        "lines": 100
+      },
+      "expected_decision": "allow",
+      "reason": "File under threshold — delegation overhead not worth it"
+    },
+    {
+      "id": 2,
+      "name": "boundary-exact-350",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/boundary.txt"
+        }
+      },
+      "fixture": {
+        "lines": 350
+      },
+      "expected_decision": "allow",
+      "reason": "Exactly at threshold (<=350) — should not block"
+    },
+    {
+      "id": 3,
+      "name": "just-over-threshold",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/over.txt"
+        }
+      },
+      "fixture": {
+        "lines": 351
+      },
+      "expected_decision": "block",
+      "reason": "One line over threshold — should block"
+    },
+    {
+      "id": 4,
+      "name": "large-file",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/large.txt"
+        }
+      },
+      "fixture": {
+        "lines": 1200
+      },
+      "expected_decision": "block",
+      "reason": "Well over threshold — clear delegation candidate"
+    },
+    {
+      "id": 5,
+      "name": "very-large-file",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/huge.txt"
+        }
+      },
+      "fixture": {
+        "lines": 5000
+      },
+      "expected_decision": "block",
+      "reason": "Very large file — blocked regardless of extension"
+    },
+    {
+      "id": 6,
+      "name": "empty-file",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/empty.txt"
+        }
+      },
+      "fixture": {
+        "lines": 0
+      },
+      "expected_decision": "allow",
+      "reason": "Empty file — nothing to delegate"
+    },
+    {
+      "id": 7,
+      "name": "offset-without-limit-blocked",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/large.txt",
+          "offset": 100
+        }
+      },
+      "fixture": {
+        "lines": 1200
+      },
+      "expected_decision": "block",
+      "reason": "CHANGED from the ported case (was named targeted-read-offset, expected_decision=allow, reason 'Offset set — targeted read, allow through'): offset alone — any value, not just 0 — does not bound a read. Without a limit, Read defaults to up to 2000 lines from the offset, which can still be most of a large file, so only `limit` counts as targeted now. This is the general form of the bypass-2 fix; the confirmed bypass itself was specifically offset:0 (see offset-zero-no-limit-blocked)."
+    },
+    {
+      "id": 8,
+      "name": "targeted-read-limit",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/large.txt",
+          "limit": 50
+        }
+      },
+      "fixture": {
+        "lines": 1200
+      },
+      "expected_decision": "allow",
+      "reason": "Limit set — targeted read, allow through"
+    },
+    {
+      "id": 9,
+      "name": "targeted-read-both",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/large.txt",
+          "offset": 100,
+          "limit": 50
+        }
+      },
+      "fixture": {
+        "lines": 1200
+      },
+      "expected_decision": "allow",
+      "reason": "Both offset and limit — definitely a targeted read"
+    },
+    {
+      "id": 10,
+      "name": "nonexistent-file",
+      "input": {
+        "tool_input": {
+          "file_path": "/tmp/shunt-does-not-exist.txt"
+        }
+      },
+      "fixture": null,
+      "expected_decision": "allow",
+      "reason": "File doesn't exist — let Read handle the error"
+    },
+    {
+      "id": 11,
+      "name": "empty-filepath",
+      "input": {
+        "tool_input": {
+          "file_path": ""
+        }
+      },
+      "fixture": null,
+      "expected_decision": "allow",
+      "reason": "Empty path — pass through"
+    },
+    {
+      "id": 12,
+      "name": "missing-filepath-field",
+      "input": {
+        "tool_input": {}
+      },
+      "fixture": null,
+      "expected_decision": "allow",
+      "reason": "No file_path field — pass through gracefully"
+    },
+    {
+      "id": 13,
+      "name": "offset-zero-no-limit-blocked",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/large.txt",
+          "offset": 0
+        }
+      },
+      "fixture": {
+        "lines": 1200
+      },
+      "expected_decision": "block",
+      "reason": "Bypass-2 regression, CHANGED from the ported case (was named offset-zero, expected_decision=allow, reason 'offset:0 treated as targeted — known bypass, documenting behavior'): offset:0 with no limit must not sail past the size gate — offset:0 is really just no offset at all, and offset alone never bounds a read. Previously allowed because 'offset present' (any value, including 0) was mistaken for evidence of a targeted read; fixed to key on `limit` presence instead."
+    },
+    {
+      "id": 14,
+      "name": "limit-zero",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/large.txt",
+          "limit": 0
+        }
+      },
+      "fixture": {
+        "lines": 1200
+      },
+      "expected_decision": "allow",
+      "reason": "limit:0 is present — jq's `// empty` does not swallow a literal 0, so this is correctly read as an explicit (if unusual) bound, not an absent one. Under the fixed hook, presence of `limit` (any value) is exactly the intended allow signal, so this is no longer a 'known bypass' — it was already correct, just mislabeled."
+    },
+    {
+      "id": 15,
+      "name": "env-override-lower",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/medium.txt"
+        }
+      },
+      "fixture": {
+        "lines": 250
+      },
+      "env": {
+        "ANTI_TANGENT_SHUNT_MIN_LINES": "200"
+      },
+      "expected_decision": "block",
+      "reason": "SHUNT_MIN_LINES=200 overrides default — 250-line file should block"
+    },
+    {
+      "id": 16,
+      "name": "env-override-higher",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/over.txt"
+        }
+      },
+      "fixture": {
+        "lines": 351
+      },
+      "env": {
+        "ANTI_TANGENT_SHUNT_MIN_LINES": "500"
+      },
+      "expected_decision": "allow",
+      "reason": "SHUNT_MIN_LINES=500 overrides default — 351-line file should be allowed"
+    },
+    {
+      "id": 17,
+      "name": "env-non-numeric-fallback",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/under.txt"
+        }
+      },
+      "fixture": {
+        "lines": 200
+      },
+      "env": {
+        "ANTI_TANGENT_SHUNT_MIN_LINES": "abc"
+      },
+      "expected_decision": "allow",
+      "reason": "Non-numeric SHUNT_MIN_LINES falls back to 350 — 200-line file is under the fallback threshold and allowed; a broken fallback would error on the comparison and fall through to block, so this case can actually fail"
+    },
+    {
+      "id": 18,
+      "name": "unreadable-file",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/unreadable.txt"
+        }
+      },
+      "fixture": {
+        "lines": 1,
+        "unreadable": true
+      },
+      "skip_if_root": true,
+      "expected_decision": "allow",
+      "reason": "chmod 000 file — wc -l cannot read it, so lines is empty; the hook must fail open (allow), never block, on a file it cannot measure (finding 1 / C1)"
+    }
+  ]
+}

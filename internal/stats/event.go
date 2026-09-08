@@ -35,6 +35,13 @@ type Event struct {
 	// Goal / Acceptance criteria header. Plan-header adoption telemetry.
 	TasksTotal      int `json:"tasks_total,omitempty"`
 	TasksWithHeader int `json:"tasks_with_header,omitempty"`
+
+	// InputTokens / OutputTokens are set only by the I/O-delegation tools
+	// (bulk_read, code_write). They are what makes "tokens kept out of the
+	// implementer's context" computable. omitempty so no existing event shape
+	// changes.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
 // CountFindings builds severity and category histograms (and the total) from a

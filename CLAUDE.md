@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (and other agents) when working with 
 
 ## Project Overview
 
-`anti-tangent-mcp` is an advisory MCP server (Go binary) that helps prevent implementing subagents from drifting away from their assigned tasks. It exposes seven tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec`, `check_progress`, `validate_completion`), two optional project-knowledge tools (`prime_project_knowledge`, `extract_project_knowledge`), and `plan_run_report` — a deterministic, reviewer-free per-task report over a finished plan run. The other six send the plan / task spec / code / knowledge-base context under review to a reviewer LLM and return structured findings.
+`anti-tangent-mcp` is an advisory MCP server (Go binary) that helps prevent implementing subagents from drifting away from their assigned tasks. It exposes nine tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec`, `check_progress`, `validate_completion`), two optional project-knowledge tools (`prime_project_knowledge`, `extract_project_knowledge`), a deterministic per-task report (`plan_run_report`), and an I/O-delegation pair (`bulk_read`, `code_write`). Six of these send context under review to a reviewer LLM and return structured findings; the two I/O tools (`bulk_read`, `code_write`) answer questions or generate code without reviewer involvement, routing work to a cheap worker model instead.
 
 The reviewer LLM is intentionally a *different* model from the implementer, so reviews are not blind to the implementer's blind spots.
 
@@ -48,7 +48,13 @@ internal/
   session/     TaskSpec, Session, Checkpoint; in-memory store with TTL
   prompts/     embedded pre/mid/post templates; render funcs; golden tests
   providers/   Reviewer interface; allowlist; HTTP clients (anthropic/openai/google)
-  mcpsrv/      MCP server: tool registration + 3 handlers + integration test
+  mcpsrv/      MCP server: tool registration + handlers + integration test
+    handlers.go               # 6 review tools (validate_plan, validate_task_spec, …)
+    worker_handlers.go        # 2 I/O tools (bulk_read, code_write)
+    worker_call.go            # worker model invocation
+    file_target.go            # write-target path resolution + O_NOFOLLOW
+    file_target_windows.go    # Windows symlink caveat
+  notices/     third-party attribution, asserted by an ordinary go test run
 ```
 
 Each package has one responsibility. `cmd/` only wires; logic lives in `internal/`.
@@ -131,5 +137,5 @@ Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). `
 - No plugin system for custom reviewers.
 - No language-specific code analysis. The reviewer is an LLM, not a linter.
 - No metrics endpoint, no OTel exporter.
-- No automatic correction: the server is advisory, never blocking.
+- No automatic correction: **the server is advisory, never blocking.** The v0.18.0 plugins (`anti-tangent-shunt`, `anti-tangent-guard`) **do** block — a PreToolUse hook refuses an oversized read before it happens, and the completion guard detects a task close that skipped `validate_completion` after the fact and returns a blocking instruction to reopen the task, validate, and re-close. (The guard cannot prevent the close: `PostToolUse` fires after the state change. See the guard plugin's README.) That is not a reversal of this non-goal: they are Claude Code plugin hooks the operator installs separately, each with a kill switch. The MCP server itself still never blocks and never corrects. Keep it that way — enforcement belongs in a plugin.
 - No queueing. Concurrency is what `sync.RWMutex` gives us.

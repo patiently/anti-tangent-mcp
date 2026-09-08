@@ -291,7 +291,11 @@ func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolRes
 // Carrying these on a struct keeps the helper signature narrow (1 arg vs. 7)
 // and matches CodeScene's "max arguments = 4" code-health threshold.
 type perTaskReviewErrInputs struct {
-	Err        error
+	Err error
+	// Tool is the calling handler's MCP tool name ("validate_task_spec",
+	// "check_progress", or "validate_completion"), copied onto the returned
+	// envelope's Tool field since this helper is shared by all three.
+	Tool       string
 	SessionID  string
 	Model      config.ModelRef
 	PartialRaw []byte
@@ -333,6 +337,7 @@ func (h *handlers) handlePerTaskReviewErr(in perTaskReviewErrInputs) (*mcp.CallT
 	}
 	r = verdict.FinalizeVerdict(r)
 	env := Envelope{
+		Tool:       in.Tool,
 		SessionID:  in.SessionID,
 		Verdict:    string(r.Verdict),
 		Findings:   r.Findings,

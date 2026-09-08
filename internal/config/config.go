@@ -12,23 +12,31 @@ import (
 )
 
 type Config struct {
-	AnthropicKey      string
-	OpenAIKey         string
-	GoogleKey         string
-	PreModel          ModelRef
-	MidModel          ModelRef
-	PostModel         ModelRef
-	PlanModel         ModelRef
-	PrimeModel        ModelRef
-	ExtractModel      ModelRef
-	SessionTTL        time.Duration
-	MaxPayloadBytes   int
-	RequestTimeout    time.Duration
-	LogLevel          slog.Level
-	PerTaskMaxTokens  int
-	PlanMaxTokens     int
-	PrimeMaxTokens    int
-	ExtractMaxTokens  int
+	AnthropicKey     string
+	OpenAIKey        string
+	GoogleKey        string
+	PreModel         ModelRef
+	MidModel         ModelRef
+	PostModel        ModelRef
+	PlanModel        ModelRef
+	PrimeModel       ModelRef
+	ExtractModel     ModelRef
+	SessionTTL       time.Duration
+	MaxPayloadBytes  int
+	RequestTimeout   time.Duration
+	LogLevel         slog.Level
+	PerTaskMaxTokens int
+	PlanMaxTokens    int
+	PrimeMaxTokens   int
+	ExtractMaxTokens int
+	// WorkerModel drives bulk_read / code_write. Resolution is explicit env
+	// override -> MidModel. The reviewer != implementer principle does NOT
+	// apply to the worker — same-model is fine, cheap is the only criterion —
+	// so this chains to the cheap tier rather than to PlanModel like the
+	// review tools do. Mirrors StatsModel's fallback exactly.
+	WorkerModel ModelRef
+	// WorkerMaxTokens caps worker output. Clamped by MaxTokensCeiling.
+	WorkerMaxTokens   int
 	PlanTasksPerChunk int
 	MaxTokensCeiling  int
 	// PlanMaxPayloadBytes caps plan content + project_knowledge for
@@ -109,6 +117,7 @@ func Load(env func(string) string) (Config, error) {
 		PlanMaxTokens:          4096,
 		PrimeMaxTokens:         4096,
 		ExtractMaxTokens:       8192,
+		WorkerMaxTokens:        4096,
 		PlanTasksPerChunk:      8,
 		MaxTokensCeiling:       16384,
 		PlanMaxPayloadBytes:    1048576,
@@ -174,6 +183,18 @@ func Load(env func(string) string) (Config, error) {
 		cfg.ExtractModel = mr
 	} else {
 		cfg.ExtractModel = cfg.PlanModel
+	}
+
+	// WorkerModel: optional override -> MidModel. Deliberately NOT chained to
+	// PlanModel: worker calls want the cheap tier, and MidModel already is one.
+	if v := env("ANTI_TANGENT_WORKER_MODEL"); v != "" {
+		mr, err := ParseModelRef(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_WORKER_MODEL: %w", err)
+		}
+		cfg.WorkerModel = mr
+	} else {
+		cfg.WorkerModel = cfg.MidModel
 	}
 
 	// KBStore: optional knowledge-store selector. Empty (the default)
@@ -438,6 +459,20 @@ func Load(env func(string) string) (Config, error) {
 	}
 	if cfg.StatsMaxTokens > cfg.MaxTokensCeiling {
 		cfg.StatsMaxTokens = cfg.MaxTokensCeiling
+	}
+
+	if v := env("ANTI_TANGENT_WORKER_MAX_TOKENS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_WORKER_MAX_TOKENS: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_WORKER_MAX_TOKENS: must be positive, got %d", n)
+		}
+		cfg.WorkerMaxTokens = n
+	}
+	if cfg.WorkerMaxTokens > cfg.MaxTokensCeiling {
+		cfg.WorkerMaxTokens = cfg.MaxTokensCeiling
 	}
 
 	if v := env("ANTI_TANGENT_PLAN_LEDGER"); v == "1" || strings.EqualFold(v, "true") {

@@ -5,6 +5,104 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-09-08
+
+### Added
+- **`bulk_read` and `code_write`** — two MCP tools that route I/O-heavy implementer work to a
+  cheap worker model, so a large file corpus and generated boilerplate never enter the
+  implementer's context. `bulk_read` reads files server-side under the same
+  `ANTI_TANGENT_PLAN_ROOTS` rules as `validate_completion` and answers a question about them;
+  `code_write` generates code matching a required `reference_path` and, given a `target_path`,
+  writes it and returns only a line count. The delegation pattern is inspired by Spotify's
+  [shunt](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt) plugin, described
+  in ["Portal by Spotify cut my Claude Code token usage by 90%"](https://engineering.atspotify.com/2026/9/portal-by-spotify-cut-my-claude-code-token-usage-by-90)
+  — these two Go tools are original code, not derived from it.
+- **`plugin/anti-tangent-shunt`** — two PreToolUse hooks that block oversized full-file reads
+  (`Read`, and `cat`/`head`/`tail`/`less`/`more` via `Bash`) and point at `bulk_read`, plus
+  bulk-reader / code-writer skills and a key-free eval suite. Adapted from Spotify's
+  [shunt](https://github.com/spotify/portal-ai-plugins/tree/main/plugins/shunt) plugin
+  (Apache-2.0) — see `THIRD_PARTY_NOTICES.md`.
+- **`plugin/anti-tangent-guard`** — a PostToolUse hook on `TaskUpdate` that detects a
+  `completed` close when `validate_completion` did not run, or ran and returned `fail`, and
+  mandates a reopen-fix-revalidate recovery flow. `PostToolUse` fires after the state change
+  has already landed, so the hook cannot refuse the close itself — this is post-close detection
+  plus mandated recovery, not a block on the close. Active on install;
+  `ANTI_TANGENT_COMPLETION_GUARD=0` disables it. Fails open on any error. Its summary-block pass
+  signal and verdict read are scoped to blocks tagged `tool: validate_completion` — see the new
+  `Envelope.tool` field below — so a `check_progress` or `validate_task_spec` block (rendered
+  byte-identical otherwise) cannot satisfy the gate or have its verdict misread as
+  validate_completion's. The hook reads that tag, and the verdict, positionally (the first
+  `tool:`/`verdict:` line within a block, never a scan for the target value anywhere in it), and
+  `formatEnvelopeSummary` escapes every continuation line of a finding's `Evidence`/`Criterion`
+  or an envelope's `next_action` with a non-whitespace sentinel — so neither a forged tag nor a
+  forged verdict smuggled through that reviewer-authored free text can be mistaken for the
+  genuine header line. A direct `validate_completion` call's own MCP result is JSON-marshalled,
+  so its summary block's newlines survive only as escapes inside one JSON string; the hook
+  matches that result back to its call and parses the JSON directly for `verdict`, so a `fail`
+  is caught on the direct-call path too, not only on a pasted marker block. Requires an
+  anti-tangent-mcp server >= 0.18.0; an untagged block from an older server does not satisfy
+  the guard.
+- **`ANTI_TANGENT_WORKER_MODEL`** (defaults to `ANTI_TANGENT_MID_MODEL`) and
+  **`ANTI_TANGENT_WORKER_MAX_TOKENS`** (4096, clamped by `ANTI_TANGENT_MAX_TOKENS_CEILING`).
+  `ANTI_TANGENT_SHUNT_MIN_LINES` (350) is read by the shunt hooks, not the server.
+- **`THIRD_PARTY_NOTICES.md`** — Apache-2.0 notice for the ported shunt hooks and eval suites.
+
+### Changed
+- `stats.Event` gains optional `input_tokens` / `output_tokens`; `rollup.json` gains an
+  additive `worker` key. Existing keys are unchanged — the gnome-topbar consumer reads them
+  by exact name.
+- `Envelope` (the JSON returned by `validate_task_spec`, `check_progress`, and
+  `validate_completion`) gains a `tool` field naming the MCP tool that produced it. Additive;
+  existing fields are unchanged. `formatEnvelopeSummary` now emits a `tool:` line, which
+  `plugin/anti-tangent-guard`'s hook requires to identify a `validate_completion` block.
+- The paste-ready `summary_block`'s multi-line rendering now prefixes every continuation line
+  with a non-whitespace `| ` sentinel instead of pure whitespace. The rule lives in the new
+  leaf package `internal/blocktext`; `internal/mcpsrv/summary.go` applies it to the per-task
+  envelope and to the `validate_plan` / `prime_project_knowledge` / `extract_project_knowledge`
+  blocks, and `internal/planrun/report.go` applies it to `plan_run_report` — whose header is
+  deliberately different (`anti-tangent plan run report`) and which was therefore missed on the
+  first pass. Covered fields: `criterion`, `evidence`, `next_action`, `task_title`, a pick's
+  `permalink`/`reason`, a proposal's `permalink`/`rationale`, the provenance and context-file
+  paths, and, in the plan-run report, the `plan_run_id`, task title, verdict cell and the whole
+  CodeScene cell (skip reason, quality gate, and the category-count map's keys). User-visible
+  formatting change, intended: without it, a caller- or reviewer-authored line that happened to
+  read `tool: validate_completion` or `verdict: pass` — or a bare `anti-tangent envelope`
+  header, which starts a whole new block — could be mistaken for the block's own grammar by a
+  downstream parser. Enum-typed fields are not escaped; the parsers in `internal/verdict` reject
+  an out-of-enum value before a formatter sees it. This is hygiene for a machine-read format,
+  not a security boundary: an agent that wants to skip `plugin/anti-tangent-guard`'s completion
+  gate can compose a block in its own report text without going near these fields — see that
+  plugin's README, "How much to trust each pass signal".
+  `internal/mcpsrv/summary_forgery_test.go` enumerates the header-emitting formatters from the
+  package's own source and drives a forged payload through every free-text field of each, so a
+  new formatter or a new field cannot be added without escaping and stay green. See
+  `plugin/anti-tangent-guard` above.
+- The README's filesystem trust-model section now covers writes, not only reads, and states
+  plainly that `bulk_read` sends the full contents of every path it reads (and `code_write` its
+  `reference_path`) to the configured worker provider — the documented mechanism of both tools,
+  not a new behavior, called out because it wasn't stated loudly enough for someone deciding
+  whether to enable them.
+
+### Fixed
+- **`code_write`'s `overwrite: true` write is now atomic.** It previously opened the target with
+  `O_TRUNC`, which emptied the file at `open(2)` before a single byte of the new content had been
+  written — a failure partway through left the caller with an empty or half-written file and no
+  way back. It now writes a temp file in the target's own directory and renames it over the
+  target, so every failure before that rename leaves the original byte-identical to what it held
+  before the call. The rename carries the target's file mode across but replaces its inode, so a
+  hard link to `target_path` now points at the pre-write content after an overwrite, and
+  ownership is not preserved across it (only the mode is). `overwrite: false` is unchanged
+  (`O_CREAT|O_EXCL|O_NOFOLLOW`).
+- **`target_path` is now refused on Windows**, rather than silently accepted with a gap. Unix
+  refuses a symlink planted at the target's final path component between the containment check
+  and the write, however it got there; Windows exposes no equivalent through Go's `syscall`
+  package, so on that platform the same symlink/reparse point would be a static bypass, not a
+  narrow race — and nothing in this repo builds or tests on Windows to validate a guard against
+  it. `code_write` without `target_path` still generates the code and returns it as `code`, so
+  the tool degrades gracefully rather than failing outright. See README's "Writes: `code_write`
+  and `target_path`" for the full reasoning, including why the read path's Windows story is
+  narrower and stays unchanged.
+
 ## [0.17.0] - 2026-09-02
 
 ### Added

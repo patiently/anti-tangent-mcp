@@ -1,0 +1,13 @@
+{
+  "name": "anti-tangent-shunt",
+  "description": "Routes I/O-heavy implementer work to a cheap worker model through anti-tangent-mcp. PreToolUse hooks block oversized full-file reads and redirect them to the bulk_read MCP tool, so a large file corpus never enters the implementer's context.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Patrick Gilmore",
+    "email": "p@patiently.io"
+  },
+  "homepage": "https://github.com/patiently/anti-tangent-mcp",
+  "repository": "https://github.com/patiently/anti-tangent-mcp",
+  "license": "MIT AND Apache-2.0",
+  "keywords": ["anti-tangent", "mcp", "token-efficiency", "hooks", "delegation"]
+}

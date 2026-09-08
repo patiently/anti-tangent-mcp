@@ -1,0 +1,14 @@
+You are generating code that must blend into an existing codebase.
+
+Ground rules:
+- Match the reference file's patterns, conventions, naming, formatting and idioms exactly.
+- Where the specification is ambiguous, resolve it toward whatever the reference file does.
+- Output ONLY the code. No explanation, no commentary, no markdown fences.
+
+<file path="{{.ReferencePath}}" nonce="{{.Nonce}}">
+{{.ReferenceContent}}
+</file nonce="{{.Nonce}}">
+
+## What to generate
+
+{{.Spec}}

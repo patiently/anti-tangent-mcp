@@ -5,7 +5,33 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/patiently/anti-tangent-mcp/internal/blocktext"
 )
+
+// Continuation indents for the two shapes of line Render emits. Both feed
+// blocktext.EscapeContinuationLines, whose "| " sentinel — not the indent —
+// is what stops a continuation line reading as block grammar; the indent only
+// decides where the folded text sits.
+const (
+	// reportValueContIndent aligns under the value column of the report's
+	// "  <label>: <value>" header lines ("  plan_run_id:  ", "  plan:         ").
+	reportValueContIndent = "                "
+	// reportCellContIndent aligns under the first column of a task row, whose
+	// "  %-2d " prefix is five characters wide.
+	reportCellContIndent = "     "
+)
+
+// escapeReportValue folds a header-line value; escapeReportCell folds a table
+// cell. EVERY caller-reachable string Render puts into its output goes through
+// one of them — see the comment on Render.
+func escapeReportValue(s string) string {
+	return blocktext.EscapeContinuationLines(s, reportValueContIndent)
+}
+
+func escapeReportCell(s string) string {
+	return blocktext.EscapeContinuationLines(s, reportCellContIndent)
+}
 
 // RunTotals is the aggregate line of a plan-run report.
 type RunTotals struct {
@@ -134,12 +160,23 @@ func topCategoriesList(counts map[string]int, max int) string {
 }
 
 // Render produces the paste-ready plan-run report.
+//
+// Its output becomes plan_run_report's summary_block, so it lands in a
+// tool_result that plugin/anti-tangent-guard's hook scans line-by-line for
+// "anti-tangent envelope" / "tool:" / "verdict:" — the hook does not care
+// which tool or which formatter produced a chunk of text. This report's own
+// header is deliberately different ("anti-tangent plan run report"), but that
+// buys nothing on its own: a newline inside any value it renders would put
+// the NEXT physical line at column 0, where it can read as that grammar. So
+// every caller-reachable value below is folded through escapeReportValue or
+// escapeReportCell first. It is hygiene, not a security boundary — see
+// blocktext.EscapeContinuationLines.
 func Render(r *Run) string {
 	t := Totals(r)
 	var b strings.Builder
 	b.WriteString("anti-tangent plan run report\n")
-	fmt.Fprintf(&b, "  plan_run_id:  %s\n", r.ID)
-	fmt.Fprintf(&b, "  plan:         %s / %s\n", r.PlanVerdict, r.PlanQuality)
+	fmt.Fprintf(&b, "  plan_run_id:  %s\n", escapeReportValue(r.ID))
+	fmt.Fprintf(&b, "  plan:         %s / %s\n", escapeReportValue(r.PlanVerdict), escapeReportValue(r.PlanQuality))
 	fmt.Fprintf(&b, "  tasks: %d of %d completed   pass %d | warn %d | fail %d\n\n",
 		t.Completed, t.Tasks, t.Pass, t.Warn, t.Fail)
 
@@ -168,7 +205,12 @@ func Render(r *Run) string {
 		if at == "" {
 			at = "incomplete"
 		}
-		fmt.Fprintf(&b, "  %-2d %-*s  %-10s %s\n", row.Index, width, title, at, codesceneCell(row))
+		// Escape AFTER truncation, and escape codesceneCell's COMPOSED output
+		// rather than its inputs: one call then covers every free-text field
+		// that can reach the cell — SkipReason, QualityGate, and the
+		// CategoryCounts map's keys — including any added later.
+		fmt.Fprintf(&b, "  %-2d %-*s  %-10s %s\n", row.Index, width,
+			escapeReportCell(title), escapeReportCell(at), escapeReportCell(codesceneCell(row)))
 	}
 
 	fmt.Fprintf(&b, "\n  codescene: %d run, %d skipped, %d missing\n",
