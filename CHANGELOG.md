@@ -21,7 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The release now asserts the outcome instead of the intermediate.** The previous guard checked
   that the notes *file* was non-empty, which was always true and stayed true through nine empty
   releases, because the file was never read. The workflow now reads back the *published* release
-  body and fails if it is empty.
+  body and fails if it is empty. Both guards test for the presence of non-whitespace content
+  rather than a byte threshold — `wc -c` counts bytes while `jq '.body | length'` counts
+  characters, so a threshold compared across the two could reject a body one guard had already
+  accepted, and any count will happily pass twenty spaces.
 
 ## [0.18.1] - 2026-09-08
 

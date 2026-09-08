@@ -145,13 +145,16 @@ jobs:
           ' CHANGELOG.md > "${RUNNER_TEMP}/release-notes.md"
 
           BYTES=$(wc -c < "${RUNNER_TEMP}/release-notes.md")
-          echo "release notes for ${NEW}: ${BYTES} bytes"
+          NONWS=$(tr -d '[:space:]' < "${RUNNER_TEMP}/release-notes.md" | wc -c)
+          echo "release notes for ${NEW}: ${BYTES} bytes, ${NONWS} non-whitespace"
           head -5 "${RUNNER_TEMP}/release-notes.md"
 
-          # Fail loudly rather than publish a blank release again. The old bug was
-          # invisible precisely because nothing checked.
-          if [ "$BYTES" -lt 20 ]; then
-            echo "::error file=CHANGELOG.md::release notes for ${NEW} are empty (${BYTES} bytes) — refusing to publish a blank release body"
+          # Test for CONTENT, not a byte threshold. A count cannot distinguish
+          # twenty spaces from twenty characters of changelog, and mixing byte
+          # counts here with character counts downstream invites a guard that
+          # passes one check and fails the other on the same body.
+          if [ "$NONWS" -eq 0 ]; then
+            echo "::error file=CHANGELOG.md::no release notes found for ${NEW} in CHANGELOG.md — refusing to publish a blank release body"
             exit 1
           fi
 
@@ -172,10 +175,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: v${{ needs.version.outputs.new_version }}
         run: |
-          BYTES=$(gh release view "$TAG" --json body --jq '.body | length')
-          echo "published body for $TAG: ${BYTES} bytes"
-          if [ "${BYTES:-0}" -lt 20 ]; then
-            echo "::error::${TAG} published with an empty release body (${BYTES} bytes)"
+          gh release view "$TAG" --json body --jq '.body' > "${RUNNER_TEMP}/published-body.md"
+          BYTES=$(wc -c < "${RUNNER_TEMP}/published-body.md")
+          NONWS=$(tr -d '[:space:]' < "${RUNNER_TEMP}/published-body.md" | wc -c)
+          echo "published body for ${TAG}: ${BYTES} bytes, ${NONWS} non-whitespace"
+          if [ "$NONWS" -eq 0 ]; then
+            echo "::error::${TAG} published with an empty release body"
             exit 1
           fi
 
