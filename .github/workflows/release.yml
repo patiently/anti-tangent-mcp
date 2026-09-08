@@ -34,7 +34,18 @@ jobs:
         run: |
           CURRENT=$(cat VERSION)
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          MSG=$(git log -1 --pretty=%B)
+          # SUBJECT ONLY, not the full message. This matched the whole commit
+          # body as a bare substring, so a merge commit whose body said
+          # "No (major)/(minor) marker: this is a patch release" — writing those
+          # two words in brackets — was read as a major bump. It computed 1.0.0
+          # and failed on the missing changelog entry. Nothing shipped, but the
+          # release was blocked by prose that was describing the convention
+          # rather than invoking it.
+          #
+          # The documented convention is that the MERGE COMMIT carries the
+          # marker, and a merge subject is the PR title, so the subject is where
+          # it belongs. Body prose can now discuss the markers freely.
+          MSG=$(git log -1 --pretty=%s)
 
           if [[ "$MSG" == *"[major]"* ]]; then
             MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0
@@ -46,6 +57,7 @@ jobs:
 
           NEW="${MAJOR}.${MINOR}.${PATCH}"
           echo "new_version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "Subject: $MSG"
           echo "Bumping: $CURRENT -> $NEW"
 
       - name: Validate changelog

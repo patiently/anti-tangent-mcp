@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release notes. It was caught in review rather than by CI. `actionlint` also invokes
   `shellcheck` on every `run:` block, which surfaced and fixed an unquoted `$GITHUB_OUTPUT`
   redirect in `release.yml`.
+- **The version-bump marker is read from the commit SUBJECT**, not the whole message. It was a
+  bare substring match over the full commit body, so a merge commit whose body explained that it
+  carried *no* marker — writing the two words in brackets to say so — was read as a major bump.
+  The release failed validating a changelog entry for a version that did not exist. Nothing
+  shipped (the tag, GoReleaser and Docker jobs were all skipped), but the release was blocked by
+  prose describing the convention rather than invoking it. The documented convention is that the
+  merge commit carries the marker, and a merge subject is the PR title, so the subject is where
+  it is now read from; body prose can discuss the markers freely.
 
 ## [0.18.0] - 2026-09-08
 
