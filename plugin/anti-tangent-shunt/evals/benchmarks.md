@@ -211,6 +211,45 @@ directly from the server's response (`structuredContent`), not computed.
 or of the file `code_write` wrote (scenario 4), which is what the `bytes/4`
 approximation in the table above is applied to.
 
+**Re-run 2026-09-08b (finding A / PR #65): `bench.sh` byte-count fix.**
+CodeRabbit found that `bench.sh`'s answer-byte measurement for scenarios 1–3
+went `answer=$(jq -r ... <<<"$resp")` then `printf '%s' "$answer" | wc -c` —
+routing the answer through a `$(...)` command substitution, which strips
+*all* trailing newlines from what it captures. An answer ending in one or
+more newlines was silently undercounted, and that undercount fed directly
+into the published "with" column. `bench.sh` now pipes `jq -j` (join, no
+added newline) straight into `wc -c`, with no `$(...)` round trip, so a
+trailing newline in the answer is counted, not discarded — see `bench.sh`
+for the fix itself.
+
+Because the raw provider responses are **not checked in**
+(`$BENCH_OUT_DIR/raw/` is a scratch directory), verifying the fix could not
+be done by recomputing over old data — it required a fresh run of all four
+scenarios, 3 runs each, same corpus/model/prompts as before. The tables
+below are that fresh run and are what `benchmarks.tsv`, the README and the
+Computed table above now report.
+
+**The fix itself made no measurable difference on this run's data.**
+Checked directly: for all 12 raw responses captured by this run, computing
+`answer` bytes both the old (buggy) way and the new (`jq -j`) way gives the
+*same* byte count in every case — none of this run's 12 answers happened to
+end in a trailing newline, so the bug had zero effect on this particular
+sample set. Every number below that differs from the table this superseded
+differs because it is a **new, independently-sampled run** (`gpt-5.6-luna`
+is called at temperature > 0; see "Answer quality varies run to run" under
+Concerns), not because the byte-count bug distorted the old figures — that
+would only be true of a run whose answer(s) actually ended in a newline. The
+old table cannot be re-checked directly against this claim because its own
+raw JSON was never retained either — this is disclosed as the honest limit
+of what "same corpus, model and prompts" can prove after the fact, not
+papered over.
+
+`code_write`'s own byte count (`wc -c` of the file it wrote to disk) never
+went through `jq`/`$(...)` at all and was never affected by this bug; its
+figures below changed for sampling-variance reasons only, included here
+purely because the task asked to re-run all four scenarios together as one
+consistent set.
+
 ### `single_large_file`
 
 **Re-run 2026-09-08.** The original three runs below produced a median (run
@@ -230,7 +269,9 @@ Computed table, `benchmarks.tsv` and the README now report.
 | 3 | 46001 | 558 | 8547 | 119 | 30 |
 | **median** | **46001** | **558** | 8547 | — | **36** |
 
-**Re-run (used for the published figures):**
+**Re-run (superseded — correct answers, but measured with the pre-finding-A
+buggy byte count; see "Re-run 2026-09-08b" below for the currently-published
+figures):**
 
 | Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) |
 |---|---|---|---|---|---|
@@ -241,14 +282,35 @@ Computed table, `benchmarks.tsv` and the README now report.
 
 All three re-run answers correctly identify `(*query).Close` (receiver
 `*query`) as the exported function mutating the package-level `fPointPool` /
-`hPointPool` point pools — unlike the superseded run 1 above. The median
-savings percentage happens to round to the same 99.9% either way (see
-Computed table); what changed is that the number is now backed by three
-runs that answered the question correctly, not one that didn't.
+`hPointPool` point pools — unlike the superseded run 1 above.
+
+**Re-run 2026-09-08b (finding A / PR #65 — used for the published
+figures):**
+
+| Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) |
+|---|---|---|---|---|---|
+| 1 | 46001 | 759 | 10535 | 117 | 29 |
+| 2 | 46001 | 400 | 5803 | 120 | 30 |
+| 3 | 46001 | 865 | 11175 | 131 | 33 |
+| **median** | **46001** | **759** | 10535 | — | **30** |
+
+Runs 1 and 3 correctly identify `(*query).Close` (receiver `*query`)
+mutating the package-level `fPointPool`/`hPointPool` pools. **Run 2's answer
+is wrong** — it claims no exported function in the file mutates
+package-level state — and run 2's byte count (120) happens to be the median
+of the three, so the published "with" figure for this scenario traces to an
+incorrect answer, same defect class as the superseded original run above,
+just smaller in effect (120 bytes is the middle value here, not an outlier
+low one). Flagged rather than silently accepted; not re-rolled beyond the
+three runs the task specified. See "Answer quality varies run to run" under
+Concerns.
 
 Without = round(171971/4) = **42993** tokens.
 
 ### `source_test_pair`
+
+**Superseded (pre-finding-A byte count; see "Re-run 2026-09-08b" below for
+the currently-published figures):**
 
 | Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) |
 |---|---|---|---|---|---|
@@ -257,9 +319,22 @@ Without = round(171971/4) = **42993** tokens.
 | 3 | 61127 | 869 | 9745 | 1490 | 373 |
 | **median** | **61127** | **1236** | 13916 | — | **373** |
 
+**Re-run 2026-09-08b (finding A / PR #65 — used for the published
+figures):**
+
+| Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) |
+|---|---|---|---|---|---|
+| 1 | 61127 | 855 | 8938 | 1473 | 368 |
+| 2 | 61127 | 1175 | 13551 | 1402 | 351 |
+| 3 | 61127 | 680 | 8677 | 764 | 191 |
+| **median** | **61127** | **855** | 8938 | — | **351** |
+
 Without = round(216506/4) = **54127** tokens.
 
 ### `multi_file_cross_package`
+
+**Superseded (pre-finding-A byte count; see "Re-run 2026-09-08b" below for
+the currently-published figures):**
 
 | Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) |
 |---|---|---|---|---|---|
@@ -268,9 +343,27 @@ Without = round(216506/4) = **54127** tokens.
 | 3 | 10864 | 341 | 4641 | 306 | 77 |
 | **median** | **10864** | **357** | 4993 | — | **74** |
 
+**Re-run 2026-09-08b (finding A / PR #65 — used for the published
+figures):**
+
+| Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) |
+|---|---|---|---|---|---|
+| 1 | 10864 | 328 | 4317 | 237 | 59 |
+| 2 | 10864 | 321 | 3805 | 208 | 52 |
+| 3 | 10864 | 504 | 5719 | 210 | 53 |
+| **median** | **10864** | **328** | 4317 | — | **53** |
+
 Without = round(41489/4) = **10372** tokens.
 
 ### `code_write`
+
+Never affected by the finding A byte-count bug — this scenario's byte count
+is `wc -c` of the file `code_write` wrote to disk, which never passed
+through `jq`/`$(...)`. Re-run anyway (finding A / PR #65) purely so the
+published set is four scenarios from one consistent run rather than three
+fresh plus one old.
+
+**Superseded:**
 
 | Run | input_tokens | output_tokens | review_ms | generated bytes | generated tokens (≈) | without = ref+gen (≈) | lines_written |
 |---|---|---|---|---|---|---|---|
@@ -279,48 +372,71 @@ Without = round(41489/4) = **10372** tokens.
 | 3 | 29325 | 2315 | 21659 | 4611 | 1153 | 28728 | 201 |
 | **median** | **29325** | **2315** | 21659 | — | — | **28634** | **199** |
 
+**Re-run 2026-09-08b (used for the published figures):**
+
+| Run | input_tokens | output_tokens | review_ms | generated bytes | generated tokens (≈) | without = ref+gen (≈) | lines_written |
+|---|---|---|---|---|---|---|---|
+| 1 | 29325 | 3121 | 21707 | 5228 | 1307 | 28882 | 257 |
+| 2 | 29325 | 2898 | 21688 | 4624 | 1156 | 28731 | 191 |
+| 3 | 29325 | 2521 | 18032 | 4886 | 1222 | 28797 | 219 |
+| **median** | **29325** | **2898** | 21688 | — | — | **28797** | **219** |
+
+Run 3's output was spot-checked and is real, syntactically plausible Go
+(`package tsdb`, `import ("context"; "math"; "testing"; ...)`, a
+`TestDefaultHeadOptions` table-driven test against `DefaultHeadOptions()`) —
+not garbage.
+
 Reference-file component (constant): round(110300/4) = **27575** tokens.
 
 ## Computed table (matches `benchmarks.tsv` / the README)
 
 | scenario_id | lines | without | with | unit | savings | worker in | worker out |
 |---|---|---|---|---|---|---|---|
-| single_large_file | 4,984 | 42,993 | 29 | tokens | 99.9% | 46,002 | 560 |
-| source_test_pair | 7,624 | 54,127 | 373 | tokens | 99% | 61,127 | 1,236 |
-| multi_file_cross_package | 1,302 | 10,372 | 74 | tokens | 99% | 10,864 | 357 |
-| code_write | 3,142 | 28,634 | 199 | lines | — | 29,325 | 2,315 |
+| single_large_file | 4,984 | 42,993 | 30 | tokens | 99.9% | 46,001 | 759 |
+| source_test_pair | 7,624 | 54,127 | 351 | tokens | 99% | 61,127 | 855 |
+| multi_file_cross_package | 1,302 | 10,372 | 53 | tokens | 99% | 10,864 | 328 |
+| code_write | 3,142 | 28,797 | 219 | lines | — | 29,325 | 2,898 |
 
 ## Concerns / observations
 
 - **Worker `output_tokens` is much larger than the visible answer would
-  suggest** (e.g. `single_large_file` run 2: 988 output tokens for a
-  117-byte answer, ~29 approximated tokens). `gpt-5.6-luna` appears to spend
-  a substantial share of its billed output on hidden reasoning that never
-  reaches the `answer` field. This is reported exactly as observed —
-  `worker_out` in the table is the provider's real reported count, not
-  reconciled against the visible answer length — but it means "worker cost"
-  and "visible answer size" are not the same thing for this model, and a
-  reader comparing worker spend across models should not assume otherwise.
+  suggest** (e.g. `single_large_file` run 3, 2026-09-08b re-run: 865 output
+  tokens for a 131-byte answer, ~33 approximated tokens). `gpt-5.6-luna`
+  appears to spend a substantial share of its billed output on hidden
+  reasoning that never reaches the `answer` field. This is reported exactly
+  as observed — `worker_out` in the table is the provider's real reported
+  count, not reconciled against the visible answer length — but it means
+  "worker cost" and "visible answer size" are not the same thing for this
+  model, and a reader comparing worker spend across models should not assume
+  otherwise.
 - **Scenario sizes deviate from upstream's targets** by amounts ranging from
   +2.9% (`source_test_pair`) to +24% (`single_large_file`, and `code_write`
   at −14%): real corpus files come in whatever sizes they come in, and no
   file was padded or trimmed to hit a round number. `multi_file_cross_package`
   came out closest (1,302 vs. upstream's 1,281, +1.6%) purely because a
   3-file real cross-package call chain happened to total almost exactly that.
-- **Answer quality varies run to run** for the same fixed prompt and input.
-  The clearest example on record: the original `single_large_file` run 1
-  claimed *no* exported function mutates package-level state, while its
-  runs 2–3 correctly identified `(*query).Close` mutating the point pools —
-  and because run 1 happened to be the median, the first published savings
-  figure was computed from the wrong answer (see the re-run note under
-  `single_large_file` above). The 2026-09-08 re-run's three answers are all
-  substantively correct, but still vary in phrasing and length (26/29/29
-  approximated tokens) — this is normal LLM sampling variance at
-  temperature > 0 and is why the method runs each scenario three times and
-  reports the median rather than a single sample. It is not a defect in the
-  harness, but it is a reason not to over-read any single scenario's answer
-  as ground truth, and a reason to check *what* the median run said, not
-  only its size.
+- **Answer quality varies run to run** for the same fixed prompt and input,
+  and this keeps recurring across re-runs of `single_large_file`
+  specifically. The original run 1 claimed *no* exported function mutates
+  package-level state, while its runs 2–3 correctly identified
+  `(*query).Close` mutating the point pools, and because run 1 happened to
+  be the median, the first published savings figure was computed from the
+  wrong answer (see the superseded original-run note under
+  `single_large_file` above). The 2026-09-08 re-run's three answers were all
+  substantively correct. Then the 2026-09-08b re-run (finding A / PR #65)
+  hit the *same* failure mode a second time in a different run: its run 2
+  claims no exported function mutates package-level state — wrong, per the
+  same evidence as before — and run 2's byte count (120) happens to be the
+  median of that run's three, so the currently-published "with" figure for
+  `single_large_file` traces to an incorrect answer (flagged in that
+  scenario's section above, not silently accepted). This is normal LLM
+  sampling variance at temperature > 0 and is why the method runs each
+  scenario three times and reports the median rather than a single sample —
+  but three samples is evidently not always enough to keep a wrong answer
+  from landing on the median for this scenario specifically. It is not a
+  defect in the harness, but it is a concrete, repeated reason not to
+  over-read any single scenario's answer as ground truth, and a reason to
+  check *what* the median run said, not only its size.
 - The `bytes/4` approximation is coarse for very short answers (a handful of
   words carries proportionally more punctuation/backtick overhead per token
   than the corpus prose it approximates for the "without" side); the

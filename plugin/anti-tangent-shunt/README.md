@@ -111,10 +111,10 @@ Ours, against `prometheus/prometheus@7f48230f675e7c459398bf1d0f055f6f55caf90a`
 
 | scenario_id | Scenario | Lines | Without | With | Unit | Savings | Worker in | Worker out | Runs | Stat |
 |---|---|---|---|---|---|---|---|---|---|---|
-| single_large_file | Single large file | 4,984 | 42,993 | 29 | tokens | 99.9% | 46,002 | 560 | 3 | median |
-| source_test_pair | Source + test pair | 7,624 | 54,127 | 373 | tokens | 99% | 61,127 | 1,236 | 3 | median |
-| multi_file_cross_package | Multi-file cross-package | 1,302 | 10,372 | 74 | tokens | 99% | 10,864 | 357 | 3 | median |
-| code_write | Code-write | 3,142 | 28,634 | 199 | lines | — | 29,325 | 2,315 | 3 | median |
+| single_large_file | Single large file | 4,984 | 42,993 | 30 | tokens | 99.9% | 46,001 | 759 | 3 | median |
+| source_test_pair | Source + test pair | 7,624 | 54,127 | 351 | tokens | 99% | 61,127 | 855 | 3 | median |
+| multi_file_cross_package | Multi-file cross-package | 1,302 | 10,372 | 53 | tokens | 99% | 10,864 | 328 | 3 | median |
+| code_write | Code-write | 3,142 | 28,797 | 219 | lines | — | 29,325 | 2,898 | 3 | median |
 
 **The two tables are not directly comparable, and ours being higher does not
 mean this port is better.** Different language and corpus (Go/Prometheus vs

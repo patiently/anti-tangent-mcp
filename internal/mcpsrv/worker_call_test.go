@@ -103,3 +103,63 @@ func TestRunWorkerMalformedJSONDoesNotEchoBody(t *testing.T) {
 	assert.Contains(t, err.Error(), "answer", "error should name the field")
 	assert.NotContains(t, err.Error(), "SECRET", "error must not echo the raw body")
 }
+
+// TestRunWorkerRejectsNullField pins the exact failure mode from finding C:
+// {"answer":null} unmarshals cleanly (json's documented no-op-on-null rule
+// for non-pointer targets) leaving an empty string with no error, so a
+// map[string]string decode alone reports success carrying nothing. runWorker
+// must fail closed instead.
+func TestRunWorkerRejectsNullField(t *testing.T) {
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"answer":null}`)}}
+	h := &handlers{deps: Deps{Reviews: providers.Registry{"anthropic": f}}}
+	_, err := h.runWorker(context.Background(),
+		config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"},
+		prompts.Output{}, 10, "answer")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "answer", "error should name the field")
+}
+
+// TestRunWorkerRejectsEmptyField covers the plain "" case (as opposed to
+// null): a provider that emits an empty string satisfies the schema and the
+// map decode, but still carries nothing useful back to the caller.
+func TestRunWorkerRejectsEmptyField(t *testing.T) {
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"answer":""}`)}}
+	h := &handlers{deps: Deps{Reviews: providers.Registry{"anthropic": f}}}
+	_, err := h.runWorker(context.Background(),
+		config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"},
+		prompts.Output{}, 10, "answer")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "answer", "error should name the field")
+}
+
+// TestRunWorkerRejectsWhitespaceOnlyField covers a value that is non-empty
+// by byte length but carries no content — a naive `text == ""` check (as
+// opposed to a trimmed check) would let this through.
+func TestRunWorkerRejectsWhitespaceOnlyField(t *testing.T) {
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"answer":"   \n\t "}`)}}
+	h := &handlers{deps: Deps{Reviews: providers.Registry{"anthropic": f}}}
+	_, err := h.runWorker(context.Background(),
+		config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"},
+		prompts.Output{}, 10, "answer")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "answer", "error should name the field")
+}
+
+// TestRunWorkerRejectsUnexpectedExtraProperty covers a response that carries
+// the required field AND something else. The wire schema already sets
+// additionalProperties:false, but that constraint is enforced by the
+// provider, not verified locally — this test pins the local, defense-in-depth
+// check: a chatty/misbehaving provider that ignores its own declared schema
+// and smuggles a second top-level property must not be silently accepted,
+// since a map[string]string decode retains (and ignores) unknown keys with
+// no error. The error must not echo the smuggled value.
+func TestRunWorkerRejectsUnexpectedExtraProperty(t *testing.T) {
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"answer":"ok","commentary":"SECRET_ASIDE"}`)}}
+	h := &handlers{deps: Deps{Reviews: providers.Registry{"anthropic": f}}}
+	_, err := h.runWorker(context.Background(),
+		config.ModelRef{Provider: "anthropic", Model: "claude-haiku-4-5-20251001"},
+		prompts.Output{}, 10, "answer")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "answer", "error should name the expected field")
+	assert.NotContains(t, err.Error(), "SECRET_ASIDE", "error must not echo smuggled content")
+}

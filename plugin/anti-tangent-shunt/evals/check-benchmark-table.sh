@@ -40,6 +40,15 @@ MDCOLS=(scenario_id lines without_tokens with_value with_unit savings_pct worker
 MDIDX=(0 2 3 4 5 6 7 8)
 NMD=${#MDCOLS[@]}
 
+# Literal header cell text each markdown table is expected to carry, in
+# order — these are the human-readable display names, NOT the COLS/MDCOLS
+# machine names, since README.md and benchmarks.md each render their own
+# header row. parse_scenario_table validates every one of these, not just
+# the leading "scenario_id" cell, so a renamed or reordered later column
+# fails loudly instead of silently passing.
+README_HEADER=(scenario_id Scenario Lines Without With Unit Savings "Worker in" "Worker out" Runs Stat)
+MD_HEADER=(scenario_id lines without with unit savings "worker in" "worker out")
+
 US=$'\x1f'
 
 fail() {
@@ -64,17 +73,23 @@ normalize() {
   printf '%s' "$v"
 }
 
-# parse_scenario_table FILE NCOLS OUT_ROW_VAR OUT_ORDER_VAR
+# parse_scenario_table FILE NCOLS EXPECTED_HEADER_VAR OUT_ROW_VAR OUT_ORDER_VAR
 #
 # Extracts the first markdown table in FILE whose header row starts with
 # "scenario_id" into OUT_ROW_VAR[scenario_id]="col1<US>col2<US>..." and
-# OUT_ORDER_VAR (an array of scenario_ids in file order). NCOLS is the
+# OUT_ORDER_VAR (an array of scenario_ids in file order). NCOLS is the exact
 # number of data columns the table is expected to have (not counting the
-# empty leading cell before the first '|').
+# empty leading cell before the first '|') and EXPECTED_HEADER_VAR names an
+# array of the NCOLS literal header cell values, in order — every header
+# cell is checked against it, not just the first ("scenario_id"). Every data
+# row must also have EXACTLY ncols cells: an extra, missing, or renamed
+# column — in the header or in any row — fails loudly rather than being
+# truncated or ignored.
 parse_scenario_table() {
   local file="$1" ncols="$2"
-  local -n out_row="$3"
-  local -n out_order="$4"
+  local -n expected_header="$3"
+  local -n out_row="$4"
+  local -n out_order="$5"
 
   local in_table=0 saw_header=0 saw_sep=0
   local line stripped row_joined sid_raw sid i cell
@@ -86,6 +101,18 @@ parse_scenario_table() {
       if [[ "$line" =~ ^\|[[:space:]]*scenario_id[[:space:]]*\| ]]; then
         in_table=1
         saw_header=1
+        IFS='|' read -r -a raw <<<"$line"
+        if [ "${#raw[@]}" -ne $((ncols + 1)) ]; then
+          fail "$file: 'scenario_id' header row has $(( ${#raw[@]} - 1 )) cells, expected exactly $ncols: $line"
+        fi
+        for i in "${!expected_header[@]}"; do
+          cell="${raw[$((i + 1))]}"
+          cell="${cell#"${cell%%[![:space:]]*}"}"
+          cell="${cell%"${cell##*[![:space:]]}"}"
+          if [ "$cell" != "${expected_header[$i]}" ]; then
+            fail "$file: 'scenario_id' header column $((i + 1)) is '$cell', expected '${expected_header[$i]}'"
+          fi
+        done
       fi
       continue
     fi
@@ -106,10 +133,12 @@ parse_scenario_table() {
     [[ "$line" == \|* ]] || break
 
     IFS='|' read -r -a raw <<<"$line"
-    # raw[0] is empty (before the leading '|'); last element is empty or
-    # trailing text after the final '|'. Real cells are raw[1..ncols].
-    if [ "${#raw[@]}" -lt $((ncols + 1)) ]; then
-      fail "$file 'scenario_id' table row has $(( ${#raw[@]} - 1 )) cells, expected $ncols: $line"
+    # raw[0] is empty (before the leading '|'); real cells are raw[1..ncols].
+    # Exact equality, not "at least ncols": a row with extra cells (an added
+    # or renamed column) must fail here, not have its extra cell silently
+    # dropped by the loop below.
+    if [ "${#raw[@]}" -ne $((ncols + 1)) ]; then
+      fail "$file 'scenario_id' table row has $(( ${#raw[@]} - 1 )) cells, expected exactly $ncols: $line"
     fi
     row_joined=""
     for i in $(seq 1 "$ncols"); do
@@ -169,7 +198,7 @@ done < "$TSV"
 # ── README.md "Ours" table vs. benchmarks.tsv ──
 declare -A readme_row
 declare -a readme_order
-parse_scenario_table "$README" "$NCOLS" readme_row readme_order
+parse_scenario_table "$README" "$NCOLS" README_HEADER readme_row readme_order
 
 for sid in "${tsv_order[@]}"; do
   [ -n "${readme_row[$sid]:-}" ] || fail "scenario '$sid' is in benchmarks.tsv but missing from the README Ours table"
@@ -195,7 +224,7 @@ echo "OK: README Ours table matches benchmarks.tsv (${#tsv_order[@]} scenarios, 
 # ── benchmarks.md "Computed table" vs. benchmarks.tsv ──
 declare -A md_row
 declare -a md_order
-parse_scenario_table "$BENCHMD" "$NMD" md_row md_order
+parse_scenario_table "$BENCHMD" "$NMD" MD_HEADER md_row md_order
 
 for sid in "${tsv_order[@]}"; do
   [ -n "${md_row[$sid]:-}" ] || fail "scenario '$sid' is in benchmarks.tsv but missing from benchmarks.md's Computed table"

@@ -134,18 +134,23 @@ run_bulk_read() {
     echo "ERROR ($scenario_id run $run): $(jq -c '.error' <<<"$resp")" >&2
     return 1
   fi
-  local verdict answer in_tok out_tok ms bytes
+  local verdict in_tok out_tok ms bytes
   verdict=$(jq -r '.result.structuredContent.verdict // empty' <<<"$resp")
   if [ -n "$verdict" ]; then
     printf '%s\t%s\tERROR\tERROR\tERROR\tERROR\t\t%s\n' "$scenario_id" "$run" "$raw_file"
     echo "REFUSED ($scenario_id run $run): $(jq -c '.result.structuredContent.findings' <<<"$resp")" >&2
     return 1
   fi
-  answer=$(jq -r '.result.structuredContent.answer' <<<"$resp")
   in_tok=$(jq -r '.result.structuredContent.input_tokens' <<<"$resp")
   out_tok=$(jq -r '.result.structuredContent.output_tokens' <<<"$resp")
   ms=$(jq -r '.result.structuredContent.review_ms' <<<"$resp")
-  bytes=$(printf '%s' "$answer" | wc -c)
+  # jq -j (join, no trailing newline) piped straight into wc -c, never through
+  # a $(...) command substitution: command substitution strips ALL trailing
+  # newlines from its captured output, so an answer ending in one or more
+  # newlines was silently undercounted. -j (unlike -r) also adds no newline
+  # of its own after the value, so this is an exact byte count of the
+  # `answer` string's content — neither over- nor under-counted.
+  bytes=$(jq -j '.result.structuredContent.answer' <<<"$resp" | wc -c)
   printf '%s\t%s\t%s\t%s\t%s\t%s\t\t%s\n' "$scenario_id" "$run" "$in_tok" "$out_tok" "$ms" "$bytes" "$raw_file"
 }
 
