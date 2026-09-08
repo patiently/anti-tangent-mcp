@@ -345,14 +345,19 @@ hooks in this release behave identically when they refuse.
 Blocks `cat` / `head` / `tail` / `less` / `more` reading a whole large file. Passes pipes,
 redirections and non-read commands.
 
-**Corrected after implementation — the shipped hook does not do what the rest of this
-paragraph originally claimed.** It said `head`/`tail` carrying a line-count flag passes,
-because the flag *is* the limit and so the read is already targeted. The ported parser does
-not implement that: `head -100 big.go` is **blocked**, while `head -n 5 big.go` is **allowed**
-only incidentally, because `-n` is stripped as an option rather than recognised as a count.
-The parser is a pinned port of upstream's, and diverging from it would invalidate the 17
-ported eval cases, so the behaviour stands and this text is corrected to match it. See
-`plugin/anti-tangent-shunt/README.md` for the user-facing statement of the real behaviour.
+**Corrected twice; this is the settled behaviour.** The original text said a `head`/`tail`
+count flag passes because the flag *is* the limit. The ported parser did not implement that:
+it stripped `-n` as an option and read the count as the path, so `head -n 100000 big.go` was
+**allowed** and put the whole file in context. A first correction documented that as an
+inherited quirk to preserve for upstream fidelity — the wrong call, and CodeRabbit caught it
+on PR #65.
+
+The rule now implemented, and the one this section asserts: **a count bounds a read, so it is
+compared against `ANTI_TANGENT_SHUNT_MIN_LINES`.** `head -n 5` and `head -100` pass; `head -n
+100000` is blocked. For `check-file-size` the parallel rule is that a `limit` bounds a read
+and an `offset` never does, so `Read(offset: 0)` is blocked while `Read(offset: 0, limit: 50)`
+passes. Five of the seventeen ported upstream eval cases changed to match, marked as
+deliberate divergences.
 
 **This hook carries the release's highest risk of user-visible harm.** A false positive on
 `check-file-size` costs a redundant delegation; a false positive here blocks a legitimate

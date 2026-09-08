@@ -49,28 +49,33 @@ use for delegated work (e.g. `anthropic:claude-haiku-4-5-20251001` — see the
 root README's "Model tiers" table for the full allowlist). The server routes
 the actual questions to that model.
 
-### Bash hook: count-flag behaviour
+### Count flags and offsets: what actually bounds a read
 
-`check-bash-read` does **not** treat a count flag as evidence of a targeted
-read, despite what the design doc says — the shipped behaviour, pinned by
-`bash-hook-evals.json`, is:
+Both hooks ask the same question — *is this read bounded to something small?*
+— and only two things answer it.
 
-- `head -100 large.txt` — **blocked**. `-100` is stripped as a flag, so the
-  parser still finds `large.txt` as the path and measures it.
-- `head -n 5 large.txt` — **allowed**, but not on purpose: `-n` is stripped as
-  a flag and `5` — not `large.txt` — is taken as the path, a file that
-  (almost always) doesn't exist, so the hook falls through to allow. This is
-  a parser bug inherited from upstream, documented in `bash-hook-evals.json`
-  case `head-n-space-count` as "Parser bug", not a deliberate carve-out for
-  count flags.
+- **A count bounds a `head`/`tail`.** `head -n 5 large.go` and `head -100
+  large.go` are allowed: the count is at or under
+  `ANTI_TANGENT_SHUNT_MIN_LINES`, so the read is genuinely small. `head -n
+  100000 large.go` is **blocked** — the count is the whole file.
+- **A `limit` bounds a `Read`; an `offset` does not.** `Read(offset: 0,
+  limit: 50)` is allowed. `Read(offset: 0)` and `Read(offset: 100)` are
+  **blocked**: an offset says where to start, never how much to take.
 
-This hook is a pinned, byte-for-byte port of upstream's own eval-derived
-parsing rules (see `THIRD_PARTY_NOTICES.md`); its header explicitly warns
-against "improving" it, since doing so risks the accumulated upstream eval
-cases it must keep passing. So this behaviour is documented here rather than
-changed. (The project's own design doc currently asserts the opposite of the
-`-n 5` case; that is a documentation defect in the design doc, not in this
-hook or its evals.)
+**This is a correction, and the earlier behaviour was a bypass.** Until
+CodeRabbit caught it on PR #65, the ported parser stripped `-n` as an option
+and read the *count* as the path — so `head -n 100000 large.go` sailed
+through and put the entire file in context, defeating the hook outright. The
+same held for `Read(offset: 0)`, where a legitimate `0` was treated as absent.
+Both are now closed, each with a regression case proven to fail against the
+unfixed hook.
+
+An earlier round of this release documented that parser behaviour as an
+inherited quirk to be preserved for upstream fidelity, and amended the design
+doc to match it. That was the wrong call: fidelity to a pinned port is not
+worth shipping a one-token defeat of the feature. Five of the seventeen ported
+upstream cases changed as a result, and are marked as deliberate divergences
+in `bash-hook-evals.json` and `hook-evals.json`.
 
 ## Running evaluations
 
