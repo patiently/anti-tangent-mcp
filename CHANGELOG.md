@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-09-08
+
+### Added
+- **`spec_quality` on `validate_task_spec`** — a second axis alongside the verdict, using the
+  same `rough` / `actionable` / `rigorous` vocabulary as `plan_quality`, so a caller facing a
+  `warn` that will not move has a convergence signal and a stopping rule. `plan_quality` has had
+  this since v0.3.1 and `validate_task_spec` had no equivalent, so there was no way to tell "this
+  spec is improving" from "this spec is as good as it is going to get and the rest is prose."
+  Carried on the envelope, in the summary block, and per task in `plan_run_report` as
+  `pre_spec_quality`.
+- **`normative_code_bodies` on `validate_task_spec`** — the sibling of `normative_test_bodies`
+  for non-test implementation code pasted verbatim into a task brief, extracted server-side from
+  a `**NORMATIVE CODE (verbatim):**` section by the same parser, under the same caps (20 entries,
+  4000 code points). A brief that answers a question in code below the prose is no longer failed
+  for leaving it open in the prose above.
+
+### Fixed
+- **The pre-task gate's terminal state is now documented.** `implementer.md` §4.2 told an
+  implementer to treat `critical` as blocking and `major` as address-or-explain, and stopped —
+  implying `pass` was the target. It is not reachable for most well-specified tasks: the severity
+  ladder puts `pass` at zero major and at most two minor findings, while `pre.tmpl` asks the
+  reviewer to emit one finding per implicit assumption. The docs now state the stopping rule.
+
 ## [0.18.2] - 2026-09-08
 
 ### Fixed
