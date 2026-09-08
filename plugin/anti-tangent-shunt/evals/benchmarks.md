@@ -162,8 +162,11 @@ reported **separately, never netted off** against the "without"/"with"
 figures above: the claim being measured is implementer-context cost, and
 worker spend is a real, separate cost paid to make that saving happen.
 
-Each scenario was run **3 times**; the table reports the **median** of each
-column across the three runs.
+Each scenario is run **3 times**; a run whose answer fails its scenario's validity criterion (see
+"Validity criteria and verdicts" below) is re-rolled and an additional run added, until **3
+valid** runs are collected. The table reports the **median** of each column across those 3 valid
+runs — never across whatever landed first. An invalid run is kept visible in the raw tables below
+with its verdict, not deleted: it is excluded from the statistic, not from the record.
 
 ## Harness configuration
 
@@ -203,7 +206,43 @@ export CORPUS_DIR=/tmp/bench-corpus     # clone + pin the commit above first
 bash plugin/anti-tangent-shunt/evals/bench.sh
 ```
 
-## Raw results (all three runs per scenario)
+## Validity criteria and verdicts
+
+**The published statistic is computed over valid runs only, and this is not optional
+disclosure — it is the method.** For the *second* time (see `single_large_file` below), a
+freshly-sampled round's byte-count median traced to a run whose answer was factually wrong; a
+wrong answer tends to be short, so including it biased the reported savings *upward* rather than
+measuring anything about delegation working. The fix is a concrete, checkable fact per scenario,
+applied to every run before any median is taken — not a rubric needing judgement, and cheap
+enough that a re-runner can apply it by eye or by `grep`:
+
+- **`single_large_file`.** Valid iff the answer names `(*query).Close` (receiver `*query`, in
+  `promql/engine.go`) as an exported function mutating package-level state — it returns
+  point/histogram slices to the package-level `fPointPool`/`hPointPool` pools (Step 2 above). An
+  answer claiming no exported function mutates package-level state is invalid.
+- **`source_test_pair`.** Valid iff the answer identifies `NewAPI` — `web/api/v1/api.go`'s
+  exported constructor — as lacking a direct test in `api_test.go`. Checkable with
+  `grep -n 'NewAPI(' web/api/v1/api_test.go`, which returns no hits: no test in the file
+  constructs an `API` via `NewAPI`. An answer claiming full test coverage of the exported surface
+  is invalid.
+- **`multi_file_cross_package`.** Valid iff the answer identifies both real cross-package calls
+  named in Step 2 — `timestamp.FromTime(...)` (`rules` → `model/timestamp`) and
+  `value.IsStaleNaN(...)` / `value.StaleNaN` (`rules` → `model/value`) — with the call direction
+  the right way round (`rules/group.go` calling out, not the reverse).
+- **`code_write`.** Valid iff the call succeeds, `target_path` exists afterward, and
+  `lines_written > 0`. Generated-code *correctness* is explicitly out of scope for this
+  measurement — `code_write`'s own contract is "verified, not inspected" (Step 2), and the
+  harness never compiles or runs the output — so validity here is about the measurement
+  completing, not about grading the generated test.
+
+A run that fails its criterion is marked **INVALID** in the raw tables below, right where it
+happened, and stays there rather than being deleted or moved to a "superseded" section on its
+own: a model getting a real question wrong on a non-trivial fraction of runs (see
+`single_large_file`'s tally under Concerns) is itself a finding about how much to trust
+unsupervised delegation, and sanding it off would hide exactly that. It is excluded only from the
+median the published tables report.
+
+## Raw results (all runs per scenario, including re-rolls)
 
 All `input_tokens` / `output_tokens` / `review_ms` values below are read
 directly from the server's response (`structuredContent`), not computed.
@@ -301,9 +340,30 @@ package-level state — and run 2's byte count (120) happens to be the median
 of the three, so the published "with" figure for this scenario traces to an
 incorrect answer, same defect class as the superseded original run above,
 just smaller in effect (120 bytes is the middle value here, not an outlier
-low one). Flagged rather than silently accepted; not re-rolled beyond the
-three runs the task specified. See "Answer quality varies run to run" under
-Concerns.
+low one). **Superseded** — see "Re-run 2026-09-08c" below, which applies the
+validity criterion and computes the median over valid runs only, per task 25.
+
+**Re-run 2026-09-08c (task 25 — validity-gated statistic; used for the published figures).**
+This is the *second* fresh round (the 2026-09-08b round above was the first) in which the
+freshly-sampled median happened to be a wrong answer. Rather than accept that a third time, every
+run below carries an explicit verdict against the criterion in "Validity criteria and verdicts",
+and the median is taken over valid runs only, re-rolling until there are three of them.
+
+| Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) | Verdict |
+|---|---|---|---|---|---|---|
+| 1 | 46001 | 560 | 10159 | 115 | 29 | valid — names `(*query).Close` |
+| 2 | 46001 | 1090 | 14832 | 195 | 49 | **INVALID** — claims no exported function mutates state |
+| 3 | 46001 | 556 | 9026 | 113 | 28 | valid — names `query.Close` |
+| 4 (re-roll) | 46001 | 555 | 10981 | 111 | 28 | valid — names `query.Close` |
+
+3 valid of 4 attempted. **Median of the 3 valid runs (1, 3, 4):** input_tokens 46001,
+output_tokens 556, review_ms 10159, answer bytes 113 → answer tokens ≈ **28**.
+
+Run 2 is kept above rather than deleted, exactly as in the superseded round: this is the same
+failure mode recurring. Counting every round recorded in this document (the original superseded
+run, the 2026-09-08 re-run, 2026-09-08b, and this one), `gpt-5.6-luna` has now given this exact
+question a wrong answer in **3 of the 13** total `single_large_file` runs sampled — roughly
+1-in-4. That rate is itself a finding; see "Answer quality varies run to run" under Concerns.
 
 Without = round(171971/4) = **42993** tokens.
 
@@ -319,8 +379,8 @@ the currently-published figures):**
 | 3 | 61127 | 869 | 9745 | 1490 | 373 |
 | **median** | **61127** | **1236** | 13916 | — | **373** |
 
-**Re-run 2026-09-08b (finding A / PR #65 — used for the published
-figures):**
+**Superseded (finding A / PR #65 byte-count fix; see "Re-run 2026-09-08c" below for the
+currently-published figures):**
 
 | Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) |
 |---|---|---|---|---|---|
@@ -328,6 +388,25 @@ figures):**
 | 2 | 61127 | 1175 | 13551 | 1402 | 351 |
 | 3 | 61127 | 680 | 8677 | 764 | 191 |
 | **median** | **61127** | **855** | 8938 | — | **351** |
+
+**Re-run 2026-09-08c (task 25 — validity-gated statistic; used for the published figures).**
+All three runs are checked against the `NewAPI` criterion in "Validity criteria and verdicts";
+no re-roll was needed.
+
+| Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) | Verdict |
+|---|---|---|---|---|---|---|
+| 1 | 61127 | 1304 | 16412 | 1304 | 326 | valid — names `NewAPI` as untested |
+| 2 | 61127 | 866 | 11094 | 1555 | 389 | valid — names `NewAPI` as untested |
+| 3 | 61127 | 1010 | 11104 | 2155 | 539 | valid — names `NewAPI` as untested |
+
+3 valid of 3 attempted. **Median:** input_tokens 61127, output_tokens 1010, review_ms 11104,
+answer bytes 1555 → answer tokens ≈ **389**.
+
+All three runs also correctly note `TSDBStatsFromIndexStats` is exercised only indirectly (via
+`API.serveTSDBStatus` in `TestTSDBStatus`), consistent with `grep -n
+'TSDBStatsFromIndexStats' web/api/v1/api_test.go` showing no direct call — not part of the
+validity criterion (`NewAPI` alone is), but corroborating that the answers engage with the real
+file rather than confabulating.
 
 Without = round(216506/4) = **54127** tokens.
 
@@ -343,8 +422,8 @@ the currently-published figures):**
 | 3 | 10864 | 341 | 4641 | 306 | 77 |
 | **median** | **10864** | **357** | 4993 | — | **74** |
 
-**Re-run 2026-09-08b (finding A / PR #65 — used for the published
-figures):**
+**Superseded (finding A / PR #65 byte-count fix; see "Re-run 2026-09-08c" below for the
+currently-published figures):**
 
 | Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) |
 |---|---|---|---|---|---|
@@ -352,6 +431,19 @@ figures):**
 | 2 | 10864 | 321 | 3805 | 208 | 52 |
 | 3 | 10864 | 504 | 5719 | 210 | 53 |
 | **median** | **10864** | **328** | 4317 | — | **53** |
+
+**Re-run 2026-09-08c (task 25 — validity-gated statistic; used for the published figures).**
+All three runs are checked against the two-call criterion in "Validity criteria and verdicts";
+no re-roll was needed.
+
+| Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) | Verdict |
+|---|---|---|---|---|---|---|
+| 1 | 10864 | 425 | 5896 | 324 | 81 | valid — both calls, correct direction |
+| 2 | 10864 | 251 | 3504 | 212 | 53 | valid — both calls, correct direction |
+| 3 | 10864 | 317 | 4518 | 192 | 48 | valid — both calls, correct direction |
+
+3 valid of 3 attempted. **Median:** input_tokens 10864, output_tokens 317, review_ms 4518,
+answer bytes 212 → answer tokens ≈ **53**.
 
 Without = round(41489/4) = **10372** tokens.
 
@@ -372,7 +464,7 @@ fresh plus one old.
 | 3 | 29325 | 2315 | 21659 | 4611 | 1153 | 28728 | 201 |
 | **median** | **29325** | **2315** | 21659 | — | — | **28634** | **199** |
 
-**Re-run 2026-09-08b (used for the published figures):**
+**Superseded (finding A / PR #65 re-run):**
 
 | Run | input_tokens | output_tokens | review_ms | generated bytes | generated tokens (≈) | without = ref+gen (≈) | lines_written |
 |---|---|---|---|---|---|---|---|
@@ -386,16 +478,42 @@ Run 3's output was spot-checked and is real, syntactically plausible Go
 `TestDefaultHeadOptions` table-driven test against `DefaultHeadOptions()`) —
 not garbage.
 
+**Re-run 2026-09-08c (task 25 — validity-gated statistic; used for the published figures).**
+All three calls succeeded, wrote `target_path`, and reported `lines_written > 0`, so all three
+are valid under this scenario's criterion; no re-roll was needed.
+
+| Run | input_tokens | output_tokens | review_ms | generated bytes | generated tokens (≈) | without = ref+gen (≈) | lines_written | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 29325 | 2908 | 24100 | 5291 | 1323 | 28898 | 215 | valid — succeeded, wrote 215 lines |
+| 2 | 29325 | 2748 | 19809 | 5577 | 1394 | 28969 | 233 | valid — succeeded, wrote 233 lines |
+| 3 | 29325 | 2358 | 19666 | 3241 | 810 | 28385 | 115 | valid — succeeded, wrote 115 lines |
+
+3 valid of 3 attempted. **Median:** input_tokens 29325, output_tokens 2748, review_ms 19809,
+without ≈ **28898**, lines_written **215**.
+
+Only run 3's file survives on disk at the end of the loop (`bench.sh` deletes and re-creates
+`$OUT_DIR/head_bench_test.go` before each run) and it was spot-checked: real, syntactically
+plausible Go (`package tsdb`, a table-driven `TestExportedFunctions` covering
+`DefaultHeadOptions()`'s zero, ordinary and error cases) — not garbage. Runs 1 and 2's generated
+files were not retained for inspection, which is why validity for this scenario is checked by
+`lines_written > 0` and the file existing, not by reading the content — see "Validity criteria
+and verdicts".
+
 Reference-file component (constant): round(110300/4) = **27575** tokens.
 
 ## Computed table (matches `benchmarks.tsv` / the README)
 
 | scenario_id | lines | without | with | unit | savings | worker in | worker out |
 |---|---|---|---|---|---|---|---|
-| single_large_file | 4,984 | 42,993 | 30 | tokens | 99.9% | 46,001 | 759 |
-| source_test_pair | 7,624 | 54,127 | 351 | tokens | 99% | 61,127 | 855 |
-| multi_file_cross_package | 1,302 | 10,372 | 53 | tokens | 99% | 10,864 | 328 |
-| code_write | 3,142 | 28,797 | 219 | lines | — | 29,325 | 2,898 |
+| single_large_file | 4,984 | 42,993 | 28 | tokens | 99.9% | 46,001 | 556 |
+| source_test_pair | 7,624 | 54,127 | 389 | tokens | 99% | 61,127 | 1,010 |
+| multi_file_cross_package | 1,302 | 10,372 | 53 | tokens | 99% | 10,864 | 317 |
+| code_write | 3,142 | 28,898 | 215 | lines | — | 29,325 | 2,748 |
+
+Every figure above is the **median of the 3 valid runs** for that scenario — see "Validity
+criteria and verdicts". `single_large_file`'s `runs`/`statistic` columns in `benchmarks.tsv` read
+3 because 3 valid runs went into the median, not because only 3 were attempted: one run (of 4)
+was invalid and is excluded from this table but not from the raw record above.
 
 ## Concerns / observations
 
@@ -417,26 +535,36 @@ Reference-file component (constant): round(110300/4) = **27575** tokens.
   3-file real cross-package call chain happened to total almost exactly that.
 - **Answer quality varies run to run** for the same fixed prompt and input,
   and this keeps recurring across re-runs of `single_large_file`
-  specifically. The original run 1 claimed *no* exported function mutates
+  specifically — three separate times now, across three independently-sampled
+  rounds. The original run 1 claimed *no* exported function mutates
   package-level state, while its runs 2–3 correctly identified
   `(*query).Close` mutating the point pools, and because run 1 happened to
   be the median, the first published savings figure was computed from the
   wrong answer (see the superseded original-run note under
   `single_large_file` above). The 2026-09-08 re-run's three answers were all
-  substantively correct. Then the 2026-09-08b re-run (finding A / PR #65)
-  hit the *same* failure mode a second time in a different run: its run 2
-  claims no exported function mutates package-level state — wrong, per the
-  same evidence as before — and run 2's byte count (120) happens to be the
-  median of that run's three, so the currently-published "with" figure for
-  `single_large_file` traces to an incorrect answer (flagged in that
-  scenario's section above, not silently accepted). This is normal LLM
-  sampling variance at temperature > 0 and is why the method runs each
-  scenario three times and reports the median rather than a single sample —
-  but three samples is evidently not always enough to keep a wrong answer
-  from landing on the median for this scenario specifically. It is not a
-  defect in the harness, but it is a concrete, repeated reason not to
-  over-read any single scenario's answer as ground truth, and a reason to
-  check *what* the median run said, not only its size.
+  substantively correct. The 2026-09-08b re-run (finding A / PR #65) hit the
+  *same* failure mode a second time: its run 2 claimed no exported function
+  mutates package-level state, and run 2's byte count (120) happened to be
+  the median of that round's three, so the figure published at the time
+  traced to an incorrect answer. **This is why the method changed for task
+  25**, rather than being disclosed a third time and left in the statistic:
+  every run is now checked against the criterion in "Validity criteria and
+  verdicts" *before* any median is taken, and an invalid run is excluded from
+  the statistic rather than trusted because it happened to land in the
+  middle. The 2026-09-08c round (the currently-published one) hit the same
+  failure mode a *third* time — its run 2 again claimed no exported function
+  mutates package-level state — but this time the criterion catches it before
+  publication: run 2 is marked INVALID and excluded, and a fourth run was
+  added to reach three valid ones. Across every round recorded in this
+  document (including the 2026-09-08 re-run, whose three answers were all
+  correct), `gpt-5.6-luna` has now given this specific question a wrong
+  answer in **3 of 13** total `single_large_file` runs — roughly 1-in-4, a
+  real, recurring failure rate on this one question, not a fluke, and worth
+  knowing on its own terms independent of the benchmark numbers: a caller
+  delegating this exact kind of "which function mutates this state" question
+  to this model should not treat a single answer as reliable without
+  checking it. It is not a defect in the harness — three (now
+  validity-gated) samples is the method working as designed, not failing.
 - The `bytes/4` approximation is coarse for very short answers (a handful of
   words carries proportionally more punctuation/backtick overhead per token
   than the corpus prose it approximates for the "without" side); the

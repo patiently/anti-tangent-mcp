@@ -24,6 +24,12 @@ saving. Omit it only when you genuinely need to inspect the code first.
       reference_path: "/abs/repo/internal/math/sub_test.go"
       target_path:    "/abs/repo/internal/math/add_test.go"
 
+**Not supported on Windows.** The server refuses `target_path` there outright
+— it cannot guarantee a symlink/reparse point planted at the target's final
+path component is refused rather than followed on that platform. `code_write`
+still generates the code and returns it as `code` on Windows; omit
+`target_path` and write the file yourself.
+
 ## `overwrite` is deliberate
 
 An existing target is refused unless you pass `overwrite: true`. That default
@@ -31,6 +37,13 @@ exists because a worker model acting on a misread spec would otherwise destroy
 a hand-written file, and the response tells you only a line count — you would
 not see what was lost. The parent directory must already exist; this tool never
 creates directories.
+
+An `overwrite: true` write is atomic: the server writes a temp file next to
+the target and renames it over, so a failed write leaves the original
+untouched instead of truncated. The rename does replace the target's inode,
+though — a hard link to it now points at the pre-write content, and ownership
+is not carried across (only the file mode is). Don't rely on a hard-linked
+`target_path` surviving an overwrite.
 
 ## When NOT to delegate
 

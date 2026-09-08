@@ -77,7 +77,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   package's own source and drives a forged payload through every free-text field of each, so a
   new formatter or a new field cannot be added without escaping and stay green. See
   `plugin/anti-tangent-guard` above.
-- The README's filesystem trust-model section now covers writes, not only reads.
+- The README's filesystem trust-model section now covers writes, not only reads, and states
+  plainly that `bulk_read` sends the full contents of every path it reads (and `code_write` its
+  `reference_path`) to the configured worker provider — the documented mechanism of both tools,
+  not a new behavior, called out because it wasn't stated loudly enough for someone deciding
+  whether to enable them.
+
+### Fixed
+- **`code_write`'s `overwrite: true` write is now atomic.** It previously opened the target with
+  `O_TRUNC`, which emptied the file at `open(2)` before a single byte of the new content had been
+  written — a failure partway through left the caller with an empty or half-written file and no
+  way back. It now writes a temp file in the target's own directory and renames it over the
+  target, so every failure before that rename leaves the original byte-identical to what it held
+  before the call. The rename carries the target's file mode across but replaces its inode, so a
+  hard link to `target_path` now points at the pre-write content after an overwrite, and
+  ownership is not preserved across it (only the mode is). `overwrite: false` is unchanged
+  (`O_CREAT|O_EXCL|O_NOFOLLOW`).
+- **`target_path` is now refused on Windows**, rather than silently accepted with a gap. Unix
+  refuses a symlink planted at the target's final path component between the containment check
+  and the write, however it got there; Windows exposes no equivalent through Go's `syscall`
+  package, so on that platform the same symlink/reparse point would be a static bypass, not a
+  narrow race — and nothing in this repo builds or tests on Windows to validate a guard against
+  it. `code_write` without `target_path` still generates the code and returns it as `code`, so
+  the tool degrades gracefully rather than failing outright. See README's "Writes: `code_write`
+  and `target_path`" for the full reasoning, including why the read path's Windows story is
+  narrower and stays unchanged.
 
 ## [0.17.0] - 2026-09-02
 

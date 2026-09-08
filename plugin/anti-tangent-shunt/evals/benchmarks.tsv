@@ -1,5 +1,5 @@
 scenario_id	label	lines	without_tokens	with_value	with_unit	savings_pct	worker_in	worker_out	runs	statistic
-single_large_file	Single large file	4984	42993	30	tokens	99.9	46001	759	3	median
-source_test_pair	Source + test pair	7624	54127	351	tokens	99	61127	855	3	median
-multi_file_cross_package	Multi-file cross-package	1302	10372	53	tokens	99	10864	328	3	median
-code_write	Code-write	3142	28797	219	lines		29325	2898	3	median
+single_large_file	Single large file	4984	42993	28	tokens	99.9	46001	556	3	median
+source_test_pair	Source + test pair	7624	54127	389	tokens	99	61127	1010	3	median
+multi_file_cross_package	Multi-file cross-package	1302	10372	53	tokens	99	10864	317	3	median
+code_write	Code-write	3142	28898	215	lines		29325	2748	3	median

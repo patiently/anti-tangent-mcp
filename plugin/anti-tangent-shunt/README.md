@@ -5,9 +5,13 @@ implementer's context small and token-efficient.
 
 This plugin provides PreToolUse hooks that intercept oversized Read and Bash
 calls, redirecting them to anti-tangent-mcp's `bulk_read` tool. The server
-reads the files server-side and delegates the question to a cheap worker model,
-returning only the answer. This keeps large file corpora out of the implementer's
-context entirely.
+reads the files server-side and sends their full contents to the configured
+worker provider (`ANTI_TANGENT_WORKER_MODEL`) to answer the question, returning
+only the answer to the implementer. This keeps large file corpora out of the
+implementer's context entirely, but it does mean the redirected files' contents
+leave the machine to that provider — the documented purpose of the delegation,
+not an incidental leak, and worth knowing before pointing this at anything
+sensitive.
 
 The plugin requires the anti-tangent-mcp server to be installed and configured
 with an `ANTI_TANGENT_WORKER_MODEL` env var pointing to a cheap model (e.g.
@@ -111,10 +115,18 @@ Ours, against `prometheus/prometheus@7f48230f675e7c459398bf1d0f055f6f55caf90a`
 
 | scenario_id | Scenario | Lines | Without | With | Unit | Savings | Worker in | Worker out | Runs | Stat |
 |---|---|---|---|---|---|---|---|---|---|---|
-| single_large_file | Single large file | 4,984 | 42,993 | 30 | tokens | 99.9% | 46,001 | 759 | 3 | median |
-| source_test_pair | Source + test pair | 7,624 | 54,127 | 351 | tokens | 99% | 61,127 | 855 | 3 | median |
-| multi_file_cross_package | Multi-file cross-package | 1,302 | 10,372 | 53 | tokens | 99% | 10,864 | 328 | 3 | median |
-| code_write | Code-write | 3,142 | 28,797 | 219 | lines | — | 29,325 | 2,898 | 3 | median |
+| single_large_file | Single large file | 4,984 | 42,993 | 28 | tokens | 99.9% | 46,001 | 556 | 3 | median |
+| source_test_pair | Source + test pair | 7,624 | 54,127 | 389 | tokens | 99% | 61,127 | 1,010 | 3 | median |
+| multi_file_cross_package | Multi-file cross-package | 1,302 | 10,372 | 53 | tokens | 99% | 10,864 | 317 | 3 | median |
+| code_write | Code-write | 3,142 | 28,898 | 215 | lines | — | 29,325 | 2,748 | 3 | median |
+
+**"Runs" is valid runs, not attempts.** `single_large_file`'s worker has given the same wrong
+answer in 3 of the 13 runs sampled across every round recorded to date (see
+[`evals/benchmarks.md`](evals/benchmarks.md)'s "Validity criteria and verdicts") — so the
+statistic above is computed over the 3 answers that were actually checked against the file's real
+behaviour, not over whatever landed first. A run that fails its scenario's stated check is kept
+visible in `benchmarks.md` with its verdict, never silently dropped, but it is excluded from the
+median.
 
 **The two tables are not directly comparable, and ours being higher does not
 mean this port is better.** Different language and corpus (Go/Prometheus vs
