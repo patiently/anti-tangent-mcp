@@ -19,7 +19,7 @@
 #   export CORPUS_DIR=/tmp/bench-corpus                 # the pinned corpus checkout (see benchmarks.md Step 1)
 #   bash plugin/anti-tangent-shunt/evals/bench.sh
 #
-# Output: one TSV row per run to stdout (13 runs: 3 each for scenarios 1-3,
+# Output: one TSV row per run to stdout (12 runs: 3 each for scenarios 1-3,
 # plus scenario 4's own 3), columns:
 #   scenario_id  run  input_tokens  output_tokens  review_ms  value_bytes  lines_written  raw_file
 # where value_bytes is the byte length of the returned `answer` (scenarios

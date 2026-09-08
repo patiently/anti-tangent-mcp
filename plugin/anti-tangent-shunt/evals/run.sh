@@ -39,6 +39,7 @@ PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURES="$SCRIPT_DIR/.fixtures"
 PASSED=0
 FAILED=0
+SKIPPED=0
 TOTAL=0
 
 generate_fixture() {
@@ -66,6 +67,9 @@ setup_fixtures() {
     local lines
     lines=$(jq -r ".evals[$i].fixture.lines" "$evals_file")
 
+    local unreadable
+    unreadable=$(jq -r ".evals[$i].fixture.unreadable // false" "$evals_file")
+
     local input_path
     input_path=$(jq -r ".evals[$i].input.tool_input.file_path // empty" "$evals_file")
     if [ -z "$input_path" ]; then
@@ -78,7 +82,17 @@ setup_fixtures() {
     # file in the working directory; the fixtures those evals rely on are
     # created by their siblings anyway.
     case "$input_path" in
-      "$FIXTURES"/*) generate_fixture "$input_path" "$lines" ;;
+      "$FIXTURES"/*)
+        generate_fixture "$input_path" "$lines"
+        # An "unreadable" fixture proves the fail-open path when `wc -l`
+        # itself cannot read the file (permission denied), not merely when
+        # the file is small or absent — see finding 1 / C1 in
+        # final-review.md. chmod 000 does nothing to a process running as
+        # root (root bypasses the permission check `wc` would otherwise
+        # hit), so the corresponding eval case is marked skip_if_root and
+        # skipped loudly rather than silently passing for the wrong reason.
+        [ "$unreadable" = "true" ] && chmod 000 "$input_path"
+        ;;
     esac
   done
 }
@@ -151,6 +165,20 @@ run_suite() {
     reason=$(jq -r ".evals[$i].reason" "$evals_file")
     input=$(jq -c ".evals[$i].input" "$evals_file" | sed "s|{{FIXTURES}}|$FIXTURES|g")
 
+    local skip_if_root
+    skip_if_root=$(jq -r ".evals[$i].skip_if_root // false" "$evals_file")
+    if [ "$skip_if_root" = "true" ] && [ "$(id -u)" -eq 0 ]; then
+      # chmod 000 does not make a file unreadable to root — root bypasses
+      # the DAC permission check entirely — so this case cannot exercise
+      # the fail-open path it exists to prove when the suite runs as root.
+      # Skipped loudly, not silently: a case that "passed" here without
+      # ever hitting the unreadable branch would be a false green.
+      printf "  \033[33mSKIP\033[0m  %-30s running as root (uid 0) — chmod 000 is not unreadable to root\n" "$name"
+      SKIPPED=$((SKIPPED + 1))
+      TOTAL=$((TOTAL + 1))
+      continue
+    fi
+
     local env_json
     env_json=$(jq -r ".evals[$i].env // empty" "$evals_file")
     run_eval "$hook" "$name" "$input" "$expected" "$reason" "$env_json"
@@ -206,7 +234,7 @@ check_no_operational_references
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"
-printf "Total: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m, %d total\n" "$PASSED" "$FAILED" "$TOTAL"
+printf "Total: \033[32m%d passed\033[0m, \033[31m%d failed\033[0m, \033[33m%d skipped\033[0m, %d total\n" "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL"
 echo ""
 
 [ "$FAILED" -gt 0 ] && exit 1

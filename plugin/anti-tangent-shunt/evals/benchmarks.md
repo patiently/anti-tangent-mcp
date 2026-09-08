@@ -213,12 +213,38 @@ approximation in the table above is applied to.
 
 ### `single_large_file`
 
+**Re-run 2026-09-08.** The original three runs below produced a median (run
+1, 36 answer tokens) whose answer was itself wrong — see the first bullet
+under Concerns — so the published savings figure was measuring an incorrect,
+abnormally short answer rather than delegation working. Per the 2026-09-07
+final review (finding 7 / I5), the scenario was re-run from scratch against
+the same pinned corpus, model and prompt; the fresh runs are what the
+Computed table, `benchmarks.tsv` and the README now report.
+
+**Original run (superseded — median answer was incorrect):**
+
 | Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) |
 |---|---|---|---|---|---|
 | 1 | 46001 | 292 | 5294 | 143 | 36 |
 | 2 | 46001 | 1061 | 16295 | 260 | 65 |
 | 3 | 46001 | 558 | 8547 | 119 | 30 |
 | **median** | **46001** | **558** | 8547 | — | **36** |
+
+**Re-run (used for the published figures):**
+
+| Run | input_tokens | output_tokens | review_ms | answer bytes | answer tokens (≈) |
+|---|---|---|---|---|---|
+| 1 | 46002 | 555 | 8643 | 103 | 26 |
+| 2 | 46002 | 988 | 11969 | 117 | 29 |
+| 3 | 46002 | 560 | 8629 | 114 | 29 |
+| **median** | **46002** | **560** | 8643 | — | **29** |
+
+All three re-run answers correctly identify `(*query).Close` (receiver
+`*query`) as the exported function mutating the package-level `fPointPool` /
+`hPointPool` point pools — unlike the superseded run 1 above. The median
+savings percentage happens to round to the same 99.9% either way (see
+Computed table); what changed is that the number is now backed by three
+runs that answered the question correctly, not one that didn't.
 
 Without = round(171971/4) = **42993** tokens.
 
@@ -259,16 +285,16 @@ Reference-file component (constant): round(110300/4) = **27575** tokens.
 
 | scenario_id | lines | without | with | unit | savings | worker in | worker out |
 |---|---|---|---|---|---|---|---|
-| single_large_file | 4,984 | 42,993 | 36 | tokens | 100% | 46,001 | 558 |
+| single_large_file | 4,984 | 42,993 | 29 | tokens | 99.9% | 46,002 | 560 |
 | source_test_pair | 7,624 | 54,127 | 373 | tokens | 99% | 61,127 | 1,236 |
 | multi_file_cross_package | 1,302 | 10,372 | 74 | tokens | 99% | 10,864 | 357 |
-| code_write | 3,142 | 28,634 | 199 lines | — | — | 29,325 | 2,315 |
+| code_write | 3,142 | 28,634 | 199 | lines | — | 29,325 | 2,315 |
 
 ## Concerns / observations
 
 - **Worker `output_tokens` is much larger than the visible answer would
-  suggest** (e.g. `single_large_file` run 2: 1,061 output tokens for a
-  260-byte answer, ~65 approximated tokens). `gpt-5.6-luna` appears to spend
+  suggest** (e.g. `single_large_file` run 2: 988 output tokens for a
+  117-byte answer, ~29 approximated tokens). `gpt-5.6-luna` appears to spend
   a substantial share of its billed output on hidden reasoning that never
   reaches the `answer` field. This is reported exactly as observed —
   `worker_out` in the table is the provider's real reported count, not
@@ -281,14 +307,20 @@ Reference-file component (constant): round(110300/4) = **27575** tokens.
   file was padded or trimmed to hit a round number. `multi_file_cross_package`
   came out closest (1,302 vs. upstream's 1,281, +1.6%) purely because a
   3-file real cross-package call chain happened to total almost exactly that.
-- **Answer quality varies run to run** for the same fixed prompt and input
-  (e.g. `single_large_file` run 1 claims *no* exported function mutates
-  package-level state, while runs 2–3 correctly identify `(*query).Close`
-  mutating the point pools). This is normal LLM sampling variance at
+- **Answer quality varies run to run** for the same fixed prompt and input.
+  The clearest example on record: the original `single_large_file` run 1
+  claimed *no* exported function mutates package-level state, while its
+  runs 2–3 correctly identified `(*query).Close` mutating the point pools —
+  and because run 1 happened to be the median, the first published savings
+  figure was computed from the wrong answer (see the re-run note under
+  `single_large_file` above). The 2026-09-08 re-run's three answers are all
+  substantively correct, but still vary in phrasing and length (26/29/29
+  approximated tokens) — this is normal LLM sampling variance at
   temperature > 0 and is why the method runs each scenario three times and
-  reports the median rather than a single sample — it is not a defect in
-  the harness, but it is a reason not to over-read any single scenario's
-  answer as ground truth.
+  reports the median rather than a single sample. It is not a defect in the
+  harness, but it is a reason not to over-read any single scenario's answer
+  as ground truth, and a reason to check *what* the median run said, not
+  only its size.
 - The `bytes/4` approximation is coarse for very short answers (a handful of
   words carries proportionally more punctuation/backtick overhead per token
   than the corpus prose it approximates for the "without" side); the

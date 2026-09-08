@@ -137,6 +137,15 @@
       "fixture": null,
       "expected_decision": "allow",
       "reason": "Parser bug: -n and 5 are separate args, 5 is treated as file path — file '5' won't exist so allow"
+    },
+    {
+      "id": 18,
+      "name": "cat-unreadable-file",
+      "input": { "tool_input": { "command": "cat {{FIXTURES}}/unreadable.txt" } },
+      "fixture": { "lines": 1, "unreadable": true },
+      "skip_if_root": true,
+      "expected_decision": "allow",
+      "reason": "chmod 000 file — wc -l cannot read it, so lines is empty; the hook must fail open (allow), never block, on a file it cannot measure (finding 1 / C1)"
     }
   ]
 }

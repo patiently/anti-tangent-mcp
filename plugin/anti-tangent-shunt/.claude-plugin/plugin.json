@@ -8,6 +8,6 @@
   },
   "homepage": "https://github.com/patiently/anti-tangent-mcp",
   "repository": "https://github.com/patiently/anti-tangent-mcp",
-  "license": "MIT",
+  "license": "MIT AND Apache-2.0",
   "keywords": ["anti-tangent", "mcp", "token-efficiency", "hooks", "delegation"]
 }

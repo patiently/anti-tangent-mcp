@@ -50,7 +50,18 @@ if [ -z "$file_path" ] || [ ! -f "$file_path" ]; then
 fi
 
 # Allow small files — delegation overhead isn't worth it.
-lines=$(wc -l < "$file_path" 2>/dev/null | tr -d ' ' || echo "0")
+lines=$(wc -l < "$file_path" 2>/dev/null | tr -d ' ')
+
+# Unreadable or otherwise unmeasurable file (permission denied, race with a
+# deletion, etc.): $lines is empty or non-numeric. The `|| echo "0"` a
+# previous version of this line relied on can never fire — `tr` succeeds
+# even when `wc` fails — so check the value itself instead. This hook must
+# never be the reason a legitimate (if unreadable) read fails; allow through
+# and let Read report the real error.
+case "$lines" in
+  ''|*[!0-9]*) exit 0 ;;
+esac
+
 if [ "$lines" -le "$MIN_LINES" ]; then
   exit 0
 fi

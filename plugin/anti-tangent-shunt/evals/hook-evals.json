@@ -246,6 +246,22 @@
       },
       "expected_decision": "allow",
       "reason": "Non-numeric SHUNT_MIN_LINES falls back to 350 — 200-line file is under the fallback threshold and allowed; a broken fallback would error on the comparison and fall through to block, so this case can actually fail"
+    },
+    {
+      "id": 18,
+      "name": "unreadable-file",
+      "input": {
+        "tool_input": {
+          "file_path": "{{FIXTURES}}/unreadable.txt"
+        }
+      },
+      "fixture": {
+        "lines": 1,
+        "unreadable": true
+      },
+      "skip_if_root": true,
+      "expected_decision": "allow",
+      "reason": "chmod 000 file — wc -l cannot read it, so lines is empty; the hook must fail open (allow), never block, on a file it cannot measure (finding 1 / C1)"
     }
   ]
 }

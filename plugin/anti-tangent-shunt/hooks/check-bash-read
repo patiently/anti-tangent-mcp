@@ -51,18 +51,36 @@ file_path=""
 if echo "$command" | grep -qE '^(cat|head|tail|less|more) '; then
   # Remove the command name, then strip any flags (-n, -100, --number, etc.)
   args=$(echo "$command" | sed -E 's/^(cat|head|tail|less|more) +//')
+  # $args is intentionally unquoted below so word-splitting still separates
+  # flags from the path, but `set -f` stops that same expansion from also
+  # globbing against the hook's own cwd (e.g. `cat *.go`), which would pick
+  # up whatever the shell happened to match rather than the literal argument
+  # the command contains.
+  set -f
   for arg in $args; do
     case "$arg" in
       -*) continue ;;
       *)  file_path=$(echo "$arg" | tr -d '"'"'"); break ;;
     esac
   done
+  set +f
 fi
 
 [ -z "$file_path" ] && exit 0
 [ ! -f "$file_path" ] && exit 0
 
-lines=$(wc -l < "$file_path" 2>/dev/null | tr -d ' ' || echo "0")
+lines=$(wc -l < "$file_path" 2>/dev/null | tr -d ' ')
+
+# Unreadable or otherwise unmeasurable file (permission denied, race with a
+# deletion, etc.): $lines is empty or non-numeric. The `|| echo "0"` a
+# previous version of this line relied on can never fire — `tr` succeeds
+# even when `wc` fails — so check the value itself instead. This hook must
+# never be the reason a legitimate (if unreadable) command fails; allow
+# through and let Bash report the real error.
+case "$lines" in
+  ''|*[!0-9]*) exit 0 ;;
+esac
+
 if [ "$lines" -le "$MIN_LINES" ]; then
   exit 0
 fi

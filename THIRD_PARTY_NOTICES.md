@@ -61,6 +61,21 @@ convention of `exit 2` with the reason on stderr (`exit 0`, silent, to allow) �
 the same mechanism the completion-guard hook in this release uses, so all of
 this release's new hooks behave identically when they refuse.
 
+**Upstream does not ship a `NOTICE` file.** Spec §6.5 left this open pending
+verification; it is now settled. Checked directly against the pinned SHA
+(`3c24ca30ff63e1f5bbad1c43fe5324daff579123`), each returning HTTP 404 via
+`raw.githubusercontent.com`:
+
+- `NOTICE` (repository root)
+- `NOTICE.txt` (repository root)
+- `plugins/shunt/NOTICE` (the ported subdirectory)
+
+Apache-2.0 §4(d) only obligates a redistributor to reproduce a `NOTICE`
+file's contents "if the Work includes" one; since `spotify/portal-ai-plugins`
+includes none at this commit, there is no upstream notice text for this
+repository to carry forward, and no `NOTICE` file is shipped here for the
+ported code.
+
 The full text of the Apache License, Version 2.0 follows. (The license text
 ends at "END OF TERMS AND CONDITIONS"; the appendix section containing EXHIBIT
 notices is omitted intentionally as it is not part of the operative licence
