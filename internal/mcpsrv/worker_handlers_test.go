@@ -225,6 +225,31 @@ func TestCodeWriteRequiresReferencePath(t *testing.T) {
 	assert.Equal(t, 0, f.calls, "worker must not be reached when reference_path is missing")
 }
 
+func TestCodeWriteOversizedReferenceNamesSizeCapAndRemedy(t *testing.T) {
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "big.go")
+	require.NoError(t, os.WriteFile(ref, make([]byte, 5000), 0o644))
+
+	f := &fakeWorkerReviewer{}
+	d := workerDeps(t, f, []string{dir})
+	d.Cfg.MaxPayloadBytes = 100
+	h := &handlers{deps: d}
+	_, _, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{Spec: "a func", ReferencePath: ref})
+
+	require.Error(t, err)
+	// Assert the three ACTIONABLE values, not merely that an error happened.
+	// The message this replaced was "reference_path: file exceeds cap", which
+	// already contains "reference_path" and "exceeds cap" — so asserting either
+	// of those would pass against the very behaviour this test exists to pin.
+	// Size and cap tell the caller how far over it is; the env var tells it
+	// what to do. Drop any one and this fails.
+	msg := err.Error()
+	assert.Contains(t, msg, "5000", "must name the reference file's true size")
+	assert.Contains(t, msg, "100", "must name the cap that was exceeded")
+	assert.Contains(t, msg, "ANTI_TANGENT_MAX_PAYLOAD_BYTES", "must name the remedy")
+	assert.Equal(t, 0, f.calls, "worker must not be reached for an oversized reference")
+}
+
 func TestCodeWriteWritesAndHidesCode(t *testing.T) {
 	dir := t.TempDir()
 	ref := filepath.Join(dir, "ref.go")

@@ -214,6 +214,19 @@ func (h *handlers) CodeWrite(ctx context.Context, _ *mcp.CallToolRequest, args C
 	}
 
 	refContent, refSrc, err := resolveFileInput(args.ReferencePath, h.deps.Cfg.PlanRoots, h.deps.Cfg.MaxPayloadBytes)
+	// An over-cap reference gets the size, the cap and the remedy rather than
+	// the bare sentinel. CodeWriteResult carries no findings (it has no verdict
+	// to report), so unlike bulk_read this cannot be a structured envelope —
+	// but the caller still needs to know HOW far over it is and what to do, or
+	// its only recourse is to read the file itself, which is precisely the
+	// context cost code_write exists to avoid. resolveFileInput stats before
+	// reading, so refSrc.Bytes here is the file's true size, not a capped read.
+	if errors.Is(err, errTooLarge) {
+		return nil, CodeWriteResult{}, fmt.Errorf(
+			"reference_path is %d bytes, over the %d byte cap: point it at a smaller file that shows "+
+				"the same pattern, or raise ANTI_TANGENT_MAX_PAYLOAD_BYTES",
+			refSrc.Bytes, h.deps.Cfg.MaxPayloadBytes)
+	}
 	if err != nil {
 		return nil, CodeWriteResult{}, fmt.Errorf("reference_path: %w", err)
 	}
