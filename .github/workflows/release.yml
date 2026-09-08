@@ -23,7 +23,6 @@ jobs:
     needs: ci
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
-      release_notes: ${{ steps.notes.outputs.notes }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -46,7 +45,7 @@ jobs:
           fi
 
           NEW="${MAJOR}.${MINOR}.${PATCH}"
-          echo "new_version=$NEW" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW" >> "$GITHUB_OUTPUT"
           echo "Bumping: $CURRENT -> $NEW"
 
       - name: Validate changelog
@@ -56,17 +55,6 @@ jobs:
             echo "ERROR: CHANGELOG.md must contain '## [$NEW]'"
             exit 1
           fi
-
-      - name: Extract release notes
-        id: notes
-        run: |
-          NEW="${{ steps.version.outputs.new_version }}"
-          NOTES=$(awk "/^## \\[${NEW}\\]/{found=1; next} /^## \\[[0-9]+\\.[0-9]+\\.[0-9]+\\]/{if(found) exit} found{print}" CHANGELOG.md)
-          {
-            echo "notes<<EOF_NOTES"
-            echo "$NOTES"
-            echo "EOF_NOTES"
-          } >> $GITHUB_OUTPUT
 
   tag:
     name: Bump VERSION and tag
@@ -125,10 +113,35 @@ jobs:
           go-version: '1.25'
 
       - name: Write release notes
+        env:
+          NEW: ${{ needs.version.outputs.new_version }}
         run: |
-          cat > "${RUNNER_TEMP}/release-notes.md" <<'EOF_NOTES'
-          ${{ needs.version.outputs.release_notes }}
-          EOF_NOTES
+          # Extract from CHANGELOG.md in THIS job's own checkout (it is checked
+          # out at the release tag above). The notes used to be extracted in the
+          # version job and handed over as a multiline job output; they arrived
+          # empty, and v0.11.0 through v0.18.0 all shipped a 1-byte release body
+          # while the workflow reported success. Only new_version crosses the job
+          # boundary now — a short single-line value, demonstrably reliable since
+          # the tag and VERSION bump were always correct.
+          #
+          # NEW arrives through env, not through workflow-expression
+          # interpolation, so its value cannot be spliced into this script.
+          awk -v v="$NEW" '
+            index($0, "## [" v "]") == 1 { f = 1; next }
+            /^## \[[0-9]+\.[0-9]+\.[0-9]+\]/ { if (f) exit }
+            f { print }
+          ' CHANGELOG.md > "${RUNNER_TEMP}/release-notes.md"
+
+          BYTES=$(wc -c < "${RUNNER_TEMP}/release-notes.md")
+          echo "release notes for ${NEW}: ${BYTES} bytes"
+          head -5 "${RUNNER_TEMP}/release-notes.md"
+
+          # Fail loudly rather than publish a blank release again. The old bug was
+          # invisible precisely because nothing checked.
+          if [ "$BYTES" -lt 20 ]; then
+            echo "::error file=CHANGELOG.md::release notes for ${NEW} are empty (${BYTES} bytes) — refusing to publish a blank release body"
+            exit 1
+          fi
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
