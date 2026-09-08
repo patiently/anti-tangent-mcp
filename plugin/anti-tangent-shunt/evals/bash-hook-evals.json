@@ -39,8 +39,8 @@
       "name": "head-with-count",
       "input": { "tool_input": { "command": "head -100 {{FIXTURES}}/large.txt" } },
       "fixture": { "lines": 800 },
-      "expected_decision": "block",
-      "reason": "head -100 — still a bulk read, block"
+      "expected_decision": "allow",
+      "reason": "CHANGED from the ported upstream case (was expected_decision=block, reason 'still a bulk read, block'): the bare -N form is a synonym for -n N, and it's the count — not the file's total size — that makes a read targeted. 100 <= threshold(350), so this is a genuinely bounded read and must allow even though the source file is large; blocking it would be the over-blocking failure mode this fix must avoid."
     },
     {
       "id": 6,
@@ -134,9 +134,9 @@
       "id": 17,
       "name": "head-n-space-count",
       "input": { "tool_input": { "command": "head -n 5 {{FIXTURES}}/large.txt" } },
-      "fixture": null,
+      "fixture": { "lines": 800 },
       "expected_decision": "allow",
-      "reason": "Parser bug: -n and 5 are separate args, 5 is treated as file path — file '5' won't exist so allow"
+      "reason": "CHANGED reason (expected_decision was already allow, but for the wrong reason and against a nonexistent file — fixture was null): this used to pass only because the parser bug mistook '5' for the file path, which then failed the -f test against a file that was never generated. Now large.txt is a real 800-line fixture and head -n 5 is parsed correctly — count(5) <= threshold(350), a genuinely targeted read, allow. This is the bypass-1 pin: a small explicit count must sail through even against a large file."
     },
     {
       "id": 18,
@@ -146,6 +146,46 @@
       "skip_if_root": true,
       "expected_decision": "allow",
       "reason": "chmod 000 file — wc -l cannot read it, so lines is empty; the hook must fail open (allow), never block, on a file it cannot measure (finding 1 / C1)"
+    },
+    {
+      "id": 19,
+      "name": "head-n-large-count-blocked",
+      "input": { "tool_input": { "command": "head -n 100000 {{FIXTURES}}/large.txt" } },
+      "fixture": { "lines": 800 },
+      "expected_decision": "block",
+      "reason": "Bypass-1 regression: head -n 100000 on a file over threshold must block. Previously the parser mistook '100000' for the file path (not '-n'), which then failed the -f test on a nonexistent file named '100000' and let the whole 800-line read through unblocked."
+    },
+    {
+      "id": 20,
+      "name": "head-bare-n-large-count-blocked",
+      "input": { "tool_input": { "command": "head -100000 {{FIXTURES}}/large.txt" } },
+      "fixture": { "lines": 800 },
+      "expected_decision": "block",
+      "reason": "The bare -N form must get the same count-vs-threshold treatment as -n: head -100000 exceeds the threshold, so it must block just like head -n 100000 does."
+    },
+    {
+      "id": 21,
+      "name": "tail-n-large-count-blocked",
+      "input": { "tool_input": { "command": "tail -n 100000 {{FIXTURES}}/large.txt" } },
+      "fixture": { "lines": 800 },
+      "expected_decision": "block",
+      "reason": "tail must get the same -n count-vs-threshold treatment as head: tail -n 100000 exceeds the threshold, block."
+    },
+    {
+      "id": 22,
+      "name": "tail-n-small-count-allowed",
+      "input": { "tool_input": { "command": "tail -n 5 {{FIXTURES}}/large.txt" } },
+      "fixture": { "lines": 800 },
+      "expected_decision": "allow",
+      "reason": "tail -n 5 — count(5) <= threshold, genuinely targeted even though the source file is large; pins that the fix does not over-block tail the same way it doesn't over-block head."
+    },
+    {
+      "id": 23,
+      "name": "tail-n-plus-unbounded-blocked",
+      "input": { "tool_input": { "command": "tail -n +100 {{FIXTURES}}/large.txt" } },
+      "fixture": { "lines": 800 },
+      "expected_decision": "block",
+      "reason": "tail -n +100 means 'start at line 100, read to EOF' — not a bounded count despite parsing out a number. A naive count<=threshold check would misread '100' as a small count and allow; the '+' form must be rejected as unbounded and fall through to the whole-file gate instead."
     }
   ]
 }

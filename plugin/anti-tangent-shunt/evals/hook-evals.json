@@ -88,7 +88,7 @@
     },
     {
       "id": 7,
-      "name": "targeted-read-offset",
+      "name": "offset-without-limit-blocked",
       "input": {
         "tool_input": {
           "file_path": "{{FIXTURES}}/large.txt",
@@ -98,8 +98,8 @@
       "fixture": {
         "lines": 1200
       },
-      "expected_decision": "allow",
-      "reason": "Offset set — targeted read, allow through"
+      "expected_decision": "block",
+      "reason": "CHANGED from the ported case (was named targeted-read-offset, expected_decision=allow, reason 'Offset set — targeted read, allow through'): offset alone — any value, not just 0 — does not bound a read. Without a limit, Read defaults to up to 2000 lines from the offset, which can still be most of a large file, so only `limit` counts as targeted now. This is the general form of the bypass-2 fix; the confirmed bypass itself was specifically offset:0 (see offset-zero-no-limit-blocked)."
     },
     {
       "id": 8,
@@ -168,7 +168,7 @@
     },
     {
       "id": 13,
-      "name": "offset-zero",
+      "name": "offset-zero-no-limit-blocked",
       "input": {
         "tool_input": {
           "file_path": "{{FIXTURES}}/large.txt",
@@ -178,8 +178,8 @@
       "fixture": {
         "lines": 1200
       },
-      "expected_decision": "allow",
-      "reason": "offset:0 treated as targeted — known bypass, documenting behavior"
+      "expected_decision": "block",
+      "reason": "Bypass-2 regression, CHANGED from the ported case (was named offset-zero, expected_decision=allow, reason 'offset:0 treated as targeted — known bypass, documenting behavior'): offset:0 with no limit must not sail past the size gate — offset:0 is really just no offset at all, and offset alone never bounds a read. Previously allowed because 'offset present' (any value, including 0) was mistaken for evidence of a targeted read; fixed to key on `limit` presence instead."
     },
     {
       "id": 14,
@@ -194,7 +194,7 @@
         "lines": 1200
       },
       "expected_decision": "allow",
-      "reason": "limit:0 treated as targeted — known bypass, documenting behavior"
+      "reason": "limit:0 is present — jq's `// empty` does not swallow a literal 0, so this is correctly read as an explicit (if unusual) bound, not an absent one. Under the fixed hook, presence of `limit` (any value) is exactly the intended allow signal, so this is no longer a 'known bypass' — it was already correct, just mislabeled."
     },
     {
       "id": 15,

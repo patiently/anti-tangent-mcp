@@ -19,7 +19,13 @@
 # header carries the licence and attribution with the file.
 #
 # Modified 2026-09 for anti-tangent-mcp: replaced the Portal/AiKA delegation
-# target with the anti-tangent MCP tools.
+# target with the anti-tangent MCP tools. Further modified 2026-09 to close a
+# confirmed bypass: Read{offset: N} with no `limit` was treated as a
+# "targeted read" and allowed straight through, regardless of N — including
+# N=0, which is really just "no offset at all". See the comment above the
+# limit check below.
+
+set -uo pipefail
 
 # Block full-file reads on large files; point the caller at
 # mcp__anti-tangent__bulk_read instead. Self-contained: all routing logic
@@ -35,12 +41,21 @@ case "$MIN_LINES" in ''|*[!0-9]*) MIN_LINES=350 ;; esac
 input=$(cat)
 
 file_path=$(echo "$input" | jq -r '.tool_input.file_path // empty')
-offset=$(echo "$input" | jq -r '.tool_input.offset // empty')
 limit=$(echo "$input" | jq -r '.tool_input.limit // empty')
 
-# Allow targeted reads (offset or limit set) — the caller already knows what
-# region it needs.
-if [ -n "$offset" ] || [ -n "$limit" ]; then
+# Allow targeted reads: only `limit` genuinely bounds how many lines come
+# back. `offset` alone does not — without a limit, Read defaults to reading
+# up to 2000 lines starting at the offset, which can still be most or all of
+# a large file, so offset is never consulted here. (offset: 0 was the
+# confirmed bypass: it was treated as "offset set" and allowed through, but
+# an offset of 0 with no limit is really just an unbounded read of the
+# file's start — no different from no offset at all.)
+#
+# Test *presence* via jq's `// empty`, not truthiness: `limit: 0` is a
+# legitimate (if unusual) value and must count as present. Do not "simplify"
+# this to something like `[ "$limit" -gt 0 ]` — that would silently
+# reintroduce the same class of falsy-value bug for limit: 0.
+if [ -n "$limit" ]; then
   exit 0
 fi
 

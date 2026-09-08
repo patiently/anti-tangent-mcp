@@ -19,7 +19,13 @@
 # header carries the licence and attribution with the file.
 #
 # Modified 2026-09 for anti-tangent-mcp: replaced the Portal/AiKA delegation
-# target with the anti-tangent MCP tools.
+# target with the anti-tangent MCP tools. Further modified 2026-09 to close a
+# confirmed bypass: `head -n 100000 file` (space-separated count) landed the
+# count itself ("100000") in $file_path instead of the real path — it isn't
+# a file, so the `-f` test below failed and the whole read sailed through
+# unblocked. See the count-parsing block below.
+
+set -uo pipefail
 
 # Block Bash commands that dump a large file into context (cat/head/tail/
 # less/more), catching reads that bypass the Read hook. Point the caller at
@@ -46,9 +52,13 @@ echo "$command" | grep -qE '\|' && exit 0
 # Skip redirections (cat file > out) — not a read-into-context operation.
 echo "$command" | grep -qE '>' && exit 0
 
-# Extract file path from read commands, stripping flags (e.g. cat -n, head -100).
+# Extract file path from read commands, stripping flags (e.g. cat -n, head
+# -100), and — for head/tail only — an explicit line count, so it can be
+# weighed against the threshold instead of being mistaken for the path.
 file_path=""
+count=""
 if echo "$command" | grep -qE '^(cat|head|tail|less|more) '; then
+  cmd=$(echo "$command" | awk '{print $1}')
   # Remove the command name, then strip any flags (-n, -100, --number, etc.)
   args=$(echo "$command" | sed -E 's/^(cat|head|tail|less|more) +//')
   # $args is intentionally unquoted below so word-splitting still separates
@@ -57,10 +67,47 @@ if echo "$command" | grep -qE '^(cat|head|tail|less|more) '; then
   # up whatever the shell happened to match rather than the literal argument
   # the command contains.
   set -f
+  skip_next=0
   for arg in $args; do
-    case "$arg" in
-      -*) continue ;;
-      *)  file_path=$(echo "$arg" | tr -d '"'"'"); break ;;
+    if [ "$skip_next" = 1 ]; then
+      # The value belonging to a preceding bare `-n` (only reachable for
+      # head/tail — see the case arms below that set skip_next).
+      skip_next=0
+      count="$arg"
+      continue
+    fi
+    case "$cmd:$arg" in
+      # head/tail's `-n` takes a following value — the next arg is the
+      # count, not the path. THE bypass: without this arm, `-n` fell
+      # through to the generic `-*) continue` case below (correctly
+      # skipping "-n" itself), then the very next arg — the count, e.g.
+      # "100000" — hit the catch-all and was mistaken for file_path.
+      # "100000" isn't a real file, so the `-f` test below failed and the
+      # read sailed through unblocked.
+      head:-n|tail:-n)
+        skip_next=1
+        continue
+        ;;
+      # Attached form, no space: `-n100000` / `-n+100` / `-n-100`.
+      head:-n[0-9+-]*|tail:-n[0-9+-]*)
+        count="${arg#-n}"
+        continue
+        ;;
+      # Bare `-N` form: `head -100` / `tail -100` is a historical synonym
+      # for `-n 100`. Scoped to head/tail only — `cat -n` is a boolean
+      # flag (number output lines), not a value-taking one, so this arm
+      # must never fire for cat/less/more or it would eat the file path.
+      head:-[0-9]*|tail:-[0-9]*)
+        count="${arg#-}"
+        continue
+        ;;
+      *:-*)
+        continue
+        ;;
+      *)
+        file_path=$(echo "$arg" | tr -d '"'"'")
+        break
+        ;;
     esac
   done
   set +f
@@ -68,6 +115,23 @@ fi
 
 [ -z "$file_path" ] && exit 0
 [ ! -f "$file_path" ] && exit 0
+
+# The count is what makes a read targeted, so compare it to the threshold —
+# but only when it's a plain unsigned integer. `-n +100` (tail: start at
+# line 100, read to EOF) and `-n -100` (head: all but the last 100 lines)
+# both parse a "count" above, but neither one bounds how much text comes
+# back, so they deliberately fall through to the whole-file check below,
+# same as no count at all.
+if printf '%s' "$count" | grep -qE '^[0-9]+$'; then
+  if [ "$count" -le "$MIN_LINES" ]; then
+    exit 0
+  fi
+  # An explicit large count was requested, but whether it actually reads
+  # too much still depends on the file's real size — `head -n 100000` on a
+  # 40-line file only ever reads 40 lines. Fall through to the same size
+  # gate as the no-count case rather than blocking on the requested count
+  # alone.
+fi
 
 lines=$(wc -l < "$file_path" 2>/dev/null | tr -d ' ')
 
