@@ -45,7 +45,7 @@ jobs:
           fi
 
           NEW="${MAJOR}.${MINOR}.${PATCH}"
-          echo "new_version=$NEW" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW" >> "$GITHUB_OUTPUT"
           echo "Bumping: $CURRENT -> $NEW"
 
       - name: Validate changelog
