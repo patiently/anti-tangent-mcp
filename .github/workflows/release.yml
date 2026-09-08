@@ -124,8 +124,8 @@ jobs:
           # boundary now — a short single-line value, demonstrably reliable since
           # the tag and VERSION bump were always correct.
           #
-          # NEW comes in via env, not ${{ }} interpolation, so the value cannot be
-          # spliced into this script.
+          # NEW arrives through env, not through workflow-expression
+          # interpolation, so its value cannot be spliced into this script.
           awk -v v="$NEW" '
             index($0, "## [" v "]") == 1 { f = 1; next }
             /^## \[[0-9]+\.[0-9]+\.[0-9]+\]/ { if (f) exit }
