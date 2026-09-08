@@ -343,8 +343,16 @@ hooks in this release behave identically when they refuse.
 ### 6.2 `check-bash-read` (PreToolUse → `Bash`)
 
 Blocks `cat` / `head` / `tail` / `less` / `more` reading a whole large file. Passes pipes,
-redirections, non-read commands, and `head`/`tail` carrying a line-count flag — the flag *is*
-the limit, making those already-targeted reads.
+redirections and non-read commands.
+
+**Corrected after implementation — the shipped hook does not do what the rest of this
+paragraph originally claimed.** It said `head`/`tail` carrying a line-count flag passes,
+because the flag *is* the limit and so the read is already targeted. The ported parser does
+not implement that: `head -100 big.go` is **blocked**, while `head -n 5 big.go` is **allowed**
+only incidentally, because `-n` is stripped as an option rather than recognised as a count.
+The parser is a pinned port of upstream's, and diverging from it would invalidate the 17
+ported eval cases, so the behaviour stands and this text is corrected to match it. See
+`plugin/anti-tangent-shunt/README.md` for the user-facing statement of the real behaviour.
 
 **This hook carries the release's highest risk of user-visible harm.** A false positive on
 `check-file-size` costs a redundant delegation; a false positive here blocks a legitimate
