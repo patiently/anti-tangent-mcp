@@ -163,6 +163,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Assert the OUTCOME, not the intermediate. The previous guard checked
+      # that the notes FILE was non-empty — which was always true, and stayed
+      # true through nine releases that published a bare newline, because the
+      # file was never read. What matters is the body GitHub actually serves.
+      - name: Verify the published release body is not empty
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ needs.version.outputs.new_version }}
+        run: |
+          BYTES=$(gh release view "$TAG" --json body --jq '.body | length')
+          echo "published body for $TAG: ${BYTES} bytes"
+          if [ "${BYTES:-0}" -lt 20 ]; then
+            echo "::error::${TAG} published with an empty release body (${BYTES} bytes)"
+            exit 1
+          fi
+
   docker:
     name: Build and push Docker image
     runs-on: ubuntu-latest

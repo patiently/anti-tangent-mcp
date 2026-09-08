@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.2] - 2026-09-08
+
+### Fixed
+- **The GitHub Release body is populated for real this time.** `.goreleaser.yaml` set
+  `changelog.disable: true`, and GoReleaser loads `--release-notes` *inside* the changelog pipe —
+  `Skip()` returns `Changelog.Disable`, and `Run()` is what calls
+  `loadContent(ctx.ReleaseNotesFile)`. With the pipe skipped, the notes file the release workflow
+  writes was never read, so every release from **v0.11.0 through v0.18.1** published a bare
+  newline no matter what the workflow passed. Disabling it was also unnecessary: `Run()` returns
+  early once a notes file is supplied, so no git-log changelog is generated on top of ours.
+  0.18.1's release-notes plumbing was a real improvement — it removed a fragile multiline
+  job-output hop and logged the byte count, which is how this was finally diagnosed — but it was
+  not the fix.
+- **The release now asserts the outcome instead of the intermediate.** The previous guard checked
+  that the notes *file* was non-empty, which was always true and stayed true through nine empty
+  releases, because the file was never read. The workflow now reads back the *published* release
+  body and fails if it is empty.
+
 ## [0.18.1] - 2026-09-08
 
 ### Fixed
