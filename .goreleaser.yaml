@@ -31,8 +31,16 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# NOT disabled. GoReleaser loads --release-notes inside the changelog pipe
+# (internal/pipe/changelog: Skip() returns Changelog.Disable, and Run() is what
+# calls loadContent(ctx.ReleaseNotesFile)). With `disable: true` the pipe was
+# skipped, the file the release workflow passes was never read, and every
+# release from v0.11.0 to v0.18.1 published a bare-newline body.
+#
+# Disabling it here is also unnecessary: Run() returns early as soon as a notes
+# file is supplied, so no git-log changelog is generated on top of ours.
 changelog:
-  disable: true
+  use: git
 
 release:
   github:
