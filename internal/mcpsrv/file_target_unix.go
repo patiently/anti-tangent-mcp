@@ -7,23 +7,27 @@ import (
 	"syscall"
 )
 
-// openWriteNoFollow opens resolved for writing, refusing to follow a symlink
-// at the final component.
+// writeTargetSupported reports whether this platform can offer the leaf
+// guarantee code_write's target_path depends on. Unix can — see
+// openCreateNoFollow and inspectOverwriteTarget — so target_path is enabled.
+func writeTargetSupported() error { return nil }
+
+// openCreateNoFollow creates resolved, refusing to follow a symlink at the
+// final component and refusing outright if anything is already there.
 //
-// O_NOFOLLOW is the load-bearing flag: without it a symlink planted at the
-// leaf between the containment check and the open redirects the write to an
-// arbitrary path outside the roots. It applies regardless of overwrite —
-// writing THROUGH a symlink is never what code_write means.
+// Only the overwrite: false path reaches this. The overwrite path never opens
+// the target at all — it writes a sibling temp file and renames it — so this
+// no longer needs an overwrite mode.
 //
-// O_EXCL additionally makes "does not already exist" atomic when overwrite is
-// false, rather than a stat-then-open race.
-func openWriteNoFollow(resolved string, overwrite bool) (*os.File, error) {
-	flags := syscall.O_WRONLY | syscall.O_CREAT | syscall.O_NOFOLLOW
-	if overwrite {
-		flags |= syscall.O_TRUNC
-	} else {
-		flags |= syscall.O_EXCL
-	}
+// O_EXCL is the load-bearing flag for both properties at once: it makes "does
+// not already exist" atomic rather than a stat-then-open race, and POSIX
+// requires it to fail when the final component is a symlink, dangling or not.
+// O_NOFOLLOW is therefore redundant here, and kept anyway — it states the
+// intent in the flags rather than in a comment, so a later edit that relaxes
+// O_EXCL (say, to allow overwriting again) does not silently take the
+// symlink refusal with it.
+func openCreateNoFollow(resolved string) (*os.File, error) {
+	flags := syscall.O_WRONLY | syscall.O_CREAT | syscall.O_EXCL | syscall.O_NOFOLLOW
 	fd, err := syscall.Open(resolved, flags, 0o644)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: resolved, Err: err}

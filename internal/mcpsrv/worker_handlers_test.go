@@ -251,6 +251,7 @@ func TestCodeWriteOversizedReferenceNamesSizeCapAndRemedy(t *testing.T) {
 }
 
 func TestCodeWriteWritesAndHidesCode(t *testing.T) {
+	skipIfWriteTargetUnsupported(t)
 	dir := t.TempDir()
 	ref := filepath.Join(dir, "ref.go")
 	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
@@ -343,16 +344,24 @@ func TestCodeWriteEmptyOutputIsAnErrorAndWritesNothing(t *testing.T) {
 	}
 }
 
-// closeFailTarget wraps a real file and reports a Close failure, so the
-// "Close errors are reported" criterion has something to assert against.
-type closeFailTarget struct {
-	*os.File
+// commitFailTarget wraps a real write transaction and reports a Commit
+// failure, so the "finalize errors are reported, not discarded" criterion has
+// something to assert against.
+//
+// It embeds writeTarget rather than *os.File so the wrapped transaction is
+// the real one: Discard still runs the production cleanup, which is the half
+// of the behaviour these tests actually assert on. Commit is failed WITHOUT
+// delegating to the real Commit, which is the faithful simulation — a
+// finalize that fails is one that did not rename.
+type commitFailTarget struct {
+	writeTarget
 	err error
 }
 
-func (c closeFailTarget) Close() error { _ = c.File.Close(); return c.err }
+func (c commitFailTarget) Commit() error { return c.err }
 
-func TestCodeWriteReportsCloseError(t *testing.T) {
+func TestCodeWriteReportsCommitError(t *testing.T) {
+	skipIfWriteTargetUnsupported(t)
 	dir := t.TempDir()
 	ref := filepath.Join(dir, "ref.go")
 	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
@@ -364,7 +373,7 @@ func TestCodeWriteReportsCloseError(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		return closeFailTarget{File: f, err: errors.New("disk went away")}, nil
+		return commitFailTarget{writeTarget: f, err: errors.New("disk went away")}, nil
 	}
 
 	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"code":"package out\n"}`)}}
@@ -376,27 +385,28 @@ func TestCodeWriteReportsCloseError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "disk went away", "a Close error must surface")
 
-	// A Close failure must not leave a file behind either: resolveWriteTarget
-	// opens with O_TRUNC on overwrite (and creates fresh via O_EXCL
-	// otherwise), so whatever WriteString put on disk before Close failed is
-	// now an orphaned partial file unless it is cleaned up.
+	// A failed commit must not leave a file behind either. This is the create
+	// path (no overwrite), so O_EXCL already claimed the name: whatever
+	// WriteString put there is a file this call itself brought into
+	// existence, and it is an orphaned partial unless Discard removes it.
 	_, statErr := os.Stat(target)
-	assert.True(t, os.IsNotExist(statErr), "a Close failure must not leave a partial file behind")
+	assert.True(t, os.IsNotExist(statErr), "a failed commit must not leave a partial file behind")
 }
 
-// writeFailTarget wraps a real file and reports a WriteString failure, so
-// the "a failed write does not leave a damaged file behind" property has
-// something to assert against. Disk-full during the write is the likelier
+// writeFailTarget wraps a real write transaction and reports a WriteString
+// failure, so the "a failed write does not leave a damaged file behind"
+// property has something to assert against. Disk-full during the write is the likelier
 // real-world failure — more likely than Close failing — and unlike Close,
 // nothing exercised this branch before.
 type writeFailTarget struct {
-	*os.File
+	writeTarget
 	err error
 }
 
 func (w writeFailTarget) WriteString(string) (int, error) { return 0, w.err }
 
 func TestCodeWriteWriteFailureLeavesNoFileBehind(t *testing.T) {
+	skipIfWriteTargetUnsupported(t)
 	dir := t.TempDir()
 	ref := filepath.Join(dir, "ref.go")
 	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
@@ -409,7 +419,7 @@ func TestCodeWriteWriteFailureLeavesNoFileBehind(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		return writeFailTarget{File: f, err: errors.New("disk full")}, nil
+		return writeFailTarget{writeTarget: f, err: errors.New("disk full")}, nil
 	}
 
 	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"code":"package out\n"}`)}}
@@ -421,12 +431,97 @@ func TestCodeWriteWriteFailureLeavesNoFileBehind(t *testing.T) {
 	assert.Contains(t, err.Error(), "disk full", "a WriteString error must surface")
 
 	// This is the assertion that pins the cleanup fix: resolveWriteTarget
-	// already created (or, on overwrite, truncated) the file at open time,
-	// before WriteString ever ran. Without an explicit os.Remove on this
-	// failure path, a zero-length file is left sitting at target_path with
-	// an error that never mentions it.
+	// already created the file at open time, before WriteString ever ran.
+	// Without an explicit removal on this failure path, a zero-length file
+	// is left sitting at target_path with an error that never mentions it.
 	_, statErr := os.Stat(target)
 	assert.True(t, os.IsNotExist(statErr), "a failed write must not leave a partial file behind")
+}
+
+// TestCodeWriteFailedOverwritePreservesOriginal is the destruction proof for
+// the atomic-overwrite contract: when overwrite is true and the write fails
+// partway, target_path must still hold EXACTLY the bytes it held before the
+// call.
+//
+// Against an implementation that opens the target with O_TRUNC this fails, and
+// it fails in the worst possible way: the truncate happens at open(2), before
+// WriteString ever runs, so the caller's file is already empty by the time the
+// failure is noticed and the cleanup path then removes what is left. The
+// assertion below is byte-identity, not merely "the file still exists" —
+// "exists" would also be satisfied by a zero-length file, which is precisely
+// the damage being guarded against.
+func TestCodeWriteFailedOverwritePreservesOriginal(t *testing.T) {
+	skipIfWriteTargetUnsupported(t)
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
+
+	target := filepath.Join(dir, "out.go")
+	const original = "package out\n\n// the caller's existing file\nfunc Existing() {}\n"
+	require.NoError(t, os.WriteFile(target, []byte(original), 0o644))
+
+	orig := openWriteTarget
+	t.Cleanup(func() { openWriteTarget = orig })
+	openWriteTarget = func(target string, roots []string, overwrite bool) (writeTarget, error) {
+		f, err := resolveWriteTarget(target, roots, overwrite)
+		if err != nil {
+			return nil, err
+		}
+		return writeFailTarget{writeTarget: f, err: errors.New("disk full")}, nil
+	}
+
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"code":"package out\n"}`)}}
+	h := &handlers{deps: workerDeps(t, f, []string{dir})}
+	_, _, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+		Spec: "s", ReferencePath: ref, TargetPath: target, Overwrite: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disk full", "a WriteString error must surface")
+
+	b, readErr := os.ReadFile(target)
+	require.NoError(t, readErr, "a failed overwrite must not remove the caller's file")
+	assert.Equal(t, original, string(b), "a failed overwrite must leave the original byte-identical")
+	assertNoTempLeftBehind(t, dir, "ref.go", "out.go")
+}
+
+// TestCodeWriteFailedCommitPreservesOriginal is the same proof one step later
+// in the sequence: the bytes were written successfully and the finalize step
+// is what failed. This is the branch a temp-file design has to get right —
+// finalizing is where the rename lives, so a design that renamed first and
+// checked afterwards would pass the WriteString test above and still destroy
+// the file here.
+func TestCodeWriteFailedCommitPreservesOriginal(t *testing.T) {
+	skipIfWriteTargetUnsupported(t)
+	dir := t.TempDir()
+	ref := filepath.Join(dir, "ref.go")
+	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
+
+	target := filepath.Join(dir, "out.go")
+	const original = "package out\n\n// the caller's existing file\nfunc Existing() {}\n"
+	require.NoError(t, os.WriteFile(target, []byte(original), 0o644))
+
+	orig := openWriteTarget
+	t.Cleanup(func() { openWriteTarget = orig })
+	openWriteTarget = func(target string, roots []string, overwrite bool) (writeTarget, error) {
+		f, err := resolveWriteTarget(target, roots, overwrite)
+		if err != nil {
+			return nil, err
+		}
+		return commitFailTarget{writeTarget: f, err: errors.New("disk went away")}, nil
+	}
+
+	f := &fakeWorkerReviewer{resp: providers.Response{RawJSON: []byte(`{"code":"package out\n"}`)}}
+	h := &handlers{deps: workerDeps(t, f, []string{dir})}
+	_, _, err := h.CodeWrite(context.Background(), nil, CodeWriteArgs{
+		Spec: "s", ReferencePath: ref, TargetPath: target, Overwrite: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disk went away")
+
+	b, readErr := os.ReadFile(target)
+	require.NoError(t, readErr, "a failed finalize must not remove the caller's file")
+	assert.Equal(t, original, string(b), "a failed finalize must leave the original byte-identical")
+	assertNoTempLeftBehind(t, dir, "ref.go", "out.go")
 }
 
 func TestStripFences(t *testing.T) {
@@ -511,6 +606,7 @@ func TestBulkReadRecordingWithNilStats(t *testing.T) {
 }
 
 func TestCodeWriteRecordsEvent(t *testing.T) {
+	skipIfWriteTargetUnsupported(t)
 	dir := t.TempDir()
 	ref := filepath.Join(dir, "ref.go")
 	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
@@ -551,6 +647,7 @@ func TestCodeWriteRecordsEvent(t *testing.T) {
 }
 
 func TestCodeWriteRecordingWithNilStats(t *testing.T) {
+	skipIfWriteTargetUnsupported(t)
 	dir := t.TempDir()
 	ref := filepath.Join(dir, "ref.go")
 	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
@@ -572,6 +669,7 @@ func TestCodeWriteRecordingWithNilStats(t *testing.T) {
 }
 
 func TestCodeWriteRecordsEventEvenIfWriteFails(t *testing.T) {
+	skipIfWriteTargetUnsupported(t)
 	dir := t.TempDir()
 	ref := filepath.Join(dir, "ref.go")
 	require.NoError(t, os.WriteFile(ref, []byte("package ref\n"), 0o644))
@@ -603,7 +701,7 @@ func TestCodeWriteRecordsEventEvenIfWriteFails(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		return writeFailTarget{File: f, err: errors.New("disk full")}, nil
+		return writeFailTarget{writeTarget: f, err: errors.New("disk full")}, nil
 	}
 
 	_, _, err = h.CodeWrite(context.Background(), nil, CodeWriteArgs{

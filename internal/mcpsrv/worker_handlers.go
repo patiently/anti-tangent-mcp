@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -190,6 +189,8 @@ func codeWriteTool() *mcp.Tool {
 			"by running the task's tests and build. You are not required to read what was generated — " +
 			"reading it would put back exactly the context this tool removes. " +
 			"An existing target is refused unless overwrite is true, and the parent directory must already exist. " +
+			"target_path is not supported on Windows, where the server cannot guarantee the write stays inside " +
+			"its configured roots — omit it there and write the returned code yourself. " +
 			"Do NOT use this for logic requiring judgement — only for boilerplate that follows an existing pattern.",
 	}
 }
@@ -278,61 +279,80 @@ func (h *handlers) CodeWrite(ctx context.Context, _ *mcp.CallToolRequest, args C
 		return nil, CodeWriteResult{}, err
 	}
 	written := f.Name()
+	// Note there is no `defer f.Discard()` and no `_ = f.Close()` here. The
+	// write is a transaction (see writeTx): Commit publishes it, Discard
+	// abandons it, and closing the underlying handle is neither — on the
+	// overwrite path a bare close would leave the temp file stranded, and a
+	// Commit reached by mistake would publish a half-written file over the
+	// caller's. Both failure branches therefore go through Discard, and the
+	// success branch through Commit, with nothing in between.
 	if _, err := f.WriteString(code); err != nil {
-		_ = f.Close()
-		return nil, CodeWriteResult{}, cleanupAfterWriteFailure(written, fmt.Errorf("write %q: %w", written, err))
+		return nil, CodeWriteResult{}, cleanupAfterWriteFailure(f, fmt.Errorf("write %q: %w", written, err))
 	}
-	// Closed explicitly, not deferred: a deferred Close discards its error, and
-	// on a write path that error is where a failed flush surfaces. Reporting
-	// success for a file that did not close cleanly would be a lie.
-	if err := f.Close(); err != nil {
-		return nil, CodeWriteResult{}, cleanupAfterWriteFailure(written, fmt.Errorf("close %q: %w", written, err))
+	// Committed explicitly, not deferred: a deferred commit discards its
+	// error, and on a write path that error is where a failed flush or a
+	// failed rename surfaces. Reporting success for a file that did not land
+	// would be a lie.
+	//
+	// Not wrapped, unlike the WriteString branch above: Commit's own errors
+	// already name both the stage that failed and the target, and
+	// cleanupAfterWriteFailure appends the target again, so a third mention
+	// would only pad the message.
+	if err := f.Commit(); err != nil {
+		return nil, CodeWriteResult{}, cleanupAfterWriteFailure(f, err)
 	}
 	res.Written = written
 	res.LinesWritten = countLines(code)
 	return nil, res, nil
 }
 
-// cleanupAfterWriteFailure runs after a WriteString or Close failure on an
-// already-opened target and reports what became of the file at written.
+// cleanupAfterWriteFailure runs after a failed WriteString or Commit on an
+// already-opened target and folds what became of the file into the error.
 //
-// resolveWriteTarget opens with O_TRUNC when overwrite is true, so by the
-// time WriteString or Close fails, any content that previously existed at
-// target_path is ALREADY gone — a mid-write failure does not fail closed on
-// its own, it leaves either an empty or a partially-written file sitting
-// where the caller's file used to be, and CodeWriteResult{} on the error
-// path carries no field that would tell a caller that. Best-effort removal
-// converts that silent corruption into a loud, named failure: the caller
-// either learns the partial file was removed, or — if removal itself
-// failed — learns exactly where a partial file may still remain, instead of
-// getting only "write failed" and finding out about the damage some other
-// way.
+// The write is a transaction, so what "cleanup" means depends on which path
+// is running, and only the transaction knows:
 //
-// Removal's own error is appended to, never substituted for, cause: a
-// failure to clean up must not mask the write/close failure that is the
-// actual reason this function is running.
+//   - overwrite: true — the bytes went to a temp file alongside the target
+//     and the rename never happened, so the caller's original file is still
+//     byte-identical. Discard removes the temp.
+//   - overwrite: false — O_EXCL proves this call created the file, so nothing
+//     pre-existing can be lost. Discard removes what this call made.
 //
-// On the default (overwrite: false) path nothing pre-existing was lost —
-// O_EXCL guarantees the target did not exist before this call — so removal
-// here is pure cleanup of a file this call itself created; on the
-// overwrite path it is the best available signal short of a design change
-// (write-to-temp-then-rename) that is out of scope for this task.
-func cleanupAfterWriteFailure(written string, cause error) error {
-	if rmErr := os.Remove(written); rmErr != nil {
-		return fmt.Errorf("%w; the partial file could NOT be removed and may still be at %q: %v", cause, written, rmErr)
-	}
-	return fmt.Errorf("%w; the partial file at %q was removed", cause, written)
+// Either way the point is the same: convert a silent leftover into a loud,
+// named outcome, so the caller learns what target_path holds now instead of
+// getting a bare "write failed" and finding out some other way. A removal
+// that itself fails is reported inside the same sentence, naming the file it
+// could not clean up.
+//
+// Discard's outcome is appended to, never substituted for, cause: a failure
+// to clean up must not mask the write failure that is the actual reason this
+// function is running.
+func cleanupAfterWriteFailure(f writeTarget, cause error) error {
+	return fmt.Errorf("%w; %s", cause, f.Discard())
 }
 
-// writeTarget is the narrow surface CodeWrite needs from an open file.
-// *os.File satisfies it. It exists solely so a test can force Close to fail —
-// there is no way to make a real *os.File's Close return an error on demand,
-// and "a Close error is reported, not discarded" is an acceptance criterion,
-// so it needs a seam.
+// writeTarget is the narrow surface CodeWrite needs from an in-flight write.
+// *writeTx satisfies it.
+//
+// It is deliberately not an io.Closer. Close would be the obvious name for
+// "finish", and it is exactly the wrong one here: on the overwrite path
+// finishing means renaming a temp file over the target, and abandoning means
+// deleting that temp, so a single Close would have to guess which the caller
+// meant. Commit and Discard say it instead, and the compiler stops anyone
+// from reaching for a third option.
+//
+// It is also the seam a test replaces to force a failure — there is no way to
+// make a real file's write or commit fail on demand, and "a failed overwrite
+// leaves the original intact" is a security-relevant property, so it needs
+// one.
 type writeTarget interface {
 	io.StringWriter
-	io.Closer
 	Name() string
+	// Commit publishes the written bytes at Name().
+	Commit() error
+	// Discard abandons the write and reports, in one caller-facing sentence,
+	// what Name() holds as a result. Idempotent.
+	Discard() string
 }
 
 // openWriteTarget is a package var for the same reason. Production always
