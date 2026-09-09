@@ -21,6 +21,7 @@ func TestReadParsesRollupSummaryAndCodescene(t *testing.T) {
 	  "category_histogram":{"ambiguous_spec":5},"review_ms_p95":1800,"generated_at":"2026-06-02T08:00:00Z",
 	  "per_tool":{"validate_completion":6},"findings_per_call":3.2,"severity_histogram":{"major":4},
 	  "review_ms_p50":900,"cache_hit_rate":0,"partial_rate":0,"model_usage":{"openai:gpt-5.5":10},
+	  "criterion_histogram":{"comment_hygiene":4,"noise_cluster":1},
 	  "window_start":"2026-05-26T08:00:00Z","window_end":"2026-06-02T08:00:00Z",
 	  "codescene":{"runs":12,"gates_passed":7,"gates_failed":5,"latest_gate":"failed","latest_trend":"regression",
 	  "latest_net_pp":2.3,"net_pp_p50":0.5,"regressions":3,"improvements":7,"neutral":2,"files_analyzed":84,"category_histogram":{"complex-method":5}}}`
@@ -45,6 +46,28 @@ func TestReadParsesRollupSummaryAndCodescene(t *testing.T) {
 	}
 	if s.WindowStart.IsZero() || s.WindowEnd.IsZero() || !s.WindowStart.Before(s.WindowEnd) {
 		t.Errorf("window: got start=%v end=%v", s.WindowStart, s.WindowEnd)
+	}
+	// A key the private rollup struct does not declare is dropped by
+	// json.Unmarshal without an error, so the only thing that proves this one
+	// crosses the component boundary is decoding it here.
+	if s.CriterionHistogram["comment_hygiene"] != 4 || s.CriterionHistogram["noise_cluster"] != 1 {
+		t.Errorf("criterion histogram not decoded: got %v", s.CriterionHistogram)
+	}
+}
+
+// TestReadCriterionHistogramAbsentIsNil pins the older-server case: a
+// rollup.json with no criterion_histogram must decode cleanly, leaving the map
+// nil so the stats page omits the section rather than showing an empty table.
+func TestReadCriterionHistogramAbsentIsNil(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "rollup.json"),
+		[]byte(`{"total_calls":1,"verdict_counts":{"pass":1},"generated_at":"2026-06-02T08:00:00Z"}`), 0o600)
+	s := Read(dir)
+	if !s.Present {
+		t.Fatal("expected present")
+	}
+	if s.CriterionHistogram != nil {
+		t.Errorf("expected nil criterion histogram, got %v", s.CriterionHistogram)
 	}
 }
 

@@ -199,7 +199,7 @@ func TestComputeRollup_CriterionHistogram(t *testing.T) {
 	b, err := json.Marshal(r)
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"criterion_histogram"`,
-		"the tray consumer and the LLM summary read this key off rollup.json")
+		"the snake_case key is the cross-component contract; an untagged field would marshal as CriterionHistogram and decode as nothing on the far side")
 }
 
 func TestComputeRollup_CriterionHistogramEmptyNotNull(t *testing.T) {

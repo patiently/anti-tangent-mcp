@@ -116,9 +116,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through a symlink at the log path; both checks stay best-effort and never change an exit status.
   Matched comment lines echoed into the close-time block message are truncated, so one very long
   diff line cannot reach the model as megabytes of hook stderr.
-- **`criterion_counts` now reaches `rollup.json`.** The per-event counts were written but never
-  aggregated, so `criterion_histogram` — and with it the comment-hygiene numbers in the LLM
-  summary and the tray consumer — did not exist. Criterion lookups also normalise case and
+- **`criterion_counts` now reaches `rollup.json` and the tray.** The per-event counts were written
+  but never aggregated, so `criterion_histogram` — and with it the comment-hygiene numbers in the
+  LLM summary — did not exist. The gnome-topbar stats page decodes the key and renders it as a
+  "Criteria" table beside Severity and Categories; a `rollup.json` without the key still decodes
+  cleanly and simply omits the section. Criterion lookups also normalise case and
   surrounding whitespace before the allowlist test: criterion is free reviewer text, and a
   reviewer writing `Comment_Hygiene` silently vanished from the metric.
 - **The write-time guard skips an unscanned file without starting an interpreter**, deciding from

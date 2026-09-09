@@ -25,9 +25,9 @@ type Rollup struct {
 	CategoryHistogram map[string]int `json:"category_histogram"`
 	// CriterionHistogram sums Event.CriterionCounts, whose keys are the
 	// server-recognised criterion sentinels (comment_hygiene and its
-	// siblings). Without it those per-event counts have no aggregate and the
-	// rollup, the LLM summary built from it, and the tray consumer all report
-	// nothing about them.
+	// siblings). It is the only aggregate of those per-event counts, and both
+	// consumers read it from here: the LLM summary built from this rollup, and
+	// the gnome-topbar stats page, which renders it as its "Criteria" table.
 	CriterionHistogram map[string]int     `json:"criterion_histogram"`
 	ReviewMSP50        int64              `json:"review_ms_p50"`
 	ReviewMSP95        int64              `json:"review_ms_p95"`
