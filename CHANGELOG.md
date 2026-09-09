@@ -121,11 +121,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   genuine record. Those checks stay best-effort and never change an exit status. Matched comment
   lines echoed into either hook's block message are truncated, so one very long line cannot reach
   the model as megabytes of hook stderr.
-- **`criterion_counts` now reaches `rollup.json` and the tray.** The per-event counts were written
-  but never aggregated, so `criterion_histogram` — and with it the comment-hygiene numbers in the
-  LLM summary — did not exist. The gnome-topbar stats page decodes the key and renders it as a
-  "Criteria" table beside Severity and Categories; a `rollup.json` without the key still decodes
-  cleanly and simply omits the section. Criterion lookups also normalise case and
+- **`criterion_counts` now reaches `rollup.json`, the LLM summary and the tray.** The per-event
+  counts were written but never aggregated, so `criterion_histogram` — and with it the
+  comment-hygiene numbers in the LLM summary — did not exist. The summary prompt's topic list now
+  names the per-criterion counts, so the model is asked about the data it is handed rather than
+  left to volunteer it. The gnome-topbar stats page decodes the key and renders it as a "Criteria"
+  table beside Severity and Categories; a `rollup.json` without the key still decodes cleanly and
+  simply omits the section. **That tray half does not ship in this release.**
+  `gnome-topbar/daemon` is a separate Go module with its own release workflow, triggered by
+  `gnome-topbar-v*` tags, and the server's release workflow ignores `gnome-topbar/**` — so the
+  "Criteria" table reaches users with the next `gnome-topbar-v*` tag, not by merging this one.
+  Criterion lookups also normalise case and
   surrounding whitespace before the allowlist test: criterion is free reviewer text, and a
   reviewer writing `Comment_Hygiene` silently vanished from the metric.
 - **The write-time guard skips an unscanned file without starting an interpreter**, deciding from
@@ -142,10 +148,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bypasses the `Edit`/`Write` matcher exactly as `Bash` writes do — and whose generated code never
   enters the agent's context to be self-reviewed either. The `code-writer` skill says so where it
   recommends `target_path`, so the readers most likely to take that bypass see the caveat without
-  reading the guard's README. `INTEGRATION.md`'s router table names §4.4 and the write-time guard
-  in the rows that carry them, so an agent picking a protocol part by what it covers can find
-  them. The CI protocol-byte budget warns at 15,500 as well as failing at 16,000: the binding
-  file sits under 1% below the cap, where the first signal of a problem should not be a red build.
+  reading the guard's README. `INTEGRATION.md`'s router table names §4.4, the write-time guard and
+  §5.3's guard hooks in the rows that carry them, so an agent picking a protocol part by what it
+  covers can find them. The CI protocol-byte budget warns at 15,500 as well as failing at 16,000:
+  the binding file sits under 1% below the cap, where the first signal of a problem should not be
+  a red build.
+- **A write the guard could not scan is no longer logged as one it scanned and cleared.** A
+  `Write` whose target is a symlink, a FIFO, a directory or a file past the read cap has no old
+  text to diff against, so the scan is declined and the write allowed — correctly, and unchanged.
+  But the wrapper traced that as `pass`, indistinguishable in the log from a clean scan. The body
+  now reports it as its own status and the wrapper traces `skip | unreadable-target`. Only the
+  trace line changes; the hook still exits 0 and still never blocks on it. The guard README gains
+  a table of the write-time fail-open causes, which it previously documented only for the
+  close-time hook.
+- `plugin/anti-tangent-protocol` is version 0.2.1 and `plugin/anti-tangent-shunt` is 0.1.1: both
+  shipped changed content in this release — three protocol parts, and the `code-writer` skill's
+  guard-bypass caveat — and nothing in the release workflow bumps a plugin, so both are bumped by
+  hand here together with their `.claude-plugin/marketplace.json` entries.
 
 No schema, tool-argument or envelope change: the verdict distribution shifts, but every type and
 field is byte-identical. Callers that calibrated against the observed distribution will see it
