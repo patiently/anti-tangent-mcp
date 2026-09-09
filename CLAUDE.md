@@ -129,6 +129,24 @@ Two failure modes to avoid: (1) leaking consumer code or naming into a public is
 
 Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). `validate_plan`, `prime_project_knowledge` and `extract_project_knowledge` each emit one summary line per call, on exit so it can carry the verdict and the duration — plus, where a call degraded rather than failed, at most one warning per degraded surface. A warning must be aggregated to one line per call, never emitted from inside a per-item loop. The other four tools (`validate_task_spec`, `check_progress`, `validate_completion`, `plan_run_report`) emit no per-call line today; that is a gap, not a design choice — if you add logging to one of them, follow the same exit-line shape. Set `ANTI_TANGENT_LOG_LEVEL=debug` to also log prompts and provider responses.
 
+## Comments
+
+The `anti-tangent-guard` plugin enforces this at write time (`Edit`/`Write`) and again at task
+close, when installed — but its scanner only catches full-line comments against a small pattern
+set, so a clean hook run is not proof of compliance; apply the policy yourself.
+
+Comments explain non-trivial behaviour, or a non-obvious invariant or hazard
+that would bite the next editor. The test: the comment reads correctly to
+someone who never saw the change that introduced it.
+
+Comments do NOT carry change history — no issue, pull-request or task
+references, no version references, no "previously" / "no longer" / "this
+replaced". Git holds that, and a comment repeating it goes stale on the next
+change.
+
+When you touch code whose comments break these rules, remove or rewrite them as
+part of your task. There is no separate cleanup pass.
+
 ## What This Repo Is Not
 
 (Lifted from the spec's non-goals; do not propose features it has already ruled out.)

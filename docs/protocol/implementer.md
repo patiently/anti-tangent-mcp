@@ -31,6 +31,11 @@ returned `session_id` — you'll thread it through subsequent calls.
   `severity: major` as "address or explain." If the spec is too ambiguous
   to proceed, stop and ask the controller for clarification rather than
   guessing.
+- A `warn` carrying only `minor` findings is a legitimate place to proceed. The
+  verdict is derived from the finding mix, so a well-specified task can sit at
+  `warn` indefinitely; iterate while findings are still being resolved, and
+  proceed once the remaining ones are prose-level. Do not keep re-validating a
+  spec whose findings have stopped changing.
 
 **2. During work (OPTIONAL).** Call `check_progress` ONLY if you suspect
 you're drifting mid-task, OR a test that 'should' fail doesn't, OR
@@ -67,7 +72,10 @@ and re-submit; no rework is implied.**
   relative `.git` in a normal checkout and would make `final_diff_path` fail the server's
   absolute-path check — `--absolute-git-dir` resolves correctly in both a normal checkout and a
   worktree, where `.git` is a regular file rather than a directory and `"$PWD/.git/..."` dies with
-  `Not a directory`). **Scope both the `git add` and the `git diff` to your task's own paths —
+  `Not a directory`). **This filename is fixed per git directory** — if another agent may write to
+  the same one (parallel tasks, a shared worktree), use a task-unique filename instead, or a shared
+  name races and the later write silently clobbers the earlier task's evidence. A path under `/tmp`
+  is refused when `ANTI_TANGENT_PLAN_ROOTS` is scoped to the project. **Scope both the `git add` and the `git diff` to your task's own paths —
   never `git add -A` or bare `git diff HEAD`.** Everything in the diff is sent to a third-party
   reviewer LLM, so an unscoped `git add -A` stages, and an unscoped diff then discloses, every
   non-ignored change in the worktree — unrelated tracked edits, scratch files, another task's
@@ -185,3 +193,17 @@ answer alone — it carries no reliable line anchors.
 **The retry loop.** Parse failures on the reviewer's response are handled inside the server (one retry with a JSON-only reminder); the implementer does not handle that.
 
 **Session not found.** A `category: session_not_found` finding means the session expired (default TTL 4h) or was never created. Call `validate_task_spec` again to start a fresh session and continue with the new ID.
+
+### 4.4 Comments
+
+Comments explain non-trivial behaviour, or a non-obvious invariant or hazard
+that would bite the next editor. The test: the comment reads correctly to
+someone who never saw the change that introduced it.
+
+Comments do NOT carry change history — no issue, pull-request or task
+references, no version references, no "previously" / "no longer" / "this
+replaced". Git holds that, and a comment repeating it goes stale on the next
+change.
+
+When you touch code whose comments break these rules, remove or rewrite them as
+part of your task. There is no separate cleanup pass.
