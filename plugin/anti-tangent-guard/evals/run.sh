@@ -135,6 +135,13 @@ run_case() {
     case_tmp=$(mktemp -d "${TMPDIR:-/tmp}/atg-eval-XXXXXX.go")
     CASE_TMPDIRS+=("$case_tmp")
 
+    # HOOK_CWD is shared across every case (that is the point — a relative
+    # path needs a stable cwd to resolve against), so a cwd_fixture file left
+    # over from an earlier case would otherwise still be on disk when a later
+    # case runs, making that later case's outcome depend on execution order.
+    # Reset it before this case gets a chance to populate it again.
+    rm -rf "${HOOK_CWD:?}"/* 2>/dev/null || true
+
     local case_dir stdin_file stderr_file
     case_dir=$(mktemp -d "$WORKDIR/case-$id.XXXXXX")
     stdin_file="$case_dir/stdin.json"
