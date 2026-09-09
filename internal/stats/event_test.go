@@ -35,8 +35,17 @@ func TestCountFindings(t *testing.T) {
 
 func TestCountFindingsEmpty(t *testing.T) {
 	sev, cat, crit, total := CountFindings(nil)
-	if sev != nil || cat != nil || crit != nil || total != 0 {
-		t.Fatalf("want nil,nil,nil,0; got %v,%v,%v,%d", sev, cat, crit, total)
+	if sev != nil {
+		t.Fatalf("severity should be nil, got %v", sev)
+	}
+	if cat != nil {
+		t.Fatalf("category should be nil, got %v", cat)
+	}
+	if crit != nil {
+		t.Fatalf("criterion should be nil, got %v", crit)
+	}
+	if total != 0 {
+		t.Fatalf("total should be 0, got %d", total)
 	}
 }
 
