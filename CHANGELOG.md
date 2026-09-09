@@ -61,10 +61,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A re-runnable zero-false-positive gate for the comment-hygiene scanner**, under
   `plugin/anti-tangent-guard/evals/`. `fp-scan.py` runs the shipped scanner over every tracked
-  source file's HEAD blob, treating every comment line as added; `fp-class.tsv` records what each
-  hit is; `fp-report.sh` joins the two strictly in both directions — rejecting unclassified,
-  unknown, duplicate and stale entries before counting — and fails unless the false-positive count
-  is zero. Wired into CI, so widening a tell can no longer quietly reopen a false positive.
+  source file's HEAD blob — skipping vendored third-party bundles, whose comments nobody here can
+  rewrite — and treats every comment line as added; `fp-class.tsv` records what each hit is;
+  `fp-report.sh` joins the two on path plus comment text, strictly in both directions, rejecting
+  unclassified, unknown, duplicate and miscounted entries before counting, and fails unless the
+  false-positive count is zero. Keying on the text rather than on a line number means an unrelated
+  commit that shifts a classified comment does not turn CI red, while a rewritten one still
+  surfaces as both an unknown classification and an unclassified hit. Wired into CI, so widening a
+  tell can no longer quietly reopen a false positive.
 
 ### Fixed
 - **`validate_task_spec` now reserves `major` for ambiguity that would actually cause
