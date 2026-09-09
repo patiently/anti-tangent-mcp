@@ -10,12 +10,24 @@
 `final_diff` or `test_evidence` "in any combination", and two of those combinations are not
 covered end-to-end:
 
-- **`final_files`-only** — no diff, so the deterministic close-time scan cannot run. The reviewer
-  still sees the file contents; Task 5 defines what it does with them.
-- **`test_evidence`-only** — no file content of any kind reaches either the scanner or the
-  reviewer. Neither close-time layer can say anything about comments. If that code was also
-  written through `Bash` rather than `Edit`/`Write`, the prevention layer missed it too, and the
-  change is unenforced by all three layers.
+- **`final_files`-only** — no diff, so neither close-time layer runs. The scanner needs a diff;
+  and the reviewer deliberately does NOT fall back to the summary, because `post.tmpl` states the
+  summary is not evidence, so it cannot establish which comments the change added.
+- **`test_evidence`-only** — no file content of any kind reaches either layer.
+- Combined with a `Bash`-written change (heredoc, `sed -i`), which the `Edit`/`Write` matcher never
+  sees, either of the above leaves the change unenforced by **all three** layers.
+
+The deterministic scanner is also narrower than the policy it enforces, and this must be
+documented rather than left for someone to discover:
+
+- it reads **full-line comments only** — block-comment interiors, trailing comments, and
+  comment-like text inside string literals are out of scope;
+- it implements **three tells** (`task-<n>`, `#<digits>`, `v<x.y.z>`), while the policy also bans
+  prose narration such as "previously", "no longer" and "this replaced". Those forms are
+  reviewer-only by design, because they cannot be pattern-matched without false positives.
+
+So the reviewer layer is the broader of the two, and the scanner is the blocking one. Tasks 9 and
+10 must state this asymmetry in the plugin README and the protocol docs.
 
 This is accepted rather than closed: requiring diff evidence purely for comment hygiene would
 change `validate_completion`'s contract for every caller, which is out of scope for this release.
@@ -491,7 +503,7 @@ git commit -m "feat(stats): record bounded criterion counts on review events"
 
 **Acceptance Criteria:**
 - [ ] `post.tmpl` states the policy (behaviour/invariant allowed, change-history banned) and names the banned forms
-- [ ] The rule states explicitly what to do for `final_files`-only evidence (judge only code the summary calls new) and for no file evidence (skip the policy) — this layer covers the deterministic scan's blind spot, so it cannot be left implicit
+- [ ] The rule applies only when a diff is present, and says so explicitly for both `final_files`-only and `test_evidence`-only evidence. It must NOT use the summary to decide which code is new — `post.tmpl` already states the summary is not evidence, and a rule that contradicts its own surrounding prompt is worse than a narrower one
 - [ ] The rule pins `category: quality`, `criterion: comment_hygiene`, `severity: minor`, and says explicitly that it is never major or critical however many are found
 - [ ] A new test asserts the passage renders and that the severity pin is present verbatim
 - [ ] All four `post_*.golden` files regenerated and the diff read
@@ -532,7 +544,9 @@ Comments added by this change must explain non-trivial behaviour, or a non-obvio
 
 A comment is a defect when it narrates change history — an issue, pull-request or task reference; a version reference; "previously", "no longer", "this replaced" — or when it restates what the code plainly does, or describes the code inaccurately.
 
-Judge only comments this change ADDS; an untouched comment is out of scope. When the evidence is a diff, added comments are the `+` lines. When the evidence is whole files (`final_files`) with no diff, you cannot distinguish an added comment from a pre-existing one — judge a comment only when the summary unambiguously names its containing file or region as newly created; skip every other comment rather than guessing. When there is no file evidence at all, skip this policy rather than guessing.
+Judge only comments this change ADDS, and only when the evidence shows which comments those are. When the evidence is a diff, added comments are the `+` lines.
+
+**Apply this policy ONLY when a diff is present.** With `final_files` and no diff you cannot tell an added comment from one that was already there, and the summary does not settle it — as stated above, the summary on its own is not evidence. With `test_evidence` alone there is no comment to read. In both cases emit no comment-hygiene finding at all rather than inferring which code is new.
 
 Emit these as `category: quality`, `criterion: comment_hygiene`, and `severity: minor` — always `minor`, never `major` or `critical`, however many you find. Quote the offending comment in `evidence`, and give the rewritten comment or an explicit removal in `suggestion`.
 ```
@@ -919,8 +933,17 @@ execution order and on residue from earlier runs. In `run.sh`, before each case:
 case_tmp=$(mktemp -d "${TMPDIR:-/tmp}/atg-eval-XXXXXX")
 ```
 
-substitute `{{TMPDIR}}` in `stdin_raw` and in the JSON-encoded `input` with `$case_tmp`, using the
-same `sed`/`jq` substitution the runner already applies for `{{TRANSCRIPT}}`.
+substitute `{{TMPDIR}}` with `$case_tmp` everywhere it can appear. Be concrete rather than
+copying the transcript path's approach: `{{TRANSCRIPT}}` is handled by `jq` **setting**
+`.input.transcript_path` to a computed value, which is a different operation from replacing a
+placeholder wherever it occurs. Use one mechanism for both payload shapes:
+
+```bash
+stdin_raw="${stdin_raw//\{\{TMPDIR\}\}/$case_tmp}"
+input=$(jq --arg d "$case_tmp" 'walk(if type == "string" then gsub("\\{\\{TMPDIR\\}\\}"; $d) else . end)' <<<"$input")
+```
+
+and apply the same `${...//}` expansion to `env` values and to any `expected_file_contains` paths.
 
 `run_case` has several early `return` paths on failure, so cleanup placed at the end of the
 function would be skipped on exactly the runs you most want cleaned. Register it per case instead
@@ -980,9 +1003,9 @@ git commit -m "feat(guard): prevent comments carrying change history at write ti
 - [ ] A `trace()` line records the new block reason
 - [ ] `ANTI_TANGENT_COMMENT_GUARD=0` skips the comment scan while the completion gate still runs
 - [ ] Existing 22 cases still pass
-- [ ] Every acceptance criterion above has at least one eval: last-call selection, absolute `final_diff_path`, relative-path fail-open, the size cap, the kill switch, and the `trace()` reason
+- [ ] Every acceptance criterion above has at least one eval: last-call selection, absolute `final_diff_path`, relative-path fail-open, the size cap, the kill switch, the `trace()` reason, `final_files`-only passing, an excluded extension, and an unchanged context line
 
-**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all 41 cases pass
+**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all 44 cases pass
 
 **Steps:**
 
@@ -1126,12 +1149,20 @@ the two happy paths:
   assertion that the trace file contains `comment-hygiene`. The `trace()` line is an acceptance
   criterion; without this case nothing proves it fires.
 
-Bump `EXPECTED_CASE_COUNT` to 41 and the `description` to `(41 cases)`.
+- **42 `close-final-files-only-allows`** — a `validate_completion` whose input carries `final_files`
+  and no diff of any kind. `expected_exit: 0`. An acceptance criterion of this task asserts exactly
+  this, and without a case it is unproven.
+- **43 `close-excluded-extension-allows`** — a diff whose only violating added line is in a `.md`
+  file. `expected_exit: 0`, pinning the extension allowlist at close time as well as at write time.
+- **44 `close-context-line-does-not-block`** — a diff carrying a violating comment as an unchanged
+  context line (no `+` prefix). `expected_exit: 0`, pinning added-lines-only at close time.
+
+Bump `EXPECTED_CASE_COUNT` to 44 and the `description` to `(44 cases)`.
 
 - [ ] **Step 4: Run the evals**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: all 41 pass, including the original 22.
+Expected: all 44 pass, including the original 22.
 
 - [ ] **Step 5: Commit**
 
@@ -1158,7 +1189,7 @@ git commit -m "feat(guard): scan the submitted diff for change-history comments 
 - [ ] Every hit is hand-classified as a TRUE positive (genuine change history) or a FALSE positive (legitimate comment)
 - [ ] The false-positive count is **zero**, either because none were found or because the offending tell was narrowed or moved to the reviewer layer
 - [ ] The scan reads HEAD blobs (`git show HEAD:<path>`), not the working tree, and exits non-zero rather than silently skipping any tracked source file it cannot read
-- [ ] The raw scan (`fp-raw.tsv`) and the durable classification (`fp-class.tsv`) are kept in SEPARATE files, joined on a stable `path:line:occurrence` key
+- [ ] The raw scan (`fp-raw.tsv`) and the durable classification (`fp-class.tsv`) are kept in SEPARATE files, joined on a stable `path:line` key
 - [ ] `fp-report.sh` performs a one-to-one join and rejects unclassified keys, unknown keys and duplicate classifications before counting; it prints `FALSE POSITIVES: 0` and exits 0, and its output is quoted in the completion report
 - [ ] Any narrowing is covered by a new eval case
 
@@ -1197,9 +1228,11 @@ for f in files:
     for n, raw in enumerate(blob.stdout.splitlines(), 1):
         for line, why in violations(f, [raw]):
             total += 1
-            # key = path:line:occurrence — stable, unique, and immune to the
-            # comment text being truncated or containing tabs.
-            print("%s:%d:1\t%s\t%s" % (f, n, why, line.replace("\t", " ")[:200]))
+            # key = path:line. violations() is called one source line at a
+            # time and returns at most one hit per line (it breaks on the first
+            # matching tell), so the line number alone is already unique. Do not
+            # append a fake occurrence index that is always 1.
+            print("%s:%d\t%s\t%s" % (f, n, why, line.replace("\t", " ")[:200]))
 print("TOTAL HITS: %d" % total)
 if failed:
     print("UNREADABLE FILES: %d" % failed)
@@ -1216,14 +1249,14 @@ classification refers to a key that no longer exists.
 
 - [ ] **Step 2: Hand-classify every hit**
 
-Read `/tmp/claude-hooks/fp-raw.tsv` in full. Each line begins with a unique key `path:line:1`. For each hit decide:
+Read `/tmp/claude-hooks/fp-raw.tsv` in full. Each line begins with a unique key `path:line`. For each hit decide:
 
 - **TRUE positive** — the comment genuinely narrates change history ("added in v0.5.0", "see #25", "task-12b review"). No action; the on-touch rule handles it when that code is next edited.
 - **FALSE positive** — the comment is legitimate and the reference is load-bearing. Known families to expect: a comment describing the product's own input grammar; a version string stating a wire-compatibility contract ("reads the v0.10.0 stats output"); a test fixture describing a criterion string such as `"AC #1"`.
 
 Write the classification to `/tmp/claude-hooks/fp-class.tsv`, one line per hit, as
 `<key><TAB><TRUE|FALSE><TAB><reason>` — where `<key>` is copied verbatim from column 1 of the raw
-file. Keying on `path:line:occurrence` rather than on the comment text is what makes the join
+file. Keying on `path:line` rather than on the comment text is what makes the join
 below exact: two identical comments in one file, or a comment containing a tab, cannot collide.
 
 - [ ] **Step 3: Drive false positives to zero**
@@ -1320,7 +1353,7 @@ git commit -m "test(guard): drive comment-scan false positives to zero against H
 - [ ] The guard's entry in `.claude-plugin/marketplace.json` mirrors that version and description
 - [ ] The marketplace catalog's own top-level `version` is bumped
 - [ ] Every statement that the hook blocks in "exactly two cases" is corrected to three
-- [ ] The README documents `ANTI_TANGENT_COMMENT_GUARD` alongside `ANTI_TANGENT_COMPLETION_GUARD`, and states the Bash-write and `PostToolUse`-timing limitations
+- [ ] The README documents `ANTI_TANGENT_COMMENT_GUARD` alongside `ANTI_TANGENT_COMPLETION_GUARD`, and states four limitations: Bash writes bypass the matcher; `PostToolUse` detects rather than prevents; the scanner reads full-line comments only; and it implements three pattern tells while the reviewer layer covers prose narration the patterns cannot catch
 
 **Verify:** `bash` the Step 4 block → prints `clean`, then `0.2.0` twice, then `ok` for each description and README assertion.
 
@@ -1356,9 +1389,10 @@ jq -r '.plugins[] | select(.name=="anti-tangent-guard") | .version' .claude-plug
 a=$(jq -r '.description' plugin/anti-tangent-guard/.claude-plugin/plugin.json)
 b=$(jq -r '.plugins[] | select(.name=="anti-tangent-guard") | .description' .claude-plugin/marketplace.json)
 [[ "$a" == "$b" ]] && echo "ok descriptions match" || echo "MISMATCH"
-# catalog version must have moved: capture it BEFORE editing and assert it changed
-# (record the pre-edit value in Step 2; substitute it for <OLD> here)
-[[ "$(jq -r '.version' .claude-plugin/marketplace.json)" != "<OLD>" ]] && echo "ok catalog version bumped" || echo "CATALOG VERSION UNCHANGED"
+# catalog version: assert the EXACT expected value, not merely "changed".
+# Record the pre-edit value in Step 2, compute the one-minor bump, and pin it
+# here as <EXPECTED> — inequality alone would accept a patch or major bump.
+[[ "$(jq -r '.version' .claude-plugin/marketplace.json)" == "<EXPECTED>" ]] && echo "ok catalog version" || echo "CATALOG VERSION WRONG"
 # README must document both switches and both limitations
 for n in ANTI_TANGENT_COMMENT_GUARD ANTI_TANGENT_COMPLETION_GUARD Bash PostToolUse; do
   grep -q "$n" plugin/anti-tangent-guard/README.md && echo "ok $n" || echo "MISSING $n"
@@ -1392,6 +1426,7 @@ git commit -m "chore(guard): 0.2.0 — two hooks, and say so everywhere"
 - [ ] `docs/protocol/controller.md`'s statement that the guard blocks in "exactly two cases" is corrected to three
 - [ ] `controller.md` carries the matching stopping-rule sentence
 - [ ] `CLAUDE.md` states the comment policy for this repo
+- [ ] The protocol docs state that the blocking scanner is narrower than the policy — full-line comments and three tells — so a clean hook run is not proof of compliance
 - [ ] Each of the four doc assertions in Step 7 prints its `ok` line
 - [ ] Every protocol part is under 16,000 bytes, `core.md` unchanged
 - [ ] `docs/protocol/` and `plugin/anti-tangent-protocol/protocol/` are byte-identical
@@ -1502,8 +1537,9 @@ git add docs/protocol/ plugin/anti-tangent-protocol/protocol/ CLAUDE.md
 git commit -m "docs(protocol): pre-gate stopping rule and the comment policy"
 ```
 
-Every `echo` above must fire. A missing `ok` means the corresponding acceptance criterion is
-unmet — do not commit past it.
+Every `echo` above must fire. Run the block under `set -e` (or append `|| exit 1` to each
+assertion) so a missing `ok` stops the sequence mechanically rather than relying on someone
+reading the output — otherwise the `git commit` at the end runs regardless.
 
 ---
 
