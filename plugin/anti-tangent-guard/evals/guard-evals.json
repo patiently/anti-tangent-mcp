@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (68 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (69 cases)",
   "evals": [
     {
       "id": 1,
@@ -1025,6 +1025,25 @@
       "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// (see v0.10.0 for compatibility)\\npackage x\\n\"}}",
       "expected_exit": 0,
       "reason": "the parenthetical-tag pattern requires the version to be the ENTIRE parenthetical content (open paren immediately before it, close paren immediately after); a version merely somewhere inside a larger parenthetical remark, with no governing change verb either, must still not block — this is what keeps the new pattern from reopening case 52's or the atstats.go/write.go wire-compatibility false positives, none of which wrap the bare version alone in its own parenthesis"
+    },
+    {
+      "id": 69,
+      "name": "comment-write-trace-carries-session-id",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "stdin_raw": "{\"session_id\": \"eval-session-12345678\", \"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "s="
+        ]
+      },
+      "reason": "the trace line written for this block must carry the session identifier column, not just the block reason, so a shared log stays attributable across concurrent sessions"
     }
   ]
 }

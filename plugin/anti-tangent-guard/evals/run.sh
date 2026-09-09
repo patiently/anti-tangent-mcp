@@ -77,11 +77,14 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # lost recall in the prior round. A seventh confirms the parenthetical
 # addition stays narrow: a version merely somewhere inside a larger
 # parenthetical remark, not alone in its own parenthesis, still does not
-# block, for an exact total. Both checks below must hold or
+# block, for a subtotal of 68. One more case pins that a written trace line
+# carries the session identifier column that keeps a shared trace log
+# attributable when more than one session appends to it, for an exact total.
+# Both checks below must hold or
 # the count assertion is vacuous: the JSON file must declare
 # EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=68
+EXPECTED_CASE_COUNT=69
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Every hook invocation below runs with this as its cwd, run-scoped (inside

@@ -12,9 +12,35 @@ set -uo pipefail
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
 mkdir -p "$(dirname "$TRACE_LOG")" 2>/dev/null || true
+
+# Short session id so one shared trace file stays readable when several
+# sessions write to it. Lines emitted before the payload is parsed carry "-",
+# which is honest about not knowing rather than silently blank.
+ATG_SESSION="-"
+atg_set_session() {
+    local raw
+    raw=$(printf '%s' "${1:-}" | jq -r '.session_id // empty' 2>/dev/null) || return 0
+    [[ -n "$raw" ]] && ATG_SESSION="${raw:0:8}"
+    return 0
+}
+
+# Best-effort rotation. A trace log that grows without bound eventually costs
+# more than it tells you. Rotating by rename rather than truncating in place
+# means a concurrent appender simply starts a fresh file instead of writing
+# into a hole.
+atg_rotate_trace() {
+    local max=${ANTI_TANGENT_GUARD_TRACE_MAX_BYTES:-1048576} size
+    [[ -f "$TRACE_LOG" ]] || return 0
+    size=$(wc -c < "$TRACE_LOG" 2>/dev/null) || return 0
+    [[ "$size" -gt "$max" ]] || return 0
+    mv -f "$TRACE_LOG" "$TRACE_LOG.1" 2>/dev/null || true
+    return 0
+}
+atg_rotate_trace
+
 trace() {
-    printf '%s | comment-write | %s%s\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${1:-?}" "${2:+ | $2}" \
+    printf '%s | s=%s | comment-write | %s%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ATG_SESSION" "${1:-?}" "${2:+ | $2}" \
         >> "$TRACE_LOG" 2>/dev/null || true
 }
 
@@ -22,7 +48,9 @@ trace() {
 command -v python3 >/dev/null 2>&1 || { trace "skip" "no-python3"; exit 0; }
 [[ -r "$PLUGIN_ROOT/hooks/check_comment_write.py" ]] || { trace "skip" "no-body"; exit 0; }
 
-ATG_INPUT="$(cat)" ATG_ROOT="$PLUGIN_ROOT" \
+ATG_INPUT="$(cat)"
+atg_set_session "$ATG_INPUT"
+ATG_INPUT="$ATG_INPUT" ATG_ROOT="$PLUGIN_ROOT" \
     python3 "$PLUGIN_ROOT/hooks/check_comment_write.py"
 status=$?
 case "$status" in

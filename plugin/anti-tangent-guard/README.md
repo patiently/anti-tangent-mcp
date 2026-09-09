@@ -315,6 +315,13 @@ log, by default:
 /tmp/claude-hooks/anti-tangent-guard.log
 ```
 
+This default path is **shared by every Claude Code session on the machine**,
+by design: a cross-session view is what makes the log worth opening at all
+when something needs debugging. The session column below is what keeps that
+shared file attributable instead of an unlabeled interleave. If you want true
+per-session isolation instead, point `ANTI_TANGENT_GUARD_TRACE_LOG` at a
+session-specific path.
+
 Override the location with `ANTI_TANGENT_GUARD_TRACE_LOG`. Tail it while
 debugging:
 
@@ -322,9 +329,21 @@ debugging:
 tail -f /tmp/claude-hooks/anti-tangent-guard.log
 ```
 
-Each line carries a UTC timestamp, the task id (or `?` if the hook exited
-before reaching one), and the decision plus its reason (e.g.
-`skip | no-jq`, `pass | called=true block=false`, `block | verdict-fail`).
+Each line carries a UTC timestamp, a short session identifier (`s=` followed
+by the first 8 characters of the hook payload's `session_id`, or `s=-` for a
+line emitted before the payload was read — the kill-switch skip, the
+missing-`jq`/`python3` skip — where the hook genuinely does not know it yet),
+the task id for `check-task-complete` (or `?` if the hook exited before
+reaching one), and the decision plus its reason (e.g. `skip | no-jq`,
+`pass | called=true block=false`, `block | verdict-fail`).
+
+The log is capped so it cannot grow without bound: past
+`ANTI_TANGENT_GUARD_TRACE_MAX_BYTES` (default 1,048,576 — 1 MiB), the next
+write rotates the existing file to a single `.1` sibling (a rename, not a
+truncation, so a concurrent appender simply starts a fresh file instead of
+writing into a hole) before appending. Identity and rotation are both
+best-effort: any failure in either — an unreadable payload, a `mv` that can't
+land — is swallowed and never changes the hook's own exit status.
 
 ## Running the evals
 
