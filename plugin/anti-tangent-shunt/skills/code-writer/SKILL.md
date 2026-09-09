@@ -19,6 +19,11 @@ With `target_path` set, the server writes the file and returns only a line
 count. The generated code never enters your context — which is the entire
 saving. Omit it only when you genuinely need to inspect the code first.
 
+The server does the writing, so the file never passes through `Edit`/`Write`
+and `anti-tangent-guard`'s write-time comment hook never sees it. Only the
+close-time scan over your submitted diff, and the reviewer, will catch a
+generated comment that carries change history.
+
     mcp__anti-tangent__code_write
       spec:           "Table test for Add covering zero, negative and overflow"
       reference_path: "/abs/repo/internal/math/sub_test.go"

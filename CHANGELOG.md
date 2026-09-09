@@ -140,7 +140,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so installing from the README no longer produces a hook that rejects edits with no warning it
   exists. The guard's own limitations list gains `code_write`, which writes server-side and so
   bypasses the `Edit`/`Write` matcher exactly as `Bash` writes do — and whose generated code never
-  enters the agent's context to be self-reviewed either.
+  enters the agent's context to be self-reviewed either. The `code-writer` skill says so where it
+  recommends `target_path`, so the readers most likely to take that bypass see the caveat without
+  reading the guard's README. `INTEGRATION.md`'s router table names §4.4 and the write-time guard
+  in the rows that carry them, so an agent picking a protocol part by what it covers can find
+  them. The CI protocol-byte budget warns at 15,500 as well as failing at 16,000: the binding
+  file sits under 1% below the cap, where the first signal of a problem should not be a red build.
 
 No schema, tool-argument or envelope change: the verdict distribution shifts, but every type and
 field is byte-identical. Callers that calibrated against the observed distribution will see it

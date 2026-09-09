@@ -67,6 +67,8 @@ jobs:
             if [ "$BYTES" -ge 16000 ]; then
               echo "::error file=$f::$f is $BYTES bytes; must be < 16000. This file is Read in full by every agent whose role matches it — the cost is paid once per dispatched subagent, not once per session. Split it or move reference detail into docs/team-setup/."
               FAIL=1
+            elif [ "$BYTES" -ge 15500 ]; then
+              echo "::warning file=$f::$f is $BYTES bytes; cap is 16000. Under 500 bytes of headroom left — the next edit here is likely to fail the build. Move reference detail into docs/team-setup/ before adding to it."
             fi
           done
           exit $FAIL
