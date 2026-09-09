@@ -162,62 +162,126 @@ that introduced it.
 code used to do ("previously", "no longer", "this replaced").
 
 **On touch**, a comment that fails these criteria is removed or rewritten as part of the task
-that touches it. There is no separate cleanup pass — roughly 135 comment lines in this repo
-currently match the banned patterns, and a big-bang sweep would be a large mechanical diff mixed
-into a release about something else. The codebase converges as it is worked on.
+that touches it. No separate cleanup pass.
 
-Note the boundary deliberately preserves *invariant*-why while banning *change*-why. The guard
-hook's own "POSITIONAL EXTRACTION, NOT FREE SCAN" comment explains a security property; deleting
-it would be actively harmful. What must go is the "(task-12b review, Critical #1)" citation
-attached to it.
+The boundary deliberately preserves *invariant*-why while banning *change*-why. The guard hook's
+own "POSITIONAL EXTRACTION, NOT FREE SCAN" comment explains a security property; deleting it
+would be actively harmful. What must go is the "(task-12b review, Critical #1)" citation attached
+to it.
 
-### Enforcement: two layers, split on what each can actually judge
+### Enforcement: reviewer primary, hook supplementary
 
-A regex cannot tell a good comment from a bad one. An LLM cannot be relied on to catch every
-instance. So the split is by decidability, not by preference:
+The two layers are split by what each can decide — a regex cannot tell a good comment from a bad
+one — but also, and this was missed in the first draft, **by what each can see.**
 
-**Deterministic — `plugin/anti-tangent-guard`'s `check-task-complete`, blocking.** The hook
-already walks the transcript and parses each `mcp__anti-tangent__validate_completion` tool_use's
-`input`, so the submitted `final_diff` (or the file named by `final_diff_path`) is reachable in
-the loop that already runs. It scans **added lines only** (`+`-prefixed) that are comments, for
-the unambiguous mechanical tells:
+**Reviewer layer — `post.tmpl`, path-independent, primary.** `validate_completion`'s reviewer
+already receives the full diff, whichever agent submitted it. It gains a rule to emit a finding
+for a comment that misleads, restates obvious code, or narrates history.
 
-- an issue or PR reference — `#<digits>`
-- a version reference — `v<major>.<minor>.<patch>`
-- a task or review reference — `Task <n>` / `task-<n>` / `review Critical|Important|Major`
+- `category: quality`, `criterion: comment_hygiene` — reusing `criterion` as a sub-type
+  discriminator, as `pre.tmpl` already does for `codebase_convention` and the raw-string caveat.
+  No new category, and therefore no schema change: `schema_invariants_test.go`'s category-enum
+  lockstep would otherwise force a new value into every schema in the package.
+- **`severity: minor`, pinned in the prompt.** This is load-bearing, not a default.
+  `applySeverityFloor` floors only `unverifiable_codebase_claim` and `convention_deviation`;
+  `quality` is **not** floored. So an unpinned rule lets the reviewer emit `major`, two majors are
+  a `fail` under the same ladder Part 1 is about, and the guard hook hard-blocks the close on
+  `verdict: fail`. §4.2 also tells implementers not to report DONE on any `major`. Part 3 would
+  have reintroduced at the post gate precisely the unpinned-severity defect Part 1 exists to fix.
+  Pin it in the prompt the way `pre.tmpl` pins `convention_deviation` to minor, rather than adding
+  a server-side floor — the floor list is for categories the reviewer *cannot verify*, which is
+  not this.
+- Consequence to accept knowingly: three or more comment findings still lift the verdict to `warn`
+  and append `noise_cluster`. That is the correct signal for a diff with pervasive comment
+  problems, and it never reaches `fail` on comments alone.
+- A comment-hygiene finding must also never flip `submission_defect_only` off. That flag goes
+  false when any major/critical is a non-submission category; pinning minor keeps it out of that
+  computation entirely.
 
-On a match it blocks the close with the same reopen-fix-revalidate recovery flow the guard
-already uses for a missing `validate_completion`.
+**Deterministic layer — the guard's `check-task-complete`, blocking, and narrower than it looks.**
+The hook walks the transcript and binds each `validate_completion` tool_use's `input`, but retains
+only the index and tool_use id — the input is dropped. So this is a real code change, not merely
+reading something already in hand.
 
-Deliberately **excluded** from the deterministic layer: prose-history tells like "previously",
-"used to" and "no longer". They cannot be matched without false positives — `verdict.go:2` says
-"JSON schema **used to** constrain provider responses", which is a correct comment, and blocking
-a task close on it would be worse than missing a violation. Those go to the reviewer.
+Scan scope, every clause of which is a defect found in review:
 
-**Judgement — `post.tmpl`, advisory.** `validate_completion`'s reviewer already receives the full
-diff. It gains a rule to emit a finding for a comment that misleads, restates obvious code, or
-narrates history. Emitted as `category: quality` with `criterion: comment_hygiene`, following the
-existing convention where `criterion` discriminates a sub-type (`noise_cluster`,
-`codebase_reference_checklist`) — so **no new category, and no schema change.** That matters more
-than it looks: `schema_invariants_test.go`'s category-enum lockstep requires every non-plan schema
-to carry exactly the canonical category set, so a new category would touch every schema in the
-package.
+- **The last `validate_completion` in the task's window only.** Scanning every call in the window
+  makes a fixed comment un-closable, because the earlier call's diff still matches. Mirrors the
+  existing last-block-wins rule.
+- **Added lines only** (`+`-prefixed). An unchanged context line carrying an old violation must
+  not block, or the on-touch rule becomes a big-bang sweep by the back door.
+- **Source files only, by extension allowlist** (`.go`, `.sh`, `.py`, `.ts`, `.js`, `.rs`, `.java`,
+  `.kt`, `.rb`, `.c`, `.h`, `.cpp`). `.md`, `.yml`, `.yaml`, `.json` and `.txt` are explicitly
+  excluded. This is not tidiness: `CHANGELOG.md` currently carries **40** tell-matching lines and
+  *must* contain `#58`, `v0.18.2` and issue references, because this repo's own conventions
+  require a changelog entry in every change. Without the filter, every release-work task close
+  blocks.
+- **Line comments only.** Block-comment interiors, trailing comments and `//` inside string
+  literals or URLs are out of scope for v1 and must be documented as such rather than half-handled.
+- **Inline `final_diff` and `final_diff_path` both**, with the path read guarded by an
+  absolute-path check, a size cap, a timeout, and fail-open on any error. Note the recipe in §4.2
+  writes one fixed filename per git dir, so a stale file from another task is possible; fail-open
+  plus last-call-in-window scoping bounds the damage, and a mismatch produces a spurious block at
+  worst, never a silent pass.
 
-Kill switch `ANTI_TANGENT_COMMENT_POLICY=0`, mirroring the guard's existing
-`ANTI_TANGENT_COMPLETION_GUARD=0`. Fail open on every error, as the guard already does.
+Tells, narrowed from the first draft after measuring them against this repo:
 
-The standing non-goal that "the server is advisory, never blocking" is not violated: the blocking
-half is a Claude Code plugin hook the operator installs separately and can disable, exactly as
-the completion guard already is. The MCP server still never blocks.
+- `task-<n>` — a review-artifact reference. Unambiguous.
+- `#<digits>` — an issue or PR reference.
+- `v<major>.<minor>.<patch>` — a version reference.
 
-### What this cannot do
+`Task <n>` (unhyphenated) is **dropped**: `internal/mcpsrv/file_consistency.go:21-28` and
+`internal/planparser/planparser.go` legitimately describe the product's own input format, whose
+literal shape is `### Task 4: Add /healthz endpoint`. A tell that fires on the product's own
+grammar is not a tell. The first draft's `review Critical|Important|Major` pattern is also
+dropped — it does not even match the example that motivated it, `(task-12b review, Critical #1)`,
+because of the comma; `task-<n>` and `#<digits>` already catch that line.
 
-`PostToolUse` fires after the state change, so the hook detects a bad comment at task close, it
-does not prevent one being written — the same limitation the guard's README already documents for
-the completion gate. Preventing it would need a `PreToolUse` hook on `Edit`/`Write`, which is the
-`anti-tangent-shunt` pattern and is not proposed here. The scan is also diff-shaped: a task that
-submits only `final_files` with no diff has nothing for the deterministic layer to read, and falls
-through to the reviewer layer alone.
+**Acceptance criterion for the pattern set:** run the scanner over every tracked source file at
+HEAD and hand-classify every hit. It ships only when the false-positive count is zero. Known
+false-positive families to resolve first: `"AC #1"` in test fixture descriptions, and version
+strings in comments that state a wire-compatibility contract rather than history. If either
+cannot be separated by pattern, that tell moves to the reviewer layer, which can judge it.
+
+Kill switch `ANTI_TANGENT_COMMENT_GUARD=0`, matching the existing `ANTI_TANGENT_COMPLETION_GUARD`.
+It disables the **hook only** — `internal/config` reads no such variable, so the reviewer half is
+governed by whether the tool is called at all. The first draft named it `..._POLICY`, which
+implied a reach it does not have.
+
+### Coverage: what the finish hook genuinely cannot reach
+
+Stated plainly because the first draft implied more coverage than exists.
+
+**Subagent-driven development — the hook is blind.** It fires on the *closing* agent's
+`TaskUpdate` and reads that agent's transcript. Under SDD the subagent calls
+`validate_completion` in its own session and the controller closes the task, seeing only the
+pasted `summary_block`, which carries `tool:` / `session_id:` / `verdict:` and **no diff**.
+`controller.md:52-56` states this as an existing property: "a controller-side hook cannot see
+inside a subagent's own session, so the pasted block is the only trace it has."
+
+So the deterministic layer covers the paths where the closing agent is the calling agent
+(`executing-plans`, or a subagent that closes its own task), and nothing else. **The reviewer
+layer covers every path**, because the diff reaches the reviewer regardless of who later closes
+the task. That is why the reviewer is primary here and the hook is supplementary — the reverse of
+how the first draft framed it.
+
+`PostToolUse` also fires after the state change, so even where it can see, the hook detects a bad
+comment at close rather than preventing one being written. Full prevention would need a
+`PreToolUse` hook on `Edit`/`Write` — the `anti-tangent-shunt` pattern — which sees every comment
+at write time regardless of execution path or evidence shape. That is not proposed here because
+the requirement named the finish hook, but it is the only mechanism that would close the SDD gap.
+
+### Bookkeeping a third block condition drags in
+
+- `plugin/anti-tangent-guard/README.md` and `controller.md` both say the hook blocks in **exactly
+  two cases**; a third invalidates that sentence in both.
+- `plugin.json` and the marketplace entry both describe the plugin as the completion gate only.
+- A **distinct** stderr message, so the comment block is separable from the two existing ones, and
+  a `trace()` line for the new block reason.
+- `evals/run.sh`'s `EXPECTED_CASE_COUNT` and `guard-evals.json`'s case-count description string
+  must move together; new case ids continue from 23, since the fixture test keys on id.
+- `run.sh` materialises only a transcript, so a `final_diff_path` case needs the runner extended
+  to write a diff file — otherwise the primary submission route ships with no eval.
 
 ## Part 4 — docs
 
@@ -265,9 +329,17 @@ The pre-fix baseline is the table above. After the change, over a comparable win
 If the distribution does not move, the reviewer is not honouring the calibration clause and the
 next lever is the ladder — which this release deliberately leaves untouched and available.
 
-The guard against over-correction is `validate_completion`, which was `pass` with zero findings
-in both #58 field cases and is unchanged here: if recalibration makes the pre-gate miss real spec
-defects, they surface at the post gate rather than silently shipping.
+The guard against over-correction is `validate_completion`: if recalibration makes the pre-gate
+miss a real spec defect, it surfaces at the post gate rather than silently shipping. That guard
+still holds — Part 3 adds no rule that would mask a spec defect.
+
+But Part 3 makes the two parts' telemetry non-independent. `validate_completion`'s `quality`
+finding count will rise by construction once comment findings land in it, and `stats.Event`
+records `category`, not `criterion`, so comment-hygiene findings are **not separable from other
+`quality` findings in the ledger**. Two consequences: Part 3's own effect is unmeasurable as
+specified, and any post-release comparison of `validate_completion` finding rates must treat the
+0.19.0 boundary as a break rather than a trend. Measuring Part 3 later would need a `criterion`
+field on `stats.Event` — out of scope here, and worth a separate issue.
 
 ## Testing
 
@@ -278,12 +350,19 @@ defects, they surface at the post gate rather than silently shipping.
   them.
 - `internal/prompts`: `post.tmpl` goldens regenerated for the comment-hygiene rule, reviewed the
   same way.
-- `plugin/anti-tangent-guard/evals/guard-evals.json`: new cases for the comment scan — one per
-  banned pattern class (issue/PR, version, task/review reference), one asserting a `+`-prefixed
-  comment is required (an unchanged context line carrying an old violation must NOT block, or the
-  on-touch rule becomes a big-bang sweep by the back door), one asserting a legitimate
-  invariant-why comment passes, and one asserting the `used to` false positive from `verdict.go:2`
-  does not block. CI runs these as the `hook-evals` job.
+- `plugin/anti-tangent-guard/evals/guard-evals.json`: new cases for the comment scan, each
+  pinning a defect found in review — one per surviving tell (`task-<n>`, `#<digits>`,
+  `v<x.y.z>`); one asserting an unchanged context line carrying an old violation does NOT block
+  (else on-touch becomes a big-bang sweep by the back door); one asserting a `.md` file's added
+  lines never block (the CHANGELOG case, which would otherwise block every release task); one
+  asserting an unhyphenated `Task 4:` in a comment describing the product's own input grammar does
+  NOT block; one asserting only the LAST `validate_completion` in the window is scanned (else a
+  fixed comment stays un-closable); one asserting a legitimate invariant-why comment passes; and
+  one for the kill switch, which the runner's `env` support already allows. A `final_diff_path`
+  case requires extending `run.sh` to materialise a diff file. CI runs these as `hook-evals`.
+- The `-`/`+` pair produced by moving or reindenting an existing comment must have a case pinning
+  the chosen behaviour in whichever direction is decided; leaving it unpinned is how a gofmt
+  reflow or a file move silently becomes a demand to rewrite every historical comment in it.
 - `guard_eval_fixture_test.go` pins `formatEnvelopeSummary` byte-for-byte; no envelope change
   here, so it should stay green — treat a failure as a signal something unintended moved.
 - No changes to `internal/verdict`, `internal/mcpsrv`, `internal/planparser` or `internal/session`,

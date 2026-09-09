@@ -45,8 +45,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reopen-fix-revalidate flow. Prose-history tells like "previously" and "used to" are deliberately
   left out of that scan: they cannot be matched without false positives, so `post.tmpl` handles
   them, with `validate_completion`'s reviewer emitting `category: quality` /
-  `criterion: comment_hygiene` findings. No new finding category and no schema change. Kill
-  switch `ANTI_TANGENT_COMMENT_POLICY=0`.
+  `criterion: comment_hygiene` findings **pinned to `severity: minor`** — `quality` is not
+  severity-floored server-side, so an unpinned rule would let two comment nits become a `fail` and
+  hard-block the close. No new finding category and no schema change. Kill switch
+  `ANTI_TANGENT_COMMENT_GUARD=0`, which disables the hook half only.
+
+  The hook half is narrower than the reviewer half by construction: it fires on the *closing*
+  agent's transcript, so on the subagent-driven path — where a subagent validates and the
+  controller closes — it sees only the pasted `summary_block` and no diff. The reviewer half
+  covers every path. The scan is also restricted to added lines in source files; `.md` and config
+  files are excluded, because a changelog entry legitimately carries issue and version references.
 
   As with the completion guard, the blocking half is a Claude Code plugin the operator installs
   and can disable — the MCP server itself remains advisory and never blocks.
