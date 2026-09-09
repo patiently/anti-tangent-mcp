@@ -129,11 +129,24 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # interpreter that does the analysis, which would fail open and silently
 # disable the gate for every close made from that directory.
 #
+# Five cases cover ground the table above left open. Two pin, one per hook,
+# that a symlink planted at the trace-log path is not written through: both
+# use a DANGLING link, so following it would create the target, and the
+# target's continued absence is the assertion — which is why
+# expected_file_absent exists at all, a presence check being unable to state
+# it. Two more exercise the write-time hook's existing-file branch, which
+# every other Write case misses by targeting a path that does not exist: a
+# Write re-stating a violating comment already on disk must not block (the
+# occurrence-aware diff consumes it), while one adding a new violation to an
+# existing file must. The last pins that the close-time trace sink strips the
+# field separators out of every argument, so a task id carrying a newline
+# cannot forge a second, complete-looking log record.
+#
 # Both checks below must hold or the count assertion is vacuous: the JSON
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=87
+EXPECTED_CASE_COUNT=92
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
@@ -447,6 +460,32 @@ run_case() {
             done
         done < <(jq -r ".evals[$idx].expected_file_contains | keys[]" "$EVALS_FILE")
         if [[ "$file_missing" == "1" ]]; then
+            FAILED=$((FAILED + 1))
+            return
+        fi
+    fi
+
+    # Optional "expected_file_absent": [paths] — fails if any of them exists
+    # after the hook ran. The counterpart to expected_file_contains, which can
+    # only assert that something WAS written. "the hook did not write through
+    # that symlink" is inexpressible as a presence check: the link's target
+    # never being created is the whole assertion, and a hook that followed the
+    # link would create it. {{TMPDIR}} is substituted the same way.
+    local has_absent
+    has_absent=$(jq -r ".evals[$idx] | has(\"expected_file_absent\")" "$EVALS_FILE")
+    if [[ "$has_absent" == "true" ]]; then
+        local unexpected=0 apath resolved_absent
+        while IFS= read -r apath; do
+            [[ -n "$apath" ]] || continue
+            resolved_absent="${apath//\{\{TMPDIR\}\}/$case_tmp}"
+            # -e is false for a dangling symlink, so test both: a link created
+            # by tmpdir_symlink must not be mistaken for its target existing.
+            if [[ -e "$resolved_absent" || -L "$resolved_absent" ]]; then
+                printf '  \033[31mFAIL\033[0m  [%s] %-45s file must not exist: %s\n' "$id" "$name" "$resolved_absent"
+                unexpected=1
+            fi
+        done < <(jq -r ".evals[$idx].expected_file_absent[]" "$EVALS_FILE")
+        if [[ "$unexpected" == "1" ]]; then
             FAILED=$((FAILED + 1))
             return
         fi

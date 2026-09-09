@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (87 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (92 cases)",
   "evals": [
     {
       "id": 1,
@@ -514,7 +514,7 @@
       "hook": "check-comment-write",
       "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}\",\"content\":\"// fixes #58\\n\"}}",
       "expected_exit": 0,
-      "reason": "file_path pointing at a directory raises on open; must fail open"
+      "reason": "file_path pointing at a directory: the open succeeds on Linux, so the S_ISREG check is what rejects it. Everything about the target that makes it unreadable -- a directory, a symlink, a FIFO, an oversized file -- must fail open rather than block the write"
     },
     {
       "id": 33,
@@ -1255,6 +1255,104 @@
         "TASK CLOSED WITHOUT anti-tangent validate_completion"
       ],
       "reason": "python3 -c puts the current working directory first on sys.path, and hooks run unsandboxed in whatever directory the session is in. A json.py sitting in a repo root would then shadow the standard library and take the whole analysis down, which the wrapper reads as a parse error and fails open -- silently disabling the gate for every close made from that directory. -I isolates the interpreter; the explicit sys.path.insert of $ATG_ROOT/hooks still resolves comment_scan under it"
+    },
+    {
+      "id": 88,
+      "name": "comment-write-trace-log-symlink-not-followed",
+      "hook": "check-comment-write",
+      "tmpdir_symlink": {
+        "trace.log": "{{TMPDIR}}/real.log"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "expected_file_absent": [
+        "{{TMPDIR}}/real.log"
+      ],
+      "reason": "the default trace path sits in a world-writable directory, so a symlink planted at it would redirect every appended line into a file of someone else's choosing. The link here dangles, so following it would CREATE real.log -- its continued absence is the assertion, and expected_file_contains cannot express it. The block must still land: refusing to trace is best-effort and must never change an exit status"
+    },
+    {
+      "id": 89,
+      "name": "close-trace-log-symlink-not-followed",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "tmpdir_symlink": {
+        "trace.log": "{{TMPDIR}}/real.log"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT anti-tangent validate_completion"
+      ],
+      "expected_file_absent": [
+        "{{TMPDIR}}/real.log"
+      ],
+      "reason": "the twin of case 88 on the close-time hook, which shares neither trace() nor its rotation with the write-time hook and so needs its own pin. Same dangling link, same assertion: real.log must never be created, and the no-validation block must still fire"
+    },
+    {
+      "id": 90,
+      "name": "comment-write-existing-file-restating-violation-does-not-block",
+      "hook": "check-comment-write",
+      "tmpdir_fixture": {
+        "atg-eval.go": "// fixes #58\npackage x\n"
+      },
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\nfunc a() {}\\n\"}}",
+      "expected_exit": 0,
+      "reason": "every other Write case targets a path that does not exist, so FileNotFoundError is the only branch they take and the existing-file diff is never exercised. Here the violating comment is ALREADY on disk and the Write merely re-states it beside a clean new line: added() consumes the existing occurrence and reports only the clean line, so nothing blocks. If the existing content were not read, every line would count as added and this would block instead"
+    },
+    {
+      "id": 91,
+      "name": "comment-write-existing-file-new-violation-blocks",
+      "hook": "check-comment-write",
+      "tmpdir_fixture": {
+        "atg-eval.go": "package x\n"
+      },
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "the mirror of case 90 on the same existing-file path: reading the old content must not become a way to miss a violation the Write genuinely introduces. The fixture is clean, the Write adds the comment, and the block must land"
+    },
+    {
+      "id": 92,
+      "name": "close-trace-task-id-separators-sanitized",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1|forged\npass"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "no_transcript": true,
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "task=1forgedpass | skip | no-transcript"
+        ]
+      },
+      "reason": "the task id reaches the trace sink straight from the payload and jq -r renders its JSON \\n as a real newline, so one trace() call became two physical lines and the second read as a genuine record. trace() now strips CR, LF and | from every field it is given, which covers the task id, the status and the tool name at once. grep -F matches within one physical line, so this needle only matches if the separators were stripped rather than passed through"
     }
   ]
 }

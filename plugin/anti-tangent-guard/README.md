@@ -388,7 +388,7 @@ land — is swallowed and never changes the hook's own exit status.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (87 cases) against both hooks and exits non-zero on
+Runs the full eval suite (92 cases) against both hooks and exits non-zero on
 any mismatch — check-task-complete's three block conditions (the third being
 its own close-time comment-hygiene scan), plus check-comment-write's
 write-time comment-hygiene guard. See `evals/run.sh`'s header comment for the
