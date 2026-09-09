@@ -105,6 +105,15 @@ func TestRenderPre_IncludesTestOnlyGuidance(t *testing.T) {
 	assert.Contains(t, out.User, "one consolidated finding")
 }
 
+func TestRenderPre_CalibratesSeverity(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Consolidate related assumptions into one finding")
+	assert.Contains(t, out.User, "prefer `verdict: pass` with `severity: minor`")
+	assert.Contains(t, out.User, "Reserve `severity: major` for ambiguity that would cause")
+	assert.Contains(t, out.User, "is not, on its own, a major finding")
+}
+
 func TestRenderPre_WithoutControllerVerifiedReferencesOmitsSection(t *testing.T) {
 	out, err := RenderPre(PreInput{Spec: sampleSpec()})
 	require.NoError(t, err)

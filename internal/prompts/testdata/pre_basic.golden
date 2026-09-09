@@ -23,7 +23,7 @@ Check three things:
 
 1. Structural completeness — is the goal clear? Are there acceptance criteria? Are non-goals declared where they help bound scope?
 2. Acceptance-criterion quality — is each AC testable, specific, and unambiguous? For any vague AC, propose a concrete rewrite in the suggestion.
-3. Implicit assumptions — list any assumptions a fresh implementer would have to make. Each becomes a finding so the spec author can either pin them down or explicitly mark them as implementer's discretion.
+3. Implicit assumptions — list any assumptions a fresh implementer would have to make. Consolidate related assumptions into one finding rather than emitting one finding per assumption. Emit each at `severity: minor` unless a competent implementer could plausibly resolve the assumption the wrong way, in which case it is `major`.
 
 For explicitly test-only tasks, treat `null`, `unchanged`, or similar assertions as acceptable when the spec names the initial state, fixture setup, or existing test harness assumption. Still flag missing invocation counts when call-count behavior matters, missing negative assertions when a no-change or no-call invariant is intended, unclear scenario setup, or unclear path through the system. When the same ambiguity repeats across multiple scenarios, prefer one consolidated finding instead of one finding per scenario.
 
@@ -44,6 +44,8 @@ If a Testability extractions section is present, treat each entry as a helper th
 If a Normative test bodies section is present, treat each entry as binding test scope — equivalent in authority to a bullet under Acceptance criteria. Do not emit `ambiguous_spec` for "test scope unclear" findings about coverage that one of these bodies already pins. An entry that begins with `// excerpt:` (or an analogous comment marker) is partial — flag invocation-count or assertion-shape gaps only when the excerpt itself reveals them, not when the gap might exist in the omitted portion. Continue to flag invocation-count gaps, missing negative assertions, or unrelated coverage holes when the entry is a complete body.
 
 Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
+
+When the goal is clear and each acceptance criterion is individually testable, prefer `verdict: pass` with `severity: minor` `category: quality` findings for nit-level concerns over a failing verdict. Reserve `severity: major` for ambiguity that would cause a competent implementer to build the wrong thing, and `severity: critical` for a spec that cannot be implemented as written. Wanting an acceptance criterion stated more explicitly is not, on its own, a major finding.
 
 If you would emit a finding with `category: ambiguous_spec` AND `severity: major`, but a normative test body (provided in the `Normative test bodies` section above) explicitly pins the value or assertion that the AC's prose leaves ambiguous, downgrade the severity to `minor` and append `(resolved-by-normative-body: <short citation of which body resolves it, max 80 chars>)` to the `suggestion` field. The `criterion` and `evidence` fields stay as you would have written them.
 
