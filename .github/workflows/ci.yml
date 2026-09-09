@@ -103,7 +103,11 @@ jobs:
           persist-credentials: false
 
       - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+        # jq ships in the ubuntu-latest image, so this is normally a no-op. Reaching
+        # apt at all makes the job depend on every third-party repo in the runner's
+        # sources: a bad index anywhere -- Google Chrome's, in one observed failure --
+        # exits apt-get update 100 and reds a build that has nothing to do with it.
+        run: command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
 
       - name: Shunt hook evals
         run: bash plugin/anti-tangent-shunt/evals/run.sh
