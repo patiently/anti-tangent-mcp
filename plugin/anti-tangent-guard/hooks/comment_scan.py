@@ -97,10 +97,18 @@ TELLS = (
     # neither a governing verb nor extractable regex signal — is left
     # deliberately, permanently reviewer-led rather than regex-led. See the
     # design spec's Part 3 for the measured recall this costs.
+    #
+    # The optional preposition bridge is written `\s*(?:(?:in|to|as of|for)\s*)?`
+    # rather than `\s*(?:in|to|as of|for)?\s*`. Two adjacent greedy `\s*` with
+    # only an optional group between them give whitespace no single owner: on a
+    # long run of spaces that is not followed by a version, the engine retries
+    # every split point between them before failing, which is quadratic in the
+    # length of the run. Keeping the trailing `\s*` inside the optional group
+    # leaves exactly one way to divide the whitespace.
     (re.compile(
         r"\b(?:add(?:s|ed)?|remov(?:es|ed)?|bump(?:s|ed)?|deprecat(?:es|ed)?|"
         r"releas(?:es|ed)?|ship(?:s|ped)?|chang(?:es|ed)?|fix(?:es|ed)?|"
-        r"introduc(?:es|ed)?|since)\b\s*(?:in|to|as of|for)?\s*v\d+\.\d+\.\d+\b"
+        r"introduc(?:es|ed)?|since)\b\s*(?:(?:in|to|as of|for)\s*)?v\d+\.\d+\.\d+\b"
         r"|"
         r"\bv\d+\.\d+\.\d+\b\s*(?:add(?:s|ed)?|remov(?:es|ed)?|bump(?:s|ed)?|"
         r"deprecat(?:es|ed)?|releas(?:es|ed)?|ship(?:s|ped)?|chang(?:es|ed)?|"

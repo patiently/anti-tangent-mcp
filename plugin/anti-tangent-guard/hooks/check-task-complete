@@ -98,7 +98,12 @@ set -uo pipefail
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
-mkdir -p "$(dirname "$TRACE_LOG")" 2>/dev/null || true
+# Mode 700 on creation: the default lives in a world-writable directory, so a
+# directory this hook creates must not be one another account can drop files
+# into. `-m` applies only to directories mkdir actually creates — an existing
+# directory keeps whatever mode it has, which is why trace() below independently
+# refuses to write through a symlink.
+mkdir -p -m 700 "$(dirname "$TRACE_LOG")" 2>/dev/null || true
 
 # Short session id so one shared trace file stays readable when several
 # sessions write to it. Lines emitted before the payload is parsed carry "-",
@@ -128,6 +133,7 @@ atg_rotate_trace() {
     # 0" a few lines down, which turns a malformed cap into a hook that skips
     # its own gate. Falling back to the default keeps this best-effort.
     [[ "$max" =~ ^[0-9]+$ ]] || max=1048576
+    [[ -L "$TRACE_LOG" ]] && return 0
     [[ -f "$TRACE_LOG" ]] || return 0
     size=$(wc -c < "$TRACE_LOG" 2>/dev/null) || return 0
     [[ "$size" -gt "$max" ]] || return 0
@@ -137,6 +143,12 @@ atg_rotate_trace() {
 atg_rotate_trace
 
 trace() {
+    # Refuse to append through a symlink. The default trace path is predictable
+    # and its parent may be world-writable, so a symlink planted there would
+    # otherwise redirect every appended line into a file of someone else's
+    # choosing. Every failure path here is swallowed: a trace that cannot be
+    # written must never change this hook's exit status.
+    [[ -L "$TRACE_LOG" ]] && return 0
     printf '%s | s=%s | guard | task=%s | %s%s\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ATG_SESSION" "${1:-?}" "${2:-?}" "${3:+ | $3}" \
         >> "$TRACE_LOG" 2>/dev/null || true
@@ -168,7 +180,7 @@ TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null | tr 
 # call carries its own taskId, so no reconstruction from creation order is
 # needed.
 PY='
-import json, os, re, sys
+import json, os, re, stat, sys
 path, task_id = sys.argv[1], str(sys.argv[2])
 try:
     lines = open(path).readlines()
@@ -289,8 +301,20 @@ def diff_added_lines(inp):
         p = inp.get("final_diff_path") or ""
         if not p or not os.path.isabs(p):
             return {}
+        # This path is caller-supplied and opened by a hook that runs
+        # unsandboxed, so it gets the same three guards the server applies to
+        # the same field: O_NOFOLLOW refuses a symlink at the final component,
+        # O_NONBLOCK keeps a FIFO from parking the hook forever inside open(),
+        # and S_ISREG rejects every other kind of special file. Every failure
+        # fails OPEN -- this scan is defence in depth, and an unreadable diff
+        # must not turn into a blocked task close.
+        fd = -1
         try:
-            with open(p, "rb") as fh:
+            fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return {}
+            with os.fdopen(fd, "rb") as fh:
+                fd = -1
                 # Read one byte past the cap rather than trusting a prior stat:
                 # the file can grow between getsize() and read(). Binary mode,
                 # and the cap counted on the raw bytes: a text-mode read counts
@@ -302,6 +326,12 @@ def diff_added_lines(inp):
             text = raw.decode("utf-8", errors="replace")
         except Exception:
             return {}
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
     out, cur = {}, None
     for line in text.splitlines():
         if line.startswith("+++ b/"):
@@ -339,7 +369,15 @@ print(json.dumps({"error": False, "called": called,
                   "comment_violations": comment_violations,
                   "comment_scan_unavailable": comment_scan_unavailable}))
 '
-RESULT=$({ ATG_ROOT="$PLUGIN_ROOT" ATG_COMMENT_GUARD="$COMMENT_GUARD" python3 -c "$PY" "$TRANSCRIPT" "$TASK_ID" 2>/dev/null || echo '{"error":true}'; } | tr -d '\r')
+# -I isolates the interpreter: without it python3 -c puts the CURRENT WORKING
+# DIRECTORY first on sys.path, so a repo-root json.py, re.py or collections.py
+# would shadow the standard library inside a hook that runs unsandboxed. The
+# explicit sys.path.insert of $ATG_ROOT/hooks still works under -I, so the
+# comment_scan import is unaffected. -B suppresses __pycache__ writes into the
+# installed plugin tree, which an uninstall would leave behind; it is a flag
+# rather than PYTHONDONTWRITEBYTECODE because -I implies -E and would ignore
+# the environment variable.
+RESULT=$({ ATG_ROOT="$PLUGIN_ROOT" ATG_COMMENT_GUARD="$COMMENT_GUARD" python3 -I -B -c "$PY" "$TRANSCRIPT" "$TASK_ID" 2>/dev/null || echo '{"error":true}'; } | tr -d '\r')
 # NOTE: deliberately ".error", not ".error // true" — jq's // operator
 # substitutes on false as well as null, so ".error // true" evaluates to
 # "true" for EVERY result (false // true == true in jq), which would make
@@ -400,7 +438,10 @@ if [[ "$CALLED" == "true" || "$BLOCK" == "true" ]]; then
             echo "Bash heredoc or similar write that never passed through Edit/Write, where"
             echo "this project's write-time guard would have caught it."
             echo
-            echo "$VIOLATIONS" | jq -r '.[0:10][] | "  " + .path + ": " + .line + "\n    -> contains " + .why'
+            # Both fields come from the submitted diff and are unbounded there;
+            # a single very long line would otherwise reach the model as
+            # megabytes of hook stderr it is expected to act on.
+            echo "$VIOLATIONS" | jq -r '.[0:10][] | "  " + .path[0:200] + ": " + .line[0:200] + "\n    -> contains " + .why'
             echo
             echo "Comments must explain non-trivial behaviour or a non-obvious invariant, and must read"
             echo "correctly to someone who never saw this change. Issue, task and version references belong"

@@ -11,23 +11,17 @@ set -uo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
-mkdir -p "$(dirname "$TRACE_LOG")" 2>/dev/null || true
+# Mode 700 on creation: the default lives in a world-writable directory, so a
+# directory this hook creates must not be one another account can drop files
+# into. `-m` applies only to directories mkdir actually creates — an existing
+# directory keeps whatever mode it has, which is why trace() below independently
+# refuses to write through a symlink.
+mkdir -p -m 700 "$(dirname "$TRACE_LOG")" 2>/dev/null || true
 
 # Short session id so one shared trace file stays readable when several
 # sessions write to it. Lines emitted before the payload is parsed carry "-",
 # which is honest about not knowing rather than silently blank.
 ATG_SESSION="-"
-atg_set_session() {
-    local raw
-    raw=$(printf '%s' "${1:-}" | jq -r '.session_id // empty' 2>/dev/null) || return 0
-    # Restrict to a safe character class before truncating: jq -r turns a
-    # JSON "\n" into a real newline, and truncating by character count alone
-    # would let it (or a "|") survive into the printf argument and split one
-    # trace() call into more than one physical log line.
-    raw="${raw//[^A-Za-z0-9_-]/}"
-    [[ -n "$raw" ]] && ATG_SESSION="${raw:0:8}"
-    return 0
-}
 
 # Best-effort rotation. A trace log that grows without bound eventually costs
 # more than it tells you. Rotating by rename rather than truncating in place
@@ -41,6 +35,7 @@ atg_rotate_trace() {
     # 0" a few lines down, which turns a malformed cap into a hook that skips
     # its own gate. Falling back to the default keeps this best-effort.
     [[ "$max" =~ ^[0-9]+$ ]] || max=1048576
+    [[ -L "$TRACE_LOG" ]] && return 0
     [[ -f "$TRACE_LOG" ]] || return 0
     size=$(wc -c < "$TRACE_LOG" 2>/dev/null) || return 0
     [[ "$size" -gt "$max" ]] || return 0
@@ -50,6 +45,12 @@ atg_rotate_trace() {
 atg_rotate_trace
 
 trace() {
+    # Refuse to append through a symlink. The default trace path is predictable
+    # and its parent may be world-writable, so a symlink planted there would
+    # otherwise redirect every appended line into a file of someone else's
+    # choosing. Every failure path here is swallowed: a trace that cannot be
+    # written must never change this hook's exit status.
+    [[ -L "$TRACE_LOG" ]] && return 0
     printf '%s | s=%s | comment-write | %s%s\n' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ATG_SESSION" "${1:-?}" "${2:+ | $2}" \
         >> "$TRACE_LOG" 2>/dev/null || true
@@ -60,12 +61,52 @@ command -v python3 >/dev/null 2>&1 || { trace "skip" "no-python3"; exit 0; }
 [[ -r "$PLUGIN_ROOT/hooks/check_comment_write.py" ]] || { trace "skip" "no-body"; exit 0; }
 
 ATG_INPUT="$(cat)"
-atg_set_session "$ATG_INPUT"
-ATG_INPUT="$ATG_INPUT" ATG_ROOT="$PLUGIN_ROOT" \
-    python3 "$PLUGIN_ROOT/hooks/check_comment_write.py"
-status=$?
+
+# One jq call carries both fields this wrapper needs before it can decide
+# whether to pay for a python3 start. Both are reduced to a shape that cannot
+# contain a space or a newline, so a single space separates them unambiguously:
+# the file extension is matched out of a closed character class, and the
+# session id is stripped to [A-Za-z0-9_-] and truncated INSIDE jq. Sanitizing
+# before truncating is the load-bearing order — jq -r turns a JSON "\n" into a
+# real newline, and truncating by character count alone would let it (or a "|")
+# survive into the printf argument and split one trace() line into two.
+ATG_META=$(printf '%s' "$ATG_INPUT" | jq -r '
+    ((.tool_input.file_path // "") | ascii_downcase
+        | [scan("\\.[a-z0-9_]+$")] | (.[0] // ""))
+    + " "
+    + ((.session_id // "") | gsub("[^A-Za-z0-9_-]"; "") | .[0:8])' 2>/dev/null) || ATG_META=""
+ATG_EXT="${ATG_META%% *}"
+ATG_SESSION_RAW="${ATG_META#* }"
+[[ -n "$ATG_SESSION_RAW" ]] && ATG_SESSION="$ATG_SESSION_RAW"
+
+# Fast path. Most Edit/Write traffic lands on files this guard never scans
+# (markdown, JSON, YAML, config), and deciding that in bash saves an
+# interpreter start plus three regex compilations on every one of them. The
+# list below duplicates comment_scan.py's SCAN_EXTS on purpose — reading it out
+# of the Python module would cost the very process this check exists to avoid —
+# and evals/run.sh asserts the two stay identical, so adding a language to one
+# and not the other fails the suite instead of silently unguarding it. An
+# extension this hook could not determine at all (no jq, no file_path, a name
+# with no extension) is not guessed at: it falls through to python3, whose
+# scannable() is the authority.
+ATG_SCAN_EXTS=".go .sh .bash .py .ts .tsx .js .jsx .rs .java .kt .rb .c .h .cc .cpp .hpp"
+if [[ -n "$ATG_EXT" && " $ATG_SCAN_EXTS " != *" $ATG_EXT "* ]]; then
+    trace "skip" "ext=$ATG_EXT"
+    exit 0
+fi
+
+# The payload travels on stdin, not in the environment. Linux caps a single
+# environment string at MAX_ARG_STRLEN (32 pages, 131072 bytes on x86-64), and
+# the content of a Write can exceed that on its own: handed to python3 as
+# ATG_INPUT= it would make exec fail, and an exec failure reads here as an
+# internal error, which this hook must treat as "allow" — so a large enough
+# write would walk straight past the guard. The hook's own stdin is consumed
+# once, above, and re-fed here; the body must not read the original descriptor.
+printf '%s' "$ATG_INPUT" | ATG_ROOT="$PLUGIN_ROOT" \
+    python3 -B "$PLUGIN_ROOT/hooks/check_comment_write.py"
+status=${PIPESTATUS[1]}
 case "$status" in
-    0) exit 0 ;;
+    0) trace "pass" "ext=${ATG_EXT:-?}"; exit 0 ;;
     2) trace "block" "comment-hygiene"; exit 2 ;;
     *) trace "error" "python-exit=$status"; exit 0 ;;
 esac
