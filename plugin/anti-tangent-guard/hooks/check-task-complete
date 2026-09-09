@@ -252,12 +252,16 @@ def diff_added_lines(inp):
         if not p or not os.path.isabs(p):
             return {}
         try:
-            with open(p) as fh:
+            with open(p, "rb") as fh:
                 # Read one byte past the cap rather than trusting a prior stat:
-                # the file can grow between getsize() and read().
-                text = fh.read(2_000_001)
-            if len(text) > 2_000_000:
+                # the file can grow between getsize() and read(). Binary mode,
+                # and the cap counted on the raw bytes: a text-mode read counts
+                # decoded characters, so a multibyte file could pass a
+                # byte-cap check while actually exceeding it.
+                raw = fh.read(2_000_001)
+            if len(raw) > 2_000_000:
                 return {}
+            text = raw.decode("utf-8", errors="replace")
         except Exception:
             return {}
     out, cur = {}, None

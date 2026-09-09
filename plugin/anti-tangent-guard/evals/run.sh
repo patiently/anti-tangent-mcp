@@ -33,15 +33,17 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # contributes eleven more. check-task-complete's own comment-hygiene scan —
 # a defence-in-depth pass over the LAST validate_completion call's diff
 # evidence in the task window, covering a comment write that reached disk
-# without going through Edit/Write — contributes eleven more still: last-call
+# without going through Edit/Write — contributes twelve more still: last-call
 # selection, an absolute final_diff_path, a relative path failing open, the
 # size cap failing open, the kill switch, the trace() reason, a
-# final_files-only close passing untouched, an excluded extension, and an
-# unchanged context line, for an exact total. Both checks below must hold or
+# final_files-only close passing untouched, an excluded extension, an
+# unchanged context line, and an unresolvable plugin root failing open on the
+# scan without masking an independently-detected failing verdict, for an
+# exact total. Both checks below must hold or
 # the count assertion is vacuous: the JSON file must declare
 # EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=44
+EXPECTED_CASE_COUNT=45
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 CASE_TMPDIRS=()

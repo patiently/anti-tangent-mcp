@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (44 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (45 cases)",
   "evals": [
     {
       "id": 1,
@@ -760,6 +760,31 @@
       ],
       "expected_exit": 0,
       "reason": "only +-prefixed lines are added lines; a violating comment surviving as unchanged context must not block"
+    },
+    {
+      "id": 45,
+      "name": "close-comment-scan-unresolvable-plugin-root-does-not-mask-verdict-fail",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "env": {
+        "CLAUDE_PLUGIN_ROOT": "/nonexistent-plugin-root-atg-eval"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"fail\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED ON A FAILED anti-tangent VERDICT"
+      ],
+      "reason": "a real validate_completion call is in the window (so the comment-scan import is actually attempted) under a CLAUDE_PLUGIN_ROOT that cannot resolve comment_scan.py; the import failure must fail open on the scan alone and must not mask the independently-detected failing verdict"
     }
   ]
 }
