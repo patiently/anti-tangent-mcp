@@ -31,11 +31,11 @@ returned `session_id` — you'll thread it through subsequent calls.
   `severity: major` as "address or explain." If the spec is too ambiguous
   to proceed, stop and ask the controller for clarification rather than
   guessing.
-- A `warn` carrying only `minor` findings is a legitimate place to proceed. The
-  verdict is derived from the finding mix, so a well-specified task can sit at
-  `warn` indefinitely; iterate while findings are still being resolved, and
-  proceed once the remaining ones are prose-level. Do not keep re-validating a
-  spec whose findings have stopped changing.
+- A `warn` carrying only `minor` findings is a legitimate place to proceed:
+  iterate while any finding is `critical` or `major`, proceed once every
+  remaining one is `severity: minor`. That is the one stop signal — a
+  well-specified task can sit at `warn` indefinitely. Do not keep
+  re-validating a spec whose findings have stopped changing.
 
 **2. During work (OPTIONAL).** Call `check_progress` ONLY if you suspect
 you're drifting mid-task, OR a test that 'should' fail doesn't, OR
@@ -74,8 +74,7 @@ and re-submit; no rework is implied.**
   worktree, where `.git` is a regular file rather than a directory and `"$PWD/.git/..."` dies with
   `Not a directory`). **This filename is fixed per git directory** — if another agent may write to
   the same one (parallel tasks, a shared worktree), use a task-unique filename instead, or a shared
-  name races and the later write silently clobbers the earlier task's evidence. A path under `/tmp`
-  is refused when `ANTI_TANGENT_PLAN_ROOTS` is scoped to the project. **Scope both the `git add` and the `git diff` to your task's own paths —
+  name races and the later write silently clobbers the earlier task's evidence. **Scope both the `git add` and the `git diff` to your task's own paths —
   never `git add -A` or bare `git diff HEAD`.** Everything in the diff is sent to a third-party
   reviewer LLM, so an unscoped `git add -A` stages, and an unscoped diff then discloses, every
   non-ignored change in the worktree — unrelated tracked edits, scratch files, another task's
@@ -207,3 +206,7 @@ change.
 
 When you touch code whose comments break these rules, remove or rewrite them as
 part of your task. There is no separate cleanup pass.
+
+If `anti-tangent-guard` is installed, its scanner catches only full-line
+comments matching a small pattern set — passing it is not evidence the
+policy above was followed; apply it yourself.

@@ -64,8 +64,8 @@ returning the reason to the model as something it must address before its
 next action) in three cases: no pass signal is present anywhere in the
 window, the most recent one carries `verdict: fail`, or the submitted diff
 adds comment lines carrying change history (a scan of added lines against a
-small pattern set; see the `anti-tangent-guard` README's "Write-time comment
-guard" for what it catches and misses). All three name the same recovery:
+small pattern set; see the `anti-tangent-guard` README's "Comment-hygiene
+scan at close" for what it catches and misses). All three name the same recovery:
 reopen with `status=in_progress`, address the findings — or remove/rewrite
 the flagged comment — re-run `validate_completion`, then re-close.
 
