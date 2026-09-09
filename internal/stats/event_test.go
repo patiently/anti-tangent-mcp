@@ -76,7 +76,7 @@ func TestCountFindings_CriterionAllowlistOnly(t *testing.T) {
 			Criterion: "comment_hygiene", Evidence: "e", Suggestion: "s"},
 		{Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
 			Criterion: "the exporter MUST emit one span per outbound request",
-			Evidence: "e", Suggestion: "s"},
+			Evidence:  "e", Suggestion: "s"},
 	}
 	_, _, crit, total := CountFindings(findings)
 	require.Equal(t, 2, total)

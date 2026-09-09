@@ -17,19 +17,19 @@ import (
 // NO finding text, plan/spec content, or raw session id (SessionHash is a salted
 // digest, never the raw id).
 type Event struct {
-	Ts             time.Time      `json:"ts"`
-	Tool           string         `json:"tool"`
-	Verdict        string         `json:"verdict,omitempty"`
-	FindingsTotal  int            `json:"findings_total"`
-	SeverityCounts map[string]int `json:"severity_counts,omitempty"`
-	CategoryCounts map[string]int `json:"category_counts,omitempty"`
+	Ts              time.Time      `json:"ts"`
+	Tool            string         `json:"tool"`
+	Verdict         string         `json:"verdict,omitempty"`
+	FindingsTotal   int            `json:"findings_total"`
+	SeverityCounts  map[string]int `json:"severity_counts,omitempty"`
+	CategoryCounts  map[string]int `json:"category_counts,omitempty"`
 	CriterionCounts map[string]int `json:"criterion_counts,omitempty"`
-	ReviewMS       int64          `json:"review_ms"`
-	Model          string         `json:"model,omitempty"`
-	Cached         bool           `json:"cached,omitempty"`
-	Partial        bool           `json:"partial,omitempty"`
-	PayloadBytes   int            `json:"payload_bytes,omitempty"`
-	SessionHash    string         `json:"session_hash,omitempty"`
+	ReviewMS        int64          `json:"review_ms"`
+	Model           string         `json:"model,omitempty"`
+	Cached          bool           `json:"cached,omitempty"`
+	Partial         bool           `json:"partial,omitempty"`
+	PayloadBytes    int            `json:"payload_bytes,omitempty"`
+	SessionHash     string         `json:"session_hash,omitempty"`
 
 	// TasksTotal and TasksWithHeader are set only on validate_plan events:
 	// how many tasks the plan parsed into, and how many carried a structured
