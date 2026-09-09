@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (79 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (82 cases)",
   "evals": [
     {
       "id": 1,
@@ -1142,6 +1142,39 @@
         ]
       },
       "reason": "jq -r turns the payload's JSON \\n into a real newline; truncating the extracted session id by character count alone let it (and the |) survive into the printf argument and split one trace() call into two physical lines, the second of which reads as a genuine, unrelated log entry -- the full reconstructed line as a single grep -F needle only matches if the newline and pipes were stripped before truncation, since grep matches within one physical line"
+    },
+    {
+      "id": 80,
+      "name": "comment-write-issue-ref-pr-trigger-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// resolves the PR #14 backport\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "pins that 'pr' still blocks somewhere in the pattern; verified by mutation (removing 'pr' from every role together makes this stop matching). NOTE, found while adding this case: 'PR' sitting directly before '#14' also satisfies pr's OWN standalone-trigger role (same bare-adjacency mechanism as 'fixes #58' / case 63's bare 'References #N') independent of 'resolves the' preceding it — confirmed a bare 'see PR #14' with no 'the' at all blocks too. So this case does NOT cleanly isolate the round-3-restricted 'the'+pr bridge from the pre-existing standalone-pr-trigger path; no test string can, since any 'the pr #N' also satisfies the bare form. Pinning 'pr' as a trigger in general is still real regression coverage — case 59's 'fixes issue #58' plays the equivalent isolating role for the bridge mechanism using 'issue', which has no standalone-trigger role to confound it"
+    },
+    {
+      "id": 81,
+      "name": "comment-write-issue-ref-pull-request-trigger-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see pull request #221 for the rationale\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "pins the 'pull request' trigger, untested until now; verified by mutation (removing 'pull\\s*request' from the trigger alternation makes this stop matching, and 'see' alone cannot reach '#221' through any bridge since 'pull request' is not a connector word — confirmed no other trigger in the line accidentally catches it)"
+    },
+    {
+      "id": 82,
+      "name": "comment-write-issue-ref-bare-bug-connector-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// closes bug #77 in the retry path\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "pins the bare (no 'the') connector-noun form for one of the six connectors (bug/ticket/item/number/no./reference) whose 'the'-bridge was removed in round three but whose bare form after a strong verb was deliberately left working; verified by mutation (removing 'bug' from the bare-connector alternation makes this stop matching)"
     }
   ]
 }

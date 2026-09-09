@@ -117,11 +117,26 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # trace line and split one trace() call into two physical lines, the
 # second of which reads as a genuine, unrelated entry; one case pins that a
 # newline-bearing session id still lands as exactly one physical line, for
-# an exact total. Both checks below must hold or
+# a subtotal of 79. A sixth pass closed a regression-coverage gap the
+# round-three restriction left open: nothing in the suite pinned "pr" or
+# "pull request" as a trigger, bare or bridged, or the bare (no "the") form
+# of the six connectors whose "the"-bridge round three removed. Three
+# cases fill that gap, each verified by mutation — the case stops matching
+# once its named trigger is actually removed from the pattern, not merely
+# present alongside something else that happens to also catch the line.
+# One of the three ("pr" via the "the"+pr bridge) turned out not to
+# isolate that mechanism cleanly: "pr" is also a pre-existing standalone
+# trigger, so "PR" sitting directly before a "#N" matches on its own bare
+# adjacency regardless of whatever precedes it — no test string can
+# separate the bridge from the standalone trigger for "pr" specifically,
+# unlike "issue" (case 59's "fixes issue #N"), which has no standalone
+# role to confound it. The case still pins "pr" as a trigger in some form,
+# documented as such rather than claimed to test what it does not, for an
+# exact total. Both checks below must hold or
 # the count assertion is vacuous: the JSON file must declare
 # EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=79
+EXPECTED_CASE_COUNT=82
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Every hook invocation below runs with this as its cwd, run-scoped (inside
