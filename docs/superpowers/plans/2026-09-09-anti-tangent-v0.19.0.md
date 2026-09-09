@@ -2,11 +2,26 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Recalibrate `validate_task_spec`'s pre-hook prompt so its verdict is actionable, and add a comment-hygiene policy enforced at write time, at review time, and at task close.
+**Goal:** Recalibrate `validate_task_spec`'s pre-hook prompt so its verdict is actionable, and add a comment-hygiene policy with three enforcement layers — write time, review time, and task close — whose combined coverage is high but explicitly not total (see the coverage holes below).
 
 **Architecture:** Parts 1–2 are prompt-only edits to `pre.tmpl`, ported from wording already proven in `post.tmpl`. Part 3 adds a comment policy with three enforcement layers — a `PreToolUse` hook that prevents, a `post.tmpl` reviewer rule that judges, and a `check-task-complete` scan that is defence in depth. The two deterministic hook layers share one scanner implementation (`comment_scan.py`); the reviewer layer applies the same policy semantically, through prompt instructions, and shares no code.
 
-**Known coverage hole, by design.** `post.tmpl` accepts completion evidence as `final_files`, `final_diff` or `test_evidence` "in any combination". The deterministic close-time scan needs a diff, so a valid `final_files`-only completion is not scanned by it at all. Task 5 defines what the reviewer does in that case; nothing else closes it. Do not describe close-time enforcement as unconditional. Part 4 adds a bounded `criterion` histogram to the stats ledger so Part 3 is measurable.
+**Known coverage holes, by design.** `post.tmpl` accepts completion evidence as `final_files`,
+`final_diff` or `test_evidence` "in any combination", and two of those combinations are not
+covered end-to-end:
+
+- **`final_files`-only** — no diff, so the deterministic close-time scan cannot run. The reviewer
+  still sees the file contents; Task 5 defines what it does with them.
+- **`test_evidence`-only** — no file content of any kind reaches either the scanner or the
+  reviewer. Neither close-time layer can say anything about comments. If that code was also
+  written through `Bash` rather than `Edit`/`Write`, the prevention layer missed it too, and the
+  change is unenforced by all three layers.
+
+This is accepted rather than closed: requiring diff evidence purely for comment hygiene would
+change `validate_completion`'s contract for every caller, which is out of scope for this release.
+The consequence is that the Goal's "at write time, at review time, and at task close" is a
+description of the three layers, NOT a claim of unconditional coverage — Tasks 7, 9 and 10 must
+state the limitation in the plugin README and the protocol docs rather than implying completeness. Part 4 adds a bounded `criterion` histogram to the stats ledger so Part 3 is measurable.
 
 **Tech Stack:** Go 1.x (`internal/prompts` text/template + golden tests, `internal/stats`, `internal/mcpsrv`), Bash + Python 3 Claude Code hooks, JSON-driven hook eval harness.
 
@@ -74,6 +89,13 @@ before the probe.
 
 - [ ] **Step 2: Register the probe hook**
 
+**Activation first.** Claude Code may read hook settings at session start rather than on every
+tool call. If the control write in Step 3 does not appear in the log, that is the FIRST thing to
+suspect — not evidence about subagents. Before concluding anything, re-read the settings (or start
+a fresh session in this directory) and repeat Step 3 until the control fires. Record in the
+completion report which of the two was needed, because it tells the next person whether a hook
+edit takes effect live.
+
 Add this `PreToolUse` entry to `.claude/settings.local.json` (merging with any existing `hooks` key rather than replacing it):
 
 ```json
@@ -103,7 +125,7 @@ Then use the `Write` tool (not Bash) from this session to create `/tmp/claude-ho
 grep -c "control.txt" /tmp/claude-hooks/subagent-probe.log
 ```
 
-Expected: `1` or more. **If this is 0, the probe is broken — stop and fix the probe before drawing any conclusion about subagents.**
+Expected: `1` or more. **If this is 0 the probe is not active, not disproven — see the activation note above, get the control firing, and only then run Step 4.** A zero here means nothing about subagents.
 
 - [ ] **Step 4: Dispatch a subagent that writes a file**
 
@@ -510,7 +532,7 @@ Comments added by this change must explain non-trivial behaviour, or a non-obvio
 
 A comment is a defect when it narrates change history — an issue, pull-request or task reference; a version reference; "previously", "no longer", "this replaced" — or when it restates what the code plainly does, or describes the code inaccurately.
 
-Judge only comments this change ADDS; an untouched comment is out of scope. When the evidence is a diff, added comments are the `+` lines. When the evidence is whole files (`final_files`) with no diff, you cannot distinguish an added comment from a pre-existing one — judge only comments in code the summary identifies as NEW, and emit nothing about the rest. When there is no file evidence at all, skip this policy rather than guessing.
+Judge only comments this change ADDS; an untouched comment is out of scope. When the evidence is a diff, added comments are the `+` lines. When the evidence is whole files (`final_files`) with no diff, you cannot distinguish an added comment from a pre-existing one — judge a comment only when the summary unambiguously names its containing file or region as newly created; skip every other comment rather than guessing. When there is no file evidence at all, skip this policy rather than guessing.
 
 Emit these as `category: quality`, `criterion: comment_hygiene`, and `severity: minor` — always `minor`, never `major` or `critical`, however many you find. Quote the offending comment in `evidence`, and give the rewritten comment or an explicit removal in `suggestion`.
 ```
@@ -897,15 +919,25 @@ execution order and on residue from earlier runs. In `run.sh`, before each case:
 case_tmp=$(mktemp -d "${TMPDIR:-/tmp}/atg-eval-XXXXXX")
 ```
 
-substitute `{{TMPDIR}}` in `stdin_raw` and `input` with `$case_tmp` exactly as `{{TRANSCRIPT}}` is
-already substituted, and `rm -rf "$case_tmp"` afterwards. Update the existing cases 23–29 to use
-`{{TMPDIR}}/...` paths rather than the fixed `/tmp/atg-eval.go`.
+substitute `{{TMPDIR}}` in `stdin_raw` and in the JSON-encoded `input` with `$case_tmp`, using the
+same `sed`/`jq` substitution the runner already applies for `{{TRANSCRIPT}}`.
+
+`run_case` has several early `return` paths on failure, so cleanup placed at the end of the
+function would be skipped on exactly the runs you most want cleaned. Register it per case instead
+— append `"$case_tmp"` to a module-level `CASE_TMPDIRS` array and have the existing
+`trap cleanup EXIT` (line 38) `rm -rf` every entry. That reuses the cleanup path already proven to
+run on every exit.
+
+Update the existing cases 23–29 to use `{{TMPDIR}}/...` paths rather than the fixed
+`/tmp/atg-eval.go`.
 
 - [ ] **Step 6: Teach run.sh to dispatch by hook and bump the count**
 
 In `plugin/anti-tangent-guard/evals/run.sh`:
 - change `EXPECTED_CASE_COUNT=22` to `EXPECTED_CASE_COUNT=33`
-- where the runner invokes the hook, read `.evals[$idx].hook` and default to `check-task-complete`:
+- replace line 19, `HOOK="$PLUGIN_DIR/hooks/check-task-complete"`, with
+  `HOOK_DIR="$PLUGIN_DIR/hooks"`, and change every invocation of `"$HOOK"` to `"$case_hook"`,
+  where `case_hook="$HOOK_DIR/$hook_name"` is computed per case from:
 
 ```bash
 hook_name=$(jq -r ".evals[$idx].hook // \"check-task-complete\"" "$EVALS_FILE")
@@ -936,6 +968,7 @@ git commit -m "feat(guard): prevent comments carrying change history at write ti
 **Files:**
 - Modify: `plugin/anti-tangent-guard/hooks/check-task-complete`
 - Modify: `plugin/anti-tangent-guard/evals/guard-evals.json`, `plugin/anti-tangent-guard/evals/run.sh`
+- Modify: `plugin/anti-tangent-guard/README.md` (the coverage limitations this layer cannot cover)
 
 **Acceptance Criteria:**
 - [ ] The transcript walk retains each `validate_completion` call's `input`, not only its index and id
@@ -981,10 +1014,12 @@ def diff_added_lines(inp):
         if not p or not os.path.isabs(p):
             return {}
         try:
-            if os.path.getsize(p) > 2_000_000:
-                return {}
             with open(p) as fh:
-                text = fh.read()
+                # Read one byte past the cap rather than trusting a prior stat:
+                # the file can grow between getsize() and read().
+                text = fh.read(2_000_001)
+            if len(text) > 2_000_000:
+                return {}
         except Exception:
             return {}
     out, cur = {}, None
@@ -1010,6 +1045,22 @@ Import at the top of the embedded python: `import os, sys` (if not already) and 
 - [ ] **Step 2b: Guard the kill switch**
 
 The comment scan must be skipped when `ANTI_TANGENT_COMMENT_GUARD=0`, while the completion gate still runs — they are separate switches. Read the env var in the bash preamble and pass it into the python as an argument or environment read, and skip only the comment portion.
+
+- [ ] **Step 2c: Record the limitations in the plugin README**
+
+Add a short subsection to `plugin/anti-tangent-guard/README.md` stating what this layer cannot
+see: a `final_files`-only or `test_evidence`-only completion carries no diff, so the close-time
+comment scan does not run and those closes rely on the reviewer layer (or, for
+`test_evidence`-only, are unenforced). Task 9 rewrites the rest of that README; this subsection is
+this task's because it documents this task's behaviour.
+
+- [ ] **Step 2d: Teach the runner to assert file contents**
+
+Case 41 asserts the trace log gained a `comment-hygiene` line, and `run.sh` today checks only exit
+status and stderr substrings. Add one optional eval field, `expected_file_contains`, as an object
+of `{path: [substrings]}`: after the case runs, for each path (with `{{TMPDIR}}` substituted) fail
+if the file is missing or any substring is absent, matching fixed strings via `grep -F`. Without
+this, case 41 cannot be expressed and the `trace()` acceptance criterion ships unverified.
 
 - [ ] **Step 3: Add evals**
 
@@ -1126,8 +1177,12 @@ from comment_scan import violations, scannable
 
 # HEAD blobs, not the working tree: the gate is about what is committed, and a
 # dirty worktree would otherwise silently change the result.
-names = subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True).stdout
-files = [f for f in names.split("\0") if f]
+ls = subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True)
+if ls.returncode != 0:
+    # Without this the script scans an empty list, prints zero hits and "passes".
+    print("git ls-files failed: %s" % ls.stderr, file=sys.stderr)
+    sys.exit(1)
+files = [f for f in ls.stdout.split("\0") if f]
 
 total, failed = 0, 0
 for f in files:
@@ -1205,6 +1260,11 @@ for l in open(cls_p).read().splitlines():
 
 # One-to-one join. Counting lines is not enough: duplicate classifications for
 # one hit would mask another hit having none.
+dup_raw = [k for k, n in collections.Counter(raw).items() if n > 1]
+if dup_raw:
+    print("DUPLICATE RAW KEYS: %s" % dup_raw[:5], file=sys.stderr)
+    sys.exit(1)
+
 missing = [k for k in raw if k not in cls]
 unknown = [k for k in cls if k not in set(raw)]
 dupes = [k for k, v in cls.items() if len(v) > 1]
@@ -1296,8 +1356,9 @@ jq -r '.plugins[] | select(.name=="anti-tangent-guard") | .version' .claude-plug
 a=$(jq -r '.description' plugin/anti-tangent-guard/.claude-plugin/plugin.json)
 b=$(jq -r '.plugins[] | select(.name=="anti-tangent-guard") | .description' .claude-plugin/marketplace.json)
 [[ "$a" == "$b" ]] && echo "ok descriptions match" || echo "MISMATCH"
-# catalog version must have moved
-jq -r '.version' .claude-plugin/marketplace.json
+# catalog version must have moved: capture it BEFORE editing and assert it changed
+# (record the pre-edit value in Step 2; substitute it for <OLD> here)
+[[ "$(jq -r '.version' .claude-plugin/marketplace.json)" != "<OLD>" ]] && echo "ok catalog version bumped" || echo "CATALOG VERSION UNCHANGED"
 # README must document both switches and both limitations
 for n in ANTI_TANGENT_COMMENT_GUARD ANTI_TANGENT_COMPLETION_GUARD Bash PostToolUse; do
   grep -q "$n" plugin/anti-tangent-guard/README.md && echo "ok $n" || echo "MISSING $n"
@@ -1421,11 +1482,13 @@ grep -q "have stopped changing" docs/protocol/implementer.md && echo "ok impleme
 grep -q "have stopped moving" docs/protocol/controller.md && echo "ok controller stopping rule"
 
 # the comment policy is stated SOMEWHERE authoritative, and CLAUDE.md carries it
-if grep -q "not carry change history" docs/protocol/implementer.md; then
+# -i is load-bearing: the mandated prose is "Comments do NOT carry change history",
+# and a case-sensitive lowercase pattern can never match it.
+if grep -qi "not carry change history" docs/protocol/implementer.md; then
   echo "ok policy in implementer.md"
 else
   # fallback shape: full policy in authoring.md AND an explicit pointer left behind
-  grep -q "not carry change history" docs/protocol/authoring.md && \
+  grep -qi "not carry change history" docs/protocol/authoring.md && \
     grep -q "authoring.md" docs/protocol/implementer.md && \
     echo "ok policy in authoring.md with pointer from implementer.md"
 fi
