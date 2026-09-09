@@ -33,9 +33,10 @@ returned `session_id` — you'll thread it through subsequent calls.
   guessing.
 - A `warn` carrying only `minor` findings is a legitimate place to proceed:
   iterate while any finding is `critical` or `major`, proceed once every
-  remaining one is `severity: minor`. That is the one stop signal — a
-  well-specified task can sit at `warn` indefinitely. Do not keep
-  re-validating a spec whose findings have stopped changing.
+  remaining one is `severity: minor`. That is the stop signal. A `critical`
+  or `major` finding whose wording has stopped changing across rounds will
+  not move by re-validating it again — fix it, or accept it with the
+  one-sentence mitigation described below and proceed on that basis.
 
 **2. During work (OPTIONAL).** Call `check_progress` ONLY if you suspect
 you're drifting mid-task, OR a test that 'should' fail doesn't, OR
@@ -207,6 +208,5 @@ change.
 When you touch code whose comments break these rules, remove or rewrite them as
 part of your task. There is no separate cleanup pass.
 
-If `anti-tangent-guard` is installed, its scanner catches only full-line
-comments matching a small pattern set — passing it is not evidence the
-policy above was followed; apply it yourself.
+If `anti-tangent-guard` is installed, a clean scanner run is not evidence
+the policy above was followed; apply the policy yourself.
