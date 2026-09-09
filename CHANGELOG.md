@@ -5,28 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.19.0] - 2026-09-08
-
-### Added
-- **`spec_quality` on `validate_task_spec`** — a second axis alongside the verdict, using the
-  same `rough` / `actionable` / `rigorous` vocabulary as `plan_quality`, so a caller facing a
-  `warn` that will not move has a convergence signal and a stopping rule. `plan_quality` has had
-  this since v0.3.1 and `validate_task_spec` had no equivalent, so there was no way to tell "this
-  spec is improving" from "this spec is as good as it is going to get and the rest is prose."
-  Carried on the envelope, in the summary block, and per task in `plan_run_report` as
-  `pre_spec_quality`.
-- **`normative_code_bodies` on `validate_task_spec`** — the sibling of `normative_test_bodies`
-  for non-test implementation code pasted verbatim into a task brief, extracted server-side from
-  a `**NORMATIVE CODE (verbatim):**` section by the same parser, under the same caps (20 entries,
-  4000 code points). A brief that answers a question in code below the prose is no longer failed
-  for leaving it open in the prose above.
+## [0.19.0] - 2026-09-09
 
 ### Fixed
-- **The pre-task gate's terminal state is now documented.** `implementer.md` §4.2 told an
-  implementer to treat `critical` as blocking and `major` as address-or-explain, and stopped —
-  implying `pass` was the target. It is not reachable for most well-specified tasks: the severity
-  ladder puts `pass` at zero major and at most two minor findings, while `pre.tmpl` asks the
-  reviewer to emit one finding per implicit assumption. The docs now state the stopping rule.
+- **`validate_task_spec` now reserves `major` for ambiguity that would actually cause
+  misimplementation.** Across 191 real calls, the tool returned `fail` 58% of the time and `warn`
+  a further 32%, and **81% of those non-passes were driven by `major` findings** — overwhelmingly
+  `ambiguous_spec` (522 of roughly 800 findings). The cause was calibration, not the severity
+  ladder: `pre.tmpl` asked the reviewer to enumerate every implicit assumption in a brief, said
+  nothing about how severe an assumption is, and defined `major` as "a competent implementer
+  would still misimplement it" — which is exactly how an enumerated assumption reads. `post.tmpl`
+  has had a calibration clause guarding against this since it was written; the pre-hook prompt
+  had no analogue. It does now, along with a bound on the assumptions clause so related
+  assumptions consolidate into one finding instead of one finding each.
+- **`Context:` is now authoritative for the pre-task reviewer.** It was already rendered into the
+  pre-hook prompt, and `post.tmpl` already told the post reviewer to treat it as the
+  disambiguator — but nothing told the *pre* reviewer the same. A task brief that answered a
+  question in `Context:` (including in verbatim code) was still failed for leaving it open in the
+  acceptance criteria above. This was the shape of one of the two field reports in
+  [#58](https://github.com/patiently/anti-tangent-mcp/issues/58): every finding on a fully
+  specified task was about prose the brief's own code answered directly below it.
+- **The pre-task gate's terminal state is documented.** `implementer.md` §4.2 told an implementer
+  to treat `critical` as blocking and `major` as address-or-explain, and stopped — leaving no
+  stopping rule for a `warn` that will not move. It now states one.
+
+No schema, tool-argument or envelope change: the verdict distribution shifts, but every type and
+field is byte-identical. Callers that calibrated against the observed distribution will see it
+move, which is why this is a minor rather than a patch.
 
 ## [0.18.2] - 2026-09-08
 
