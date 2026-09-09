@@ -997,7 +997,7 @@ git commit -m "feat(guard): prevent comments carrying change history at write ti
 - [ ] The transcript walk retains each `validate_completion` call's `input`, not only its index and id
 - [ ] Only the LAST `validate_completion` in the task window is scanned
 - [ ] Inline `final_diff` is scanned; `final_diff_path` is read with an absolute-path check and a size cap, failing open on any error
-- [ ] A `final_files`-only completion (no diff of any kind) passes this layer without a block, and the README records that such closes rely on the reviewer layer alone
+- [ ] A `final_files`-only completion (no diff of any kind) passes this layer without a block, and the README records that **neither** close-time layer covers such a close — Task 5's reviewer rule applies only when a diff is present — so it is covered by the write-time hook alone, and not at all if the code was written through `Bash`
 - [ ] Only `+`-prefixed lines in scannable files are considered, reusing `comment_scan.py`
 - [ ] The block message is textually distinct from the two existing block messages
 - [ ] A `trace()` line records the new block reason
@@ -1063,7 +1063,15 @@ TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY
 
 then the offending lines, then the same rewrite guidance the write-time hook prints. Exit 2. Call `trace(task_id, "block", "comment-hygiene")` first.
 
-Import at the top of the embedded python: `import os, sys` (if not already) and the shared scanner via the same `sys.path.insert` trick used in `check-comment-write`.
+Import at the top of the embedded python: `import os, sys` (if not already), then the shared
+scanner. `check-comment-write` reaches it through `ATG_ROOT`, which that wrapper exports; this hook
+exports nothing of the kind, so derive the root in the bash preamble and pass it in explicitly —
+`ATG_ROOT="$PLUGIN_ROOT"` on the `python3` invocation — and use the same
+`sys.path.insert(0, os.path.join(os.environ["ATG_ROOT"], "hooks"))`. Without this the import fails
+and the scan silently never runs.
+
+Cases 36–44 are specified as prose above. Author each as a complete JSON entry following the shape
+of cases 34–35 before running the suite; a described case is not a case.
 
 - [ ] **Step 2b: Guard the kill switch**
 
@@ -1073,8 +1081,10 @@ The comment scan must be skipped when `ANTI_TANGENT_COMMENT_GUARD=0`, while the 
 
 Add a short subsection to `plugin/anti-tangent-guard/README.md` stating what this layer cannot
 see: a `final_files`-only or `test_evidence`-only completion carries no diff, so the close-time
-comment scan does not run and those closes rely on the reviewer layer (or, for
-`test_evidence`-only, are unenforced). Task 9 rewrites the rest of that README; this subsection is
+comment scan does not run. Do NOT write that such closes "rely on the reviewer layer": Task 5's
+rule applies only when a diff is present, so the reviewer emits nothing for them either. They are
+covered by the write-time `Edit`/`Write` hook alone, and by nothing at all if the code was written
+through `Bash`. Task 9 rewrites the rest of that README; this subsection is
 this task's because it documents this task's behaviour.
 
 - [ ] **Step 2d: Teach the runner to assert file contents**
@@ -1366,7 +1376,7 @@ git commit -m "test(guard): drive comment-scan false positives to zero against H
 Set `"version": "0.2.0"` and replace `description` with:
 
 ```
-Two hooks enforcing anti-tangent-mcp's conventions. A PostToolUse hook on TaskUpdate mandates the validate_completion gate at task close and refuses a close whose submitted diff adds comments carrying change history. A PreToolUse hook on Edit/Write refuses such a comment before it is written. Kill switches: ANTI_TANGENT_COMPLETION_GUARD=0, ANTI_TANGENT_COMMENT_GUARD=0.
+Two hooks enforcing anti-tangent-mcp's conventions. A PostToolUse hook on TaskUpdate mandates the validate_completion gate at task close and, when the submitted diff adds comments carrying change history, returns a blocking instruction to reopen and fix. It detects rather than prevents: PostToolUse fires after the state change, so it cannot stop the close itself. A PreToolUse hook on Edit/Write refuses such a comment before it is written. Kill switches: ANTI_TANGENT_COMPLETION_GUARD=0, ANTI_TANGENT_COMMENT_GUARD=0.
 ```
 
 - [ ] **Step 2: Mirror into the marketplace catalog**
