@@ -193,13 +193,13 @@ False positives cost much more here than at task close: a bad pattern blocks an 
 rather than a close at the end. The zero-false-positive acceptance criterion below is therefore a
 release blocker for this layer specifically, not a nicety.
 
-**Two gaps this layer does not close.** `Bash` writes — a heredoc, `sed -i`, a generated file —
+**One gap this layer does not close.** `Bash` writes — a heredoc, `sed -i`, a generated file —
 bypass an `Edit`/`Write` matcher entirely, and this is not hypothetical: agents are routinely
 instructed to prefer Bash for file changes. `anti-tangent-shunt` sets a precedent for matching
 `Bash` (it intercepts `cat`/`head`/`tail` reads), but recognising *written comment content* inside
-arbitrary shell is not tractable, so Bash-written comments fall through to the reviewer layer.
-Second, whether `PreToolUse` fires for tool calls made **inside a subagent** is unverified —
-see [Coverage](#coverage-what-each-layer-reaches).
+arbitrary shell is not tractable, so Bash-written comments fall through to the reviewer layer. A
+call made **inside a subagent** is not a second gap: see
+[Coverage](#coverage-what-each-layer-reaches) for the measured reach into subagent sessions.
 
 **Reviewer layer — `post.tmpl`, path-independent, primary.** `validate_completion`'s reviewer
 already receives the full diff, whichever agent submitted it. It gains a rule to emit a finding
@@ -294,20 +294,34 @@ can see, it detects rather than prevents.
 **The reviewer layer covers every path**, because the diff reaches the reviewer regardless of who
 later closes the task.
 
-**Measured: `PreToolUse` does fire for tool calls issued inside a subagent.** A `PreToolUse`
-matcher on `Write` was registered in `.claude/settings.local.json`, appending each intercepted
-call's JSON payload to a log file. From the main session, a `Write` to `control.txt` produced one
+**Measured: `PreToolUse` fires for both `Write` and `Edit` calls issued inside a subagent.** Two
+probes were run, each dispatching one `general-purpose` subagent via the Agent tool and appending
+intercepted calls' JSON payloads to a log file.
+
+First probe — matcher `Write` only. From the main session, a `Write` to `control.txt` produced one
 log entry; `grep -c "control.txt" /tmp/claude-hooks/subagent-probe.log` returned `1`, confirming
-the hook took effect mid-session with no restart. A `general-purpose` subagent was then dispatched
-and used its own `Write` tool call to create `subagent.txt`; `grep -c "subagent.txt"
-/tmp/claude-hooks/subagent-probe.log` also returned `1`, and that log entry carried `agent_id` and
-`agent_type` fields absent from the control entry, confirming it was captured from inside the
+the hook took effect mid-session with no restart. The dispatched subagent's own `Write` call,
+creating `subagent.txt`, also produced one entry; `grep -c "subagent.txt"
+/tmp/claude-hooks/subagent-probe.log` returned `1`, and that entry carried `agent_id` and
+`agent_type` fields absent from the control entry, confirming it was captured inside the
 subagent's own session rather than the controller's.
 
-So the prevention layer closes the SDD gap completely: a subagent's `Edit`/`Write` calls are
-intercepted by the same hook the controller session uses, regardless of transcript visibility or
-evidence shape. It is the primary comment gate for controller- and subagent-issued writes alike,
-not a supplement to the reviewer layer.
+Second probe — matcher `Edit|Write`, logging to a file shared with a concurrently running task, so
+entries were attributed by `agent_id` rather than by count. The dispatched subagent created a
+scratch file with `Write`, then changed it with `Edit`; both calls appear in the log tagged with
+that subagent's `agent_id`, showing `Edit` is intercepted inside a subagent's session on the same
+footing as `Write`.
+
+Both probes exercised one harness and one subagent type (`general-purpose`); no other dispatch
+path or agent type was tried, and the result should not be generalised past `Edit` and `Write`.
+
+So, for the two tool calls this layer matches, it closes the SDD gap: a subagent's `Edit` and
+`Write` calls are intercepted, and blocked before the write lands, by the same hook the controller
+session uses — regardless of transcript visibility or evidence shape. It reaches every path those
+two tools take. The reviewer layer stays the broader-judgment layer: it alone weighs a comment's
+substance rather than match a pattern, so it remains the backstop for the one gap prevention does
+not close (`Bash` writes) and for anything a pattern cannot catch on the paths prevention does
+reach.
 
 ### Bookkeeping a third block condition drags in
 
