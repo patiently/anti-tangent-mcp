@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "anti-tangent-mcp",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Anti-tangent MCP server companions: the anti-tangent-protocol on-demand protocol plugin, the bm-scribe Basic Memory note-writing plugin, and I/O-delegation hooks (anti-tangent-shunt for bulk reads, anti-tangent-guard for completion enforcement).",
   "owner": {
     "name": "Patrick Gilmore",
@@ -34,7 +34,7 @@
     },
     {
       "name": "anti-tangent-guard",
-      "description": "Enforces anti-tangent-mcp's validate_completion gate at task close via a PostToolUse hook. Detects when a task is marked completed without running validate_completion and returns a blocking instruction to reopen, validate, and re-close.",
+      "description": "Two hooks enforcing anti-tangent-mcp's conventions. A PostToolUse hook on TaskUpdate mandates the validate_completion gate at task close and, when the submitted diff adds comments carrying change history, returns a blocking instruction to reopen and fix. It detects rather than prevents: PostToolUse fires after the state change, so it cannot stop the close itself. A PreToolUse hook on Edit/Write refuses such a comment before it is written. Kill switches: ANTI_TANGENT_COMPLETION_GUARD=0, ANTI_TANGENT_COMMENT_GUARD=0.",
       "version": "0.2.0",
       "source": "./plugin/anti-tangent-guard",
       "category": "productivity",

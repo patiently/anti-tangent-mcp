@@ -1,7 +1,9 @@
 # anti-tangent-guard
 
-A single `PostToolUse` hook that enforces anti-tangent-mcp's `validate_completion`
-gate at task close.
+Two hooks enforcing anti-tangent-mcp's conventions: a `PostToolUse` hook that
+mandates the `validate_completion` gate at task close and detects when submitted
+diffs add comments carrying change history, and a `PreToolUse` hook that prevents
+such comments from being written in the first place.
 
 ## Active on install
 
@@ -28,7 +30,7 @@ Is Not"). Enforcement, where a project wants it, lives here instead.
 The hook watches for a `TaskUpdate` whose `tool_input.status` is `completed`.
 Every other tool call, and every other status, is a silent no-op (exit 0).
 
-## The two block conditions
+## The three block conditions
 
 For a matching close, the hook scans the transcript window for this task (see
 "Window scoping" below) for two possible pass signals: a direct
@@ -36,7 +38,7 @@ For a matching close, the hook scans the transcript window for this task (see
 envelope` / `session_id:` summary block, **tagged `tool: validate_completion`**,
 pasted into a `tool_result` (this is how a subagent's report of running the
 gate becomes visible from the controller's own transcript). It blocks
-(`exit 2`) in exactly two cases:
+(`exit 2`) in exactly three cases:
 
 1. **Neither signal is present.** Nothing in the window shows the completion
    gate ran at all.
@@ -48,10 +50,17 @@ gate becomes visible from the controller's own transcript). It blocks
    surviving only as escapes inside one JSON string, so the hook parses that
    JSON directly for `verdict` rather than pattern-matching the escaped
    text.
+3. **The submitted diff contains added comment lines carrying change history.**
+   A scan of added lines in the diff detects comments matching a pattern set
+   (patterns stored in `comment_scan.py`), the same patterns the write-time
+   hook applies to `Edit` and `Write` calls. This scan detects rather than
+   prevents, catching comments that reached disk through `Bash` or other
+   pathways the write-time hook cannot intercept.
 
-Both messages state the same recovery flow explicitly: reopen the task with
+The first two messages state the same recovery flow explicitly: reopen the task with
 `status=in_progress`, address whatever the gate is asking for, run
 `mcp__anti-tangent__validate_completion` (again), and only then re-close.
+The third message names the pattern set and instructs the same recovery.
 
 ### Why the summary block must be tagged `tool: validate_completion`
 
@@ -192,6 +201,33 @@ already-abandoned attempt cannot satisfy the gate for this one. If no
 `in_progress` entry exists for the task, it falls back to the whole
 transcript.
 
+## Write-time comment guard (PreToolUse hook)
+
+A `PreToolUse` hook on `Edit` and `Write` tool calls scans added lines in the
+diff-to-be-written for comments matching the same pattern set used by the
+close-time scan. It refuses the write (exit 2) if a pattern matches on an
+added line in a file type the scanner recognizes (determined by extension,
+using the same allowlist `comment_scan.py` maintains). The refusal message
+directs the model to remove the flagged comment and resubmit the edit.
+
+This hook fires inside dispatched subagents as well as the main agent, since
+`PreToolUse` fires for all `Edit`/`Write` calls regardless of origin.
+
+**Limitations:**
+- `Bash` writes (heredocs, sed -i, and similar) bypass the `Edit`/`Write`
+  matcher entirely — comments written through `Bash` are caught, if at all,
+  only by the close-time scan.
+- The scanner reads full-line comments only. Multi-line comments, including
+  those that span across lines, are not detected.
+- The scanner implements a small pattern set capturing common change-history
+  markers. The reviewer layer at completion time covers prose narration the
+  patterns cannot catch — an engineer writing a sentence like "I rewrote this
+  for clarity" in a comment passes the scanner but may be flagged by the
+  reviewer.
+
+Set `ANTI_TANGENT_COMMENT_GUARD=0` to skip this write-time scan while leaving
+the close-time completion gate and close-time comment scan intact.
+
 ## Comment-hygiene scan at close
 
 Beyond the two block conditions above, a close that is otherwise going to
@@ -230,11 +266,14 @@ payload) and `python3` (to walk the transcript, since the signals it looks
 for are nested inside `tool_result` content that `jq` alone parses more
 awkwardly than a few lines of Python). Both must be on `PATH`.
 
-## Kill switch
+## Kill switches
 
-Set `ANTI_TANGENT_COMPLETION_GUARD=0` to short-circuit the hook to `exit 0`
-unconditionally, before it reads stdin or does any work. The comment-hygiene
-scan has its own, separate switch — see above.
+- `ANTI_TANGENT_COMPLETION_GUARD=0` short-circuits the `PostToolUse` hook to
+  `exit 0` unconditionally, before it reads stdin or does any work. This
+  disables both the completion-gate check and the close-time comment-hygiene
+  scan.
+- `ANTI_TANGENT_COMMENT_GUARD=0` disables the comment-hygiene scan (both
+  write-time and close-time) while leaving the completion-gate check active.
 
 ## Fail-open policy
 
