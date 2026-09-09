@@ -388,7 +388,7 @@ land — is swallowed and never changes the hook's own exit status.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (84 cases) against both hooks and exits non-zero on
+Runs the full eval suite (87 cases) against both hooks and exits non-zero on
 any mismatch — check-task-complete's three block conditions (the third being
 its own close-time comment-hygiene scan), plus check-comment-write's
 write-time comment-hygiene guard. See `evals/run.sh`'s header comment for the
@@ -401,3 +401,21 @@ mirror of its regexes. Case 22 pairs a validate_completion tool_use with its
 tool_result exactly as the server's `envelopeResult` marshals it, so the
 direct-call verdict read (see "The three block conditions" above) is
 exercised end-to-end too.
+
+### The false-positive gate
+
+```bash
+bash evals/fp-report.sh
+```
+
+Separate from the case suite, and answering a different question: not "does
+each pinned shape still behave", but "does the scanner, as shipped, misread any
+comment in this repository's own source". `fp-scan.py` runs it over every
+tracked source file's HEAD blob with every comment line offered as an added
+line — the worst case the write-time hook can see. `fp-class.tsv` records what
+each hit is, judged by hand. `fp-report.sh` joins the two strictly in both
+directions and fails on an unclassified hit, a classification with no hit, a
+duplicate key, or a key whose comment text has drifted, so a stale table cannot
+report a clean zero. Widening a tell is the change this gate exists to catch:
+regenerate with `python3 -B evals/fp-scan.py`, then reconcile `fp-class.tsv` by
+hand — every new key needs a human judgement.
