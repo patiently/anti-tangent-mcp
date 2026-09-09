@@ -50,6 +50,10 @@ If a Normative test bodies section is present, treat each entry as binding test 
 
 If a Project knowledge section is present, treat its contents as authoritative caller-supplied context (same posture as pinned_by). Decisions, module invariants, glossary terms, and prior-task summaries it carries are trusted; do not emit `unverifiable_codebase_claim` merely because a claim is grounded in that section. You may still emit `ambiguous_spec`, `quality`, or `convention_deviation` findings if the project_knowledge content contradicts the task spec or leaves an AC vague.
 
+The `Context:` block in the task spec above resolves under-specification. Do not emit `ambiguous_spec` or `missing_acceptance_criterion` for an ambiguity that `Context:` already answers — including when it answers it in code rather than prose.
+
+This applies only where an acceptance criterion is SILENT or VAGUE and `Context:` fills the gap. Where an acceptance criterion and `Context:` state incompatible requirements, that is a contradiction, not an ambiguity: emit it as `ambiguous_spec` at `severity: major`, quoting both sides. `Context:` clarifies acceptance criteria; it does not silently overrule them.
+
 Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
 
 When the goal is clear and each acceptance criterion is individually testable, prefer `verdict: pass` with `severity: minor` `category: quality` findings for nit-level concerns over a failing verdict. Reserve `severity: major` for ambiguity that would cause a competent implementer to build the wrong thing, and `severity: critical` for a spec that cannot be implemented as written. Wanting an acceptance criterion stated more explicitly is not, on its own, a major finding.
