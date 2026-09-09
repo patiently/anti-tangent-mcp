@@ -217,6 +217,9 @@ This hook fires inside dispatched subagents as well as the main agent, since
 - `Bash` writes (heredocs, sed -i, and similar) bypass the `Edit`/`Write`
   matcher entirely — comments written through `Bash` are caught, if at all,
   only by the close-time scan.
+- `PostToolUse` detects rather than prevents: the close-time scan fires
+  **after** the state change to `completed`, so a comment reaching disk
+  through `Bash` blocks further progress only at close time, not at write time.
 - The scanner reads full-line comments only. Multi-line comments, including
   those that span across lines, are not detected.
 - The scanner implements a small pattern set capturing common change-history
@@ -225,17 +228,18 @@ This hook fires inside dispatched subagents as well as the main agent, since
   for clarity" in a comment passes the scanner but may be flagged by the
   reviewer.
 
-Set `ANTI_TANGENT_COMMENT_GUARD=0` to skip this write-time scan while leaving
-the close-time completion gate and close-time comment scan intact.
+Set `ANTI_TANGENT_COMMENT_GUARD=0` to disable the comment-hygiene scan at both
+write time (PreToolUse on `Edit`/`Write`) and close time (part of the
+PostToolUse scan), while leaving the completion-gate check active.
 
 ## Comment-hygiene scan at close
 
-Beyond the two block conditions above, a close that is otherwise going to
+Beyond the first two block conditions above, a close that is otherwise going to
 pass gets one more check: the LAST `validate_completion` call in the task
 window is scanned for added comment lines carrying change history — the
-same rule `check-comment-write`'s `PreToolUse` hook applies to an
-`Edit`/`Write`, run again here as defence in depth for a comment that
-reached disk without going through either, most commonly a `Bash` heredoc.
+same rule the write-time `PreToolUse` hook applies to an `Edit`/`Write`, run
+again here as defence in depth for a comment that reached disk without going
+through either, most commonly a `Bash` heredoc.
 Only the last call in the window is scanned, so a re-validation after
 rewriting a flagged comment closes cleanly on its own updated diff.
 
