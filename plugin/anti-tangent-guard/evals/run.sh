@@ -79,12 +79,36 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # parenthetical remark, not alone in its own parenthesis, still does not
 # block, for a subtotal of 68. One more case pins that a written trace line
 # carries the session identifier column that keeps a shared trace log
-# attributable when more than one session appends to it, for an exact total.
-# Both checks below must hold or
+# attributable when more than one session appends to it, for a subtotal of
+# 69. A fourth pass on the #\d+ tell found the "the"-bridge from round three
+# had been applied to all eight connector nouns when only "issue" needed it:
+# "the item #4 dialog", "the ticket #4 printer jam", "the bug #7 spray
+# pattern" are ordinary English no regex can separate from a genuine tracker
+# reference by shape alone. Rather than narrow the bridge a third time, it
+# was restricted to issue/pr only; the other six connector words keep their
+# BARE form (straight after a strong verb, no "the") and lose only the "the"
+# form. A companion case closes the same hole for "reference[sd]?"
+# specifically, which is also a standalone trigger (for "References #N"):
+# "the reference #2 style" no longer blocks via a negative lookbehind that
+# refuses it as a trigger when directly preceded by "the ", without touching
+# a bare "References #N" at the start of a clause. The bare-parenthesis
+# version rule added the round before was found to have the same flaw one
+# direction over: "backward compatible with (vX.Y.Z)", "accepts (vX.Y.Z) or
+# later payloads", "still reads the older (vX.Y.Z) shape", "matches the wire
+# shape used by the daemon (vX.Y.Z)" are wire-compatibility sentences that
+# happen to parenthesize their version, indistinguishable by shape from the
+# genuine-history shape the rule targeted — so it was REMOVED rather than
+# narrowed again, deliberately giving up the recall it had recovered; that
+# shape is now reviewer-led, not regex-led, same as any version reference
+# with no governing verb and no other regex-extractable signal. Case 67 is
+# flipped in place (from blocking to not blocking) to match, rather than
+# deleted, since it still documents the shape it once covered. Four cases
+# pin the newly-clean #\d+ shapes, four more pin the newly-clean version
+# shapes, for an exact total. Both checks below must hold or
 # the count assertion is vacuous: the JSON file must declare
 # EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=69
+EXPECTED_CASE_COUNT=77
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Every hook invocation below runs with this as its cwd, run-scoped (inside

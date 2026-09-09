@@ -268,10 +268,10 @@ because of the comma; `task-<n>` and `#<digits>` already catch that line.
 source file at HEAD (`git show HEAD:<path>` per file, every comment line treated as added); every
 hit was hand-classified TRUE (genuine change history) or FALSE (legitimate comment) via a
 one-to-one `path:line` join between the raw scan and a separate classification file. Final result
-(after the three fix rounds below): 36 hits, 36 true positives, **0 false positives** — broken
-down by tell as `task-\d+` 16, version 15, `#\d+`/PR 5.
+(after the four fix rounds below): 27 hits, 27 true positives, **0 false positives** — broken down
+by tell as `task-\d+` 16, `#\d+`/PR 5, version 6.
 
-Getting there took three rounds. The first narrowed all three tells, not just the two `#\d+` /
+Getting there took four rounds. The first narrowed all three tells, not just the two `#\d+` /
 `task-\d+` ones found first:
 
 - `task-\d+` gained a lookbehind refusing a match preceded by a word character, `/` or `-` (so
@@ -369,9 +369,50 @@ entirely and were deliberately left alone rather than contorted around: `// see 
 full list of allowed extensions` and `// ref #1 in the appendix for background` both still block,
 same as they did before any of these three rounds started.
 
-All three rounds' evals are pinned in `guard-evals.json` (cases 46-68). The `"AC #1"`-in-test-fixture
-false-positive family anticipated at the start of this work was not observed in this repo's
-committed comments in any round.
+The third round's own review found the same recurrence a third time, on both of that round's own
+additions, and changed strategy in response: **drop, not narrow.**
+
+- The `the`-bridge from round three had been extended to all eight connector nouns when only
+  `issue` was cited in the case that motivated it. `close the item #4 dialog`, `resolve the ticket
+  #4 printer jam`, `see the reference #2 style`, `see the bug #7 spray pattern` all blocked, and
+  all four are ordinary English — `the <noun> #N` reads as `the Nth <noun>` with `item`, `ticket`,
+  `number`, `no.`, `reference` and `bug` exactly as readily as with the ambiguous cases round one
+  already established for the bare form. The bridge is now restricted to `issue` and `pr` only —
+  the two tracker-specific words with no competing ordinary-noun reading in this position — and the
+  other six connectors lose the `the`-prefixed form entirely; their **bare** form (directly after a
+  strong verb, no `the`: `fixes issue #58`, `closes bug #12`) is unaffected, exactly as it was
+  before round two ever added a bridge. `reference[sd]?` needed a second fix beyond the bridge
+  restriction: it is also a *standalone* trigger (for `References #58`), so `the reference #2
+  style` still matched via a fresh attempt starting at `reference` itself, independent of whatever
+  the bridge allows after `see`. A negative lookbehind — `reference[sd]?` refused as a trigger when
+  directly preceded by `the ` — closes that without touching a bare `References #N` at the start of
+  a clause.
+- The bare-parenthesis version rule added in round three (`\(v\d+\.\d+\.\d+\)`) had the identical
+  flaw one level up: shape alone cannot tell `// Categories emitted by prime_project_knowledge
+  (v0.6.0).` (genuine history, the case that motivated the rule) from `// backward compatible with
+  (v0.10.0)`, `// accepts (v0.15.0) or later payloads from the client`, `// still reads the older
+  (v0.10.0) shape for compatibility`, or `// matches the wire shape used by the daemon (v0.21.1)`
+  (wire-compatibility statements — precisely the category the version tell exists to exempt — that
+  happen to parenthesize their version too). Both shapes are exactly `(vX.Y.Z)` with nothing else
+  inside the parens; no enumerable word or lookaround distinguishes them, because the ambiguity is
+  in what the surrounding *sentence* means, not in what sits next to the version. Rather than narrow
+  the shape a third time, the rule was **removed**. Version recall returns to the round-two number
+  (6 hits at HEAD) and that gap is now a deliberate, permanent decision: a version reference with
+  neither a governing verb nor an extractable regex signal is reviewer-led, not regex-led, full
+  stop — not "not yet precise enough."
+
+The asymmetry driving this round's decisions, stated once rather than per-case: a false positive
+here **blocks an edit mid-task**; a false negative is still caught by `post.tmpl`'s semantic
+comment-hygiene rule, which names a version or issue reference as a defect on its own judgement,
+regardless of verb or connector shape. Three rounds of narrow-then-discover on both tells is the
+evidence that these specific remaining shapes need judgement a regex cannot supply — so the regex
+stopped guessing rather than narrowing a fourth time.
+
+All four rounds' evals are pinned in `guard-evals.json` (cases 46-77; case 67 is flipped in place
+from blocking to not-blocking to match the rule it once pinned being removed, rather than deleted,
+so its id keeps documenting the shape). The `"AC #1"`-in-test-fixture false-positive family
+anticipated at the start of this work was not observed in this repo's committed comments in any
+round.
 
 Kill switch `ANTI_TANGENT_COMMENT_GUARD=0`, matching the existing `ANTI_TANGENT_COMPLETION_GUARD`.
 It disables the **hook only** — `internal/config` reads no such variable, so the reviewer half is

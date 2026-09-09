@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (69 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (77 cases)",
   "evals": [
     {
       "id": 1,
@@ -1009,14 +1009,11 @@
     },
     {
       "id": 67,
-      "name": "comment-write-version-ref-parenthetical-tag-blocks",
+      "name": "comment-write-version-ref-parenthetical-tag-does-not-block",
       "hook": "check-comment-write",
       "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// Categories emitted by prime_project_knowledge (v0.6.0).\\npackage x\\n\"}}",
-      "expected_exit": 2,
-      "expected_stderr_contains": [
-        "a version reference"
-      ],
-      "reason": "a bare parenthetical version tag naming when something shipped, with no governing change verb anywhere in the sentence, is genuine change-history narration common throughout this project's own comments (internal/verdict/verdict.go:81 at HEAD) and must block; the verb-governs-only mechanism from the prior fix round missed this entire shape (39 of the 40 hits the second fix round lost were exactly this)"
+      "expected_exit": 0,
+      "reason": "REVERSED from the prior round: the bare-parenthesis version rule this case pinned as blocking was removed (round-3 Finding 2) because shape alone cannot distinguish 'Categories emitted by prime_project_knowledge (v0.6.0).' from a wire-compatibility sentence that happens to parenthesize its version too (cases 74-77); this shape is now reviewer-led, not regex-led, and must not block"
     },
     {
       "id": 68,
@@ -1044,6 +1041,70 @@
         ]
       },
       "reason": "the trace line written for this block must carry the session identifier column, not just the block reason, so a shared log stays attributable across concurrent sessions"
+    },
+    {
+      "id": 70,
+      "name": "comment-write-issue-ref-the-item-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// close the item #4 dialog when the user clicks away\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'the item #4' reads as ordinary English (the 4th item), no different from 'the ticket #4' or 'the #1 rule'; the 'the'-bridge is restricted to issue/pr only, so 'item' no longer bridges from 'the'"
+    },
+    {
+      "id": 71,
+      "name": "comment-write-issue-ref-the-ticket-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// resolve the ticket #4 printer jam at the front desk\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'the ticket #4 printer jam' is ordinary English identifying which printer by number, not a tracker reference; 'ticket' no longer bridges from 'the', only its bare form after a strong verb still does"
+    },
+    {
+      "id": 72,
+      "name": "comment-write-issue-ref-the-reference-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see the reference #2 style used throughout this file\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'the reference #2 style' reads as 'the second reference [example]', not a tracker link; a negative lookbehind now refuses 'reference[sd]?' as a standalone trigger when directly preceded by 'the ', closing the gap that survives merely narrowing the bridge (reference is also a standalone trigger, not only a bridge connector)"
+    },
+    {
+      "id": 73,
+      "name": "comment-write-issue-ref-the-bug-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see the bug #7 spray pattern on the windshield\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'the bug #7 spray pattern' is an entomology comment, not a tracker reference; 'bug' no longer bridges from 'the', matching case 58's bare-form rationale"
+    },
+    {
+      "id": 74,
+      "name": "comment-write-version-ref-paren-wire-compat-backward-compatible-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// backward compatible with (v0.10.0)\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a wire-compatibility statement with its version in parentheses; shape alone (open-paren, version, close-paren) cannot distinguish this from case 67's now-removed genuine-history shape, so the bare-parenthesis rule was dropped rather than narrowed again"
+    },
+    {
+      "id": 75,
+      "name": "comment-write-version-ref-paren-wire-compat-accepts-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// accepts (v0.15.0) or later payloads from the client\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "same wire-compatibility-in-parens shape as case 74, with 'accepts ... or later' instead of 'backward compatible with'"
+    },
+    {
+      "id": 76,
+      "name": "comment-write-version-ref-paren-wire-compat-reads-older-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// still reads the older (v0.10.0) shape for compatibility\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "same wire-compatibility-in-parens shape as cases 74-75, phrased as 'still reads the older ... shape for compatibility'"
+    },
+    {
+      "id": 77,
+      "name": "comment-write-version-ref-paren-wire-compat-daemon-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// matches the wire shape used by the daemon (v0.21.1)\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "same wire-compatibility-in-parens shape as cases 74-76, naming a specific external daemon's wire version rather than this project's own"
     }
   ]
 }

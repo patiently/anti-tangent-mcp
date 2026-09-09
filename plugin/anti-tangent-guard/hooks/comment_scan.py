@@ -40,20 +40,28 @@ TELLS = (
     # the trigger to GOVERN the digits, separated from them by nothing but:
     # optional whitespace, an optional colon (GitHub's own "Fixes: #N"
     # closing syntax), and then EITHER "also" alone (a citation-style "see
-    # also #N" has no ordinary-prose reading) OR an optional "the" followed by
-    # a REQUIRED connector noun ("the issue #N", "issue #N" — but never a bare
-    # "the #N", which is exactly the ordinary-English shape above; "the" can
-    # only bridge to a connector noun, never straight to the digits). Two of
-    # the connectors — issue, bug — carry ordinary-English senses
-    # "fix"/"close"/"resolve"/"ref"/"pr"/"reference" do not, so they are
-    # accepted only as the connector after one of those verbs, never as a
-    # trigger on their own; a bare "issue #1" or "bug ... #1" with no
-    # governing verb still does not match, trading recall for precision on
-    # exactly the ambiguous case a regex cannot otherwise resolve.
+    # also #N" has no ordinary-prose reading) OR a REQUIRED connector noun,
+    # optionally preceded by "the". The "the"-bridge is deliberately narrow —
+    # only "issue" and "pr" — not the full connector set: "the item #4
+    # dialog", "the ticket #4 printer jam", "the bug #7 spray pattern" are all
+    # ordinary English with "the <noun> #N" read as "the Nth <noun>", and no
+    # regex can tell those from a genuine "the issue #N" / "the PR #N"
+    # tracker reference by surface form alone — so a two-round narrow-and-
+    # discover cycle on that exact shape was replaced with dropping the
+    # bridge for those nouns rather than narrowing it again. Their BARE form
+    # (no "the", directly after a strong verb — "fixes issue #N", "closes bug
+    # #N") is unaffected and still matches, same as before this bridge
+    # existed. "reference"/"references" is also a standalone trigger (for
+    # GitHub's own "References #N" syntax) with the same ordinary-English
+    # collision: "the reference #2 style" reads as "the second reference",
+    # not a tracker link. `(?<!the )` refuses "reference[sd]?" as a trigger
+    # when directly preceded by "the " — "References #N" at the start of a
+    # clause is unaffected, only the "the reference #N" shape is excluded.
     (re.compile(
         r"\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?|see|ref(?:s)?|pr|"
-        r"pull\s*request|reference[sd]?)\b\s*(?::\s*)?"
-        r"(?:also\s*|(?:the\s+)?(?:issue|bug|ticket|pr|item|number|no\.?|reference[sd]?)\s*)?"
+        r"pull\s*request|(?<!the )reference[sd]?)\b\s*(?::\s*)?"
+        r"(?:also\s*|(?:the\s+(?:issue|pr)|issue|bug|ticket|pr|item|number|"
+        r"no\.?|reference[sd]?)\s*)?"
         r"#\d+\b",
         re.I,
     ), "an issue or pull-request reference"),
@@ -70,21 +78,26 @@ TELLS = (
     # "vX.Y.Z removes ...") — this fails safe: a wire-compatibility sentence
     # like "reads the vX.Y.Z output" or "accepts vX.Y.Z+" has no change verb
     # anywhere near the version and so never matches, without needing to name
-    # the nouns ("output", "server", "shape") that happen to appear in it. A
-    # third, verb-free shape is common in this project's own history too: a
-    # bare parenthetical version tag naming when something shipped ("Task 4
-    # (vX.Y.Z)", "Categories emitted by prime_project_knowledge (vX.Y.Z)."),
-    # with no governing verb anywhere in the sentence. `\(v\d+\.\d+\.\d+\)`
-    # catches exactly that shape — the open paren immediately before the
-    # version and the close paren immediately after, nothing else inside —
-    # without reopening the wire-compat exemptions above: none of those put
-    # the version alone inside its own parenthesis (v0.11.0+'s "+" sits
-    # before the enclosing paren closes, and the other two have no
-    # parenthesis around the version at all). A version reference with
-    # NEITHER a governing verb NOR this exact parenthetical shape (a plain
-    # "--- v0.6.0 project-knowledge env vars ---" section header, for
-    # example) is not caught by this tell; that gap is deliberate — see the
-    # design spec's Part 3 for the recorded, reviewer-led fallback.
+    # the nouns ("output", "server", "shape") that happen to appear in it.
+    #
+    # A bare-parenthesis rule — "the version alone inside its own
+    # parenthesis, nothing else" — was tried as a third branch to catch a
+    # verb-free shape common in this project's own history ("Categories
+    # emitted by prime_project_knowledge (vX.Y.Z)."). It was REMOVED: a
+    # wire-compatibility sentence can put its version in parentheses too
+    # ("backward compatible with (vX.Y.Z)", "accepts (vX.Y.Z) or later
+    # payloads", "matches the wire shape used by the daemon (vX.Y.Z)") and
+    # shape alone cannot tell those from the genuine history shape the rule
+    # was added for — both are exactly "(vX.Y.Z)" with nothing else inside
+    # the parens. Unlike the tells above, no enumerable word closes this gap:
+    # the ambiguity is in what the surrounding SENTENCE means, not in what
+    # sits next to the version. A false positive here blocks a write
+    # mid-edit; a false negative is still caught by post.tmpl's semantic
+    # comment-hygiene rule, which names a version reference as a defect on
+    # its own judgement, verb or no verb. So this class — a version with
+    # neither a governing verb nor extractable regex signal — is left
+    # deliberately, permanently reviewer-led rather than regex-led. See the
+    # design spec's Part 3 for the measured recall this costs.
     (re.compile(
         r"\b(?:add(?:s|ed)?|remov(?:es|ed)?|bump(?:s|ed)?|deprecat(?:es|ed)?|"
         r"releas(?:es|ed)?|ship(?:s|ped)?|chang(?:es|ed)?|fix(?:es|ed)?|"
@@ -92,9 +105,7 @@ TELLS = (
         r"|"
         r"\bv\d+\.\d+\.\d+\b\s*(?:add(?:s|ed)?|remov(?:es|ed)?|bump(?:s|ed)?|"
         r"deprecat(?:es|ed)?|releas(?:es|ed)?|ship(?:s|ped)?|chang(?:es|ed)?|"
-        r"fix(?:es|ed)?|introduc(?:es|ed)?)\b"
-        r"|"
-        r"\(v\d+\.\d+\.\d+\)",
+        r"fix(?:es|ed)?|introduc(?:es|ed)?)\b",
         re.I,
     ), "a version reference"),
 )
