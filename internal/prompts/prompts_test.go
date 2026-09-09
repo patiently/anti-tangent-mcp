@@ -973,6 +973,8 @@ func TestRenderPre_ContextApprovedDeviationIsNotAContradiction(t *testing.T) {
 	assert.Contains(t, out.User, "explicitly anticipates or approves the deviation from the AC's literal wording")
 	assert.Contains(t, out.User, "the spec is coherent, not defective")
 	assert.Contains(t, out.User, "Emit no finding for that")
+	assert.Contains(t, out.User, "An explicit approval is sufficient on its own")
+	assert.Contains(t, out.User, "(for example, by naming a framework constraint")
 	assert.Contains(t, out.User, "Reserve the major for the irreconcilable case")
 	assert.Contains(t, out.User, "nothing in the spec indicates which governs")
 
