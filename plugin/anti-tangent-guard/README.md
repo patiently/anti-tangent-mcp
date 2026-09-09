@@ -192,6 +192,37 @@ already-abandoned attempt cannot satisfy the gate for this one. If no
 `in_progress` entry exists for the task, it falls back to the whole
 transcript.
 
+## Comment-hygiene scan at close
+
+Beyond the two block conditions above, a close that is otherwise going to
+pass gets one more check: the LAST `validate_completion` call in the task
+window is scanned for added comment lines carrying change history — the
+same rule `check-comment-write`'s `PreToolUse` hook applies to an
+`Edit`/`Write`, run again here as defence in depth for a comment that
+reached disk without going through either, most commonly a `Bash` heredoc.
+Only the last call in the window is scanned, so a re-validation after
+rewriting a flagged comment closes cleanly on its own updated diff.
+
+The diff is read from `final_diff` inline, or from `final_diff_path` — an
+absolute path, capped at 2,000,000 bytes and failing open on any read
+error, including the path being relative or the file exceeding the cap.
+Only `+`-prefixed lines count as added; an unchanged context line does not.
+The scan reuses `comment_scan.py`'s extension allowlist directly, so a file
+type the write-time hook does not scan is not scanned here either. A
+violation blocks with its own message, textually distinct from the two
+above, and is recorded to the trace log the same way. Set
+`ANTI_TANGENT_COMMENT_GUARD=0` to skip this scan while the completion gate
+above still runs in full.
+
+**What this scan cannot see.** A completion whose evidence is `final_files`
+or `test_evidence` alone carries no diff of any kind, so there is nothing
+here to read — the close is not blocked on comment hygiene, one way or the
+other. That gap is not filled elsewhere: the reviewer's own rule for a
+change-history comment applies only when a diff is present in the same
+call, so a diff-less completion gets no comment scrutiny from the reviewer
+either. Such a close is covered by the write-time `Edit`/`Write` hook alone
+— and by nothing at all if the code reached disk through `Bash`.
+
 ## Dependencies
 
 The hook is a `bash` script that shells out to `jq` (to read the JSON stdin
@@ -202,7 +233,8 @@ awkwardly than a few lines of Python). Both must be on `PATH`.
 ## Kill switch
 
 Set `ANTI_TANGENT_COMPLETION_GUARD=0` to short-circuit the hook to `exit 0`
-unconditionally, before it reads stdin or does any work.
+unconditionally, before it reads stdin or does any work. The comment-hygiene
+scan has its own, separate switch — see above.
 
 ## Fail-open policy
 

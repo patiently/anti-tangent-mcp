@@ -89,6 +89,14 @@
 # signal still covers that case.
 set -uo pipefail
 
+# The comment-hygiene scan below reuses comment_scan.py, which lives beside
+# this script under hooks/. It has no CLAUDE_PLUGIN_ROOT of its own to read
+# (unlike check-comment-write's separate Python body), so this hook derives
+# the plugin root itself and hands it to the embedded interpreter explicitly
+# as ATG_ROOT — an import that silently never happens looks identical to "no
+# violations found", so this must not be left to inherit anything.
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
 TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
 mkdir -p "$(dirname "$TRACE_LOG")" 2>/dev/null || true
 trace() {
@@ -98,6 +106,10 @@ trace() {
 }
 
 [[ "${ANTI_TANGENT_COMPLETION_GUARD:-1}" == "0" ]] && { trace "?" "skip" "guard=0"; exit 0; }
+# Separate switch from the one above: with the comment guard off, the
+# completion gate itself (called / block_found / verdict) still runs in
+# full — only the comment-hygiene scan over the submitted diff is skipped.
+COMMENT_GUARD="${ANTI_TANGENT_COMMENT_GUARD:-1}"
 trap 'trace "?" "error" "trap-ERR"; exit 0' ERR
 command -v jq >/dev/null 2>&1      || { trace "?" "skip" "no-jq"; exit 0; }
 command -v python3 >/dev/null 2>&1 || { trace "?" "skip" "no-python3"; exit 0; }
@@ -118,7 +130,7 @@ TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null | tr 
 # call carries its own taskId, so no reconstruction from creation order is
 # needed.
 PY='
-import json, re, sys
+import json, os, re, sys
 path, task_id = sys.argv[1], str(sys.argv[2])
 try:
     lines = open(path).readlines()
@@ -128,6 +140,7 @@ except Exception:
 last_inprogress = -1
 called_idx, texts = [], []   # (idx) of direct calls; (idx, text) of tool_result chunks
 call_ids = {}                # tool_use id -> idx, for validate_completion calls only
+completion_inputs = []       # (idx, input) for every validate_completion call, in order
 
 for idx, line in enumerate(lines):
     try: entry = json.loads(line)
@@ -141,6 +154,7 @@ for idx, line in enumerate(lines):
                 name, inp = c.get("name", ""), (c.get("input") or {})
                 if name == "mcp__anti-tangent__validate_completion":
                     called_idx.append(idx)
+                    completion_inputs.append((idx, inp))
                     tuid = c.get("id")
                     if tuid:
                         call_ids[tuid] = idx
@@ -223,10 +237,58 @@ if qualifying:
     vm = VERDICT_RE.search(qualifying[-1])
     if vm: verdict = vm.group(1)
 
+# Comment-hygiene scan over the diff evidence of the LAST validate_completion
+# call in the task window -- defence in depth for a comment that carries
+# change history and reached disk without passing through Edit/Write (a Bash
+# heredoc, most commonly), so the write-time hook never saw it. Only the
+# LAST call is scanned: a re-validation after rewriting a flagged comment
+# must close on the diff it submitted, not on an earlier submission in the
+# same window.
+def diff_added_lines(inp):
+    """Return {path: [added lines]} from a validate_completion input dict."""
+    text = inp.get("final_diff") or ""
+    if not text:
+        p = inp.get("final_diff_path") or ""
+        if not p or not os.path.isabs(p):
+            return {}
+        try:
+            with open(p) as fh:
+                # Read one byte past the cap rather than trusting a prior stat:
+                # the file can grow between getsize() and read().
+                text = fh.read(2_000_001)
+            if len(text) > 2_000_000:
+                return {}
+        except Exception:
+            return {}
+    out, cur = {}, None
+    for line in text.splitlines():
+        if line.startswith("+++ b/"):
+            cur = line[6:].strip()
+            out.setdefault(cur, [])
+        elif cur and line.startswith("+") and not line.startswith("+++"):
+            out[cur].append(line[1:])
+    return out
+
+comment_violations = []
+in_window_completions = [inp for (i, inp) in completion_inputs if i >= scan_from]
+if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
+    scan_violations = None
+    try:
+        sys.path.insert(0, os.path.join(os.environ.get("ATG_ROOT", ""), "hooks"))
+        from comment_scan import violations as scan_violations
+    except Exception:
+        scan_violations = None
+    if scan_violations is not None:
+        added_by_path = diff_added_lines(in_window_completions[-1])
+        for fpath, added in added_by_path.items():
+            for line, why in scan_violations(fpath, added):
+                comment_violations.append({"path": fpath, "line": line, "why": why})
+
 print(json.dumps({"error": False, "called": called,
-                  "block_found": bool(qualifying), "verdict": verdict}))
+                  "block_found": bool(qualifying), "verdict": verdict,
+                  "comment_violations": comment_violations}))
 '
-RESULT=$({ python3 -c "$PY" "$TRANSCRIPT" "$TASK_ID" 2>/dev/null || echo '{"error":true}'; } | tr -d '\r')
+RESULT=$({ ATG_ROOT="$PLUGIN_ROOT" ATG_COMMENT_GUARD="$COMMENT_GUARD" python3 -c "$PY" "$TRANSCRIPT" "$TASK_ID" 2>/dev/null || echo '{"error":true}'; } | tr -d '\r')
 # NOTE: deliberately ".error", not ".error // true" — jq's // operator
 # substitutes on false as well as null, so ".error // true" evaluates to
 # "true" for EVERY result (false // true == true in jq), which would make
@@ -267,6 +329,33 @@ if [[ "$VERDICT" == "fail" ]]; then
 fi
 
 if [[ "$CALLED" == "true" || "$BLOCK" == "true" ]]; then
+    VIOLATIONS=$(echo "$RESULT" | jq -c '.comment_violations // []')
+    VIOLATIONS_COUNT=$(echo "$VIOLATIONS" | jq 'length')
+    if [[ "$VIOLATIONS_COUNT" -gt 0 ]]; then
+        trace "$TASK_ID" "block" "comment-hygiene"
+        {
+            echo "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
+            echo
+            echo "Task #$TASK_ID's completion gate passed, but the diff it was validated"
+            echo "against still carries added comment(s) referencing change history — a"
+            echo "Bash heredoc or similar write that never passed through Edit/Write, where"
+            echo "this project's write-time guard would have caught it."
+            echo
+            echo "$VIOLATIONS" | jq -r '.[] | "  " + .path + ": " + .line + "\n    -> contains " + .why'
+            echo
+            echo "Comments must explain non-trivial behaviour or a non-obvious invariant, and must read"
+            echo "correctly to someone who never saw this change. Issue, task and version references belong"
+            echo "in the commit message, not the code. Rewrite the comment(s), then:"
+            echo
+            echo "  1. TaskUpdate taskId=$TASK_ID status=in_progress"
+            echo "  2. Fix the flagged comment(s)"
+            echo "  3. Call mcp__anti-tangent__validate_completion again with the updated diff"
+            echo "  4. Re-close once the verdict is pass"
+            echo
+            echo "(Disable: ANTI_TANGENT_COMMENT_GUARD=0. Trace: $TRACE_LOG)"
+        } >&2
+        exit 2
+    fi
     trace "$TASK_ID" "pass" "called=$CALLED block=$BLOCK"
     exit 0
 fi

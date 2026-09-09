@@ -35,7 +35,7 @@
     {
       "name": "anti-tangent-guard",
       "description": "Enforces anti-tangent-mcp's validate_completion gate at task close via a PostToolUse hook. Detects when a task is marked completed without running validate_completion and returns a blocking instruction to reopen, validate, and re-close.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "source": "./plugin/anti-tangent-guard",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"

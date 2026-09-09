@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (33 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (44 cases)",
   "evals": [
     {
       "id": 1,
@@ -134,7 +134,7 @@
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 0,
-      "reason": "a later re-validation with verdict: pass supersedes an earlier fail \u2014 LAST block wins"
+      "reason": "a later re-validation with verdict: pass supersedes an earlier fail — LAST block wins"
     },
     {
       "id": 8,
@@ -177,7 +177,7 @@
       "name": "malformed-stdin-json-fails-open",
       "stdin_raw": "{\"tool_name\": \"TaskUpdate\", \"tool_input\": {",
       "expected_exit": 0,
-      "reason": "stdin itself is not valid JSON \u2014 the hook cannot know what it is looking at, so it fails open"
+      "reason": "stdin itself is not valid JSON — the hook cannot know what it is looking at, so it fails open"
     },
     {
       "id": 11,
@@ -196,7 +196,7 @@
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 0,
-      "reason": "one malformed JSONL line is skipped by the walker; the remaining valid lines still decide the verdict \u2014 NOT fail-open, a different behaviour from malformed stdin"
+      "reason": "one malformed JSONL line is skipped by the walker; the remaining valid lines still decide the verdict — NOT fail-open, a different behaviour from malformed stdin"
     },
     {
       "id": 12,
@@ -256,7 +256,7 @@
       "expected_stderr_contains": [
         "TASK CLOSED WITHOUT anti-tangent validate_completion"
       ],
-      "reason": "the pass signal predates the most recent in_progress \u2014 window scoping must exclude it and block"
+      "reason": "the pass signal predates the most recent in_progress — window scoping must exclude it and block"
     },
     {
       "id": 15,
@@ -429,7 +429,10 @@
       "hook": "check-comment-write",
       "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes #58\\npackage x\\n\"}}",
       "expected_exit": 2,
-      "expected_stderr_contains": ["adds comment(s) carrying change history", "an issue or pull-request reference"],
+      "expected_stderr_contains": [
+        "adds comment(s) carrying change history",
+        "an issue or pull-request reference"
+      ],
       "reason": "an added Go comment citing an issue must block"
     },
     {
@@ -468,7 +471,9 @@
       "id": 28,
       "name": "comment-write-kill-switch",
       "hook": "check-comment-write",
-      "env": { "ANTI_TANGENT_COMMENT_GUARD": "0" },
+      "env": {
+        "ANTI_TANGENT_COMMENT_GUARD": "0"
+      },
       "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes #58\\npackage x\\n\"}}",
       "expected_exit": 0,
       "reason": "kill switch disables the hook"
@@ -479,7 +484,9 @@
       "hook": "check-comment-write",
       "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"// see #12\\nfunc a() {}\",\"new_string\":\"// see #12\\nfunc a() {}\\n// see #12\\nfunc b() {}\"}}",
       "expected_exit": 2,
-      "expected_stderr_contains": ["an issue or pull-request reference"],
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
       "reason": "a set-based diff discards this newly added duplicate; the occurrence-aware one must catch it"
     },
     {
@@ -494,7 +501,9 @@
       "id": 31,
       "name": "comment-write-missing-body-fails-open",
       "hook": "check-comment-write",
-      "env": { "CLAUDE_PLUGIN_ROOT": "/nonexistent-plugin-root" },
+      "env": {
+        "CLAUDE_PLUGIN_ROOT": "/nonexistent-plugin-root"
+      },
       "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/a.go\",\"content\":\"// fixes #58\\n\"}}",
       "expected_exit": 0,
       "reason": "a missing python body must fail open, not block"
@@ -511,10 +520,246 @@
       "id": 33,
       "name": "comment-write-no-python3-fails-open",
       "hook": "check-comment-write",
-      "env": { "PATH": "/nonexistent-bin" },
+      "env": {
+        "PATH": "/nonexistent-bin"
+      },
       "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/a.go\",\"content\":\"// fixes #58\\n\"}}",
       "expected_exit": 0,
       "reason": "no python3 on PATH must fail open"
+    },
+    {
+      "id": 34,
+      "name": "close-with-history-comment-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
+      ],
+      "reason": "a passing verdict must not let a change-history comment through"
+    },
+    {
+      "id": 35,
+      "name": "close-with-clean-comment-allows",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "an invariant comment in the diff must not block a clean close"
+    },
+    {
+      "id": 36,
+      "name": "close-last-call-wins",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t2\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t2\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "the FIRST call's violating diff must not block a close whose LAST call submitted a clean diff"
+    },
+    {
+      "id": 37,
+      "name": "close-diff-path-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"{{DIFFFILE}}\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "diff_file": "+++ b/a.go\n+// fixes #58\n",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
+      ],
+      "reason": "final_diff_path is the route section 4.2 tells implementers to prefer; a violating line reached through it must block just like an inline final_diff"
+    },
+    {
+      "id": 38,
+      "name": "close-relative-diff-path-fails-open",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"relative/final.diff\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a relative final_diff_path must fail open rather than being opened relative to the hook's cwd"
+    },
+    {
+      "id": 39,
+      "name": "close-oversized-diff-path-fails-open",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"{{DIFFFILE}}\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "diff_file": "+++ b/a.go\n+// fixes #58\n",
+      "diff_file_min_bytes": 2000010,
+      "expected_exit": 0,
+      "reason": "a final_diff_path file over the 2,000,000-byte cap must fail open rather than block, even though it carries a violating line within the first bytes"
+    },
+    {
+      "id": 40,
+      "name": "close-comment-kill-switch",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "env": {
+        "ANTI_TANGENT_COMMENT_GUARD": "0"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "ANTI_TANGENT_COMMENT_GUARD=0 must skip the comment scan while the completion gate itself still runs and still passes"
+    },
+    {
+      "id": 41,
+      "name": "close-trace-records-comment-hygiene",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "comment-hygiene"
+        ]
+      },
+      "reason": "the trace() call for this block reason must actually reach the trace log, not just the block message on stderr"
+    },
+    {
+      "id": 42,
+      "name": "close-final-files-only-allows",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [\"a.go\"]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a final_files-only completion carries no diff of any kind; this layer must let it through untouched"
+    },
+    {
+      "id": 43,
+      "name": "close-excluded-extension-allows",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/README.md\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "the extension allowlist applies at close time exactly as it does at write time; .md is not scanned"
+    },
+    {
+      "id": 44,
+      "name": "close-context-line-does-not-block",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n // fixes #58\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "only +-prefixed lines are added lines; a violating comment surviving as unchanged context must not block"
     }
   ]
 }

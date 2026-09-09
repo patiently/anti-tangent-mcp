@@ -30,11 +30,18 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # final review's Important #1, which pairs a validate_completion tool_use
 # with its tool_result exactly as the server's envelopeResult marshals it)
 # has 22 rows; check-comment-write, the PreToolUse comment-hygiene guard,
-# contributes eleven more, for an exact total. Both checks below must hold or
+# contributes eleven more. check-task-complete's own comment-hygiene scan —
+# a defence-in-depth pass over the LAST validate_completion call's diff
+# evidence in the task window, covering a comment write that reached disk
+# without going through Edit/Write — contributes eleven more still: last-call
+# selection, an absolute final_diff_path, a relative path failing open, the
+# size cap failing open, the kill switch, the trace() reason, a
+# final_files-only close passing untouched, an excluded extension, and an
+# unchanged context line, for an exact total. Both checks below must hold or
 # the count assertion is vacuous: the JSON file must declare
 # EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=33
+EXPECTED_CASE_COUNT=44
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 CASE_TMPDIRS=()
@@ -112,11 +119,36 @@ run_case() {
     stdin_file="$case_dir/stdin.json"
     stderr_file="$case_dir/stderr.txt"
 
+    # {{DIFFFILE}} fixture, materialised the same way {{TRANSCRIPT}} already
+    # is: a case that declares "diff_file" gets its content written to a real
+    # file before stdin/env/transcript substitution runs, so {{DIFFFILE}} can
+    # be used anywhere the other tokens are — most usefully inside
+    # transcript_raw_lines, where a validate_completion call's
+    # final_diff_path lives. An optional "diff_file_min_bytes" pads the file
+    # with filler past its literal content, for a case that needs to trip a
+    # size cap without inlining megabytes of JSON.
+    local difffile_path=""
+    local has_diff_file
+    has_diff_file=$(jq -r ".evals[$idx] | has(\"diff_file\")" "$EVALS_FILE")
+    if [[ "$has_diff_file" == "true" ]]; then
+        difffile_path="$case_dir/diff-fixture.diff"
+        jq -r ".evals[$idx].diff_file" "$EVALS_FILE" > "$difffile_path"
+        local min_bytes cur_bytes
+        min_bytes=$(jq -r ".evals[$idx].diff_file_min_bytes // 0" "$EVALS_FILE")
+        if [[ "$min_bytes" -gt 0 ]]; then
+            cur_bytes=$(wc -c < "$difffile_path")
+            if [[ "$cur_bytes" -lt "$min_bytes" ]]; then
+                head -c "$((min_bytes - cur_bytes))" /dev/zero | tr '\0' ' ' >> "$difffile_path"
+            fi
+        fi
+    fi
+
     local stdin_raw
     stdin_raw=$(jq -r ".evals[$idx].stdin_raw // empty" "$EVALS_FILE")
 
     if [[ -n "$stdin_raw" ]]; then
         stdin_raw="${stdin_raw//\{\{TMPDIR\}\}/$case_tmp}"
+        stdin_raw="${stdin_raw//\{\{DIFFFILE\}\}/$difffile_path}"
         printf '%s' "$stdin_raw" > "$stdin_file"
     else
         local no_transcript transcript_path
@@ -131,13 +163,17 @@ run_case() {
             local line_count li
             line_count=$(jq -r ".evals[$idx].transcript_raw_lines | length" "$EVALS_FILE")
             for ((li = 0; li < line_count; li++)); do
-                jq -r ".evals[$idx].transcript_raw_lines[$li]" "$EVALS_FILE" >> "$transcript_path"
+                local raw_line
+                raw_line=$(jq -r ".evals[$idx].transcript_raw_lines[$li]" "$EVALS_FILE")
+                raw_line="${raw_line//\{\{TMPDIR\}\}/$case_tmp}"
+                raw_line="${raw_line//\{\{DIFFFILE\}\}/$difffile_path}"
+                printf '%s\n' "$raw_line" >> "$transcript_path"
             done
         fi
         local input
         input=$(jq -c --arg tp "$transcript_path" '.evals['"$idx"'].input | .transcript_path = $tp' "$EVALS_FILE")
-        input=$(jq -c --arg d "$case_tmp" \
-            'walk(if type == "string" then gsub("\\{\\{TMPDIR\\}\\}"; $d) else . end)' \
+        input=$(jq -c --arg d "$case_tmp" --arg df "$difffile_path" \
+            'walk(if type == "string" then gsub("\\{\\{TMPDIR\\}\\}"; $d) | gsub("\\{\\{DIFFFILE\\}\\}"; $df) else . end)' \
             <<<"$input")
         printf '%s' "$input" > "$stdin_file"
     fi
@@ -148,7 +184,10 @@ run_case() {
     if [[ -n "$env_json" ]]; then
         local kv
         while IFS= read -r kv; do
-            [[ -n "$kv" ]] && env_assignments+=("${kv//\{\{TMPDIR\}\}/$case_tmp}")
+            [[ -n "$kv" ]] || continue
+            kv="${kv//\{\{TMPDIR\}\}/$case_tmp}"
+            kv="${kv//\{\{DIFFFILE\}\}/$difffile_path}"
+            env_assignments+=("$kv")
         done < <(jq -r ".evals[$idx].env | to_entries[] | \"\(.key)=\(.value)\"" "$EVALS_FILE")
     fi
 
@@ -190,6 +229,42 @@ run_case() {
             fi
         done
         if [[ "$missing" == "1" ]]; then
+            FAILED=$((FAILED + 1))
+            return
+        fi
+    fi
+
+    # Optional "expected_file_contains": {path: [substrings]} — checked after
+    # the case has already passed on exit code (and stderr, if a block).
+    # Fails if the file is missing, or if any substring is absent, matched as
+    # a fixed string (grep -F). {{TMPDIR}} is substituted into the path the
+    # same way it is everywhere else a case references its scratch directory.
+    local has_files
+    has_files=$(jq -r ".evals[$idx] | has(\"expected_file_contains\")" "$EVALS_FILE")
+    if [[ "$has_files" == "true" ]]; then
+        local file_missing=0
+        local fpath
+        while IFS= read -r fpath; do
+            [[ -n "$fpath" ]] || continue
+            local resolved_path
+            resolved_path="${fpath//\{\{TMPDIR\}\}/$case_tmp}"
+            if [[ ! -f "$resolved_path" ]]; then
+                printf '  \033[31mFAIL\033[0m  [%s] %-45s expected file missing: %s\n' "$id" "$name" "$resolved_path"
+                file_missing=1
+                continue
+            fi
+            local needle_count ni
+            needle_count=$(jq -r --arg k "$fpath" '.evals['"$idx"'].expected_file_contains[$k] | length' "$EVALS_FILE")
+            for ((ni = 0; ni < needle_count; ni++)); do
+                local file_needle
+                file_needle=$(jq -r --arg k "$fpath" '.evals['"$idx"'].expected_file_contains[$k]['"$ni"']' "$EVALS_FILE")
+                if ! grep -qF -- "$file_needle" "$resolved_path"; then
+                    printf '  \033[31mFAIL\033[0m  [%s] %-45s %s missing substring: %s\n' "$id" "$name" "$resolved_path" "$file_needle"
+                    file_missing=1
+                fi
+            done
+        done < <(jq -r ".evals[$idx].expected_file_contains | keys[]" "$EVALS_FILE")
+        if [[ "$file_missing" == "1" ]]; then
             FAILED=$((FAILED + 1))
             return
         fi
