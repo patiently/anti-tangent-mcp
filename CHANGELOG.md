@@ -63,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requires one in every change. `Write` over an existing file is diffed against what is on disk,
   so rewriting a file does not demand cleanup of every comment already in it.
 
+### Fixed
+- **The guard's trace log now says which session wrote each line, and stops growing forever.**
+  Every hook wrote to one shared `/tmp` path with no identity in the line, so on a machine running
+  more than one Claude session the log could not answer the only question it exists to answer —
+  which hook fired, for whom. Lines now carry a short session id (`-` where the payload has not
+  been read yet), and the file rotates to a single `.1` sibling past
+  `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES`. Both are best-effort: a trace failure never changes a
+  hook's exit status. `ANTI_TANGENT_GUARD_TRACE_LOG` still repoints the path for anyone wanting
+  per-session isolation.
+
 ### Added
 - **`criterion_counts` on stats events.** `stats.Event` recorded `category_counts` but nothing
   finer, so a `quality` finding about a comment was indistinguishable from any other `quality`

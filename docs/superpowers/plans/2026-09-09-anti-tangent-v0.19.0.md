@@ -1553,6 +1553,98 @@ reading the output — otherwise the `git commit` at the end runs regardless.
 
 ---
 
+### Task 11: Session identity and a size cap on the guard trace log
+
+**Goal:** Make `anti-tangent-guard`'s trace log usable as a diagnostic when more than one Claude session is running, and stop it growing without bound.
+
+**Files:**
+- Modify: `plugin/anti-tangent-guard/hooks/check-task-complete`
+- Modify: `plugin/anti-tangent-guard/hooks/check-comment-write`
+- Modify: `plugin/anti-tangent-guard/evals/guard-evals.json`
+- Modify: `plugin/anti-tangent-guard/README.md`
+
+**Acceptance Criteria:**
+- [ ] Every `trace()` line carries a short session identifier, and lines written before the payload is read carry an explicit unknown marker rather than an empty field
+- [ ] The log is capped: past a byte limit it rotates to a single `.1` sibling rather than growing forever
+- [ ] Rotation and identity are best-effort — every failure path leaves the hook's exit status untouched, because a trace failure must never block a tool call or a task close
+- [ ] `ANTI_TANGENT_GUARD_TRACE_LOG` still overrides the path, and `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES` overrides the cap
+- [ ] An eval asserts a written trace line contains the session identifier, using the `expected_file_contains` mechanism
+- [ ] `EXPECTED_CASE_COUNT` and the fixture `description` string agree with the real case count
+- [ ] The README documents both env vars and states that the log is shared across sessions by design
+
+**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all cases pass
+
+**Steps:**
+
+- [ ] **Step 1: Give `trace()` an identity**
+
+Both hooks read the whole payload before doing real work (`INPUT=$(cat)` / `ATG_INPUT="$(cat)"`). Extract a short session id right after that read, and default it for the paths that trace before the read:
+
+```bash
+# Short session id so one shared trace file stays readable when several
+# sessions write to it. Lines emitted before the payload is parsed carry "-",
+# which is honest about not knowing rather than silently blank.
+ATG_SESSION="-"
+atg_set_session() {
+    local raw
+    raw=$(printf '%s' "${1:-}" | jq -r '.session_id // empty' 2>/dev/null) || return 0
+    [[ -n "$raw" ]] && ATG_SESSION="${raw:0:8}"
+    return 0
+}
+```
+
+Call `atg_set_session "$INPUT"` (or `"$ATG_INPUT"`) immediately after the payload is read, and add the field to the format string. In `check-task-complete`:
+
+```bash
+trace() {
+    printf '%s | s=%s | guard | task=%s | %s%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ATG_SESSION" "${1:-?}" "${2:-?}" "${3:+ | $3}" \
+        >> "$TRACE_LOG" 2>/dev/null || true
+}
+```
+
+and the matching change in `check-comment-write`'s `trace()`. Keep the trailing `|| true` on both: a trace write must never change the hook's exit status.
+
+- [ ] **Step 2: Cap the file**
+
+```bash
+# Best-effort rotation. A trace log that grows without bound eventually costs
+# more than it tells you. Rotating by rename rather than truncating in place
+# means a concurrent appender simply starts a fresh file instead of writing
+# into a hole.
+atg_rotate_trace() {
+    local max=${ANTI_TANGENT_GUARD_TRACE_MAX_BYTES:-1048576} size
+    [[ -f "$TRACE_LOG" ]] || return 0
+    size=$(wc -c < "$TRACE_LOG" 2>/dev/null) || return 0
+    [[ "$size" -gt "$max" ]] || return 0
+    mv -f "$TRACE_LOG" "$TRACE_LOG.1" 2>/dev/null || true
+    return 0
+}
+```
+
+Call it once, immediately after `mkdir -p "$(dirname "$TRACE_LOG")"`, in both hooks.
+
+- [ ] **Step 3: Prove it with an eval**
+
+Add a case (id continues from whatever the suite is at) driving `check-comment-write` with a violating payload, `env` setting `ANTI_TANGENT_GUARD_TRACE_LOG` to `{{TMPDIR}}/trace.log`, `expected_exit: 2`, and an `expected_file_contains` asserting the trace file holds `s=`. If the runner substitutes `{{TMPDIR}}` in `env` values, use it there; if not, extend the substitution to cover `env` too and say so in the report.
+
+Bump `EXPECTED_CASE_COUNT` and the `description` string together.
+
+- [ ] **Step 4: Document it**
+
+In `plugin/anti-tangent-guard/README.md`, document `ANTI_TANGENT_GUARD_TRACE_LOG` and `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES`, and state plainly that the default path is shared by every session on the machine — the session column is what makes it readable, and anyone wanting true isolation should point the env var at a per-session path.
+
+- [ ] **Step 5: Verify and commit**
+
+```bash
+bash plugin/anti-tangent-guard/evals/run.sh
+go test -race ./... 2>&1 | tail -3
+git add plugin/anti-tangent-guard/
+git commit -m "fix(guard): identify the session in trace lines and cap the log"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
