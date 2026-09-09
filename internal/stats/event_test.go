@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -15,7 +18,7 @@ func TestCountFindings(t *testing.T) {
 		{Severity: verdict.SeverityMajor, Category: verdict.CategoryAmbiguousSpec},
 		{Severity: verdict.SeverityMinor, Category: verdict.CategoryScopeDrift},
 	}
-	sev, cat, total := CountFindings(findings)
+	sev, cat, crit, total := CountFindings(findings)
 	if total != 3 {
 		t.Fatalf("total = %d, want 3", total)
 	}
@@ -25,12 +28,15 @@ func TestCountFindings(t *testing.T) {
 	if cat["scope_drift"] != 2 || cat["ambiguous_spec"] != 1 {
 		t.Fatalf("category = %v", cat)
 	}
+	if crit != nil {
+		t.Fatalf("criterion should be nil for findings with no allowlisted criteria, got %v", crit)
+	}
 }
 
 func TestCountFindingsEmpty(t *testing.T) {
-	sev, cat, total := CountFindings(nil)
-	if sev != nil || cat != nil || total != 0 {
-		t.Fatalf("want nil,nil,0; got %v,%v,%d", sev, cat, total)
+	sev, cat, crit, total := CountFindings(nil)
+	if sev != nil || cat != nil || crit != nil || total != 0 {
+		t.Fatalf("want nil,nil,nil,0; got %v,%v,%v,%d", sev, cat, crit, total)
 	}
 }
 
@@ -53,4 +59,33 @@ func TestEventTokenFieldsOmittedWhenZero(t *testing.T) {
 			t.Errorf("expected %s in %s", k, b)
 		}
 	}
+}
+
+func TestCountFindings_CriterionAllowlistOnly(t *testing.T) {
+	findings := []verdict.Finding{
+		{Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
+			Criterion: "comment_hygiene", Evidence: "e", Suggestion: "s"},
+		{Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
+			Criterion: "the exporter MUST emit one span per outbound request",
+			Evidence: "e", Suggestion: "s"},
+	}
+	_, _, crit, total := CountFindings(findings)
+	require.Equal(t, 2, total)
+	assert.Equal(t, 1, crit["comment_hygiene"])
+	assert.Len(t, crit, 1,
+		"verbatim acceptance-criterion text must never reach the ledger")
+}
+
+func TestCountFindings_NoAllowlistedCriteriaYieldsNilMap(t *testing.T) {
+	findings := []verdict.Finding{
+		{Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
+			Criterion: "some verbatim AC", Evidence: "e", Suggestion: "s"},
+	}
+	_, _, crit, _ := CountFindings(findings)
+	assert.Nil(t, crit, "nil map keeps criterion_counts out of the JSON via omitempty")
+
+	blob, err := json.Marshal(Event{Tool: "validate_task_spec", CriterionCounts: crit})
+	require.NoError(t, err)
+	assert.NotContains(t, string(blob), "criterion_counts",
+		"omitempty must actually drop the key, not merely leave it null")
 }

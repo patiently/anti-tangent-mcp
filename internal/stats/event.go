@@ -23,6 +23,7 @@ type Event struct {
 	FindingsTotal  int            `json:"findings_total"`
 	SeverityCounts map[string]int `json:"severity_counts,omitempty"`
 	CategoryCounts map[string]int `json:"category_counts,omitempty"`
+	CriterionCounts map[string]int `json:"criterion_counts,omitempty"`
 	ReviewMS       int64          `json:"review_ms"`
 	Model          string         `json:"model,omitempty"`
 	Cached         bool           `json:"cached,omitempty"`
@@ -44,18 +45,41 @@ type Event struct {
 	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
-// CountFindings builds severity and category histograms (and the total) from a
+// countedCriteria bounds what the ledger records. Criterion is free-form
+// reviewer text — the pre-hook prompt instructs the reviewer to quote verbatim
+// acceptance-criterion text into it — so counting every distinct value would
+// give the histogram one key per acceptance criterion ever reviewed and write
+// specification text into the ledger, which otherwise holds no free text at all.
+// Only these server-recognised sentinels are counted; everything else is dropped.
+var countedCriteria = map[string]bool{
+	"comment_hygiene":              true,
+	"noise_cluster":                true,
+	"codebase_reference_checklist": true,
+	"codebase_convention":          true,
+	"exit_contract":                true,
+	"spec":                         true,
+	"structure":                    true,
+	"max_tokens_override":          true,
+}
+
+// CountFindings builds severity, category, and criterion histograms (and the total) from a
 // finding slice. Returns nil maps when there are no findings so empty Events
 // serialize without empty objects.
-func CountFindings(findings []verdict.Finding) (severity, category map[string]int, total int) {
+func CountFindings(findings []verdict.Finding) (severity, category, criterion map[string]int, total int) {
 	if len(findings) == 0 {
-		return nil, nil, 0
+		return nil, nil, nil, 0
 	}
 	severity = make(map[string]int)
 	category = make(map[string]int)
 	for _, f := range findings {
 		severity[string(f.Severity)]++
 		category[string(f.Category)]++
+		if countedCriteria[f.Criterion] {
+			if criterion == nil {
+				criterion = make(map[string]int)
+			}
+			criterion[f.Criterion]++
+		}
 	}
-	return severity, category, len(findings)
+	return severity, category, criterion, len(findings)
 }

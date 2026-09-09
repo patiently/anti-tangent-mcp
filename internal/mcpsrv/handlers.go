@@ -327,7 +327,7 @@ func (h *handlers) recordStat(p statParams) {
 	if h.deps.Stats == nil {
 		return
 	}
-	sev, cat, total := stats.CountFindings(p.findings)
+	sev, cat, crit, total := stats.CountFindings(p.findings)
 	h.deps.Stats.Record(stats.Event{
 		Ts:              time.Now().UTC().Truncate(time.Second),
 		Tool:            p.tool,
@@ -335,6 +335,7 @@ func (h *handlers) recordStat(p statParams) {
 		FindingsTotal:   total,
 		SeverityCounts:  sev,
 		CategoryCounts:  cat,
+		CriterionCounts: crit,
 		ReviewMS:        p.reviewMS,
 		Model:           p.modelUsed,
 		Cached:          p.cached,
@@ -1708,7 +1709,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	}
 
 	if !lightweight && sess.PlanRunID != "" {
-		sev, _, _ := stats.CountFindings(env.Findings)
+		sev, _, _, _ := stats.CountFindings(env.Findings)
 		state := planrun.StateMissing
 		if args.Codescene != nil {
 			if args.Codescene.Ran {
