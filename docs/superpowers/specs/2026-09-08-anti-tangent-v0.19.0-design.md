@@ -294,19 +294,20 @@ can see, it detects rather than prevents.
 **The reviewer layer covers every path**, because the diff reaches the reviewer regardless of who
 later closes the task.
 
-**The prevention layer's reach turns on one unverified fact, and it must be probed before this is
-built: does `PreToolUse` fire for tool calls issued inside a subagent?**
+**Measured: `PreToolUse` does fire for tool calls issued inside a subagent.** A `PreToolUse`
+matcher on `Write` was registered in `.claude/settings.local.json`, appending each intercepted
+call's JSON payload to a log file. From the main session, a `Write` to `control.txt` produced one
+log entry; `grep -c "control.txt" /tmp/claude-hooks/subagent-probe.log` returned `1`, confirming
+the hook took effect mid-session with no restart. A `general-purpose` subagent was then dispatched
+and used its own `Write` tool call to create `subagent.txt`; `grep -c "subagent.txt"
+/tmp/claude-hooks/subagent-probe.log` also returned `1`, and that log entry carried `agent_id` and
+`agent_type` fields absent from the control entry, confirming it was captured from inside the
+subagent's own session rather than the controller's.
 
-- If yes, the prevention layer closes the SDD gap completely — the subagent's own `Edit`/`Write`
-  calls are intercepted in its own session, and neither transcript visibility nor evidence shape
-  matters.
-- If no, prevention covers only the controller's own edits, SDD implementer work is covered by
-  the reviewer layer alone, and the honest description of enforcement changes accordingly.
-
-The probe is small: register a `PreToolUse` matcher on `Write` that appends its stdin to a log,
-dispatch a subagent that writes a file, and check whether the log gained an entry naming that
-file. Do this **before** implementing, because the answer determines whether the prevention layer
-is the primary gate or a supplement to the reviewer.
+So the prevention layer closes the SDD gap completely: a subagent's `Edit`/`Write` calls are
+intercepted by the same hook the controller session uses, regardless of transcript visibility or
+evidence shape. It is the primary comment gate for controller- and subagent-issued writes alike,
+not a supplement to the reviewer layer.
 
 ### Bookkeeping a third block condition drags in
 
