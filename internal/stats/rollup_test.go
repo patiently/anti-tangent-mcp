@@ -179,3 +179,33 @@ func TestRollupExistingKeysUnchanged(t *testing.T) {
 		}
 	}
 }
+
+func TestComputeRollup_CriterionHistogram(t *testing.T) {
+	base := time.Unix(1700000000, 0).UTC()
+	events := []Event{
+		{Ts: base, Tool: "validate_completion", Verdict: "warn", FindingsTotal: 2,
+			CriterionCounts: map[string]int{"comment_hygiene": 2}},
+		{Ts: base.Add(time.Minute), Tool: "validate_completion", Verdict: "warn", FindingsTotal: 2,
+			CriterionCounts: map[string]int{"comment_hygiene": 1, "noise_cluster": 1}},
+		{Ts: base.Add(2 * time.Minute), Tool: "validate_task_spec", Verdict: "pass"},
+	}
+	r := computeRollup(events, base.Add(time.Hour))
+
+	assert.Equal(t, 3, r.CriterionHistogram["comment_hygiene"],
+		"per-event criterion counts must sum across the window")
+	assert.Equal(t, 1, r.CriterionHistogram["noise_cluster"])
+	assert.Len(t, r.CriterionHistogram, 2, "no key may appear that no event carried")
+
+	b, err := json.Marshal(r)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"criterion_histogram"`,
+		"the tray consumer and the LLM summary read this key off rollup.json")
+}
+
+func TestComputeRollup_CriterionHistogramEmptyNotNull(t *testing.T) {
+	base := time.Unix(1700000000, 0).UTC()
+	r := computeRollup([]Event{{Ts: base, Tool: "validate_task_spec", Verdict: "pass"}}, base)
+	require.NotNil(t, r.CriterionHistogram,
+		"an initialised empty map marshals as {}; a nil one marshals as null and breaks a consumer that ranges over it")
+	assert.Empty(t, r.CriterionHistogram)
+}

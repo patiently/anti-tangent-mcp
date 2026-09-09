@@ -98,3 +98,20 @@ func TestCountFindings_NoAllowlistedCriteriaYieldsNilMap(t *testing.T) {
 	assert.NotContains(t, string(blob), "criterion_counts",
 		"omitempty must actually drop the key, not merely leave it null")
 }
+
+func TestCountFindings_CriterionCaseAndWhitespaceNormalised(t *testing.T) {
+	findings := []verdict.Finding{
+		{Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
+			Criterion: "Comment_Hygiene", Evidence: "e", Suggestion: "s"},
+		{Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
+			Criterion: "  comment_hygiene ", Evidence: "e", Suggestion: "s"},
+		{Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
+			Criterion: "NOISE_CLUSTER", Evidence: "e", Suggestion: "s"},
+	}
+	_, _, crit, total := CountFindings(findings)
+	require.Equal(t, 3, total)
+	assert.Equal(t, 2, crit["comment_hygiene"],
+		"Criterion is free reviewer text; casing and stray whitespace must not drop a finding from the metric")
+	assert.Equal(t, 1, crit["noise_cluster"])
+	assert.Len(t, crit, 2, "normalisation must fold onto the lower-case allowlist key, not add a second bucket")
+}

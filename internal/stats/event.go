@@ -8,6 +8,7 @@
 package stats
 
 import (
+	"strings"
 	"time"
 
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -51,6 +52,10 @@ type Event struct {
 // give the histogram one key per acceptance criterion ever reviewed and write
 // specification text into the ledger, which otherwise holds no free text at all.
 // Only these server-recognised sentinels are counted; everything else is dropped.
+// Keys are lower-case, and lookups normalise the reviewer's text to match:
+// Criterion is free text on the wire, so a reviewer writing "Comment_Hygiene"
+// or " comment_hygiene" means the same sentinel and must land in the same
+// bucket rather than vanishing from the metric.
 var countedCriteria = map[string]bool{
 	"comment_hygiene":              true,
 	"noise_cluster":                true,
@@ -74,11 +79,12 @@ func CountFindings(findings []verdict.Finding) (severity, category, criterion ma
 	for _, f := range findings {
 		severity[string(f.Severity)]++
 		category[string(f.Category)]++
-		if countedCriteria[f.Criterion] {
+		key := strings.ToLower(strings.TrimSpace(f.Criterion))
+		if countedCriteria[key] {
 			if criterion == nil {
 				criterion = make(map[string]int)
 			}
-			criterion[f.Criterion]++
+			criterion[key]++
 		}
 	}
 	return severity, category, criterion, len(findings)
