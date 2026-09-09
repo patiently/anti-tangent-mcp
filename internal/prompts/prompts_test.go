@@ -907,6 +907,22 @@ func TestRenderPost_IncludesDemotionRule(t *testing.T) {
 	require.Contains(t, out.User, "downgrade the severity to `minor`")
 }
 
+func TestRenderPost_CommentHygieneIsPinnedMinor(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:    sampleSpec(),
+		Summary: "Added Gin handler at /healthz returning \"ok\".",
+		Files: []File{{
+			Path:    "handlers/health.go",
+			Content: "package handlers\nfunc Health(c *gin.Context) { c.String(200, \"ok\") }\n",
+		}},
+		TestEvidence: "PASS: TestHealthReturns200",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "criterion: comment_hygiene")
+	assert.Contains(t, out.User, "always `minor`, never `major` or `critical`")
+	assert.Contains(t, out.User, "read correctly to someone who never saw this change")
+}
+
 func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
 	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
 	require.NoError(t, err)
