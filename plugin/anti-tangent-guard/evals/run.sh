@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Eval runner for check-task-complete, the anti-tangent-guard PostToolUse hook.
+# Eval runner for the anti-tangent-guard hooks: check-task-complete
+# (PostToolUse) and check-comment-write (PreToolUse).
 #
-# Reads guard-evals.json (shape: {skill_name, description, evals: [...]}, 21
-# cases), builds each case's stdin payload and synthetic transcript, invokes
-# the hook, and compares its exit code (and, for a block, its stderr message)
-# against what the case expects.
+# Reads guard-evals.json (shape: {skill_name, description, evals: [...]}),
+# builds each case's stdin payload — and, unless the case supplies its own
+# raw stdin, a synthetic transcript — invokes the case's hook, and compares
+# its exit code (and, for a block, its stderr message) against what the case
+# expects.
 #
 # A block case (expected_exit=2) is only counted a pass if BOTH the exit code
 # is 2 AND the expected substring appears on stderr — an exit-code-only check
@@ -16,7 +18,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-HOOK="$PLUGIN_DIR/hooks/check-task-complete"
+HOOK_DIR="$PLUGIN_DIR/hooks"
 EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 
 # The eval table this suite implements (see task-12-brief.md Step 4, the two
@@ -27,14 +29,22 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # Important #2), and one direct-call JSON-result case added for the v0.18.0
 # final review's Important #1, which pairs a validate_completion tool_use
 # with its tool_result exactly as the server's envelopeResult marshals it)
-# has exactly 22 rows. Both checks below must hold or the count assertion is
-# vacuous: the JSON file must declare 22 cases, AND the loop must actually
-# execute 22 of them (a silently-skipped case would satisfy the first check
-# alone).
-EXPECTED_CASE_COUNT=22
+# has 22 rows; check-comment-write, the PreToolUse comment-hygiene guard,
+# contributes eleven more, for an exact total. Both checks below must hold or
+# the count assertion is vacuous: the JSON file must declare
+# EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
+# silently-skipped case would satisfy the first check alone).
+EXPECTED_CASE_COUNT=33
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
-cleanup() { rm -rf "$WORKDIR"; }
+CASE_TMPDIRS=()
+cleanup() {
+    rm -rf "$WORKDIR"
+    local d
+    for d in "${CASE_TMPDIRS[@]:-}"; do
+        [[ -n "$d" ]] && rm -rf "$d"
+    done
+}
 trap cleanup EXIT
 
 PASSED=0
@@ -65,14 +75,37 @@ build_stub_dir() {
 # run_case renders one eval object (by index) to a stdin file plus, unless
 # stdin_raw or no_transcript is set, a synthetic transcript file with
 # {{TRANSCRIPT}} substituted into input.transcript_path, then invokes the
-# hook and checks its exit code and (for blocks) stderr message.
+# case's hook (default check-task-complete; "hook" field selects another,
+# e.g. check-comment-write) and checks its exit code and (for blocks) its
+# stderr message.
+#
+# Every case gets its own {{TMPDIR}} — a fresh, case-scoped directory
+# substituted for the literal "{{TMPDIR}}" token wherever it appears in
+# stdin_raw, in the rendered input JSON, or in an env value. Several
+# check-comment-write cases write or read a target file, and a Write over an
+# existing file deliberately depends on what is already on disk, so sharing
+# one path across cases would make outcomes depend on execution order and on
+# residue an earlier run left behind. The directory carries a trailing
+# ".go" component so that a case referencing {{TMPDIR}} bare (rather than a
+# path beneath it) still lands on a recognized extension — otherwise the
+# unreadable-target case would exit 0 via the unrelated "extension not
+# scanned" gate instead of the open()-on-a-directory path it means to
+# exercise. Registered in CASE_TMPDIRS (not cleaned up locally) because this
+# function returns early on several failure paths, and only the module-level
+# `trap cleanup EXIT` is guaranteed to run on all of them.
 run_case() {
     local idx="$1"
-    local id name reason expected_exit
+    local id name reason expected_exit hook_name case_hook
     id=$(jq -r ".evals[$idx].id" "$EVALS_FILE")
     name=$(jq -r ".evals[$idx].name" "$EVALS_FILE")
     reason=$(jq -r ".evals[$idx].reason" "$EVALS_FILE")
     expected_exit=$(jq -r ".evals[$idx].expected_exit" "$EVALS_FILE")
+    hook_name=$(jq -r ".evals[$idx].hook // \"check-task-complete\"" "$EVALS_FILE")
+    case_hook="$HOOK_DIR/$hook_name"
+
+    local case_tmp
+    case_tmp=$(mktemp -d "${TMPDIR:-/tmp}/atg-eval-XXXXXX.go")
+    CASE_TMPDIRS+=("$case_tmp")
 
     local case_dir stdin_file stderr_file
     case_dir=$(mktemp -d "$WORKDIR/case-$id.XXXXXX")
@@ -83,6 +116,7 @@ run_case() {
     stdin_raw=$(jq -r ".evals[$idx].stdin_raw // empty" "$EVALS_FILE")
 
     if [[ -n "$stdin_raw" ]]; then
+        stdin_raw="${stdin_raw//\{\{TMPDIR\}\}/$case_tmp}"
         printf '%s' "$stdin_raw" > "$stdin_file"
     else
         local no_transcript transcript_path
@@ -100,7 +134,12 @@ run_case() {
                 jq -r ".evals[$idx].transcript_raw_lines[$li]" "$EVALS_FILE" >> "$transcript_path"
             done
         fi
-        jq -c --arg tp "$transcript_path" '.evals['"$idx"'].input | .transcript_path = $tp' "$EVALS_FILE" > "$stdin_file"
+        local input
+        input=$(jq -c --arg tp "$transcript_path" '.evals['"$idx"'].input | .transcript_path = $tp' "$EVALS_FILE")
+        input=$(jq -c --arg d "$case_tmp" \
+            'walk(if type == "string" then gsub("\\{\\{TMPDIR\\}\\}"; $d) else . end)' \
+            <<<"$input")
+        printf '%s' "$input" > "$stdin_file"
     fi
 
     # Build the env-var prefix from the case's "env" object, if any.
@@ -109,7 +148,7 @@ run_case() {
     if [[ -n "$env_json" ]]; then
         local kv
         while IFS= read -r kv; do
-            [[ -n "$kv" ]] && env_assignments+=("$kv")
+            [[ -n "$kv" ]] && env_assignments+=("${kv//\{\{TMPDIR\}\}/$case_tmp}")
         done < <(jq -r ".evals[$idx].env | to_entries[] | \"\(.key)=\(.value)\"" "$EVALS_FILE")
     fi
 
@@ -121,11 +160,11 @@ run_case() {
     if [[ -n "$path_exclude" ]]; then
         local stub
         stub=$(build_stub_dir "$path_exclude")
-        PATH="$stub" "$bash_path" "$HOOK" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
+        PATH="$stub" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
     elif [[ ${#env_assignments[@]} -gt 0 ]]; then
-        env "${env_assignments[@]}" "$bash_path" "$HOOK" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
+        env "${env_assignments[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
     else
-        "$bash_path" "$HOOK" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
+        "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
     fi
 
     TOTAL=$((TOTAL + 1))

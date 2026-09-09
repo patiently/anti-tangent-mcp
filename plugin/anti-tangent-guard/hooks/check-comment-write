@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# PreToolUse hook: refuse an Edit/Write that ADDS a comment carrying change
+# history. Behaviour and invariants belong in comments; issue, task and version
+# references belong in git.
+#
+# There is deliberately NO `trap ... ERR` here. The Python body signals a block
+# with exit 2, and an ERR trap fires on that and rewrites it to 0 — which would
+# make this hook incapable of ever blocking. Statuses are handled explicitly
+# instead: 2 blocks, 0 allows, anything else is an internal error and allows.
+set -uo pipefail
+
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
+mkdir -p "$(dirname "$TRACE_LOG")" 2>/dev/null || true
+trace() {
+    printf '%s | comment-write | %s%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${1:-?}" "${2:+ | $2}" \
+        >> "$TRACE_LOG" 2>/dev/null || true
+}
+
+[[ "${ANTI_TANGENT_COMMENT_GUARD:-1}" == "0" ]] && { trace "skip" "guard=0"; exit 0; }
+command -v python3 >/dev/null 2>&1 || { trace "skip" "no-python3"; exit 0; }
+[[ -r "$PLUGIN_ROOT/hooks/check_comment_write.py" ]] || { trace "skip" "no-body"; exit 0; }
+
+ATG_INPUT="$(cat)" ATG_ROOT="$PLUGIN_ROOT" \
+    python3 "$PLUGIN_ROOT/hooks/check_comment_write.py"
+status=$?
+case "$status" in
+    0) exit 0 ;;
+    2) trace "block" "comment-hygiene"; exit 2 ;;
+    *) trace "error" "python-exit=$status"; exit 0 ;;
+esac

@@ -2,6 +2,8 @@
 /anti-tangent-mcp
 /dist/
 *.exe
+__pycache__/
+*.pyc
 
 # Test outputs
 *.test

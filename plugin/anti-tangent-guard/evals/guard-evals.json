@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook (22 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (33 cases)",
   "evals": [
     {
       "id": 1,
@@ -422,6 +422,99 @@
         "TASK CLOSED ON A FAILED anti-tangent VERDICT"
       ],
       "reason": "final review Important #1: a REAL MCP tool_result is JSON-marshalled (envelopeResult, handlers.go), so summary_block's newlines survive only as \\n escapes inside one JSON string — the header-anchored HEADER_RE can never match this text on its own. This case pairs the validate_completion tool_use with its tool_result exactly as the server marshals it (verdict: fail) and expects a block: the hook must match tool_result.tool_use_id back to the tool_use, parse the JSON body, and read its verdict directly — not rely on the escaped text ever looking like a marker block. Before that fix, this case is red: called=true short-circuits the close to a pass with the verdict silently ignored."
+    },
+    {
+      "id": 23,
+      "name": "comment-write-issue-ref-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": ["adds comment(s) carrying change history", "an issue or pull-request reference"],
+      "reason": "an added Go comment citing an issue must block"
+    },
+    {
+      "id": 24,
+      "name": "comment-write-markdown-never-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.md\",\"content\":\"// fixes #58 in v0.19.0\\n\"}}",
+      "expected_exit": 0,
+      "reason": "CHANGELOG.md legitimately carries issue and version refs; markdown is never scanned"
+    },
+    {
+      "id": 25,
+      "name": "comment-write-untouched-comment-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"// see #12\\nfunc a() {}\",\"new_string\":\"// see #12\\nfunc a() { return }\"}}",
+      "expected_exit": 0,
+      "reason": "on-touch means ADDED lines only; an untouched violating comment must not block"
+    },
+    {
+      "id": 26,
+      "name": "comment-write-invariant-why-passes",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// POSITIONAL EXTRACTION, NOT FREE SCAN: a forged line could otherwise win.\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "invariant-why is the kind of comment the policy protects"
+    },
+    {
+      "id": 27,
+      "name": "comment-write-product-grammar-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// matches the leading \\\"Task 4: Add /healthz endpoint\\\" of a RawTask.Title\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "unhyphenated Task N is the product's own input grammar, deliberately not a tell"
+    },
+    {
+      "id": 28,
+      "name": "comment-write-kill-switch",
+      "hook": "check-comment-write",
+      "env": { "ANTI_TANGENT_COMMENT_GUARD": "0" },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "kill switch disables the hook"
+    },
+    {
+      "id": 29,
+      "name": "comment-write-added-duplicate-is-scanned",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"// see #12\\nfunc a() {}\",\"new_string\":\"// see #12\\nfunc a() {}\\n// see #12\\nfunc b() {}\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": ["an issue or pull-request reference"],
+      "reason": "a set-based diff discards this newly added duplicate; the occurrence-aware one must catch it"
+    },
+    {
+      "id": 30,
+      "name": "comment-write-malformed-json-fails-open",
+      "hook": "check-comment-write",
+      "stdin_raw": "not json at all",
+      "expected_exit": 0,
+      "reason": "a malformed payload must never block work"
+    },
+    {
+      "id": 31,
+      "name": "comment-write-missing-body-fails-open",
+      "hook": "check-comment-write",
+      "env": { "CLAUDE_PLUGIN_ROOT": "/nonexistent-plugin-root" },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/a.go\",\"content\":\"// fixes #58\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a missing python body must fail open, not block"
+    },
+    {
+      "id": 32,
+      "name": "comment-write-unreadable-target-fails-open",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}\",\"content\":\"// fixes #58\\n\"}}",
+      "expected_exit": 0,
+      "reason": "file_path pointing at a directory raises on open; must fail open"
+    },
+    {
+      "id": 33,
+      "name": "comment-write-no-python3-fails-open",
+      "hook": "check-comment-write",
+      "env": { "PATH": "/nonexistent-bin" },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/a.go\",\"content\":\"// fixes #58\\n\"}}",
+      "expected_exit": 0,
+      "reason": "no python3 on PATH must fail open"
     }
   ]
 }
