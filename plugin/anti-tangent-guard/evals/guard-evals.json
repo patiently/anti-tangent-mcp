@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (45 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (52 cases)",
   "evals": [
     {
       "id": 1,
@@ -785,6 +785,68 @@
         "TASK CLOSED ON A FAILED anti-tangent VERDICT"
       ],
       "reason": "a real validate_completion call is in the window (so the comment-scan import is actually attempted) under a CLAUDE_PLUGIN_ROOT that cannot resolve comment_scan.py; the import failure must fail open on the scan alone and must not mask the independently-detected failing verdict"
+    },
+    {
+      "id": 46,
+      "name": "comment-write-issue-ref-hexcolor-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// #123456 brand color\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "an all-numeric hex colour must not be read as an issue/PR reference; the #\\d+ tell now requires an adjacent reference verb (see/fixes/closes/issue/PR/...)"
+    },
+    {
+      "id": 47,
+      "name": "comment-write-issue-ref-prose-ordinal-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.py\", \"content\": \"# the #1 rule here is idempotence\\n\"}}",
+      "expected_exit": 0,
+      "reason": "ordinary prose using '#1' as a rank/ordinal must not be read as an issue reference"
+    },
+    {
+      "id": 48,
+      "name": "comment-write-task-ref-subcompound-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// process the subtask-4 queue before returning\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'subtask-4' is a compound word, not a 'task-N' reference; the task-\\d+ tell now refuses a match preceded by a word character or hyphen"
+    },
+    {
+      "id": 49,
+      "name": "comment-write-task-ref-url-path-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see https://example.com/docs/task-42/setup for details\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a 'task-NN' URL path segment must not be read as a task reference; the tell now refuses a match immediately followed by another path segment"
+    },
+    {
+      "id": 50,
+      "name": "comment-write-task-ref-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// task-12b review, Critical #1\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "the narrowed task-\\d+ tell must still block a genuine task reference, including one with a trailing letter suffix on the id"
+    },
+    {
+      "id": 51,
+      "name": "comment-write-version-ref-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// added in v0.5.0\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a version reference"
+      ],
+      "reason": "the narrowed version tell must still block a genuine change-history version reference"
+    },
+    {
+      "id": 52,
+      "name": "comment-write-version-ref-wire-compat-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// Package atstats reads the anti-tangent v0.10.0 stats output\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a version number naming a wire-compatibility contract (what output shape this code reads) reads correctly without change-history context and must not block; found as a real false positive in gnome-topbar/daemon/internal/atstats/atstats.go at HEAD"
     }
   ]
 }

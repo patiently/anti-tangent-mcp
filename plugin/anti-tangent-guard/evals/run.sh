@@ -38,12 +38,18 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # size cap failing open, the kill switch, the trace() reason, a
 # final_files-only close passing untouched, an excluded extension, an
 # unchanged context line, and an unresolvable plugin root failing open on the
-# scan without masking an independently-detected failing verdict, for an
-# exact total. Both checks below must hold or
+# scan without masking an independently-detected failing verdict, for a
+# subtotal of 45. A zero-false-positive pass over every tracked source file's
+# comments contributes seven more: four pin a narrowed tell's now-allowed
+# shape (an all-numeric colour literal, an ordinal in prose, a compound word,
+# and a URL path segment) at exit 0, two re-confirm that a genuine reference
+# still blocks after the same narrowing, and one pins that a version number
+# naming a wire-compatibility contract — what shape of data this code reads —
+# does not block, for an exact total. Both checks below must hold or
 # the count assertion is vacuous: the JSON file must declare
 # EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=45
+EXPECTED_CASE_COUNT=52
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 CASE_TMPDIRS=()
