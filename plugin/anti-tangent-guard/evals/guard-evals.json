@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (53 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (61 cases)",
   "evals": [
     {
       "id": 1,
@@ -878,6 +878,79 @@
         ]
       },
       "reason": "a broken plugin root plus a genuinely violating diff plus a passing verdict must still fail open (exit 0), but the trace log must record that the scan itself could not run, distinguishing this from a clean scan that legitimately found nothing"
+    },
+    {
+      "id": 54,
+      "name": "comment-write-issue-ref-close-attention-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// pay close attention to the #1 priority here\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'close' as an ordinary adjective ('close attention'), not the verb 'close(s/d)', sits many characters from the digits; the #\\d+ tell now requires the trigger to directly govern the digits, not merely appear somewhere nearby"
+    },
+    {
+      "id": 55,
+      "name": "comment-write-issue-ref-see-guide-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see the #1 best practice guide for details\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'see' is a real trigger, but 'the' intervenes between it and the digits; strict adjacency (see#N or see #N, nothing else between) is what lets genuine 'see #25' keep blocking without this false positive"
+    },
+    {
+      "id": 56,
+      "name": "comment-write-issue-ref-issue-ordinal-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// this list ranks the top vendors; issue #1 is always price sensitivity\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'issue' used in its ordinary-English sense ('the primary issue') immediately before a digit is indistinguishable by surface form from a genuine issue-tracker reference; 'issue' is accepted only as a connector noun after a strong verb (fix/close/resolve/ref/pr), never as a trigger by itself"
+    },
+    {
+      "id": 57,
+      "name": "comment-write-issue-ref-reference-count-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// keep the reference count under #100 to avoid overflow\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'reference' is several words from the digits ('count under' intervenes) and is not a standalone trigger either way; a bare word-proximity check would have wrongly blocked this"
+    },
+    {
+      "id": 58,
+      "name": "comment-write-issue-ref-bug-prose-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// bug in the UI shows #1 instead of #2 for empty state\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'bug' used in its ordinary software sense, not attached to any '#N', and not preceded by a strong verb; 'bug' is accepted only as a connector noun after fix/close/resolve/ref/pr, same rationale as case 56's 'issue'"
+    },
+    {
+      "id": 59,
+      "name": "comment-write-issue-ref-connector-noun-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes issue #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "'issue' directly after the strong verb 'fixes', directly before the digits, is exactly the shape the connector-noun allowance exists for; this must still block even though bare 'issue #N' (cases 56/58) does not"
+    },
+    {
+      "id": 60,
+      "name": "comment-write-version-ref-added-verb-blocks-despite-nearby-noun",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// added v1.2.3 support for the metrics server\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a version reference"
+      ],
+      "reason": "a genuine 'added vX.Y.Z' change-history statement must block even though the unrelated word 'server' sits within the same sentence; the version tell now keys on the governing change verb, not on excluding nearby nouns, so an incidental noun can no longer suppress a real violation"
+    },
+    {
+      "id": 61,
+      "name": "comment-write-version-ref-removed-verb-blocks-despite-nearby-noun",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// removed in v2.0.0 after the old server was decommissioned\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a version reference"
+      ],
+      "reason": "same failure mode as case 60 with 'removed in' and 'server' in the same sentence; the mirror-image false negative of case 52's wire-compatibility shape, now fixed by the same verb-governs mechanism"
     }
   ]
 }

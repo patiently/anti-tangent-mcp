@@ -31,28 +31,51 @@ TELLS = (
     # another path segment. [a-zA-Z]* absorbs a trailing letter suffix on the
     # id itself (some task ids carry one), not just on the following prose.
     (re.compile(r"(?<![\w/-])task-\d+[a-zA-Z]*\b(?!/)", re.I), "a task reference"),
-    # Bare `#\d+` also fires on an all-numeric hex colour ("#123456") and on
-    # ordinary prose ("the #1 rule") — neither is an issue/PR reference. Require
-    # a change/reference verb within a short window before the digits; this is
-    # a precision trade against recall (a bare "// #25: ..." with no such verb
-    # on its own line no longer matches), acceptable because the false case
-    # blocks a write mid-edit and the true case has other lines to be caught on.
+    # Bare `#\d+` fires on an all-numeric hex colour ("#123456") and on
+    # ordinary prose using "#1" as an ordinal or rank ("the #1 rule", "the #1
+    # priority"). A trigger word merely NEAR the digits is not enough either:
+    # "see the #1 best practice guide" and "issue #1 is always price
+    # sensitivity" both put an ordinary-English sense of a trigger word within
+    # a few characters of a "#N" that names nothing. The tell instead requires
+    # the trigger to GOVERN the digits — separated from them by nothing but
+    # optional whitespace and, for a closed set of connector nouns, one of
+    # those nouns — so "see #N" and "fixes issue #N" match while "see the #1
+    # guide" does not (the word "the" is not in the allowed span). Three of
+    # the connectors below — issue, bug, reference — carry ordinary-English
+    # senses "fix"/"close"/"resolve"/"ref"/"pr" do not, so they are accepted
+    # only as the connector after one of those verbs, never as a trigger on
+    # their own; a bare "issue #1" or "bug ... #1" with no governing verb no
+    # longer matches at all, trading recall for precision on exactly the
+    # ambiguous case a regex cannot otherwise resolve.
     (re.compile(
-        r"\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?|see|ref(?:s|erence[sd]?)?|"
-        r"issue|pr|pull\s*request|bug)\b[^#\n]{0,20}#\d+\b",
+        r"\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?|see|ref(?:s)?|pr|pull\s*request)\b"
+        r"\s*(?:(?:issue|bug|ticket|item|number|no\.?|reference[sd]?)\s*)?"
+        r"#\d+\b",
         re.I,
     ), "an issue or pull-request reference"),
     # A version number that names a wire-compatibility contract ("reads the
     # v0.10.0 stats output", "shape, v0.11.0+", "the live v0.21.1 server",
     # "v0.15.0, may also receive ...") documents what the code does NOW, not
-    # when it changed — it reads correctly to someone who never saw the change
-    # that introduced it, so post.tmpl's "reads correctly" test does not flag
-    # it either. The three exclusions target exactly that shape: a floor
-    # annotation ("vX.Y.Z+"), a version adjacent to "live", and a version
-    # named as the source of a shape/output a caller receives.
+    # when it changed — it reads correctly to someone who never saw the
+    # change that introduced it. Keying on a nearby noun to exclude that
+    # shape has the mirror-image flaw of the tell above: an unrelated noun
+    # like "server" merely sitting near a genuine change reference ("added
+    # v1.2.3 support for the metrics server") would suppress a real
+    # violation. The tell instead requires a change verb to GOVERN the
+    # version, on either side of it ("added in vX.Y.Z", "since vX.Y.Z",
+    # "vX.Y.Z removes ...") — this fails safe: a wire-compatibility sentence
+    # like "reads the vX.Y.Z output" or "accepts vX.Y.Z+" has no change verb
+    # anywhere near the version and so never matches, without needing to
+    # name the nouns ("output", "server", "shape") that happen to appear in
+    # it.
     (re.compile(
-        r"(?<!live )\bv\d+\.\d+\.\d+\b(?!\+)"
-        r"(?!.{0,30}?\b(?:stats output|server|may also receive)\b)",
+        r"\b(?:add(?:s|ed)?|remov(?:es|ed)?|bump(?:s|ed)?|deprecat(?:es|ed)?|"
+        r"releas(?:es|ed)?|ship(?:s|ped)?|chang(?:es|ed)?|fix(?:es|ed)?|"
+        r"introduc(?:es|ed)?|since)\b\s*(?:in|to|as of|for)?\s*v\d+\.\d+\.\d+\b"
+        r"|"
+        r"\bv\d+\.\d+\.\d+\b\s*(?:add(?:s|ed)?|remov(?:es|ed)?|bump(?:s|ed)?|"
+        r"deprecat(?:es|ed)?|releas(?:es|ed)?|ship(?:s|ped)?|chang(?:es|ed)?|"
+        r"fix(?:es|ed)?|introduc(?:es|ed)?)\b",
         re.I,
     ), "a version reference"),
 )

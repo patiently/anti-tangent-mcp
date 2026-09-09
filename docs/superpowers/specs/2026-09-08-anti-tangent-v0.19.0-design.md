@@ -267,37 +267,61 @@ because of the comma; `task-<n>` and `#<digits>` already catch that line.
 **Acceptance criterion for the pattern set — measured.** The scanner ran over every tracked
 source file at HEAD (`git show HEAD:<path>` per file, every comment line treated as added); every
 hit was hand-classified TRUE (genuine change history) or FALSE (legitimate comment) via a
-one-to-one `path:line` join between the raw scan and a separate classification file. Result: 67
-hits, 67 true positives, **0 false positives**.
+one-to-one `path:line` join between the raw scan and a separate classification file. Final result
+(after the fix round below): 27 hits, 27 true positives, **0 false positives**.
 
-Getting there took narrowing all three tells, not just the two `#\d+` / `task-\d+` ones found
-first:
+Getting there took two rounds. The first narrowed all three tells, not just the two `#\d+` /
+`task-\d+` ones found first:
 
 - `task-\d+` gained a lookbehind refusing a match preceded by a word character, `/` or `-` (so
   `subtask-4` and a `task-42/setup` URL segment no longer match) and a lookahead refusing one
   immediately followed by `/` (the same URL case), plus `[a-zA-Z]*` so an id with a trailing
   letter (`task-12b`) still matches as a whole.
-- `#\d+` gained a requirement that a reference verb (`see`, `fix(es/ed)`, `close(s/d)`,
-  `resolve(s/d)`, `issue`, `PR`, `pull request`, `ref(s)`, `bug`) appear within 20 characters
-  before it — an all-numeric colour literal (`#123456`) and prose using `#1` as an ordinal no
-  longer match. This trades recall for precision: a bare `// #25: ...` with no such verb on its
-  own line no longer matches either, acceptable because the true case has other lines it can still
-  be caught on and the false case blocks a write mid-edit.
+- `#\d+` gained a requirement that a reference verb appear within 20 characters before it — an
+  all-numeric colour literal (`#123456`) and prose using `#1` as an ordinal no longer matched.
 - The version tell (`v\d+\.\d+\.\d+`) needed narrowing too — not called out by the brief that
-  started this pass, but four real hits in `gnome-topbar/daemon/internal/atstats/atstats.go`,
-  `gnome-topbar/daemon/internal/bm/write.go` and `internal/stats/codescene.go` turned out to be
-  exactly the "wire-compatibility contract" family: `// Package atstats reads the anti-tangent
-  v0.10.0 stats output`, `v0.11.0+` as a shape floor, `the live v0.21.1 server`, and `v0.15.0, may
-  also receive the same shape in band`. These document what the code does *now*; they read
-  correctly to someone who never saw the change that introduced them. The tell gained a negative
-  lookbehind for `live ` and a negative lookahead for a trailing `+` or a nearby `stats output` /
-  `server` / `may also receive` — precise enough to hold as a pattern, so nothing moved to the
-  reviewer layer. The `"AC #1"`-in-test-fixture family anticipated below was not observed in this
-  repo's committed comments.
+  started this pass, but four real hits turned out to be a "wire-compatibility contract" family:
+  `// Package atstats reads the anti-tangent v0.10.0 stats output`, `v0.11.0+` as a shape floor,
+  `the live v0.21.1 server`, and `v0.15.0, may also receive the same shape in band`
+  (`gnome-topbar/daemon/internal/atstats/atstats.go`, `gnome-topbar/daemon/internal/bm/write.go`,
+  `internal/stats/codescene.go`). These document what the code does *now*; they read correctly to
+  someone who never saw the change that introduced them. It gained a negative lookbehind for
+  `live ` and a negative lookahead for a trailing `+` or a nearby `stats output` / `server` /
+  `may also receive`.
 
-Each narrowing is pinned by a `check-comment-write` eval case at `expected_exit: 0` on the
-now-allowed shape, alongside a same-tell eval confirming a genuine reference still blocks
-(`plugin/anti-tangent-guard/evals/guard-evals.json`, cases 46-52).
+That round's own review reproduced a Critical against the shipped pattern: the `#\d+` fix keyed on
+trigger-word **proximity** (any of the reference verbs within 20 characters), not grammatical
+attachment, so ordinary prose putting `see`/`issue`/`bug`/`reference` near an unrelated `#N` still
+blocked — `// see the #1 best practice guide for details`, `// issue #1 is always price
+sensitivity`, `// keep the reference count under #100`, `// bug in the UI shows #1 instead of
+#2`. An Important-severity companion finding showed the version tell had the mirror-image flaw:
+its noun-exclusion list could be defeated by an unrelated noun sitting near a genuine change
+reference, wrongly passing `// added v1.2.3 support for the metrics server` and `// removed in
+v2.0.0 after the old server was decommissioned`.
+
+The second round changed both from proximity checks to grammar checks:
+
+- `#\d+` now requires the reference verb to directly **govern** the digits — separated from them
+  by nothing but optional whitespace and, for a closed set of connector nouns (`issue`, `bug`,
+  `ticket`, `item`, `number`, `no`, `reference`), one of those nouns. `see #25` and `fixes issue
+  #58` match; `see the #1 guide` does not, because `the` sits in the disallowed span. `issue` and
+  `bug` are dropped as *standalone* triggers — their ordinary-English senses are indistinguishable
+  by surface form from a genuine reference when a bare `#N` sits right after them — and kept only
+  as the connector after a strong verb.
+- The version tell was inverted from allow-by-default-except-excluded-noun to
+  block-only-if-governed-by-a-change-verb: `add(s/ed)`, `remov(es/ed)`, `bump(s/ed)`,
+  `deprecat(es/ed)`, `releas(es/ed)`, `ship(s/ped)`, `chang(es/ed)`, `fix(es/ed)`, `introduc(es/ed)`
+  or `since`, on either side of the version (`added in vX.Y.Z`, `vX.Y.Z removes ...`). This fails
+  safe: a wire-compatibility sentence has no change verb anywhere near the version and so never
+  matches, without needing to name the nouns (`output`, `server`, `shape`) that happen to appear
+  in it — the noun no longer matters at all, so it can no longer be gamed by an incidental one.
+
+Both directions of both fixes are pinned by `check-comment-write` evals — the now-allowed
+proximity-only shapes at `expected_exit: 0`, the connector-noun and verb-governs-despite-nearby-noun
+shapes still blocking at `expected_exit: 2` — alongside the first round's cases
+(`plugin/anti-tangent-guard/evals/guard-evals.json`, cases 46-61). The `"AC #1"`-in-test-fixture
+false-positive family anticipated at the start of this work was not observed in this repo's
+committed comments in either round.
 
 Kill switch `ANTI_TANGENT_COMMENT_GUARD=0`, matching the existing `ANTI_TANGENT_COMPLETION_GUARD`.
 It disables the **hook only** — `internal/config` reads no such variable, so the reviewer half is

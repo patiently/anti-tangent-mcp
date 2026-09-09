@@ -49,12 +49,24 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # plugin root does not silently swallow a genuine violation: a passing
 # verdict over a violating diff still fails open on exit code, but the trace
 # log must carry a distinct reason for "could not scan" rather than reading
-# identically to a clean scan that found nothing, for an exact total. Both
-# checks below must hold or
+# identically to a clean scan that found nothing, for a subtotal of 53. A
+# follow-up pass on the same zero-false-positive work found the first
+# narrowing traded one imprecision for another: the issue-reference tell
+# matched on trigger-word PROXIMITY, so an ordinary-English sentence putting
+# "see"/"issue"/"bug"/"reference" within a short window of an unrelated "#N"
+# still blocked, and the version tell's noun-exclusion list could be defeated
+# by an unrelated noun ("server") sitting near a genuine change reference and
+# wrongly letting it through. Eight more cases hold both directions of the
+# re-fix: five pin that a trigger word merely near the digits, with no direct
+# grammatical link, does not block; one pins that the trigger is still
+# honored when directly followed by one of a small closed set of connector
+# nouns (so "fixes issue #N" still blocks); two pin that a genuine
+# added/removed-in-version statement now blocks even with an unrelated noun
+# in the same sentence, for an exact total. Both checks below must hold or
 # the count assertion is vacuous: the JSON file must declare
 # EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=53
+EXPECTED_CASE_COUNT=61
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Every hook invocation below runs with this as its cwd, run-scoped (inside
