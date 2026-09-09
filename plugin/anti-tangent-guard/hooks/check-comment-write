@@ -20,6 +20,11 @@ ATG_SESSION="-"
 atg_set_session() {
     local raw
     raw=$(printf '%s' "${1:-}" | jq -r '.session_id // empty' 2>/dev/null) || return 0
+    # Restrict to a safe character class before truncating: jq -r turns a
+    # JSON "\n" into a real newline, and truncating by character count alone
+    # would let it (or a "|") survive into the printf argument and split one
+    # trace() call into more than one physical log line.
+    raw="${raw//[^A-Za-z0-9_-]/}"
     [[ -n "$raw" ]] && ATG_SESSION="${raw:0:8}"
     return 0
 }
@@ -30,6 +35,12 @@ atg_set_session() {
 # into a hole.
 atg_rotate_trace() {
     local max=${ANTI_TANGENT_GUARD_TRACE_MAX_BYTES:-1048576} size
+    # [[ -gt ]] evaluates both sides arithmetically. Validate the env-supplied
+    # cap before it ever reaches that comparison: under set -u, a non-numeric
+    # value there aborts the whole script rather than tripping the "|| return
+    # 0" a few lines down, which turns a malformed cap into a hook that skips
+    # its own gate. Falling back to the default keeps this best-effort.
+    [[ "$max" =~ ^[0-9]+$ ]] || max=1048576
     [[ -f "$TRACE_LOG" ]] || return 0
     size=$(wc -c < "$TRACE_LOG" 2>/dev/null) || return 0
     [[ "$size" -gt "$max" ]] || return 0

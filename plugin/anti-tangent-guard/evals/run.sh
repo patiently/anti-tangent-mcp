@@ -104,11 +104,24 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # flipped in place (from blocking to not blocking) to match, rather than
 # deleted, since it still documents the shape it once covered. Four cases
 # pin the newly-clean #\d+ shapes, four more pin the newly-clean version
-# shapes, for an exact total. Both checks below must hold or
+# shapes, for a subtotal of 77. A fifth pass on the session-identity and
+# rotation work found the rotation cap comparison used bash's [[ -gt ]],
+# which evaluates both operands arithmetically: a non-numeric
+# ANTI_TANGENT_GUARD_TRACE_MAX_BYTES against an already-existing trace log
+# aborted the whole script under set -u, before the trailing "|| return 0"
+# and outside any ERR trap — the worst shape available, since it let a
+# violating write's block MESSAGE reach stderr while the exit code silently
+# stopped being 2. One case pins that a malformed cap still blocks. A
+# second found the session id was truncated by character count, not by a
+# safe character class, so a jq-decoded embedded newline survived into the
+# trace line and split one trace() call into two physical lines, the
+# second of which reads as a genuine, unrelated entry; one case pins that a
+# newline-bearing session id still lands as exactly one physical line, for
+# an exact total. Both checks below must hold or
 # the count assertion is vacuous: the JSON file must declare
 # EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=77
+EXPECTED_CASE_COUNT=79
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Every hook invocation below runs with this as its cwd, run-scoped (inside
@@ -245,6 +258,26 @@ run_case() {
             mkdir -p "$(dirname "$fixture_dest")"
             jq -r --arg k "$fixture_rel" ".evals[$idx].cwd_fixture[\$k]" "$EVALS_FILE" > "$fixture_dest"
         done < <(jq -r ".evals[$idx].cwd_fixture | keys[]" "$EVALS_FILE")
+    fi
+
+    # Optional "tmpdir_fixture": {relative_path: content} — the {{TMPDIR}}
+    # counterpart to cwd_fixture above: materialises a real file under this
+    # case's OWN {{TMPDIR}} (case_tmp), which env/stdin/transcript
+    # substitution can then reference by the same {{TMPDIR}} token, rather
+    # than under the shared HOOK_CWD. Needed for a case that must prove
+    # behaviour conditioned on a target file already existing there before
+    # the hook runs — a code path guarded by "only act if the file is
+    # already present" is untested by a target that starts out absent.
+    local has_tmpdir_fixture
+    has_tmpdir_fixture=$(jq -r ".evals[$idx] | has(\"tmpdir_fixture\")" "$EVALS_FILE")
+    if [[ "$has_tmpdir_fixture" == "true" ]]; then
+        local tfixture_rel
+        while IFS= read -r tfixture_rel; do
+            [[ -n "$tfixture_rel" ]] || continue
+            local tfixture_dest="$case_tmp/$tfixture_rel"
+            mkdir -p "$(dirname "$tfixture_dest")"
+            jq -r --arg k "$tfixture_rel" ".evals[$idx].tmpdir_fixture[\$k]" "$EVALS_FILE" > "$tfixture_dest"
+        done < <(jq -r ".evals[$idx].tmpdir_fixture | keys[]" "$EVALS_FILE")
     fi
 
     local stdin_raw

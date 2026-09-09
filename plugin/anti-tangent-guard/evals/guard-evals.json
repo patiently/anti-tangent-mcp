@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (77 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (79 cases)",
   "evals": [
     {
       "id": 1,
@@ -1105,6 +1105,43 @@
       "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// matches the wire shape used by the daemon (v0.21.1)\\npackage x\\n\"}}",
       "expected_exit": 0,
       "reason": "same wire-compatibility-in-parens shape as cases 74-76, naming a specific external daemon's wire version rather than this project's own"
+    },
+    {
+      "id": 78,
+      "name": "comment-write-malformed-trace-cap-still-blocks",
+      "hook": "check-comment-write",
+      "tmpdir_fixture": {
+        "trace.log": "preexisting\n"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log",
+        "ANTI_TANGENT_GUARD_TRACE_MAX_BYTES": "not-a-number"
+      },
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "[[ -gt ]] evaluates a non-numeric ANTI_TANGENT_GUARD_TRACE_MAX_BYTES arithmetically; against an already-existing trace log (the tmpdir_fixture above) that aborted the whole script under set -u before reaching the trailing || return 0, letting a violating write's block message reach stderr while the exit code silently stopped being 2 -- the trace log must already exist for this case to exercise the vulnerable [[ -f ]] gate at all"
+    },
+    {
+      "id": 79,
+      "name": "comment-write-trace-session-newline-sanitized",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "stdin_raw": "{\"session_id\": \"ab\\ncd|BLOCK|forged\", \"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "s=abcdBLOC | comment-write | block | comment-hygiene"
+        ]
+      },
+      "reason": "jq -r turns the payload's JSON \\n into a real newline; truncating the extracted session id by character count alone let it (and the |) survive into the printf argument and split one trace() call into two physical lines, the second of which reads as a genuine, unrelated log entry -- the full reconstructed line as a single grep -F needle only matches if the newline and pipes were stripped before truncation, since grep matches within one physical line"
     }
   ]
 }
