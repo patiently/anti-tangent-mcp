@@ -921,6 +921,8 @@ func TestRenderPost_CommentHygieneIsPinnedMinor(t *testing.T) {
 	assert.Contains(t, out.User, "criterion: comment_hygiene")
 	assert.Contains(t, out.User, "always `minor`, never `major` or `critical`")
 	assert.Contains(t, out.User, "read correctly to someone who never saw this change")
+	assert.Contains(t, out.User, "Apply this policy ONLY when a diff is present")
+	assert.Contains(t, out.User, "With `final_files` and no diff")
 }
 
 func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
