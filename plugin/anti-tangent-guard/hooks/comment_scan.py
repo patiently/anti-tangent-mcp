@@ -41,17 +41,16 @@ TELLS = (
     # optional whitespace, an optional colon (GitHub's own "Fixes: #N"
     # closing syntax), and then EITHER "also" alone (a citation-style "see
     # also #N" has no ordinary-prose reading) OR a REQUIRED connector noun,
-    # optionally preceded by "the". The "the"-bridge is deliberately narrow —
-    # only "issue" and "pr" — not the full connector set: "the item #4
-    # dialog", "the ticket #4 printer jam", "the bug #7 spray pattern" are all
-    # ordinary English with "the <noun> #N" read as "the Nth <noun>", and no
-    # regex can tell those from a genuine "the issue #N" / "the PR #N"
-    # tracker reference by surface form alone — so a two-round narrow-and-
-    # discover cycle on that exact shape was replaced with dropping the
-    # bridge for those nouns rather than narrowing it again. Their BARE form
-    # (no "the", directly after a strong verb — "fixes issue #N", "closes bug
-    # #N") is unaffected and still matches, same as before this bridge
-    # existed. "reference"/"references" is also a standalone trigger (for
+    # optionally preceded by "the". The "the"-bridge admits only "issue" and
+    # "pr" — not the full connector set — because "the item #4 dialog", "the
+    # ticket #4 printer jam", "the bug #7 spray pattern" are all ordinary
+    # English with "the <noun> #N" read as "the Nth <noun>", and no regex can
+    # tell those from a genuine "the issue #N" / "the PR #N" tracker
+    # reference by surface form alone. The other connector nouns keep only
+    # their BARE form (no "the", directly after a strong verb — "fixes issue
+    # #N", "closes bug #N"), which needs no "the" in front of it to read
+    # unambiguously as a reference. "reference"/"references" is also a
+    # standalone trigger (for
     # GitHub's own "References #N" syntax) with the same ordinary-English
     # collision: "the reference #2 style" reads as "the second reference",
     # not a tracker link. `(?<!the )` refuses "reference[sd]?" as a trigger
@@ -80,16 +79,16 @@ TELLS = (
     # anywhere near the version and so never matches, without needing to name
     # the nouns ("output", "server", "shape") that happen to appear in it.
     #
-    # A bare-parenthesis rule — "the version alone inside its own
-    # parenthesis, nothing else" — was tried as a third branch to catch a
-    # verb-free shape common in this project's own history ("Categories
-    # emitted by prime_project_knowledge (vX.Y.Z)."). It was REMOVED: a
+    # A bare-parenthesis shape — "the version alone inside its own
+    # parenthesis, nothing else" — is deliberately NOT a tell, even though it
+    # would catch a verb-free pattern common in this project's own history
+    # ("Categories emitted by prime_project_knowledge (vX.Y.Z)."). A
     # wire-compatibility sentence can put its version in parentheses too
     # ("backward compatible with (vX.Y.Z)", "accepts (vX.Y.Z) or later
     # payloads", "matches the wire shape used by the daemon (vX.Y.Z)") and
-    # shape alone cannot tell those from the genuine history shape the rule
-    # was added for — both are exactly "(vX.Y.Z)" with nothing else inside
-    # the parens. Unlike the tells above, no enumerable word closes this gap:
+    # shape alone cannot tell those from a genuine history reference — both
+    # are exactly "(vX.Y.Z)" with nothing else inside the parens. Unlike the
+    # tells above, no enumerable word closes this gap:
     # the ambiguity is in what the surrounding SENTENCE means, not in what
     # sits next to the version. A false positive here blocks a write
     # mid-edit; a false negative is still caught by post.tmpl's semantic

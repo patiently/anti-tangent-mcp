@@ -21,122 +21,109 @@ PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 HOOK_DIR="$PLUGIN_DIR/hooks"
 EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 
-# The eval table this suite implements (see task-12-brief.md Step 4, the two
-# tool-scoping cases added for task-12b, the two forged-marker cases added for
-# task-12c — see task-12b-review.md Critical #1 — the two ESCAPED cases added
-# for task-12d, which run the current server's own rendering through the hook
-# rather than a hand-written fixture (task-12c-review.md Critical #1 /
-# Important #2), and one direct-call JSON-result case added for the v0.18.0
-# final review's Important #1, which pairs a validate_completion tool_use
-# with its tool_result exactly as the server's envelopeResult marshals it)
-# has 22 rows; check-comment-write, the PreToolUse comment-hygiene guard,
-# contributes eleven more. check-task-complete's own comment-hygiene scan —
-# a defence-in-depth pass over the LAST validate_completion call's diff
-# evidence in the task window, covering a comment write that reached disk
-# without going through Edit/Write — contributes twelve more still: last-call
-# selection, an absolute final_diff_path, a relative path failing open, the
-# size cap failing open, the kill switch, the trace() reason, a
-# final_files-only close passing untouched, an excluded extension, an
-# unchanged context line, and an unresolvable plugin root failing open on the
-# scan without masking an independently-detected failing verdict, for a
-# subtotal of 45. A zero-false-positive pass over every tracked source file's
-# comments contributes seven more: four pin a narrowed tell's now-allowed
-# shape (an all-numeric colour literal, an ordinal in prose, a compound word,
-# and a URL path segment) at exit 0, two re-confirm that a genuine reference
-# still blocks after the same narrowing, and one pins that a version number
-# naming a wire-compatibility contract — what shape of data this code reads —
-# does not block, for a subtotal of 52. One case more asserts that a broken
-# plugin root does not silently swallow a genuine violation: a passing
-# verdict over a violating diff still fails open on exit code, but the trace
-# log must carry a distinct reason for "could not scan" rather than reading
-# identically to a clean scan that found nothing, for a subtotal of 53. A
-# follow-up pass on the same zero-false-positive work found the first
-# narrowing traded one imprecision for another: the issue-reference tell
-# matched on trigger-word PROXIMITY, so an ordinary-English sentence putting
-# "see"/"issue"/"bug"/"reference" within a short window of an unrelated "#N"
-# still blocked, and the version tell's noun-exclusion list could be defeated
-# by an unrelated noun ("server") sitting near a genuine change reference and
-# wrongly letting it through. Eight more cases hold both directions of the
-# re-fix: five pin that a trigger word merely near the digits, with no direct
-# grammatical link, does not block; one pins that the trigger is still
-# honored when directly followed by one of a small closed set of connector
-# nouns (so "fixes issue #N" still blocks); two pin that a genuine
-# added/removed-in-version statement now blocks even with an unrelated noun
-# in the same sentence, for a subtotal of 61. A third pass found the
-# grammatical-attachment rule for #\d+ had overshot: requiring bare whitespace
-# between trigger and digits missed GitHub's own "Fixes: #N" / "References #N"
-# syntax, "fixes the issue #N", and "see also #N" — the single most common
-# real forms. Five cases pin those now block, holding a closed, enumerated set
-# of bridge words (a colon; "also" alone; an optional "the" that may only lead
-# to a REQUIRED connector noun, never bare to the digits) rather than a wider
-# gap that would reopen the five prose false positives from the prior round.
-# A sixth pins that a bare parenthetical version tag ("(vX.Y.Z)", the version
-# alone inside its own parenthesis with no governing change verb anywhere in
-# the sentence) now blocks too — a shape the verb-governs-only version tell
-# had been missing entirely, accounting for the great majority of that tell's
-# lost recall in the prior round. A seventh confirms the parenthetical
-# addition stays narrow: a version merely somewhere inside a larger
-# parenthetical remark, not alone in its own parenthesis, still does not
-# block, for a subtotal of 68. One more case pins that a written trace line
-# carries the session identifier column that keeps a shared trace log
-# attributable when more than one session appends to it, for a subtotal of
-# 69. A fourth pass on the #\d+ tell found the "the"-bridge from round three
-# had been applied to all eight connector nouns when only "issue" needed it:
-# "the item #4 dialog", "the ticket #4 printer jam", "the bug #7 spray
-# pattern" are ordinary English no regex can separate from a genuine tracker
-# reference by shape alone. Rather than narrow the bridge a third time, it
-# was restricted to issue/pr only; the other six connector words keep their
-# BARE form (straight after a strong verb, no "the") and lose only the "the"
-# form. A companion case closes the same hole for "reference[sd]?"
-# specifically, which is also a standalone trigger (for "References #N"):
-# "the reference #2 style" no longer blocks via a negative lookbehind that
-# refuses it as a trigger when directly preceded by "the ", without touching
-# a bare "References #N" at the start of a clause. The bare-parenthesis
-# version rule added the round before was found to have the same flaw one
-# direction over: "backward compatible with (vX.Y.Z)", "accepts (vX.Y.Z) or
-# later payloads", "still reads the older (vX.Y.Z) shape", "matches the wire
-# shape used by the daemon (vX.Y.Z)" are wire-compatibility sentences that
-# happen to parenthesize their version, indistinguishable by shape from the
-# genuine-history shape the rule targeted — so it was REMOVED rather than
-# narrowed again, deliberately giving up the recall it had recovered; that
-# shape is now reviewer-led, not regex-led, same as any version reference
-# with no governing verb and no other regex-extractable signal. Case 67 is
-# flipped in place (from blocking to not blocking) to match, rather than
-# deleted, since it still documents the shape it once covered. Four cases
-# pin the newly-clean #\d+ shapes, four more pin the newly-clean version
-# shapes, for a subtotal of 77. A fifth pass on the session-identity and
-# rotation work found the rotation cap comparison used bash's [[ -gt ]],
-# which evaluates both operands arithmetically: a non-numeric
-# ANTI_TANGENT_GUARD_TRACE_MAX_BYTES against an already-existing trace log
-# aborted the whole script under set -u, before the trailing "|| return 0"
-# and outside any ERR trap — the worst shape available, since it let a
-# violating write's block MESSAGE reach stderr while the exit code silently
-# stopped being 2. One case pins that a malformed cap still blocks. A
-# second found the session id was truncated by character count, not by a
-# safe character class, so a jq-decoded embedded newline survived into the
-# trace line and split one trace() call into two physical lines, the
-# second of which reads as a genuine, unrelated entry; one case pins that a
-# newline-bearing session id still lands as exactly one physical line, for
-# a subtotal of 79. A sixth pass closed a regression-coverage gap the
-# round-three restriction left open: nothing in the suite pinned "pr" or
-# "pull request" as a trigger, bare or bridged, or the bare (no "the") form
-# of the six connectors whose "the"-bridge round three removed. Three
-# cases fill that gap, each verified by mutation — the case stops matching
-# once its named trigger is actually removed from the pattern, not merely
-# present alongside something else that happens to also catch the line.
-# One of the three ("pr" via the "the"+pr bridge) turned out not to
-# isolate that mechanism cleanly: "pr" is also a pre-existing standalone
-# trigger, so "PR" sitting directly before a "#N" matches on its own bare
-# adjacency regardless of whatever precedes it — no test string can
-# separate the bridge from the standalone trigger for "pr" specifically,
-# unlike "issue" (case 59's "fixes issue #N"), which has no standalone
-# role to confound it. The case still pins "pr" as a trigger in some form,
-# documented as such rather than claimed to test what it does not, for an
-# exact total. Both checks below must hold or
-# the count assertion is vacuous: the JSON file must declare
-# EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
-# silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=82
+# The eval table this suite implements. check-task-complete's FIRST TWO block
+# conditions (no pass signal anywhere in the window; the last qualifying
+# signal's verdict reads fail) are pinned by 22 cases: tool-scoping (a
+# check_progress or validate_task_spec block must not satisfy the guard),
+# forged-marker resistance (a finding's free-text Evidence containing the
+# literal lines "tool: validate_completion" / "verdict: pass" must not be
+# read as the block header — both against a hand-written, un-escaped fixture
+# and against the current server's actual escaped rendering, the latter
+# pinned byte-for-byte by internal/mcpsrv/guard_eval_fixture_test.go so these
+# cases track the real formatters rather than a hand-rolled mirror of them),
+# and one case pairing a validate_completion tool_use with its tool_result
+# exactly as the server's envelopeResult marshals it, exercising the
+# direct-call verdict read end-to-end. check-comment-write, the PreToolUse
+# comment-hygiene guard, contributes eleven more. check-task-complete's THIRD
+# block condition — the submitted diff adds a comment carrying change
+# history — is its own comment-hygiene scan: a defence-in-depth pass over the
+# LAST validate_completion call's diff evidence in the task window, catching
+# a comment write that reached disk without going through Edit/Write. It
+# contributes twelve cases of its own: last-call selection, an absolute
+# final_diff_path, a relative path failing open, the size cap failing open,
+# the kill switch, the trace() reason, a final_files-only close passing
+# untouched, an excluded extension, an unchanged context line, and an
+# unresolvable plugin root failing open on the scan without masking an
+# independently-detected failing verdict.
+#
+# A zero-false-positive pass over every tracked source file's own comments
+# contributes seven cases pinning the tells' precise boundaries — four pin
+# shapes that must NOT block (an all-numeric colour literal, an ordinal in
+# prose, a compound word, a URL path segment), two confirm a genuine
+# reference still blocks, and one pins that a version number naming a
+# wire-compatibility contract — what shape of data the code reads now, not
+# when it changed — does not block. One further case pins that a broken
+# plugin root fails open on the exit code without masking an independently-
+# detected failing verdict, with a trace-log reason distinct from "scanned
+# and found nothing" so the two can never be confused.
+#
+# The `#\d+` and version tells are grammar-based rather than proximity-based,
+# and the suite pins the boundary this buys. A trigger word merely NEAR the
+# digits — "see"/"issue"/"bug"/"reference" anywhere within a short window of
+# an unrelated "#N" — is not enough: ordinary prose ("see the #1 best
+# practice guide") puts those words near a "#N" that names nothing. The tell
+# instead requires the trigger to GOVERN the digits, separated from them by
+# nothing but a closed, enumerated bridge set: an optional colon (GitHub's
+# "Fixes: #N"), "also" alone ("see also #N"), or an optional "the" leading to
+# a REQUIRED connector noun. That "the"-bridge admits only "issue" and "pr" —
+# the other candidate connector nouns ("item", "ticket", "bug", "number",
+# "no.", "reference") read as ordinary English ("the ticket #4 printer jam",
+# "the reference #2 style") indistinguishably from a genuine tracker
+# reference by surface form alone, so their "the"-prefixed form is excluded
+# entirely and only their bare form (straight after a strong verb, no "the")
+# matches. "reference[sd]?" needs its own lookbehind on top of that, since it
+# is also a standalone trigger for GitHub's "References #N": the lookbehind
+# excludes "the reference #N" without touching a bare "References #N" at a
+# clause start.
+#
+# The version tell mirrors this reasoning: it requires a change verb to
+# govern the version on either side, which is why a wire-compatibility
+# sentence like "reads the vX.Y.Z output" never matches — no change verb sits
+# near the version at all. A bare-parenthesis version shape ("(vX.Y.Z)", the
+# version alone inside its own parenthesis with nothing else) is deliberately
+# not a tell: a wire-compatibility sentence can parenthesize its version too
+# ("backward compatible with (vX.Y.Z)", "matches the wire shape used by the
+# daemon (vX.Y.Z)"), and shape alone cannot distinguish that from genuine
+# history ("Categories emitted by X (vX.Y.Z).") — the ambiguity is in what
+# the surrounding sentence means, not what sits next to the version, so this
+# class is deliberately reviewer-led rather than regex-led, the same as any
+# version reference with no governing verb and no other regex-extractable
+# signal.
+#
+# Twenty-nine cases pin these boundaries: eight hold both directions of the
+# grammar-vs-proximity distinction for the issue and version tells (a trigger
+# merely near the digits does not block; a trigger governing the digits
+# despite a nearby unrelated noun still blocks); five pin GitHub's own
+# closing syntax and the bridge words that admit it without reopening
+# ordinary prose; two pin that the bare-parenthesis version shape does not
+# block either way — the version alone in its own parenthesis, and a version
+# merely somewhere inside a larger parenthetical remark, both fall through to
+# reviewer-led judgment; one pins the trace session-identifier column; eight
+# confirm the excluded shapes stay excluded — four for the "the"+connector-
+# noun forms this suite does not treat as a tell, four for the wire-
+# compatibility parenthetical forms; and two pin trace/session-id hardening
+# (a malformed rotation cap still blocks rather than aborting the script, and
+# a newline embedded in a session id still lands as exactly one physical
+# trace line). A final three cases pin "pr" and "pull request" as triggers
+# and the bare (no "the") form of the six narrowly-bridged connectors, each
+# verified by mutation — the case stops matching once its named trigger is
+# actually removed from the pattern, not merely alongside something else
+# that happens to also catch the line; "pr" is also a pre-existing
+# standalone trigger, so its case cannot isolate the bridge mechanism from
+# the standalone one in a single test string and is documented as such
+# rather than claimed to test what it does not.
+#
+# Two more cases pin the on-touch boundary for a moved or reindented existing
+# comment: byte-identical content that only relocates within the diff does
+# not block, while a comment line whose bytes change — even only by
+# reindentation — is treated as added and does block, since changing a
+# line's bytes is touching it.
+#
+# Both checks below must hold or the count assertion is vacuous: the JSON
+# file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
+# execute that many (a silently-skipped case would satisfy the first check
+# alone).
+EXPECTED_CASE_COUNT=84
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Every hook invocation below runs with this as its cwd, run-scoped (inside

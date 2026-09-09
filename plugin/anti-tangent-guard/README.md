@@ -7,9 +7,10 @@ such comments from being written in the first place.
 
 ## Active on install
 
-This plugin has one hook and no configuration step. As soon as it is
-installed, every `TaskUpdate` call is watched — there is nothing further to
-turn on.
+This plugin has two hooks and no configuration step. As soon as it is
+installed, every `TaskUpdate` call is watched for the completion gate, and
+every `Edit`/`Write` call is intercepted for the write-time comment-hygiene
+scan — there is nothing further to turn on.
 
 ## What it does, and what it does not do
 
@@ -213,6 +214,27 @@ directs the model to remove the flagged comment and resubmit the edit.
 This hook fires inside dispatched subagents as well as the main agent, since
 `PreToolUse` fires for all `Edit`/`Write` calls regardless of origin.
 
+### On-touch: what counts as an added comment line
+
+Both scans (write-time and close-time) compare line *text*, not line
+*position*. A comment line whose bytes are unchanged from what was already in
+the file — even if it moved to a different line number, a different
+function, or a different file region — is not treated as added and is never
+scanned, no matter how the surrounding code shifted around it. A comment
+line whose bytes changed at all — including when the only change is leading
+whitespace from a re-indent or a gofmt-style reflow — **is** treated as added
+and is scanned like any newly written line.
+
+This is deliberate, not an edge case the scanner happens to get wrong:
+changing a line's bytes is touching it, and the on-touch rule this policy is
+built on (see the design spec's "The policy") applies to any touch, not only
+a change in wording. So re-indenting an existing comment that already
+violates the policy blocks the write until the comment is fixed, while a pure
+move of the same, unchanged line — a function relocated verbatim, a file
+split with no line inside it edited — does not. If a reflow is about to touch
+a violating comment incidentally, fix the comment as part of that same edit
+rather than treating the reflow as separate from the touch.
+
 **Limitations:**
 - `Bash` writes (heredocs, sed -i, and similar) bypass the `Edit`/`Write`
   matcher entirely — comments written through `Bash` are caught, if at all,
@@ -227,6 +249,10 @@ This hook fires inside dispatched subagents as well as the main agent, since
   patterns cannot catch — an engineer writing a sentence like "I rewrote this
   for clarity" in a comment passes the scanner but may be flagged by the
   reviewer.
+- The extension allowlist (`comment_scan.py`'s `SCAN_EXTS`) is keyed on
+  `os.path.splitext`, so a file with no extension — including this plugin's
+  own extensionless `check-task-complete` and `check-comment-write` hook
+  scripts — falls outside it and is not scanned by either layer.
 
 Set `ANTI_TANGENT_COMMENT_GUARD=0` to disable the comment-hygiene scan at both
 write time (PreToolUse on `Edit`/`Write`) and close time (part of the
@@ -351,13 +377,16 @@ land — is swallowed and never changes the hook's own exit status.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (22 cases) against the hook and exits non-zero on
-any mismatch. Cases 18/19 are deliberately un-escaped fixtures — they test
-positional extraction against an older server. Cases 20/21 are the current
-server's own rendering, pinned byte-for-byte to the formatters by
+Runs the full eval suite (84 cases) against both hooks and exits non-zero on
+any mismatch — check-task-complete's three block conditions (the third being
+its own close-time comment-hygiene scan), plus check-comment-write's
+write-time comment-hygiene guard. See `evals/run.sh`'s header comment for the
+full breakdown by case. Cases 18/19 are deliberately un-escaped fixtures — they
+test positional extraction against an older server. Cases 20/21 are the
+current server's own rendering, pinned byte-for-byte to the formatters by
 `internal/mcpsrv/guard_eval_fixture_test.go`, so the escaping half is
 exercised end-to-end through the real hook rather than only through a Go
 mirror of its regexes. Case 22 pairs a validate_completion tool_use with its
 tool_result exactly as the server's `envelopeResult` marshals it, so the
-direct-call verdict read (see "The two block conditions" above) is
+direct-call verdict read (see "The three block conditions" above) is
 exercised end-to-end too.

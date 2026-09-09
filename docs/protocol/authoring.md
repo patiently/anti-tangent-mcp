@@ -116,3 +116,26 @@ The section is OPTIONAL. A task without it yields no file operations and no find
 guards plans that opt into the structure, it does not demand that they do. The `json:metadata`
 fence's `files` array is a flat list with no verb, so it cannot drive this check; the bullets are
 the only source.
+
+### Write-time comment guard (if `anti-tangent-guard` is installed)
+
+The comment policy (`implementer.md` §4.4) can be enforced, not just stated. If the
+`anti-tangent-guard` plugin is installed, its `PreToolUse` hook on `Edit`/`Write` refuses — `exit
+2`, before the write ever lands — a write that adds a comment matching one of a small set of
+mechanical tells: an issue, pull-request or task reference, or a version reference narrating when
+something changed. Prose narration ("previously", "no longer", "this replaced") cannot be matched
+without false positives, so that half of the policy is reviewer-led instead — `post.tmpl` catches
+it at completion time — and a clean write-time pass is not proof the whole of §4.4 was followed. A
+refused `Edit`/`Write` is not a bug in your call; it is the policy holding. Rewrite the flagged
+comment and retry the same edit.
+
+The hook fires per tool call regardless of which session issued it, so it reaches a dispatched
+subagent's own `Edit`/`Write` calls the same as the controller's. It does not see a `Bash`-written
+file (a heredoc, `sed -i`) at all, so writing the same comment through `Bash` bypasses this layer
+entirely — a comment that reaches disk that way is caught, if at all, only by `post.tmpl`'s
+reviewer rule or the completion guard's close-time scan. See the guard plugin's README for the
+full limitations list.
+
+Kill switch: `ANTI_TANGENT_COMMENT_GUARD=0`. This is a Claude Code plugin hook, not the MCP
+server — the server itself stays advisory and never blocks (root `CLAUDE.md`, "What This Repo Is
+Not").

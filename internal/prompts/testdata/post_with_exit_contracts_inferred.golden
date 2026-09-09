@@ -68,7 +68,9 @@ If you would emit a finding with `category: ambiguous_spec` AND `severity: major
 
 Comments added by this change must explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next editor. The test is that a comment read correctly to someone who never saw this change.
 
-A comment is a defect when it narrates change history — an issue, pull-request or task reference; a version reference; "previously", "no longer", "this replaced" — or when it restates what the code plainly does, or describes the code inaccurately.
+A comment is a defect when it narrates change history — an issue, pull-request or task reference; a version reference naming WHEN something changed ("added in v0.5.0", "removed in v2.0.0", "this replaced the old handler"); "previously", "no longer", "this replaced" — or when it restates what the code plainly does, or describes the code inaccurately.
+
+**A version reference is not automatically a defect.** One stating a live compatibility contract — what the code reads, accepts, or negotiates now (e.g. "reads the anti-tangent v0.10.0 stats output", "accepts v0.15.0+ payloads", "matches the wire shape used by the v0.21.1 server") — reads correctly to someone who never saw the change that introduced it, and documents present behavior rather than history. Only flag a version reference when it narrates a change rather than stating a contract.
 
 Judge only comments this change ADDS, and only when the evidence shows which comments those are. When the evidence is a diff, added comments are the `+` lines.
 

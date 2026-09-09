@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (82 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (84 cases)",
   "evals": [
     {
       "id": 1,
@@ -1175,6 +1175,25 @@
         "an issue or pull-request reference"
       ],
       "reason": "pins the bare (no 'the') connector-noun form for one of the six connectors (bug/ticket/item/number/no./reference) whose 'the'-bridge was removed in round three but whose bare form after a strong verb was deliberately left working; verified by mutation (removing 'bug' from the bare-connector alternation makes this stop matching)"
+    },
+    {
+      "id": 83,
+      "name": "comment-write-reindent-of-violating-comment-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"func a() {\\n// see #12\\nreturn 1\\n}\",\"new_string\":\"func a() {\\n    // see #12\\nreturn 1\\n}\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "the on-touch rule keys on line bytes, not line position: re-indenting an existing violating comment changes its bytes, so the occurrence-aware diff in added() no longer finds a matching entry to consume and the line counts as added. This is deliberate — changing a line's bytes is touching it — and must block the same as writing the violation fresh."
+    },
+    {
+      "id": 84,
+      "name": "comment-write-pure-move-of-violating-comment-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"// see #12\\nfunc a() {}\\nfunc b() {}\",\"new_string\":\"func b() {}\\n// see #12\\nfunc a() {}\"}}",
+      "expected_exit": 0,
+      "reason": "the mirror of case 83: relocating a comment line without changing a single byte of it leaves an exact match in the old text's occurrence counter, so added() consumes it and reports no added line. A byte-identical move is not a touch, and must not block — the asymmetry with case 83 is the on-touch rule working as designed, not a gap."
     }
   ]
 }

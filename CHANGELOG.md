@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.19.0] - 2026-09-09
 
+### Added
+- **A comment-hygiene policy, prevented at write time and backstopped at task close.** Comments
+  may explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next
+  editor — the test is that they read correctly to someone who never saw the change. They may not
+  carry change history: issue, PR or task references, version references, review references, or
+  narration of what the code used to do. Git already holds that, and a comment repeating it goes
+  stale on the next change. A comment failing these criteria is removed or rewritten by whatever
+  task next touches it; there is no big-bang cleanup.
+
+  Enforced in three layers, split by what each can actually decide and what each can see.
+  **Prevention** — a `PreToolUse` hook on `Edit`/`Write` in `anti-tangent-guard`
+  (**0.1.0 → 0.2.0**) refuses the write outright before a violating comment reaches disk. It is
+  the only layer that prevents rather than detects, and the only one whose reach does not depend
+  on transcript visibility or evidence shape. **Review** — `validate_completion`'s reviewer
+  already receives the full diff, whichever agent submitted it, and gains a rule emitting
+  `category: quality` / `criterion: comment_hygiene` findings **pinned to `severity: minor`** —
+  `quality` is not severity-floored server-side, so an unpinned rule would let two comment nits
+  become a `fail` and hard-block the close. This reaches every path that submits a diff to
+  `validate_completion`, regardless of which agent later closes the task, but only when a diff is
+  actually present in that call — `final_files`-only or `test_evidence`-only evidence gets no
+  comment-hygiene review from this layer. No new finding category and no schema change.
+  **Detection** — the same `check-task-complete` hook that already mandates the completion gate
+  scans the added comment lines of the last `validate_completion` call's diff for the unambiguous
+  mechanical tells (issue/PR references, version references, task/review references) and blocks
+  the close with the existing reopen-fix-revalidate flow, catching a comment that reached disk
+  through `Bash` or another path prevention cannot intercept. It is defence in depth, not the
+  primary gate: it fires on the *closing* agent's transcript, so on the subagent-driven path —
+  where a subagent validates and the controller closes — it sees only the pasted `summary_block`
+  and no diff. Prose-history tells like "previously" and "used to" are deliberately left out of
+  both scans: they cannot be matched without false positives, so review is what catches them.
+
+  Every scan (prevention and detection) is restricted to **added** lines in source files. `.md`
+  and config files are excluded: a changelog entry legitimately carries issue and version
+  references, and this repo requires one in every change. `Write` over an existing file is diffed
+  against what is on disk, so rewriting a file does not demand cleanup of every comment already in
+  it that stays byte-for-byte unchanged — moving an untouched line is not a touch. A comment line
+  whose bytes change is treated as added and scanned, and that includes a pure re-indent: changing
+  a line's bytes is touching it, even when the change is only whitespace. Kill switch
+  `ANTI_TANGENT_COMMENT_GUARD=0` disables both the prevention and detection hook layers while
+  leaving the completion-gate check active. As with the completion guard, the blocking half here
+  is a Claude Code plugin the operator installs and can disable — the MCP server itself remains
+  advisory and never blocks.
+
+- **`criterion_counts` on stats events.** `stats.Event` recorded `category_counts` but nothing
+  finer, so a `quality` finding about a comment was indistinguishable from any other `quality`
+  finding and the comment policy's effect could not be measured. Counts come from an **allowlist
+  of server-recognised criterion sentinels**, never from raw criterion text: `pre.tmpl` tells the
+  reviewer to quote verbatim acceptance-criterion text as the criterion, and the ledger has until
+  now held no free text at all — every string in it is a bounded enum or a hash. Recording raw
+  criterion would have written task-specification text to disk and given the map one key per
+  acceptance criterion ever reviewed.
+
 ### Fixed
 - **`validate_task_spec` now reserves `major` for ambiguity that would actually cause
   misimplementation.** Across 191 real calls, the tool returned `fail` 58% of the time and `warn`
@@ -28,42 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The pre-task gate's terminal state is documented.** `implementer.md` §4.2 told an implementer
   to treat `critical` as blocking and `major` as address-or-explain, and stopped — leaving no
   stopping rule for a `warn` that will not move. It now states one.
-
-### Added
-- **A comment-hygiene policy, enforced at task close.** Comments may explain non-trivial
-  behaviour, or a non-obvious invariant or hazard that would bite the next editor — the test is
-  that they read correctly to someone who never saw the change. They may not carry change
-  history: issue, PR or task references, version references, review references, or narration of
-  what the code used to do. Git already holds that, and a comment repeating it goes stale on the
-  next change. A comment failing these criteria is removed or rewritten by whatever task next
-  touches it; there is no big-bang cleanup.
-
-  Enforced in two layers, split by what each can actually decide. `anti-tangent-guard`'s
-  `check-task-complete` hook (**0.1.0 → 0.2.0**) scans the added comment lines of the diff
-  submitted to `validate_completion` for the unambiguous mechanical tells — issue/PR references,
-  version references, task/review references — and blocks the close with the existing
-  reopen-fix-revalidate flow. Prose-history tells like "previously" and "used to" are deliberately
-  left out of that scan: they cannot be matched without false positives, so `post.tmpl` handles
-  them, with `validate_completion`'s reviewer emitting `category: quality` /
-  `criterion: comment_hygiene` findings **pinned to `severity: minor`** — `quality` is not
-  severity-floored server-side, so an unpinned rule would let two comment nits become a `fail` and
-  hard-block the close. No new finding category and no schema change. Kill switch
-  `ANTI_TANGENT_COMMENT_GUARD=0`, which disables the hook half only.
-
-  Three layers. A `PreToolUse` hook on `Edit`/`Write` **prevents** a violating comment being
-  written at all — the only layer that prevents rather than detects, and the only one whose reach
-  does not depend on transcript visibility or evidence shape. `post.tmpl`'s reviewer rule covers
-  every execution path, because the diff reaches the reviewer regardless of which agent later
-  closes the task. The `check-task-complete` scan is defence in depth: it fires on the *closing*
-  agent's transcript, so on the subagent-driven path — where a subagent validates and the
-  controller closes — it sees only the pasted `summary_block` and no diff.
-
-  Every scan is restricted to **added** lines in source files. `.md` and config files are
-  excluded: a changelog entry legitimately carries issue and version references, and this repo
-  requires one in every change. `Write` over an existing file is diffed against what is on disk,
-  so rewriting a file does not demand cleanup of every comment already in it.
-
-### Fixed
 - **The guard's trace log now says which session wrote each line, and stops growing forever.**
   Every hook wrote to one shared `/tmp` path with no identity in the line, so on a machine running
   more than one Claude session the log could not answer the only question it exists to answer —
@@ -72,19 +88,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES`. Both are best-effort: a trace failure never changes a
   hook's exit status. `ANTI_TANGENT_GUARD_TRACE_LOG` still repoints the path for anyone wanting
   per-session isolation.
-
-### Added
-- **`criterion_counts` on stats events.** `stats.Event` recorded `category_counts` but nothing
-  finer, so a `quality` finding about a comment was indistinguishable from any other `quality`
-  finding and the comment policy's effect could not be measured. Counts come from an **allowlist
-  of server-recognised criterion sentinels**, never from raw criterion text: `pre.tmpl` tells the
-  reviewer to quote verbatim acceptance-criterion text as the criterion, and the ledger has until
-  now held no free text at all — every string in it is a bounded enum or a hash. Recording raw
-  criterion would have written task-specification text to disk and given the map one key per
-  acceptance criterion ever reviewed.
-
-  As with the completion guard, the blocking half is a Claude Code plugin the operator installs
-  and can disable — the MCP server itself remains advisory and never blocks.
 
 No schema, tool-argument or envelope change: the verdict distribution shifts, but every type and
 field is byte-identical. Callers that calibrated against the observed distribution will see it

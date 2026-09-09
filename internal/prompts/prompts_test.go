@@ -925,6 +925,22 @@ func TestRenderPost_CommentHygieneIsPinnedMinor(t *testing.T) {
 	assert.Contains(t, out.User, "With `final_files` and no diff")
 }
 
+func TestRenderPost_CommentHygieneVersionCarveOut(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:    sampleSpec(),
+		Summary: "Added Gin handler at /healthz returning \"ok\".",
+		Files: []File{{
+			Path:    "handlers/health.go",
+			Content: "package handlers\nfunc Health(c *gin.Context) { c.String(200, \"ok\") }\n",
+		}},
+		TestEvidence: "PASS: TestHealthReturns200",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "A version reference is not automatically a defect")
+	assert.Contains(t, out.User, "reads the anti-tangent v0.10.0 stats output")
+	assert.Contains(t, out.User, "Only flag a version reference when it narrates a change rather than stating a contract")
+}
+
 func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
 	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
 	require.NoError(t, err)

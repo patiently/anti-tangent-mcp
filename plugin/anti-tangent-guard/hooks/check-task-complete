@@ -35,7 +35,7 @@
 # An untagged block (no tool: line at all — e.g. from a pre-0.18.0 server)
 # does NOT satisfy the guard; see README.md's version note.
 #
-# POSITIONAL EXTRACTION, NOT FREE SCAN (task-12b review, Critical #1): the
+# POSITIONAL EXTRACTION, NOT FREE SCAN: the
 # tool:/verdict: lines are read from a FIXED position — the first line
 # matching each pattern WITHIN one envelope block — never by searching a
 # block's full text for the pattern anywhere in it. A finding's Evidence (or
@@ -232,7 +232,7 @@ for idx, line in enumerate(lines):
 scan_from = last_inprogress if last_inprogress >= 0 else 0
 called = any(i >= scan_from for i in called_idx)
 
-# Positional block extraction (task-12b review, Critical #1). A genuine
+# Positional block extraction. A genuine
 # envelope always starts with a bare "anti-tangent envelope" header line --
 # no leading whitespace, nothing else on the line; formatEnvelopeSummary
 # writes exactly that -- followed, before any finding is rendered, by

@@ -89,6 +89,18 @@ itself: the server stays advisory (root `CLAUDE.md`, "What This Repo Is
 Not"); enforcement, where a project wants it, is opt-in at the harness
 layer.
 
+**The same plugin also installs a `PreToolUse` hook on `Edit`/`Write`.**
+Unlike the completion guard above, this one can genuinely prevent a write: it
+refuses (`exit 2`) an `Edit` or `Write` that adds a comment carrying change
+history, before the write ever lands — an implementing subagent whose edit is
+refused this way should rewrite the flagged comment and retry, the same
+recovery §4.4 describes. It fires per tool call regardless of which session
+issued it, so it needs no controller-side transcript visibility to reach a
+subagent's own writes. Kill switch: `ANTI_TANGENT_COMMENT_GUARD=0` — separate
+from `ANTI_TANGENT_COMPLETION_GUARD` above, and it also disables the
+completion guard's own close-time comment scan. See the guard plugin's
+README for what the write-time scanner can and cannot see.
+
 ### 5.4 Anti-pattern: don't re-validate completion from the controller
 
 Do NOT have the controller call `validate_completion` itself after the subagent reports DONE. The implementer's session was created in its own context — the controller doesn't have the `session_id`, so a fresh `validate_completion` call from the controller would either fail with a `session_not_found` finding or, if the controller passed an arbitrary id, return spurious findings. The subagent's post-hook IS the gate.

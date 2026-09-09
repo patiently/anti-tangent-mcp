@@ -435,8 +435,10 @@ So the finish-hook layer covers the paths where the closing agent is the calling
 depth, not the primary gate. `PostToolUse` also fires after the state change, so even where it
 can see, it detects rather than prevents.
 
-**The reviewer layer covers every path**, because the diff reaches the reviewer regardless of who
-later closes the task.
+**The reviewer layer covers every path that submits a diff**, because the diff reaches the
+reviewer regardless of who later closes the task — but only when a diff is present in that same
+call; `final_files`-only or `test_evidence`-only evidence gets no comment-hygiene review from this
+layer either (see `post.tmpl`'s "Apply this policy ONLY when a diff is present").
 
 **Measured: `PreToolUse` fires for both `Write` and `Edit` calls issued inside a subagent.** Two
 probes were run, each dispatching one `general-purpose` subagent via the Agent tool and appending
