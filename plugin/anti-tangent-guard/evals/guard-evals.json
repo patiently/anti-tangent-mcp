@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (52 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (53 cases)",
   "evals": [
     {
       "id": 1,
@@ -629,7 +629,10 @@
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
-      "reason": "a relative final_diff_path must fail open rather than being opened relative to the hook's cwd"
+      "reason": "a relative final_diff_path must fail open rather than being opened relative to the hook's cwd",
+      "cwd_fixture": {
+        "relative/final.diff": "+++ b/a.go\n+// fixes #58\n"
+      }
     },
     {
       "id": 39,
@@ -847,6 +850,34 @@
       "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// Package atstats reads the anti-tangent v0.10.0 stats output\\npackage x\\n\"}}",
       "expected_exit": 0,
       "reason": "a version number naming a wire-compatibility contract (what output shape this code reads) reads correctly without change-history context and must not block; found as a real false positive in gnome-topbar/daemon/internal/atstats/atstats.go at HEAD"
+    },
+    {
+      "id": 53,
+      "name": "close-comment-scan-unavailable-does-not-silently-hide-violation",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "env": {
+        "CLAUDE_PLUGIN_ROOT": "/nonexistent-plugin-root-atg-eval",
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "comment-scan-unavailable"
+        ]
+      },
+      "reason": "a broken plugin root plus a genuinely violating diff plus a passing verdict must still fail open (exit 0), but the trace log must record that the scan itself could not run, distinguishing this from a clean scan that legitimately found nothing"
     }
   ]
 }

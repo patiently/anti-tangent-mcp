@@ -274,6 +274,13 @@ def diff_added_lines(inp):
     return out
 
 comment_violations = []
+# Distinct from "scanned and found nothing": set only when an in-window call
+# existed for the scan to examine and the guard did not disable it, but the
+# scanner itself could not be loaded. Without this signal, an import failure
+# (a misresolved plugin root, most commonly) is indistinguishable from a
+# clean scan on both the exit code and the "pass" trace line -- the guard
+# would be permanently and invisibly disabled.
+comment_scan_unavailable = False
 in_window_completions = [inp for (i, inp) in completion_inputs if i >= scan_from]
 if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
     scan_violations = None
@@ -282,6 +289,7 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
         from comment_scan import violations as scan_violations
     except Exception:
         scan_violations = None
+        comment_scan_unavailable = True
     if scan_violations is not None:
         added_by_path = diff_added_lines(in_window_completions[-1])
         for fpath, added in added_by_path.items():
@@ -290,7 +298,8 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
 
 print(json.dumps({"error": False, "called": called,
                   "block_found": bool(qualifying), "verdict": verdict,
-                  "comment_violations": comment_violations}))
+                  "comment_violations": comment_violations,
+                  "comment_scan_unavailable": comment_scan_unavailable}))
 '
 RESULT=$({ ATG_ROOT="$PLUGIN_ROOT" ATG_COMMENT_GUARD="$COMMENT_GUARD" python3 -c "$PY" "$TRANSCRIPT" "$TASK_ID" 2>/dev/null || echo '{"error":true}'; } | tr -d '\r')
 # NOTE: deliberately ".error", not ".error // true" — jq's // operator
@@ -306,6 +315,14 @@ CALLED=$(echo "$RESULT" | jq -r '.called // false')
 BLOCK=$(echo "$RESULT" | jq -r '.block_found // false')
 VERDICT=$(echo "$RESULT" | jq -r '.verdict // ""')
 trace "$TASK_ID" "parsed" "called=$CALLED block=$BLOCK verdict=$VERDICT"
+
+# Recorded unconditionally, before any block/pass branch below, so a broken
+# comment-scan import is visible in the trace log whether the close goes on
+# to block for an unrelated reason (a failing verdict) or to pass. Without
+# this, "scanned and found nothing" and "could not scan at all" are the same
+# entry in the log.
+[[ "$(echo "$RESULT" | jq -r '.comment_scan_unavailable // false')" == "true" ]] && \
+    trace "$TASK_ID" "skip" "comment-scan-unavailable"
 
 if [[ "$VERDICT" == "fail" ]]; then
     trace "$TASK_ID" "block" "verdict-fail"
@@ -345,7 +362,7 @@ if [[ "$CALLED" == "true" || "$BLOCK" == "true" ]]; then
             echo "Bash heredoc or similar write that never passed through Edit/Write, where"
             echo "this project's write-time guard would have caught it."
             echo
-            echo "$VIOLATIONS" | jq -r '.[] | "  " + .path + ": " + .line + "\n    -> contains " + .why'
+            echo "$VIOLATIONS" | jq -r '.[0:10][] | "  " + .path + ": " + .line + "\n    -> contains " + .why'
             echo
             echo "Comments must explain non-trivial behaviour or a non-obvious invariant, and must read"
             echo "correctly to someone who never saw this change. Issue, task and version references belong"

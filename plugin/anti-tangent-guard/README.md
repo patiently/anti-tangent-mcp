@@ -247,6 +247,16 @@ exit 0 silently, with only a trace-log line (see below) as a record:
 - any other unexpected internal error (an `ERR` trap covers this as a
   last-resort backstop)
 
+The comment-hygiene scan (see above) has one fail-open cause of its own: the
+scanner module cannot be imported, most commonly a `CLAUDE_PLUGIN_ROOT` that
+does not resolve to this plugin's `hooks/` directory. This is the one
+fail-open cause that is **not** silent by trace-log-line-only convention
+above — it gets its own distinct reason, `comment-scan-unavailable`, so it
+reads differently from a scan that genuinely ran and found nothing. Without
+that distinction, a misconfigured plugin root would disable the scan
+permanently and invisibly, indistinguishable on both the exit code and the
+trace log from a clean pass.
+
 A malformed line **inside** the transcript is handled differently, and
 deliberately not folded into "fail open": the transcript walker skips a
 single unparsable JSONL line and lets the remaining lines decide the verdict

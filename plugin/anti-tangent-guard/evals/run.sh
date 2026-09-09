@@ -45,13 +45,26 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # and a URL path segment) at exit 0, two re-confirm that a genuine reference
 # still blocks after the same narrowing, and one pins that a version number
 # naming a wire-compatibility contract — what shape of data this code reads —
-# does not block, for an exact total. Both checks below must hold or
+# does not block, for a subtotal of 52. One case more asserts that a broken
+# plugin root does not silently swallow a genuine violation: a passing
+# verdict over a violating diff still fails open on exit code, but the trace
+# log must carry a distinct reason for "could not scan" rather than reading
+# identically to a clean scan that found nothing, for an exact total. Both
+# checks below must hold or
 # the count assertion is vacuous: the JSON file must declare
 # EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=52
+EXPECTED_CASE_COUNT=53
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
+# Every hook invocation below runs with this as its cwd, run-scoped (inside
+# WORKDIR, so isolated from a concurrent run.sh invocation) rather than
+# per-case, so a "cwd_fixture" case can place a real file at a RELATIVE path
+# and have a relative-path assertion (e.g. that final_diff_path rejects a
+# relative path outright) exercise a path that genuinely resolves, instead of
+# a relative path that merely doesn't exist anywhere.
+HOOK_CWD="$WORKDIR/hook-cwd"
+mkdir -p "$HOOK_CWD"
 CASE_TMPDIRS=()
 cleanup() {
     rm -rf "$WORKDIR"
@@ -151,6 +164,26 @@ run_case() {
         fi
     fi
 
+    # Optional "cwd_fixture": {relative_path: content} — materialises a real
+    # file under HOOK_CWD (the directory every hook below is invoked from) at
+    # each given relative path, so a case asserting behaviour against a
+    # RELATIVE path (e.g. that final_diff_path rejects one outright) does so
+    # against a path that genuinely resolves to a real file if opened, not
+    # merely one that doesn't exist anywhere — otherwise a fail-open assertion
+    # would hold whether the relative-path rejection fired or the file was
+    # simply never found, and would prove nothing about which.
+    local has_cwd_fixture
+    has_cwd_fixture=$(jq -r ".evals[$idx] | has(\"cwd_fixture\")" "$EVALS_FILE")
+    if [[ "$has_cwd_fixture" == "true" ]]; then
+        local fixture_rel
+        while IFS= read -r fixture_rel; do
+            [[ -n "$fixture_rel" ]] || continue
+            local fixture_dest="$HOOK_CWD/$fixture_rel"
+            mkdir -p "$(dirname "$fixture_dest")"
+            jq -r --arg k "$fixture_rel" ".evals[$idx].cwd_fixture[\$k]" "$EVALS_FILE" > "$fixture_dest"
+        done < <(jq -r ".evals[$idx].cwd_fixture | keys[]" "$EVALS_FILE")
+    fi
+
     local stdin_raw
     stdin_raw=$(jq -r ".evals[$idx].stdin_raw // empty" "$EVALS_FILE")
 
@@ -207,11 +240,11 @@ run_case() {
     if [[ -n "$path_exclude" ]]; then
         local stub
         stub=$(build_stub_dir "$path_exclude")
-        PATH="$stub" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
+        ( cd "$HOOK_CWD" && PATH="$stub" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     elif [[ ${#env_assignments[@]} -gt 0 ]]; then
-        env "${env_assignments[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
+        ( cd "$HOOK_CWD" && env "${env_assignments[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     else
-        "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
+        ( cd "$HOOK_CWD" && "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     fi
 
     TOTAL=$((TOTAL + 1))
