@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Eval runner for check-task-complete, the anti-tangent-guard PostToolUse hook.
+# Eval runner for the anti-tangent-guard hooks: check-task-complete
+# (PostToolUse) and check-comment-write (PreToolUse).
 #
-# Reads guard-evals.json (shape: {skill_name, description, evals: [...]}, 21
-# cases), builds each case's stdin payload and synthetic transcript, invokes
-# the hook, and compares its exit code (and, for a block, its stderr message)
-# against what the case expects.
+# Reads guard-evals.json (shape: {skill_name, description, evals: [...]}),
+# builds each case's stdin payload — and, unless the case supplies its own
+# raw stdin, a synthetic transcript — invokes the case's hook, and compares
+# its exit code (and, for a block, its stderr message) against what the case
+# expects.
 #
 # A block case (expected_exit=2) is only counted a pass if BOTH the exit code
 # is 2 AND the expected substring appears on stderr — an exit-code-only check
@@ -16,25 +18,161 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-HOOK="$PLUGIN_DIR/hooks/check-task-complete"
+HOOK_DIR="$PLUGIN_DIR/hooks"
 EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 
-# The eval table this suite implements (see task-12-brief.md Step 4, the two
-# tool-scoping cases added for task-12b, the two forged-marker cases added for
-# task-12c — see task-12b-review.md Critical #1 — the two ESCAPED cases added
-# for task-12d, which run the current server's own rendering through the hook
-# rather than a hand-written fixture (task-12c-review.md Critical #1 /
-# Important #2), and one direct-call JSON-result case added for the v0.18.0
-# final review's Important #1, which pairs a validate_completion tool_use
-# with its tool_result exactly as the server's envelopeResult marshals it)
-# has exactly 22 rows. Both checks below must hold or the count assertion is
-# vacuous: the JSON file must declare 22 cases, AND the loop must actually
-# execute 22 of them (a silently-skipped case would satisfy the first check
+# The eval table this suite implements. check-task-complete's FIRST TWO block
+# conditions (no pass signal anywhere in the window; the last qualifying
+# signal's verdict reads fail) are pinned by 22 cases: tool-scoping (a
+# check_progress or validate_task_spec block must not satisfy the guard),
+# forged-marker resistance (a finding's free-text Evidence containing the
+# literal lines "tool: validate_completion" / "verdict: pass" must not be
+# read as the block header — both against a hand-written, un-escaped fixture
+# and against the current server's actual escaped rendering, the latter
+# pinned byte-for-byte by internal/mcpsrv/guard_eval_fixture_test.go so these
+# cases track the real formatters rather than a hand-rolled mirror of them),
+# and one case pairing a validate_completion tool_use with its tool_result
+# exactly as the server's envelopeResult marshals it, exercising the
+# direct-call verdict read end-to-end. check-comment-write, the PreToolUse
+# comment-hygiene guard, contributes eleven more. check-task-complete's THIRD
+# block condition — the submitted diff adds a comment carrying change
+# history — is its own comment-hygiene scan: a defence-in-depth pass over the
+# LAST validate_completion call's diff evidence in the task window, catching
+# a comment write that reached disk without going through Edit/Write. It
+# contributes twelve cases of its own: last-call selection, an absolute
+# final_diff_path, a relative path failing open, the size cap failing open,
+# the kill switch, the trace() reason, a final_files-only close passing
+# untouched, an excluded extension, an unchanged context line, and an
+# unresolvable plugin root failing open on the scan without masking an
+# independently-detected failing verdict.
+#
+# A zero-false-positive pass over every tracked source file's own comments
+# contributes seven cases pinning the tells' precise boundaries — four pin
+# shapes that must NOT block (an all-numeric colour literal, an ordinal in
+# prose, a compound word, a URL path segment), two confirm a genuine
+# reference still blocks, and one pins that a version number naming a
+# wire-compatibility contract — what shape of data the code reads now, not
+# when it changed — does not block. One further case pins that a broken
+# plugin root fails open on the exit code without masking an independently-
+# detected failing verdict, with a trace-log reason distinct from "scanned
+# and found nothing" so the two can never be confused.
+#
+# The `#\d+` and version tells are grammar-based rather than proximity-based,
+# and the suite pins the boundary this buys. A trigger word merely NEAR the
+# digits — "see"/"issue"/"bug"/"reference" anywhere within a short window of
+# an unrelated "#N" — is not enough: ordinary prose ("see the #1 best
+# practice guide") puts those words near a "#N" that names nothing. The tell
+# instead requires the trigger to GOVERN the digits, separated from them by
+# nothing but a closed, enumerated bridge set: an optional colon (GitHub's
+# "Fixes: #N"), "also" alone ("see also #N"), or an optional "the" leading to
+# a REQUIRED connector noun. That "the"-bridge admits only "issue" and "pr" —
+# the other candidate connector nouns ("item", "ticket", "bug", "number",
+# "no.", "reference") read as ordinary English ("the ticket #4 printer jam",
+# "the reference #2 style") indistinguishably from a genuine tracker
+# reference by surface form alone, so their "the"-prefixed form is excluded
+# entirely and only their bare form (straight after a strong verb, no "the")
+# matches. "reference[sd]?" needs its own lookbehind on top of that, since it
+# is also a standalone trigger for GitHub's "References #N": the lookbehind
+# excludes "the reference #N" without touching a bare "References #N" at a
+# clause start.
+#
+# The version tell mirrors this reasoning: it requires a change verb to
+# govern the version on either side, which is why a wire-compatibility
+# sentence like "reads the vX.Y.Z output" never matches — no change verb sits
+# near the version at all. A bare-parenthesis version shape ("(vX.Y.Z)", the
+# version alone inside its own parenthesis with nothing else) is deliberately
+# not a tell: a wire-compatibility sentence can parenthesize its version too
+# ("backward compatible with (vX.Y.Z)", "matches the wire shape used by the
+# daemon (vX.Y.Z)"), and shape alone cannot distinguish that from genuine
+# history ("Categories emitted by X (vX.Y.Z).") — the ambiguity is in what
+# the surrounding sentence means, not what sits next to the version, so this
+# class is deliberately reviewer-led rather than regex-led, the same as any
+# version reference with no governing verb and no other regex-extractable
+# signal.
+#
+# Twenty-nine cases pin these boundaries: eight hold both directions of the
+# grammar-vs-proximity distinction for the issue and version tells (a trigger
+# merely near the digits does not block; a trigger governing the digits
+# despite a nearby unrelated noun still blocks); five pin GitHub's own
+# closing syntax and the bridge words that admit it without reopening
+# ordinary prose; two pin that the bare-parenthesis version shape does not
+# block either way — the version alone in its own parenthesis, and a version
+# merely somewhere inside a larger parenthetical remark, both fall through to
+# reviewer-led judgment; one pins the trace session-identifier column; eight
+# confirm the excluded shapes stay excluded — four for the "the"+connector-
+# noun forms this suite does not treat as a tell, four for the wire-
+# compatibility parenthetical forms; and two pin trace/session-id hardening
+# (a malformed rotation cap still blocks rather than aborting the script, and
+# a newline embedded in a session id still lands as exactly one physical
+# trace line). A final three cases pin "pr" and "pull request" as triggers
+# and the bare (no "the") form of the six narrowly-bridged connectors, each
+# verified by mutation — the case stops matching once its named trigger is
+# actually removed from the pattern, not merely alongside something else
+# that happens to also catch the line; "pr" is also a pre-existing
+# standalone trigger, so its case cannot isolate the bridge mechanism from
+# the standalone one in a single test string and is documented as such
+# rather than claimed to test what it does not.
+#
+# Two more cases pin the on-touch boundary for a moved or reindented existing
+# comment: byte-identical content that only relocates within the diff does
+# not block, while a comment line whose bytes change — even only by
+# reindentation — is treated as added and does block, since changing a
+# line's bytes is touching it.
+#
+# Three final cases pin the hooks against their own hostile environment: a
+# Write whose payload exceeds the kernel's cap on a single environment string
+# must still block (the payload reaches the Python body on stdin, so it never
+# has to fit in the environment at all); a final_diff_path that is a symlink
+# must be refused rather than followed, which shows up as the close passing
+# where the identical content reached as a regular file blocks; and a
+# repo-root json.py must not shadow the standard library inside the
+# interpreter that does the analysis, which would fail open and silently
+# disable the gate for every close made from that directory.
+#
+# Six cases cover ground the table above left open. Two pin, one per hook,
+# that a symlink planted at the trace-log path is not written through: both
+# use a DANGLING link, so following it would create the target, and the
+# target's continued absence is the assertion — which is why
+# expected_file_absent exists at all, a presence check being unable to state
+# it. Two more exercise the write-time hook's existing-file branch, which
+# every other Write case misses by targeting a path that does not exist: a
+# Write re-stating a violating comment already on disk must not block (the
+# occurrence-aware diff consumes it), while one adding a new violation to an
+# existing file must. One pins that the close-time trace sink strips the
+# field separators out of every argument, so a task id carrying a newline
+# cannot forge a second, complete-looking log record. The last is the
+# write-time counterpart of the final_diff_path symlink refusal: a Write whose
+# target is a symlink is not followed, and traces as an unreadable target
+# rather than a pass, so a write the guard never scanned cannot be read out of
+# the log as a scan that ran and found nothing. Only the directory and symlink
+# shapes of an unreadable target are pinned here; the FIFO and oversized-file
+# shapes share the same code path but have no case of their own.
+#
+# Both checks below must hold or the count assertion is vacuous: the JSON
+# file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
+# execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=22
+EXPECTED_CASE_COUNT=93
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
-cleanup() { rm -rf "$WORKDIR"; }
+# Both hooks default their trace log to a fixed shared path under /tmp, and
+# rotate it by rename once it passes a size cap. Left unset, a run of this
+# suite would append 80-odd lines to whatever real session log is living
+# there and could rotate it away entirely. Point every case at a run-scoped
+# file instead; a case that sets ANTI_TANGENT_GUARD_TRACE_LOG in its own "env"
+# block still wins, since `env` applies after this export.
+export ANTI_TANGENT_GUARD_TRACE_LOG="$WORKDIR/trace.log"
+# Every hook invocation below runs with this as its cwd, run-scoped (inside
+# WORKDIR, so isolated from a concurrent run.sh invocation) rather than
+# per-case, so a "cwd_fixture" case can place a real file at a RELATIVE path
+# and have a relative-path assertion (e.g. that final_diff_path rejects a
+# relative path outright) exercise a path that genuinely resolves, instead of
+# a relative path that merely doesn't exist anywhere.
+HOOK_CWD="$WORKDIR/hook-cwd"
+mkdir -p "$HOOK_CWD"
+cleanup() {
+    rm -rf "$WORKDIR"
+}
 trap cleanup EXIT
 
 PASSED=0
@@ -65,24 +203,169 @@ build_stub_dir() {
 # run_case renders one eval object (by index) to a stdin file plus, unless
 # stdin_raw or no_transcript is set, a synthetic transcript file with
 # {{TRANSCRIPT}} substituted into input.transcript_path, then invokes the
-# hook and checks its exit code and (for blocks) stderr message.
+# case's hook (default check-task-complete; "hook" field selects another,
+# e.g. check-comment-write) and checks its exit code and (for blocks) its
+# stderr message.
+#
+# Every case gets its own {{TMPDIR}} — a fresh, case-scoped directory
+# substituted for the literal "{{TMPDIR}}" token wherever it appears in
+# stdin_raw, in the rendered input JSON, or in an env value. Several
+# check-comment-write cases write or read a target file, and a Write over an
+# existing file deliberately depends on what is already on disk, so sharing
+# one path across cases would make outcomes depend on execution order and on
+# residue an earlier run left behind. The directory carries a trailing
+# ".go" component so that a case referencing {{TMPDIR}} bare (rather than a
+# path beneath it) still lands on a recognized extension — otherwise the
+# unreadable-target case would exit 0 via the unrelated "extension not
+# scanned" gate instead of the open()-on-a-directory path it means to
+# exercise. That component cannot be part of the mktemp template: BSD/macOS
+# mktemp requires the run of X's to END the template and rejects anything
+# after it, so uniqueness comes from an mktemp'd parent and the ".go"
+# directory is created with a fixed name inside it. The pair lives under
+# WORKDIR, not $TMPDIR, because this function returns early on several
+# failure paths: only the module-level `trap cleanup EXIT` is guaranteed to
+# run, and a single `rm -rf "$WORKDIR"` there reclaims every case's
+# directory including those of an interrupted run.
 run_case() {
     local idx="$1"
-    local id name reason expected_exit
+    local id name reason expected_exit hook_name case_hook
     id=$(jq -r ".evals[$idx].id" "$EVALS_FILE")
     name=$(jq -r ".evals[$idx].name" "$EVALS_FILE")
     reason=$(jq -r ".evals[$idx].reason" "$EVALS_FILE")
     expected_exit=$(jq -r ".evals[$idx].expected_exit" "$EVALS_FILE")
+    hook_name=$(jq -r ".evals[$idx].hook // \"check-task-complete\"" "$EVALS_FILE")
+    case_hook="$HOOK_DIR/$hook_name"
+
+    local case_tmp case_parent
+    case_parent=$(mktemp -d "$WORKDIR/atg-eval-XXXXXX")
+    # Checked rather than assumed: this script runs without `set -e`, so a
+    # failed mktemp would otherwise leave case_parent empty and every
+    # {{TMPDIR}} substitution below would silently resolve against "/target.go".
+    if [[ ! -d "$case_parent" ]]; then
+        echo "mktemp -d failed under $WORKDIR — case $id cannot be given an isolated {{TMPDIR}}."
+        exit 1
+    fi
+    case_tmp="$case_parent/target.go"
+    if ! mkdir "$case_tmp"; then
+        echo "could not create $case_tmp — case $id cannot be given an isolated {{TMPDIR}}."
+        exit 1
+    fi
+
+    # HOOK_CWD is shared across every case (that is the point — a relative
+    # path needs a stable cwd to resolve against), so a cwd_fixture file left
+    # over from an earlier case would otherwise still be on disk when a later
+    # case runs, making that later case's outcome depend on execution order.
+    # Reset it before this case gets a chance to populate it again. A glob
+    # (HOOK_CWD/*) would silently skip a dotfile; find's -mindepth/-maxdepth
+    # walk does not.
+    find "${HOOK_CWD:?}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true
 
     local case_dir stdin_file stderr_file
     case_dir=$(mktemp -d "$WORKDIR/case-$id.XXXXXX")
     stdin_file="$case_dir/stdin.json"
     stderr_file="$case_dir/stderr.txt"
 
+    # {{DIFFFILE}} fixture, materialised the same way {{TRANSCRIPT}} already
+    # is: a case that declares "diff_file" gets its content written to a real
+    # file before stdin/env/transcript substitution runs, so {{DIFFFILE}} can
+    # be used anywhere the other tokens are — most usefully inside
+    # transcript_raw_lines, where a validate_completion call's
+    # final_diff_path lives. An optional "diff_file_min_bytes" pads the file
+    # with filler past its literal content, for a case that needs to trip a
+    # size cap without inlining megabytes of JSON.
+    local difffile_path=""
+    local has_diff_file
+    has_diff_file=$(jq -r ".evals[$idx] | has(\"diff_file\")" "$EVALS_FILE")
+    if [[ "$has_diff_file" == "true" ]]; then
+        difffile_path="$case_dir/diff-fixture.diff"
+        jq -r ".evals[$idx].diff_file" "$EVALS_FILE" > "$difffile_path"
+        local min_bytes cur_bytes
+        min_bytes=$(jq -r ".evals[$idx].diff_file_min_bytes // 0" "$EVALS_FILE")
+        if [[ "$min_bytes" -gt 0 ]]; then
+            cur_bytes=$(wc -c < "$difffile_path")
+            if [[ "$cur_bytes" -lt "$min_bytes" ]]; then
+                head -c "$((min_bytes - cur_bytes))" /dev/zero | tr '\0' ' ' >> "$difffile_path"
+            fi
+        fi
+    fi
+
+    # Optional "cwd_fixture": {relative_path: content} — materialises a real
+    # file under HOOK_CWD (the directory every hook below is invoked from) at
+    # each given relative path, so a case asserting behaviour against a
+    # RELATIVE path (e.g. that final_diff_path rejects one outright) does so
+    # against a path that genuinely resolves to a real file if opened, not
+    # merely one that doesn't exist anywhere — otherwise a fail-open assertion
+    # would hold whether the relative-path rejection fired or the file was
+    # simply never found, and would prove nothing about which.
+    local has_cwd_fixture
+    has_cwd_fixture=$(jq -r ".evals[$idx] | has(\"cwd_fixture\")" "$EVALS_FILE")
+    if [[ "$has_cwd_fixture" == "true" ]]; then
+        local fixture_rel
+        while IFS= read -r fixture_rel; do
+            [[ -n "$fixture_rel" ]] || continue
+            local fixture_dest="$HOOK_CWD/$fixture_rel"
+            mkdir -p "$(dirname "$fixture_dest")"
+            jq -r --arg k "$fixture_rel" ".evals[$idx].cwd_fixture[\$k]" "$EVALS_FILE" > "$fixture_dest"
+        done < <(jq -r ".evals[$idx].cwd_fixture | keys[]" "$EVALS_FILE")
+    fi
+
+    # Optional "tmpdir_fixture": {relative_path: content} — the {{TMPDIR}}
+    # counterpart to cwd_fixture above: materialises a real file under this
+    # case's OWN {{TMPDIR}} (case_tmp), which env/stdin/transcript
+    # substitution can then reference by the same {{TMPDIR}} token, rather
+    # than under the shared HOOK_CWD. Needed for a case that must prove
+    # behaviour conditioned on a target file already existing there before
+    # the hook runs — a code path guarded by "only act if the file is
+    # already present" is untested by a target that starts out absent.
+    local has_tmpdir_fixture
+    has_tmpdir_fixture=$(jq -r ".evals[$idx] | has(\"tmpdir_fixture\")" "$EVALS_FILE")
+    if [[ "$has_tmpdir_fixture" == "true" ]]; then
+        local tfixture_rel
+        while IFS= read -r tfixture_rel; do
+            [[ -n "$tfixture_rel" ]] || continue
+            local tfixture_dest="$case_tmp/$tfixture_rel"
+            mkdir -p "$(dirname "$tfixture_dest")"
+            jq -r --arg k "$tfixture_rel" ".evals[$idx].tmpdir_fixture[\$k]" "$EVALS_FILE" > "$tfixture_dest"
+        done < <(jq -r ".evals[$idx].tmpdir_fixture | keys[]" "$EVALS_FILE")
+    fi
+
+    # Optional "tmpdir_symlink": {link_relative_path: target} — creates a real
+    # symlink under this case's {{TMPDIR}}. Needed to exercise the hooks' refusal
+    # to open a caller-supplied path through a symlink, which cannot be asserted
+    # against a fixture the harness only ever materialises as a regular file.
+    local has_tmpdir_symlink
+    has_tmpdir_symlink=$(jq -r ".evals[$idx] | has(\"tmpdir_symlink\")" "$EVALS_FILE")
+    if [[ "$has_tmpdir_symlink" == "true" ]]; then
+        local link_rel
+        while IFS= read -r link_rel; do
+            [[ -n "$link_rel" ]] || continue
+            local link_target
+            link_target=$(jq -r --arg k "$link_rel" ".evals[$idx].tmpdir_symlink[\$k]" "$EVALS_FILE")
+            link_target="${link_target//\{\{TMPDIR\}\}/$case_tmp}"
+            link_target="${link_target//\{\{DIFFFILE\}\}/$difffile_path}"
+            mkdir -p "$(dirname "$case_tmp/$link_rel")"
+            ln -sfn "$link_target" "$case_tmp/$link_rel"
+        done < <(jq -r ".evals[$idx].tmpdir_symlink | keys[]" "$EVALS_FILE")
+    fi
+
     local stdin_raw
     stdin_raw=$(jq -r ".evals[$idx].stdin_raw // empty" "$EVALS_FILE")
 
     if [[ -n "$stdin_raw" ]]; then
+        stdin_raw="${stdin_raw//\{\{TMPDIR\}\}/$case_tmp}"
+        stdin_raw="${stdin_raw//\{\{DIFFFILE\}\}/$difffile_path}"
+        # Optional "stdin_pad_bytes": expands the literal "{{PAD}}" token into
+        # that many filler characters. A case pinning a size limit measured in
+        # hundreds of kilobytes (the kernel's cap on one environment string,
+        # for instance) would otherwise have to carry that many bytes inline in
+        # guard-evals.json, which no reader could diff.
+        local pad_bytes
+        pad_bytes=$(jq -r ".evals[$idx].stdin_pad_bytes // 0" "$EVALS_FILE")
+        if [[ "$pad_bytes" -gt 0 ]]; then
+            local pad
+            pad=$(head -c "$pad_bytes" /dev/zero | tr '\0' 'x')
+            stdin_raw="${stdin_raw//\{\{PAD\}\}/$pad}"
+        fi
         printf '%s' "$stdin_raw" > "$stdin_file"
     else
         local no_transcript transcript_path
@@ -97,10 +380,19 @@ run_case() {
             local line_count li
             line_count=$(jq -r ".evals[$idx].transcript_raw_lines | length" "$EVALS_FILE")
             for ((li = 0; li < line_count; li++)); do
-                jq -r ".evals[$idx].transcript_raw_lines[$li]" "$EVALS_FILE" >> "$transcript_path"
+                local raw_line
+                raw_line=$(jq -r ".evals[$idx].transcript_raw_lines[$li]" "$EVALS_FILE")
+                raw_line="${raw_line//\{\{TMPDIR\}\}/$case_tmp}"
+                raw_line="${raw_line//\{\{DIFFFILE\}\}/$difffile_path}"
+                printf '%s\n' "$raw_line" >> "$transcript_path"
             done
         fi
-        jq -c --arg tp "$transcript_path" '.evals['"$idx"'].input | .transcript_path = $tp' "$EVALS_FILE" > "$stdin_file"
+        local input
+        input=$(jq -c --arg tp "$transcript_path" '.evals['"$idx"'].input | .transcript_path = $tp' "$EVALS_FILE")
+        input=$(jq -c --arg d "$case_tmp" --arg df "$difffile_path" \
+            'walk(if type == "string" then gsub("\\{\\{TMPDIR\\}\\}"; $d) | gsub("\\{\\{DIFFFILE\\}\\}"; $df) else . end)' \
+            <<<"$input")
+        printf '%s' "$input" > "$stdin_file"
     fi
 
     # Build the env-var prefix from the case's "env" object, if any.
@@ -109,7 +401,10 @@ run_case() {
     if [[ -n "$env_json" ]]; then
         local kv
         while IFS= read -r kv; do
-            [[ -n "$kv" ]] && env_assignments+=("$kv")
+            [[ -n "$kv" ]] || continue
+            kv="${kv//\{\{TMPDIR\}\}/$case_tmp}"
+            kv="${kv//\{\{DIFFFILE\}\}/$difffile_path}"
+            env_assignments+=("$kv")
         done < <(jq -r ".evals[$idx].env | to_entries[] | \"\(.key)=\(.value)\"" "$EVALS_FILE")
     fi
 
@@ -121,11 +416,11 @@ run_case() {
     if [[ -n "$path_exclude" ]]; then
         local stub
         stub=$(build_stub_dir "$path_exclude")
-        PATH="$stub" "$bash_path" "$HOOK" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
+        ( cd "$HOOK_CWD" && PATH="$stub" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     elif [[ ${#env_assignments[@]} -gt 0 ]]; then
-        env "${env_assignments[@]}" "$bash_path" "$HOOK" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
+        ( cd "$HOOK_CWD" && env "${env_assignments[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     else
-        "$bash_path" "$HOOK" < "$stdin_file" > /dev/null 2> "$stderr_file" || exit_code=$?
+        ( cd "$HOOK_CWD" && "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     fi
 
     TOTAL=$((TOTAL + 1))
@@ -156,11 +451,94 @@ run_case() {
         fi
     fi
 
+    # Optional "expected_file_contains": {path: [substrings]} — checked after
+    # the case has already passed on exit code (and stderr, if a block).
+    # Fails if the file is missing, or if any substring is absent, matched as
+    # a fixed string (grep -F). {{TMPDIR}} is substituted into the path the
+    # same way it is everywhere else a case references its scratch directory.
+    local has_files
+    has_files=$(jq -r ".evals[$idx] | has(\"expected_file_contains\")" "$EVALS_FILE")
+    if [[ "$has_files" == "true" ]]; then
+        local file_missing=0
+        local fpath
+        while IFS= read -r fpath; do
+            [[ -n "$fpath" ]] || continue
+            local resolved_path
+            resolved_path="${fpath//\{\{TMPDIR\}\}/$case_tmp}"
+            if [[ ! -f "$resolved_path" ]]; then
+                printf '  \033[31mFAIL\033[0m  [%s] %-45s expected file missing: %s\n' "$id" "$name" "$resolved_path"
+                file_missing=1
+                continue
+            fi
+            local needle_count ni
+            needle_count=$(jq -r --arg k "$fpath" '.evals['"$idx"'].expected_file_contains[$k] | length' "$EVALS_FILE")
+            for ((ni = 0; ni < needle_count; ni++)); do
+                local file_needle
+                file_needle=$(jq -r --arg k "$fpath" '.evals['"$idx"'].expected_file_contains[$k]['"$ni"']' "$EVALS_FILE")
+                if ! grep -qF -- "$file_needle" "$resolved_path"; then
+                    printf '  \033[31mFAIL\033[0m  [%s] %-45s %s missing substring: %s\n' "$id" "$name" "$resolved_path" "$file_needle"
+                    file_missing=1
+                fi
+            done
+        done < <(jq -r ".evals[$idx].expected_file_contains | keys[]" "$EVALS_FILE")
+        if [[ "$file_missing" == "1" ]]; then
+            FAILED=$((FAILED + 1))
+            return
+        fi
+    fi
+
+    # Optional "expected_file_absent": [paths] — fails if any of them exists
+    # after the hook ran. The counterpart to expected_file_contains, which can
+    # only assert that something WAS written. "the hook did not write through
+    # that symlink" is inexpressible as a presence check: the link's target
+    # never being created is the whole assertion, and a hook that followed the
+    # link would create it. {{TMPDIR}} is substituted the same way.
+    local has_absent
+    has_absent=$(jq -r ".evals[$idx] | has(\"expected_file_absent\")" "$EVALS_FILE")
+    if [[ "$has_absent" == "true" ]]; then
+        local unexpected=0 apath resolved_absent
+        while IFS= read -r apath; do
+            [[ -n "$apath" ]] || continue
+            resolved_absent="${apath//\{\{TMPDIR\}\}/$case_tmp}"
+            # -e is false for a dangling symlink, so test both: a link created
+            # by tmpdir_symlink must not be mistaken for its target existing.
+            if [[ -e "$resolved_absent" || -L "$resolved_absent" ]]; then
+                printf '  \033[31mFAIL\033[0m  [%s] %-45s file must not exist: %s\n' "$id" "$name" "$resolved_absent"
+                unexpected=1
+            fi
+        done < <(jq -r ".evals[$idx].expected_file_absent[]" "$EVALS_FILE")
+        if [[ "$unexpected" == "1" ]]; then
+            FAILED=$((FAILED + 1))
+            return
+        fi
+    fi
+
     printf '  \033[32mPASS\033[0m  [%s] %-45s %s\n' "$id" "$name" "$reason"
     PASSED=$((PASSED + 1))
 }
 
 # ── Main ──
+
+# check-comment-write carries a copy of comment_scan.py's SCAN_EXTS so it can
+# decide "this file is never scanned" without paying for a python3 start. That
+# duplication is safe only while the two agree: an extension added to the
+# Python set alone would be skipped in bash and never reach the scanner, which
+# looks exactly like a clean pass. Compare them here, where a mismatch fails
+# the suite instead.
+hook_exts=$(sed -n 's/^ATG_SCAN_EXTS="\(.*\)"$/\1/p' "$HOOK_DIR/check-comment-write" \
+    | tr ' ' '\n' | sed '/^$/d' | sort -u)
+py_exts=$(sed -n '/^SCAN_EXTS = {/,/^}/p' "$HOOK_DIR/comment_scan.py" \
+    | grep -oE '"\.[a-z0-9_]+"' | tr -d '"' | sort -u)
+if [[ -z "$hook_exts" || -z "$py_exts" ]]; then
+    echo "could not read the extension list out of check-comment-write or comment_scan.py — the drift check below would pass vacuously."
+    exit 1
+fi
+if [[ "$hook_exts" != "$py_exts" ]]; then
+    echo "check-comment-write's ATG_SCAN_EXTS and comment_scan.py's SCAN_EXTS disagree:"
+    diff <(printf '%s\n' "$py_exts") <(printf '%s\n' "$hook_exts") | sed 's/^/  /'
+    echo "an extension in only one of them is silently unguarded — update both."
+    exit 1
+fi
 
 json_count=$(jq -r '.evals | length' "$EVALS_FILE")
 if [[ "$json_count" -ne "$EXPECTED_CASE_COUNT" ]]; then
@@ -168,7 +546,7 @@ if [[ "$json_count" -ne "$EXPECTED_CASE_COUNT" ]]; then
     exit 1
 fi
 
-echo "check-task-complete evals"
+echo "anti-tangent-guard hook evals (check-task-complete + check-comment-write)"
 echo "────────────────────────────────────────────────────────────────"
 
 for ((i = 0; i < json_count; i++)); do

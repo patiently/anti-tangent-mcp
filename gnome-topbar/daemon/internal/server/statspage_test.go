@@ -101,3 +101,15 @@ func TestRenderClaudePageHighUtilWarns(t *testing.T) {
 		t.Errorf("high-utilization ⚠ marker missing on /ui/claude:\n%s", out)
 	}
 }
+
+// TestRenderStatsPageCriterionHistogram pins the criterion section end to end:
+// the aggregate is what tells a reader which acceptance criteria the reviewer
+// keeps failing, and it renders from the same decoded map atstats hands over.
+func TestRenderStatsPageCriterionHistogram(t *testing.T) {
+	at := atstats.Stats{Present: true, TotalCalls: 5,
+		CriterionHistogram: map[string]int{"comment_hygiene": 4, "noise_cluster": 1}}
+	out := renderStatsPage(at)
+	if !strings.Contains(out, "Criteria") || !strings.Contains(out, "comment_hygiene") {
+		t.Errorf("criterion histogram not rendered:\n%s", out)
+	}
+}

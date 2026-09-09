@@ -72,6 +72,12 @@ tray renders the body with a staleness indicator.
 
 ## Changelog
 
+### Unreleased
+- Stats page renders a **Criteria** table beside Severity and Categories, decoded from anti-tangent's `criterion_histogram` rollup key. The per-criterion counts (e.g. `comment_hygiene`) reached `rollup.json` but neither `atstats` struct declared the key, so the tray silently dropped them; a `rollup.json` without the key still decodes cleanly and the section is omitted. The daemon is a separate Go module released on `gnome-topbar-v*` tags, so this reaches users on the next such tag — merging an anti-tangent server release does not rebuild it.
+
+### v0.3.2
+- Basic-Memory-backed tray features (howtos, gotchas, search, todos) recover from an evicted MCP session instead of answering `mcp http 404` until the daemon is restarted. The daemon holds one long-lived streamable-HTTP MCP client; when Basic Memory restarts or expires the session, a session-bearing request now drops the dead session, re-initializes and retries exactly once, per the MCP streamable-HTTP spec. A 404 on a request that carried no session id is returned unchanged, so there is no unbounded re-init loop. _(Written after the fact: `gnome-topbar-v0.3.2` was tagged and released while this changelog still ended at v0.3.1.)_
+
 ### v0.3.1
 - Compact Claude overview now carries a third segment, **`f5`** (Fable's weekly sub-limit), beside `5h` and `wk` — same bar + `%` styling and 60/80 amber/red thresholds. Sourced from the producer's `limits.weekly_models` (matched on a case-insensitive `fable` display-name prefix, so a `Fable`→`Fable 5` rename still resolves); the segment is omitted until the producer emits that data. Complements the per-model rows already shown in the usage submenu (v0.3.0).
 

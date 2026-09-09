@@ -5,6 +5,180 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-09-09
+
+### Added
+- **A comment-hygiene policy, enforced at write time and backstopped at task close.** Comments
+  may explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next
+  editor — the test is that they read correctly to someone who never saw the change. They may not
+  carry change history: issue, PR or task references, version references, review references, or
+  narration of what the code used to do. Git already holds that, and a comment repeating it goes
+  stale on the next change. A comment failing these criteria is removed or rewritten by whatever
+  task next touches it; there is no big-bang cleanup.
+
+  Enforced in three layers, split by what each can actually decide and what each can see.
+  **Prevention** — a `PreToolUse` hook on `Edit`/`Write` in `anti-tangent-guard`
+  (**0.1.0 → 0.2.0**) refuses the write outright before a violating comment reaches disk. It is
+  the only layer that prevents rather than detects, and the only one whose reach does not depend
+  on transcript visibility or evidence shape. **Review** — `validate_completion`'s reviewer
+  already receives the full diff, whichever agent submitted it, and gains a rule emitting
+  `category: quality` / `criterion: comment_hygiene` findings **pinned to `severity: minor`** —
+  `quality` is not severity-floored server-side, so an unpinned rule would let two comment nits
+  become a `fail` and hard-block the close. This reaches every path that submits a diff to
+  `validate_completion`, regardless of which agent later closes the task, but only when a diff is
+  actually present in that call — `final_files`-only or `test_evidence`-only evidence gets no
+  comment-hygiene review from this layer. No new finding category and no schema change.
+  **Detection** — the same `check-task-complete` hook that already mandates the completion gate
+  scans the added comment lines of the last `validate_completion` call's diff for the unambiguous
+  mechanical tells (issue/PR references, version references, task/review references) and blocks
+  the close with the existing reopen-fix-revalidate flow, catching a comment that reached disk
+  through `Bash` or another path prevention cannot intercept. It is defence in depth, not the
+  primary gate: it fires on the *closing* agent's transcript, so on the subagent-driven path —
+  where a subagent validates and the controller closes — it sees only the pasted `summary_block`
+  and no diff. Prose-history tells like "previously" and "used to" are deliberately left out of
+  both scans: they cannot be matched without false positives, so review is what catches them.
+
+  Every scan (prevention and detection) is restricted to **added** lines in source files. `.md`
+  and config files are excluded: a changelog entry legitimately carries issue and version
+  references, and this repo requires one in every change. `Write` over an existing file is diffed
+  against what is on disk, so rewriting a file does not demand cleanup of every comment already in
+  it that stays byte-for-byte unchanged — moving an untouched line is not a touch. A comment line
+  whose bytes change is treated as added and scanned, and that includes a pure re-indent: changing
+  a line's bytes is touching it, even when the change is only whitespace. Kill switch
+  `ANTI_TANGENT_COMMENT_GUARD=0` disables both the prevention and detection hook layers while
+  leaving the completion-gate check active. As with the completion guard, the blocking half here
+  is a Claude Code plugin the operator installs and can disable — the MCP server itself remains
+  advisory and never blocks.
+
+- **`criterion_counts` on stats events.** `stats.Event` recorded `category_counts` but nothing
+  finer, so a `quality` finding about a comment was indistinguishable from any other `quality`
+  finding and the comment policy's effect could not be measured. Counts come from an **allowlist
+  of server-recognised criterion sentinels**, never from raw criterion text: `pre.tmpl` tells the
+  reviewer to quote verbatim acceptance-criterion text as the criterion, and the ledger has until
+  now held no free text at all — every string in it is a bounded enum or a hash. Recording raw
+  criterion would have written task-specification text to disk and given the map one key per
+  acceptance criterion ever reviewed.
+
+- **A re-runnable zero-false-positive gate for the comment-hygiene scanner**, under
+  `plugin/anti-tangent-guard/evals/`. `fp-scan.py` runs the shipped scanner over every tracked
+  source file's HEAD blob — skipping vendored third-party bundles, whose comments nobody here can
+  rewrite — and treats every comment line as added; `fp-class.tsv` records what each hit is;
+  `fp-report.sh` joins the two on path plus comment text, strictly in both directions, rejecting
+  unclassified, unknown, duplicate and miscounted entries before counting, and fails unless the
+  false-positive count is zero. Keying on the text rather than on a line number means an unrelated
+  commit that shifts a classified comment does not turn CI red, while a rewritten one still
+  surfaces as both an unknown classification and an unclassified hit. Wired into CI, so widening a
+  tell can no longer quietly reopen a false positive.
+
+### Fixed
+- **`validate_task_spec` now reserves `major` for ambiguity that would actually cause
+  misimplementation.** Across 191 real calls, the tool returned `fail` 58% of the time and `warn`
+  a further 32%, and **81% of those non-passes were driven by `major` findings** — overwhelmingly
+  `ambiguous_spec` (522 of roughly 800 findings). The cause was calibration, not the severity
+  ladder: `pre.tmpl` asked the reviewer to enumerate every implicit assumption in a brief, said
+  nothing about how severe an assumption is, and defined `major` as "a competent implementer
+  would still misimplement it" — which is exactly how an enumerated assumption reads. `post.tmpl`
+  has had a calibration clause guarding against this since it was written; the pre-hook prompt
+  had no analogue. It does now, along with a bound on the assumptions clause so related
+  assumptions consolidate into one finding instead of one finding each.
+- **`Context:` is now authoritative for the pre-task reviewer.** It was already rendered into the
+  pre-hook prompt, and `post.tmpl` already told the post reviewer to treat it as the
+  disambiguator — but nothing told the *pre* reviewer the same. A task brief that answered a
+  question in `Context:` (including in verbatim code) was still failed for leaving it open in the
+  acceptance criteria above. This was the shape of one of the two field reports in
+  [#58](https://github.com/patiently/anti-tangent-mcp/issues/58): every finding on a fully
+  specified task was about prose the brief's own code answered directly below it. The
+  contradiction rule that comes with it is scoped to match: only an irreconcilable AC/`Context:`
+  pair, where nothing in the spec indicates which side governs, is a `major` `ambiguous_spec`.
+  Where `Context:` explicitly anticipates or approves a deviation from an AC's literal wording,
+  the spec is coherent and the pre reviewer emits nothing — the same call `post.tmpl` already
+  makes about that shape, so a task can no longer draw a `major` before implementation for
+  precisely what the final review is told to accept.
+- **The pre-task gate's terminal state is documented.** `implementer.md` §4.2 told an implementer
+  to treat `critical` as blocking and `major` as address-or-explain, and stopped — leaving no
+  stopping rule for a `warn` that will not move. It now states one.
+- **The guard's trace log now says which session wrote each line, and stops growing forever.**
+  Every hook wrote to one shared `/tmp` path with no identity in the line, so on a machine running
+  more than one Claude session the log could not answer the only question it exists to answer —
+  which hook fired, for whom. Lines now carry a short session id (`-` where the payload has not
+  been read yet), and the file rotates to a single `.1` sibling past
+  `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES`. Both are best-effort: a trace failure never changes a
+  hook's exit status. `ANTI_TANGENT_GUARD_TRACE_LOG` still repoints the path for anyone wanting
+  per-session isolation.
+- **A large `Write` no longer slips past the write-time guard.** The hook handed its payload to the
+  Python body as an environment variable, and Linux caps a single environment string at
+  `MAX_ARG_STRLEN` (32 pages, 131072 bytes on x86-64) — so a `Write` of a large file made `exec`
+  fail, which the wrapper read as an internal error and allowed. The payload travels on stdin
+  now, so payload size is no longer a ceiling. A `Write` over an existing file that is not valid
+  UTF-8 no longer crashes the scan into a silent allow either: the content is read in binary and
+  decoded with `errors="replace"`, matching the close-time scan exactly. That read stays capped
+  at 2,000,000 bytes, and a target above it is still skipped — deliberately, and now traced as
+  `skip | unreadable-target` rather than logged as a clean pass.
+- **Both guard hooks harden the paths they open and the log they write.** The three guards the
+  server applies to a caller-supplied path — `O_NOFOLLOW` refusing a symlink at the final
+  component, `O_NONBLOCK` keeping a FIFO from parking the hook inside `open()`, and an `S_ISREG`
+  check rejecting everything else — now live in one helper in `comment_scan.py` that both hooks
+  call, alongside the byte cap and the replacing decode, so the write-time `Write` target and the
+  close-time `final_diff_path` cannot drift apart again. Every one of those refusals fails open.
+  Both hooks run their Python under `python3 -I`, so neither a `json.py` in the working directory
+  nor a `PYTHONPATH` entry can shadow the standard library inside a hook that runs unsandboxed,
+  and neither writes `__pycache__` into an installed plugin tree. The trace directory is created
+  mode `700`, neither hook appends through a symlink at the log path, and both trace sinks strip
+  CR, LF and `|` out of every field they are handed — a task id, status or tool name carrying a
+  newline could otherwise split one log call into two physical lines, the second reading as a
+  genuine record. Those checks stay best-effort and never change an exit status. Matched comment
+  lines echoed into either hook's block message are truncated, so one very long line cannot reach
+  the model as megabytes of hook stderr.
+- **`criterion_counts` now reaches `rollup.json`, the LLM summary and the tray.** The per-event
+  counts were written but never aggregated, so `criterion_histogram` — and with it the
+  comment-hygiene numbers in the LLM summary — did not exist. The summary prompt's topic list now
+  names the per-criterion counts, so the model is asked about the data it is handed rather than
+  left to volunteer it. The gnome-topbar stats page decodes the key and renders it as a "Criteria"
+  table beside Severity and Categories; a `rollup.json` without the key still decodes cleanly and
+  simply omits the section. **That tray half does not ship in this release.**
+  `gnome-topbar/daemon` is a separate Go module with its own release workflow, triggered by
+  `gnome-topbar-v*` tags, and the server's release workflow ignores `gnome-topbar/**` — so the
+  "Criteria" table reaches users with the next `gnome-topbar-v*` tag, not by merging this one.
+  Criterion lookups also normalise case and
+  surrounding whitespace before the allowlist test: criterion is free reviewer text, and a
+  reviewer writing `Comment_Hygiene` silently vanished from the metric.
+- **The write-time guard skips an unscanned file without starting an interpreter**, deciding from
+  the extension in the wrapper. It also traces the allow path, so the trace log records every
+  decision as its documentation says. `check-comment-write`'s copy of the extension list and
+  `comment_scan.py`'s `SCAN_EXTS` are asserted identical by the eval suite; an extension in only
+  one of them would be silently unguarded.
+- **The version tell no longer backtracks quadratically** over a long whitespace run: its optional
+  preposition bridge gave the whitespace two greedy owners with an optional group between them.
+- **`README.md` and the marketplace catalog description described the guard as a single
+  close-time hook.** Both now name the `PreToolUse` write-refusal hook and both kill switches,
+  so installing from the README no longer produces a hook that rejects edits with no warning it
+  exists. The guard's own limitations list gains `code_write`, which writes server-side and so
+  bypasses the `Edit`/`Write` matcher exactly as `Bash` writes do — and whose generated code never
+  enters the agent's context to be self-reviewed either. The `code-writer` skill says so where it
+  recommends `target_path`, so the readers most likely to take that bypass see the caveat without
+  reading the guard's README. `INTEGRATION.md`'s router table names §4.4, the write-time guard and
+  §5.3's guard hooks in the rows that carry them, so an agent picking a protocol part by what it
+  covers can find them. The CI protocol-byte budget warns at 15,500 as well as failing at 16,000:
+  the binding file sits under 1% below the cap, where the first signal of a problem should not be
+  a red build.
+- **A write the guard could not scan is no longer logged as one it scanned and cleared.** A
+  `Write` whose target is a symlink, a FIFO, a directory or a file past the read cap has no old
+  text to diff against, so the scan is declined and the write allowed — correctly, and unchanged.
+  But the wrapper traced that as `pass`, indistinguishable in the log from a clean scan. The body
+  now reports it as its own status and the wrapper traces `skip | unreadable-target`. Only the
+  trace line changes; the hook still exits 0 and still never blocks on it. The guard README gains
+  a table of the write-time fail-open causes, which it previously documented only for the
+  close-time hook.
+- `plugin/anti-tangent-protocol` is version 0.2.1 and `plugin/anti-tangent-shunt` is 0.1.1: both
+  shipped changed content in this release — three protocol parts, and the `code-writer` skill's
+  guard-bypass caveat — and nothing in the release workflow bumps a plugin, so both are bumped by
+  hand here together with their `.claude-plugin/marketplace.json` entries.
+
+No schema, tool-argument or envelope change: the verdict distribution shifts, but every public
+type and field is byte-identical. The one addition is internal to the opt-in stats ledger —
+`stats.Event` gains an optional `criterion_counts` map, omitted entirely when empty. Callers that calibrated against the observed distribution will see it
+move, which is why this is a minor rather than a patch.
+
 ## [0.18.2] - 2026-09-08
 
 ### Fixed

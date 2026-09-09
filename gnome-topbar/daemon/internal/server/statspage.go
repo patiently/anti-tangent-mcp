@@ -91,6 +91,7 @@ func renderStatsPage(at atstats.Stats) string {
 	b.WriteString(histTable(2, "Per tool", at.PerTool))
 	b.WriteString(histTable(2, "Severity", at.SeverityHistogram))
 	b.WriteString(histTable(2, "Categories", at.CategoryHistogram))
+	b.WriteString(histTable(2, "Criteria", at.CriterionHistogram))
 	b.WriteString(histTable(2, "Model usage", at.ModelUsage))
 	b.WriteString(`<h2>CodeScene</h2>`)
 	if cs := at.CodeScene; cs != nil {

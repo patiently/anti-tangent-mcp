@@ -1,13 +1,16 @@
 # anti-tangent-guard
 
-A single `PostToolUse` hook that enforces anti-tangent-mcp's `validate_completion`
-gate at task close.
+Two hooks enforcing anti-tangent-mcp's conventions: a `PostToolUse` hook that
+mandates the `validate_completion` gate at task close and detects when submitted
+diffs add comments carrying change history, and a `PreToolUse` hook that prevents
+such comments from being written in the first place.
 
 ## Active on install
 
-This plugin has one hook and no configuration step. As soon as it is
-installed, every `TaskUpdate` call is watched — there is nothing further to
-turn on.
+This plugin has two hooks and no configuration step. As soon as it is
+installed, every `TaskUpdate` call is watched for the completion gate, and
+every `Edit`/`Write` call is intercepted for the write-time comment-hygiene
+scan — there is nothing further to turn on.
 
 ## What it does, and what it does not do
 
@@ -28,7 +31,7 @@ Is Not"). Enforcement, where a project wants it, lives here instead.
 The hook watches for a `TaskUpdate` whose `tool_input.status` is `completed`.
 Every other tool call, and every other status, is a silent no-op (exit 0).
 
-## The two block conditions
+## The three block conditions
 
 For a matching close, the hook scans the transcript window for this task (see
 "Window scoping" below) for two possible pass signals: a direct
@@ -36,7 +39,7 @@ For a matching close, the hook scans the transcript window for this task (see
 envelope` / `session_id:` summary block, **tagged `tool: validate_completion`**,
 pasted into a `tool_result` (this is how a subagent's report of running the
 gate becomes visible from the controller's own transcript). It blocks
-(`exit 2`) in exactly two cases:
+(`exit 2`) in exactly three cases:
 
 1. **Neither signal is present.** Nothing in the window shows the completion
    gate ran at all.
@@ -48,10 +51,17 @@ gate becomes visible from the controller's own transcript). It blocks
    surviving only as escapes inside one JSON string, so the hook parses that
    JSON directly for `verdict` rather than pattern-matching the escaped
    text.
+3. **The submitted diff contains added comment lines carrying change history.**
+   A scan of added lines in the diff detects comments matching a pattern set
+   (patterns stored in `comment_scan.py`), the same patterns the write-time
+   hook applies to `Edit` and `Write` calls. This scan detects rather than
+   prevents, catching comments that reached disk through `Bash` or other
+   pathways the write-time hook cannot intercept.
 
-Both messages state the same recovery flow explicitly: reopen the task with
+The first two messages state the same recovery flow explicitly: reopen the task with
 `status=in_progress`, address whatever the gate is asking for, run
 `mcp__anti-tangent__validate_completion` (again), and only then re-close.
+The third message names the pattern set and instructs the same recovery.
 
 ### Why the summary block must be tagged `tool: validate_completion`
 
@@ -192,6 +202,127 @@ already-abandoned attempt cannot satisfy the gate for this one. If no
 `in_progress` entry exists for the task, it falls back to the whole
 transcript.
 
+## Write-time comment guard (PreToolUse hook)
+
+A `PreToolUse` hook on `Edit` and `Write` tool calls scans added lines in the
+diff-to-be-written for comments matching the same pattern set used by the
+close-time scan. It refuses the write (exit 2) if a pattern matches on an
+added line in a file type the scanner recognizes (determined by extension,
+using the same allowlist `comment_scan.py` maintains). The refusal message
+directs the model to remove the flagged comment and resubmit the edit.
+
+This hook fires inside dispatched subagents as well as the main agent, since
+`PreToolUse` fires for all `Edit`/`Write` calls regardless of origin.
+
+### Write-time fail-open causes
+
+Like the close-time hook, this one allows the write rather than blocking it
+whenever it cannot do its job. Each cause gets its own trace-log reason, so
+the log distinguishes a write the scanner cleared from one it never looked at:
+
+| Cause | Trace reason |
+| --- | --- |
+| `ANTI_TANGENT_COMMENT_GUARD=0` | `skip \| guard=0` |
+| `python3` absent from `PATH` | `skip \| no-python3` |
+| the scanner body unreadable under `$CLAUDE_PLUGIN_ROOT/hooks/` | `skip \| no-body` |
+| the `Write` target cannot be read: a symlink, a FIFO, a directory, or a file past the 2,000,000-byte read cap | `skip \| unreadable-target` |
+| any other unexpected internal error | `error \| python-exit=N` |
+
+The unreadable-target row is the one worth understanding. A `Write` over an
+existing file is scanned by diffing the new content against what is on disk,
+so a target the hook refuses to read leaves nothing to diff against — and a
+scan that cannot see the old text would report the entire file as added and
+block on comments that were already there. Allowing the write is the right
+call, but it means the write lands **unscanned**: only the close-time scan
+still sees it. The refusal to read is deliberate rather than incidental —
+`O_NOFOLLOW` declines a symlink at the final component, `O_NONBLOCK` keeps a
+FIFO from parking the hook inside `open()`, and an `S_ISREG` check rejects
+everything else — because the path is caller-supplied and the hook runs
+unsandboxed.
+
+Note that a file whose extension is outside the allowlist is *not* a fail-open
+case: it traces `skip | ext=…` and is out of scope by policy, not by failure.
+
+### On-touch: what counts as an added comment line
+
+Both scans (write-time and close-time) compare line *text*, not line
+*position*. A comment line whose bytes are unchanged from what was already in
+the file — even if it moved to a different line number, a different
+function, or a different file region — is not treated as added and is never
+scanned, no matter how the surrounding code shifted around it. A comment
+line whose bytes changed at all — including when the only change is leading
+whitespace from a re-indent or a gofmt-style reflow — **is** treated as added
+and is scanned like any newly written line.
+
+This is deliberate, not an edge case the scanner happens to get wrong:
+changing a line's bytes is touching it, and the on-touch rule this policy is
+built on (see the design spec's "The policy") applies to any touch, not only
+a change in wording. So re-indenting an existing comment that already
+violates the policy blocks the write until the comment is fixed, while a pure
+move of the same, unchanged line — a function relocated verbatim, a file
+split with no line inside it edited — does not. If a reflow is about to touch
+a violating comment incidentally, fix the comment as part of that same edit
+rather than treating the reflow as separate from the touch.
+
+**Limitations:**
+- `Bash` writes (heredocs, sed -i, and similar) bypass the `Edit`/`Write`
+  matcher entirely — comments written through `Bash` are caught, if at all,
+  only by the close-time scan.
+- anti-tangent-mcp's own `code_write` tool, called with `target_path`, bypasses
+  it the same way: the server writes the file itself, so no `Edit`/`Write` ever
+  reaches this hook. It is the sharper case of the two, because the generated
+  code never enters the agent's context either, so there is no self-review
+  step to fall back on — only the close-time scan and the reviewer layer see it.
+- `PostToolUse` detects rather than prevents: the close-time scan fires
+  **after** the state change to `completed`, so a comment reaching disk
+  through `Bash` blocks further progress only at close time, not at write time.
+- The scanner reads full-line comments only. Multi-line comments, including
+  those that span across lines, are not detected.
+- The scanner implements a small pattern set capturing common change-history
+  markers. The reviewer layer at completion time covers prose narration the
+  patterns cannot catch — an engineer writing a sentence like "I rewrote this
+  for clarity" in a comment passes the scanner but may be flagged by the
+  reviewer.
+- The extension allowlist (`comment_scan.py`'s `SCAN_EXTS`) is keyed on
+  `os.path.splitext`, so a file with no extension — including this plugin's
+  own extensionless `check-task-complete` and `check-comment-write` hook
+  scripts — falls outside it and is not scanned by either layer.
+
+Set `ANTI_TANGENT_COMMENT_GUARD=0` to disable the comment-hygiene scan at both
+write time (PreToolUse on `Edit`/`Write`) and close time (part of the
+PostToolUse scan), while leaving the completion-gate check active.
+
+## Comment-hygiene scan at close
+
+Beyond the first two block conditions above, a close that is otherwise going to
+pass gets one more check: the LAST `validate_completion` call in the task
+window is scanned for added comment lines carrying change history — the
+same rule the write-time `PreToolUse` hook applies to an `Edit`/`Write`, run
+again here as defence in depth for a comment that reached disk without going
+through either, most commonly a `Bash` heredoc.
+Only the last call in the window is scanned, so a re-validation after
+rewriting a flagged comment closes cleanly on its own updated diff.
+
+The diff is read from `final_diff` inline, or from `final_diff_path` — an
+absolute path, capped at 2,000,000 bytes and failing open on any read
+error, including the path being relative or the file exceeding the cap.
+Only `+`-prefixed lines count as added; an unchanged context line does not.
+The scan reuses `comment_scan.py`'s extension allowlist directly, so a file
+type the write-time hook does not scan is not scanned here either. A
+violation blocks with its own message, textually distinct from the two
+above, and is recorded to the trace log the same way. Set
+`ANTI_TANGENT_COMMENT_GUARD=0` to skip this scan while the completion gate
+above still runs in full.
+
+**What this scan cannot see.** A completion whose evidence is `final_files`
+or `test_evidence` alone carries no diff of any kind, so there is nothing
+here to read — the close is not blocked on comment hygiene, one way or the
+other. That gap is not filled elsewhere: the reviewer's own rule for a
+change-history comment applies only when a diff is present in the same
+call, so a diff-less completion gets no comment scrutiny from the reviewer
+either. Such a close is covered by the write-time `Edit`/`Write` hook alone
+— and by nothing at all if the code reached disk through `Bash`.
+
 ## Dependencies
 
 The hook is a `bash` script that shells out to `jq` (to read the JSON stdin
@@ -199,21 +330,37 @@ payload) and `python3` (to walk the transcript, since the signals it looks
 for are nested inside `tool_result` content that `jq` alone parses more
 awkwardly than a few lines of Python). Both must be on `PATH`.
 
-## Kill switch
+## Kill switches
 
-Set `ANTI_TANGENT_COMPLETION_GUARD=0` to short-circuit the hook to `exit 0`
-unconditionally, before it reads stdin or does any work.
+- `ANTI_TANGENT_COMPLETION_GUARD=0` short-circuits the `PostToolUse` hook to
+  `exit 0` unconditionally, before it reads stdin or does any work. This
+  disables both the completion-gate check and the close-time comment-hygiene
+  scan.
+- `ANTI_TANGENT_COMMENT_GUARD=0` disables the comment-hygiene scan (both
+  write-time and close-time) while leaving the completion-gate check active.
 
 ## Fail-open policy
 
-This hook never blocks work because it broke. Any of the following makes it
-exit 0 silently, with only a trace-log line (see below) as a record:
+Neither hook blocks work because it broke. The causes below are the close-time
+`PostToolUse` hook's; the write-time hook has its own set, tabulated under
+"Write-time fail-open causes" above. Any of the following makes the close-time
+hook exit 0 silently, with only a trace-log line (see below) as a record:
 
 - a missing or unreadable `transcript_path`
 - `jq` or `python3` absent from `PATH`
 - malformed JSON on stdin (the hook cannot know what it is looking at)
 - any other unexpected internal error (an `ERR` trap covers this as a
   last-resort backstop)
+
+The comment-hygiene scan (see above) has one fail-open cause of its own: the
+scanner module cannot be imported, most commonly a `CLAUDE_PLUGIN_ROOT` that
+does not resolve to this plugin's `hooks/` directory. Among the close-time
+causes it is the one that is **not** silent by trace-log-line-only convention
+above — it gets its own distinct reason, `comment-scan-unavailable`, so it
+reads differently from a scan that genuinely ran and found nothing. Without
+that distinction, a misconfigured plugin root would disable the scan
+permanently and invisibly, indistinguishable on both the exit code and the
+trace log from a clean pass.
 
 A malformed line **inside** the transcript is handled differently, and
 deliberately not folded into "fail open": the transcript walker skips a
@@ -230,6 +377,19 @@ log, by default:
 /tmp/claude-hooks/anti-tangent-guard.log
 ```
 
+This default path is **shared by every Claude Code session on the machine**,
+by design: a cross-session view is what makes the log worth opening at all
+when something needs debugging. The session column below is what keeps that
+shared file attributable instead of an unlabeled interleave. If you want true
+per-session isolation instead, point `ANTI_TANGENT_GUARD_TRACE_LOG` at a
+session-specific path.
+
+Because it sits in a world-writable directory, both hooks create the
+containing directory mode `700` and refuse to append when the log path is a
+symlink, so a link planted there cannot redirect the trace into a file of
+someone else's choosing. Both checks are best-effort: a trace that cannot be
+written is dropped and never changes a hook's exit status.
+
 Override the location with `ANTI_TANGENT_GUARD_TRACE_LOG`. Tail it while
 debugging:
 
@@ -237,9 +397,21 @@ debugging:
 tail -f /tmp/claude-hooks/anti-tangent-guard.log
 ```
 
-Each line carries a UTC timestamp, the task id (or `?` if the hook exited
-before reaching one), and the decision plus its reason (e.g.
-`skip | no-jq`, `pass | called=true block=false`, `block | verdict-fail`).
+Each line carries a UTC timestamp, a short session identifier (`s=` followed
+by the first 8 characters of the hook payload's `session_id`, or `s=-` for a
+line emitted before the payload was read — the kill-switch skip, the
+missing-`jq`/`python3` skip — where the hook genuinely does not know it yet),
+the task id for `check-task-complete` (or `?` if the hook exited before
+reaching one), and the decision plus its reason (e.g. `skip | no-jq`,
+`pass | called=true block=false`, `block | verdict-fail`).
+
+The log is capped so it cannot grow without bound: past
+`ANTI_TANGENT_GUARD_TRACE_MAX_BYTES` (default 1,048,576 — 1 MiB), the next
+write rotates the existing file to a single `.1` sibling (a rename, not a
+truncation, so a concurrent appender simply starts a fresh file instead of
+writing into a hole) before appending. Identity and rotation are both
+best-effort: any failure in either — an unreadable payload, a `mv` that can't
+land — is swallowed and never changes the hook's own exit status.
 
 ## Running the evals
 
@@ -247,13 +419,34 @@ before reaching one), and the decision plus its reason (e.g.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (22 cases) against the hook and exits non-zero on
-any mismatch. Cases 18/19 are deliberately un-escaped fixtures — they test
-positional extraction against an older server. Cases 20/21 are the current
-server's own rendering, pinned byte-for-byte to the formatters by
+Runs the full eval suite (93 cases) against both hooks and exits non-zero on
+any mismatch — check-task-complete's three block conditions (the third being
+its own close-time comment-hygiene scan), plus check-comment-write's
+write-time comment-hygiene guard. See `evals/run.sh`'s header comment for the
+full breakdown by case. Cases 18/19 are deliberately un-escaped fixtures — they
+test positional extraction against an older server. Cases 20/21 are the
+current server's own rendering, pinned byte-for-byte to the formatters by
 `internal/mcpsrv/guard_eval_fixture_test.go`, so the escaping half is
 exercised end-to-end through the real hook rather than only through a Go
 mirror of its regexes. Case 22 pairs a validate_completion tool_use with its
 tool_result exactly as the server's `envelopeResult` marshals it, so the
-direct-call verdict read (see "The two block conditions" above) is
+direct-call verdict read (see "The three block conditions" above) is
 exercised end-to-end too.
+
+### The false-positive gate
+
+```bash
+bash evals/fp-report.sh
+```
+
+Separate from the case suite, and answering a different question: not "does
+each pinned shape still behave", but "does the scanner, as shipped, misread any
+comment in this repository's own source". `fp-scan.py` runs it over every
+tracked source file's HEAD blob with every comment line offered as an added
+line — the worst case the write-time hook can see. `fp-class.tsv` records what
+each hit is, judged by hand. `fp-report.sh` joins the two strictly in both
+directions and fails on an unclassified hit, a classification with no hit, a
+duplicate key, or a key whose comment text has drifted, so a stale table cannot
+report a clean zero. Widening a tell is the change this gate exists to catch:
+regenerate with `python3 -B evals/fp-scan.py`, then reconcile `fp-class.tsv` by
+hand — every new key needs a human judgement.

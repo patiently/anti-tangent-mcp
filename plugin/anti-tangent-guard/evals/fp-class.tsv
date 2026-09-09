@@ -1,0 +1,62 @@
+# Classification of every comment-hygiene hit fp-scan.py finds in this
+# repository's own committed source. One record per distinct comment text,
+# four tab-separated fields:
+#
+#   <path>  <TAB>  <count>  <TAB>  true_positive|false_positive  <TAB>  <matched text>
+#
+# true_positive  the comment really does carry change history; the scanner is
+#                right to flag it. Under this project's comment policy that
+#                also makes it a comment the next task touching that file is
+#                expected to rewrite -- the gate measures the SCANNER, not the
+#                repository's compliance, so a true positive is not a defect
+#                here.
+# false_positive the patterns misread ordinary prose. fp-report.sh fails while
+#                any of these exist: a tell that reaches ordinary prose blocks
+#                real writes mid-edit, which costs more than a missed
+#                violation.
+#
+# THE KEY IS PATH PLUS TEXT. No line number appears here: the same comment text
+# is the same judgement wherever in the file it sits, so an unrelated commit
+# that inserts a line above one of these entries does not invalidate it. The
+# count is how many copies of that exact text the scan must find at that path --
+# a copy-pasted flagged comment has to be re-judged rather than inheriting the
+# original's verdict. A rewritten comment shows up twice in fp-report.sh's
+# output: UNKNOWN for the entry below that no longer matches anything, and
+# UNCLASSIFIED for the text that replaced it.
+#
+# The matched text is escaped the way fp-scan.py emits it: backslash as `\\`
+# and tab as `\t`, so a comment containing a tab cannot add a column.
+#
+# Regenerate the left-hand side with:
+#   python3 -B plugin/anti-tangent-guard/evals/fp-scan.py
+# and reconcile by hand. Every new key needs a human judgement; that is why
+# this file is kept separate from the scan rather than produced by it.
+#
+# CodeRabbit review references, task-NN work-item references and version
+# narration ("added in vX.Y.Z", "vX.Y.Z removes ...") are exactly the three
+# mechanical tells the scanner claims to detect, and each hit below is one of
+# them sitting in a full-line comment. None is a version naming a
+# wire-compatibility contract, an ordinal in prose, a hex colour, or a URL path
+# segment -- the four shapes the eval suite pins as non-matches.
+internal/codescene/codescene_test.go	1	true_positive	// meaningful. Regression for the overflow CodeRabbit flagged on PR #59.
+internal/mcpsrv/context_files_test.go	1	true_positive	// CodeRabbit PR #63. TestResolveDirInput_ErrorCannotForgeSummaryLines above
+internal/mcpsrv/file_consistency_test.go	1	true_positive	// CodeRabbit PR #63: resolveUnderRoot is lexical only, and os.Stat follows
+internal/mcpsrv/file_consistency_test.go	1	true_positive	// CodeRabbit PR #63: "./a.go" and "a.go" are the same file, so a later
+internal/mcpsrv/guard_eval_fixture_test.go	1	true_positive	// Why this exists (task-12c-review.md Important #2): eval cases 18 and 19 use
+internal/mcpsrv/guard_eval_fixture_test.go	1	true_positive	// task-12b forgery, rendered by the current (escaping) server.
+internal/mcpsrv/guard_eval_fixture_test.go	1	true_positive	// Case 21: the task-12c exploit input verbatim — one validate_plan
+internal/mcpsrv/handlers.go	1	true_positive	// The bare `/...` substring that v0.5.2 added has been removed in v0.6.1
+internal/mcpsrv/handlers.go	1	true_positive	// syntax in `test_evidence` strings and test-file contents (see #25). Every
+internal/mcpsrv/handlers.go	1	true_positive	// Added in v0.5.2 from field reports:
+internal/mcpsrv/handlers_test.go	1	true_positive	// v0.5.2 added six placeholder/truncation patterns. v0.6.1 removed `/...`
+internal/mcpsrv/handlers_test.go	1	true_positive	// v0.6.1 removes the `/...` entry; this test pins that decision.
+internal/mcpsrv/summary.go	1	true_positive	// task-12c's defect, exploited end-to-end through formatPlanSummary's
+internal/mcpsrv/summary_contract_test.go	1	true_positive	// TestSummaryBlockContractEvidenceCannotForgeMarkers pins task-12b review
+internal/mcpsrv/summary_contract_test.go	1	true_positive	// (task-12b-review.md Critical #1, reproduced independently before this
+internal/mcpsrv/summary_contract_test.go	1	true_positive	// SECOND half of task-12b review Critical #1's fix — the hook's positional
+internal/mcpsrv/summary_contract_test.go	1	true_positive	// source would render it (the shape task-12b-review.md's reproduction used,
+internal/mcpsrv/summary_contract_test.go	1	true_positive	// Sanity check: the naive, task-12b-shipped pattern (does this literal
+internal/mcpsrv/summary_forgery_test.go	1	true_positive	// HOW (1) IS KEYED, and why it changed. Until task-12e the scan looked for
+internal/mcpsrv/summary_forgery_test.go	1	true_positive	// envelope" line reached the hook end-to-end (task-12d-review.md Critical #1).
+internal/verdict/parser_test.go	1	true_positive	// Six new categories added in v0.6.0 for prime_project_knowledge and
+internal/verdict/schema_invariants_test.go	1	true_positive	// v0.6.0 adds six new categories alongside the existing v0.5.x set; this

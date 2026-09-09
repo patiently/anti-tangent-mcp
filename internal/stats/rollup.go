@@ -7,31 +7,37 @@ import (
 )
 
 // Rollup is the deterministic aggregate written to rollup.json. The json tags
-// are a LOAD-BEARING cross-component contract — the gnome-topbar consumer
-// (branch feat/gnome-topbar, Task 17) reads these exact snake_case keys. Go
-// marshals PascalCase by default, which would silently break that consumer, so
-// every field is tagged. Changing/dropping a key is a breaking change.
+// are a LOAD-BEARING cross-component contract — the gnome-topbar tray consumer
+// reads these exact snake_case keys. Go marshals PascalCase by default, which
+// would silently break that consumer, so every field is tagged.
+// Changing/dropping a key is a breaking change.
 //
-// The Codescene field (added in Task 9) is populated when the agent appends
-// CodeScene per-run records to codescene-events.jsonl.
+// The Codescene field is populated when the agent appends CodeScene per-run
+// records to codescene-events.jsonl.
 type Rollup struct {
-	WindowStart       time.Time          `json:"window_start"`
-	WindowEnd         time.Time          `json:"window_end"`
-	TotalCalls        int                `json:"total_calls"`
-	PerTool           map[string]int     `json:"per_tool"`
-	VerdictCounts     map[string]int     `json:"verdict_counts"`
-	FindingsPerCall   float64            `json:"findings_per_call"`
-	SeverityHistogram map[string]int     `json:"severity_histogram"`
-	CategoryHistogram map[string]int     `json:"category_histogram"`
-	ReviewMSP50       int64              `json:"review_ms_p50"`
-	ReviewMSP95       int64              `json:"review_ms_p95"`
-	CacheHitRate      float64            `json:"cache_hit_rate"`
-	PartialRate       float64            `json:"partial_rate"`
-	ModelUsage        map[string]int     `json:"model_usage"`
-	GeneratedAt       time.Time          `json:"generated_at"`
-	Codescene         *CodesceneRollup   `json:"codescene,omitempty"`
-	PlanHeaders       *PlanHeadersRollup `json:"plan_headers,omitempty"`
-	Worker            *WorkerRollup      `json:"worker,omitempty"`
+	WindowStart       time.Time      `json:"window_start"`
+	WindowEnd         time.Time      `json:"window_end"`
+	TotalCalls        int            `json:"total_calls"`
+	PerTool           map[string]int `json:"per_tool"`
+	VerdictCounts     map[string]int `json:"verdict_counts"`
+	FindingsPerCall   float64        `json:"findings_per_call"`
+	SeverityHistogram map[string]int `json:"severity_histogram"`
+	CategoryHistogram map[string]int `json:"category_histogram"`
+	// CriterionHistogram sums Event.CriterionCounts, whose keys are the
+	// server-recognised criterion sentinels (comment_hygiene and its
+	// siblings). It is the only aggregate of those per-event counts, and both
+	// consumers read it from here: the LLM summary built from this rollup, and
+	// the gnome-topbar stats page, which renders it as its "Criteria" table.
+	CriterionHistogram map[string]int     `json:"criterion_histogram"`
+	ReviewMSP50        int64              `json:"review_ms_p50"`
+	ReviewMSP95        int64              `json:"review_ms_p95"`
+	CacheHitRate       float64            `json:"cache_hit_rate"`
+	PartialRate        float64            `json:"partial_rate"`
+	ModelUsage         map[string]int     `json:"model_usage"`
+	GeneratedAt        time.Time          `json:"generated_at"`
+	Codescene          *CodesceneRollup   `json:"codescene,omitempty"`
+	PlanHeaders        *PlanHeadersRollup `json:"plan_headers,omitempty"`
+	Worker             *WorkerRollup      `json:"worker,omitempty"`
 }
 
 // PlanHeadersRollup reports structured-header adoption across the window's
@@ -60,13 +66,14 @@ var workerTools = map[string]bool{"bulk_read": true, "code_write": true}
 // window for an empty event set).
 func computeRollup(events []Event, now time.Time) Rollup {
 	r := Rollup{
-		PerTool:           map[string]int{},
-		VerdictCounts:     map[string]int{},
-		SeverityHistogram: map[string]int{},
-		CategoryHistogram: map[string]int{},
-		ModelUsage:        map[string]int{},
-		GeneratedAt:       now,
-		TotalCalls:        len(events),
+		PerTool:            map[string]int{},
+		VerdictCounts:      map[string]int{},
+		SeverityHistogram:  map[string]int{},
+		CategoryHistogram:  map[string]int{},
+		CriterionHistogram: map[string]int{},
+		ModelUsage:         map[string]int{},
+		GeneratedAt:        now,
+		TotalCalls:         len(events),
 	}
 	if len(events) == 0 {
 		r.WindowStart, r.WindowEnd = now, now
@@ -93,6 +100,9 @@ func computeRollup(events []Event, now time.Time) Rollup {
 		}
 		for k, v := range e.CategoryCounts {
 			r.CategoryHistogram[k] += v
+		}
+		for k, v := range e.CriterionCounts {
+			r.CriterionHistogram[k] += v
 		}
 		if e.Model != "" {
 			r.ModelUsage[e.Model]++

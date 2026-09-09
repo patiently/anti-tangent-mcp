@@ -9,9 +9,9 @@ role so an agent loads only what applies to it.
 | Part | Who reads it | Covers |
 |---|---|---|
 | [`core.md`](docs/protocol/core.md) | everyone | tool surface, scope and limits, §1 when the protocol applies, §6 FAQ and finding categories |
-| [`authoring.md`](docs/protocol/authoring.md) | plan authors | §3 task-block format, normative test bodies, attestations |
-| [`implementer.md`](docs/protocol/implementer.md) | implementing subagents | §4 lifecycle, the paste-in dispatch clause, lightweight mode, CodeScene companion |
-| [`controller.md`](docs/protocol/controller.md) | controllers | §5 plan-handoff gate, dispatch addendum, end-of-run reporting |
+| [`authoring.md`](docs/protocol/authoring.md) | plan authors | §3 task-block format, normative test bodies, attestations, write-time comment guard |
+| [`implementer.md`](docs/protocol/implementer.md) | implementing subagents | §4 lifecycle, the paste-in dispatch clause, lightweight mode, CodeScene companion, §4.4 comment policy |
+| [`controller.md`](docs/protocol/controller.md) | controllers | §5 plan-handoff gate, dispatch addendum, §5.3 guard hooks, end-of-run reporting |
 | [`project-knowledge.md`](docs/protocol/project-knowledge.md) | controllers, only with a KB | prime/extract loop, note types, Basic Memory translation |
 
 The five parts live in `docs/protocol/`; the installer rewrites these paths to your local copy.

@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook (22 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (93 cases)",
   "evals": [
     {
       "id": 1,
@@ -134,7 +134,7 @@
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 0,
-      "reason": "a later re-validation with verdict: pass supersedes an earlier fail \u2014 LAST block wins"
+      "reason": "a later re-validation with verdict: pass supersedes an earlier fail — LAST block wins"
     },
     {
       "id": 8,
@@ -177,7 +177,7 @@
       "name": "malformed-stdin-json-fails-open",
       "stdin_raw": "{\"tool_name\": \"TaskUpdate\", \"tool_input\": {",
       "expected_exit": 0,
-      "reason": "stdin itself is not valid JSON \u2014 the hook cannot know what it is looking at, so it fails open"
+      "reason": "stdin itself is not valid JSON — the hook cannot know what it is looking at, so it fails open"
     },
     {
       "id": 11,
@@ -196,7 +196,7 @@
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 0,
-      "reason": "one malformed JSONL line is skipped by the walker; the remaining valid lines still decide the verdict \u2014 NOT fail-open, a different behaviour from malformed stdin"
+      "reason": "one malformed JSONL line is skipped by the walker; the remaining valid lines still decide the verdict — NOT fail-open, a different behaviour from malformed stdin"
     },
     {
       "id": 12,
@@ -256,7 +256,7 @@
       "expected_stderr_contains": [
         "TASK CLOSED WITHOUT anti-tangent validate_completion"
       ],
-      "reason": "the pass signal predates the most recent in_progress \u2014 window scoping must exclude it and block"
+      "reason": "the pass signal predates the most recent in_progress — window scoping must exclude it and block"
     },
     {
       "id": 15,
@@ -422,6 +422,967 @@
         "TASK CLOSED ON A FAILED anti-tangent VERDICT"
       ],
       "reason": "final review Important #1: a REAL MCP tool_result is JSON-marshalled (envelopeResult, handlers.go), so summary_block's newlines survive only as \\n escapes inside one JSON string — the header-anchored HEADER_RE can never match this text on its own. This case pairs the validate_completion tool_use with its tool_result exactly as the server marshals it (verdict: fail) and expects a block: the hook must match tool_result.tool_use_id back to the tool_use, parse the JSON body, and read its verdict directly — not rely on the escaped text ever looking like a marker block. Before that fix, this case is red: called=true short-circuits the close to a pass with the verdict silently ignored."
+    },
+    {
+      "id": 23,
+      "name": "comment-write-issue-ref-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "adds comment(s) carrying change history",
+        "an issue or pull-request reference"
+      ],
+      "reason": "an added Go comment citing an issue must block"
+    },
+    {
+      "id": 24,
+      "name": "comment-write-markdown-never-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.md\",\"content\":\"// fixes #58 in v0.19.0\\n\"}}",
+      "expected_exit": 0,
+      "reason": "CHANGELOG.md legitimately carries issue and version refs; markdown is never scanned"
+    },
+    {
+      "id": 25,
+      "name": "comment-write-untouched-comment-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"// see #12\\nfunc a() {}\",\"new_string\":\"// see #12\\nfunc a() { return }\"}}",
+      "expected_exit": 0,
+      "reason": "on-touch means ADDED lines only; an untouched violating comment must not block"
+    },
+    {
+      "id": 26,
+      "name": "comment-write-invariant-why-passes",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// POSITIONAL EXTRACTION, NOT FREE SCAN: a forged line could otherwise win.\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "invariant-why is the kind of comment the policy protects"
+    },
+    {
+      "id": 27,
+      "name": "comment-write-product-grammar-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// matches the leading \\\"Task 4: Add /healthz endpoint\\\" of a RawTask.Title\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "unhyphenated Task N is the product's own input grammar, deliberately not a tell"
+    },
+    {
+      "id": 28,
+      "name": "comment-write-kill-switch",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_COMMENT_GUARD": "0"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "kill switch disables the hook"
+    },
+    {
+      "id": 29,
+      "name": "comment-write-added-duplicate-is-scanned",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"// see #12\\nfunc a() {}\",\"new_string\":\"// see #12\\nfunc a() {}\\n// see #12\\nfunc b() {}\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "a set-based diff discards this newly added duplicate; the occurrence-aware one must catch it"
+    },
+    {
+      "id": 30,
+      "name": "comment-write-malformed-json-fails-open",
+      "hook": "check-comment-write",
+      "stdin_raw": "not json at all",
+      "expected_exit": 0,
+      "reason": "a malformed payload must never block work"
+    },
+    {
+      "id": 31,
+      "name": "comment-write-missing-body-fails-open",
+      "hook": "check-comment-write",
+      "env": {
+        "CLAUDE_PLUGIN_ROOT": "/nonexistent-plugin-root"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/a.go\",\"content\":\"// fixes #58\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a missing python body must fail open, not block"
+    },
+    {
+      "id": 32,
+      "name": "comment-write-unreadable-target-fails-open",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}\",\"content\":\"// fixes #58\\n\"}}",
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "comment-write | skip | unreadable-target"
+        ]
+      },
+      "reason": "file_path pointing at a directory: the open succeeds on Linux, so the S_ISREG check is what rejects it. An unreadable target must fail open rather than block the write, and the trace must say so -- folded into the pass arm, a write that was never scanned would be indistinguishable in the log from one scanned and found clean. This case exercises the directory shape only; the symlink shape has its own case, and the FIFO and oversized-file shapes are unpinned by this suite"
+    },
+    {
+      "id": 33,
+      "name": "comment-write-no-python3-fails-open",
+      "hook": "check-comment-write",
+      "env": {
+        "PATH": "/nonexistent-bin"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/a.go\",\"content\":\"// fixes #58\\n\"}}",
+      "expected_exit": 0,
+      "reason": "no python3 on PATH must fail open"
+    },
+    {
+      "id": 34,
+      "name": "close-with-history-comment-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
+      ],
+      "reason": "a passing verdict must not let a change-history comment through"
+    },
+    {
+      "id": 35,
+      "name": "close-with-clean-comment-allows",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "an invariant comment in the diff must not block a clean close"
+    },
+    {
+      "id": 36,
+      "name": "close-last-call-wins",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t2\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t2\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "the FIRST call's violating diff must not block a close whose LAST call submitted a clean diff"
+    },
+    {
+      "id": 37,
+      "name": "close-diff-path-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"{{DIFFFILE}}\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "diff_file": "+++ b/a.go\n+// fixes #58\n",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
+      ],
+      "reason": "final_diff_path is the route section 4.2 tells implementers to prefer; a violating line reached through it must block just like an inline final_diff"
+    },
+    {
+      "id": 38,
+      "name": "close-relative-diff-path-fails-open",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"relative/final.diff\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a relative final_diff_path must fail open rather than being opened relative to the hook's cwd",
+      "cwd_fixture": {
+        "relative/final.diff": "+++ b/a.go\n+// fixes #58\n"
+      }
+    },
+    {
+      "id": 39,
+      "name": "close-oversized-diff-path-fails-open",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"{{DIFFFILE}}\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "diff_file": "+++ b/a.go\n+// fixes #58\n",
+      "diff_file_min_bytes": 2000010,
+      "expected_exit": 0,
+      "reason": "a final_diff_path file over the 2,000,000-byte cap must fail open rather than block, even though it carries a violating line within the first bytes"
+    },
+    {
+      "id": 40,
+      "name": "close-comment-kill-switch",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "env": {
+        "ANTI_TANGENT_COMMENT_GUARD": "0"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "ANTI_TANGENT_COMMENT_GUARD=0 must skip the comment scan while the completion gate itself still runs and still passes"
+    },
+    {
+      "id": 41,
+      "name": "close-trace-records-comment-hygiene",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "comment-hygiene"
+        ]
+      },
+      "reason": "the trace() call for this block reason must actually reach the trace log, not just the block message on stderr"
+    },
+    {
+      "id": 42,
+      "name": "close-final-files-only-allows",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [\"a.go\"]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a final_files-only completion carries no diff of any kind; this layer must let it through untouched"
+    },
+    {
+      "id": 43,
+      "name": "close-excluded-extension-allows",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/README.md\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "the extension allowlist applies at close time exactly as it does at write time; .md is not scanned"
+    },
+    {
+      "id": 44,
+      "name": "close-context-line-does-not-block",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n // fixes #58\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "only +-prefixed lines are added lines; a violating comment surviving as unchanged context must not block"
+    },
+    {
+      "id": 45,
+      "name": "close-comment-scan-unresolvable-plugin-root-does-not-mask-verdict-fail",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "env": {
+        "CLAUDE_PLUGIN_ROOT": "/nonexistent-plugin-root-atg-eval"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"fail\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED ON A FAILED anti-tangent VERDICT"
+      ],
+      "reason": "a real validate_completion call is in the window (so the comment-scan import is actually attempted) under a CLAUDE_PLUGIN_ROOT that cannot resolve comment_scan.py; the import failure must fail open on the scan alone and must not mask the independently-detected failing verdict"
+    },
+    {
+      "id": 46,
+      "name": "comment-write-issue-ref-hexcolor-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// #123456 brand color\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "an all-numeric hex colour must not be read as an issue/PR reference; the #\\d+ tell now requires an adjacent reference verb (see/fixes/closes/issue/PR/...)"
+    },
+    {
+      "id": 47,
+      "name": "comment-write-issue-ref-prose-ordinal-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.py\", \"content\": \"# the #1 rule here is idempotence\\n\"}}",
+      "expected_exit": 0,
+      "reason": "ordinary prose using '#1' as a rank/ordinal must not be read as an issue reference"
+    },
+    {
+      "id": 48,
+      "name": "comment-write-task-ref-subcompound-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// process the subtask-4 queue before returning\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'subtask-4' is a compound word, not a 'task-N' reference; the task-\\d+ tell now refuses a match preceded by a word character or hyphen"
+    },
+    {
+      "id": 49,
+      "name": "comment-write-task-ref-url-path-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see https://example.com/docs/task-42/setup for details\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a 'task-NN' URL path segment must not be read as a task reference; the tell now refuses a match immediately followed by another path segment"
+    },
+    {
+      "id": 50,
+      "name": "comment-write-task-ref-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// task-12b review, Critical #1\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "the narrowed task-\\d+ tell must still block a genuine task reference, including one with a trailing letter suffix on the id"
+    },
+    {
+      "id": 51,
+      "name": "comment-write-version-ref-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// added in v0.5.0\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a version reference"
+      ],
+      "reason": "the narrowed version tell must still block a genuine change-history version reference"
+    },
+    {
+      "id": 52,
+      "name": "comment-write-version-ref-wire-compat-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// Package atstats reads the anti-tangent v0.10.0 stats output\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a version number naming a wire-compatibility contract (what output shape this code reads) reads correctly without change-history context and must not block; found as a real false positive in gnome-topbar/daemon/internal/atstats/atstats.go at HEAD"
+    },
+    {
+      "id": 53,
+      "name": "close-comment-scan-unavailable-does-not-silently-hide-violation",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "env": {
+        "CLAUDE_PLUGIN_ROOT": "/nonexistent-plugin-root-atg-eval",
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "comment-scan-unavailable"
+        ]
+      },
+      "reason": "a broken plugin root plus a genuinely violating diff plus a passing verdict must still fail open (exit 0), but the trace log must record that the scan itself could not run, distinguishing this from a clean scan that legitimately found nothing"
+    },
+    {
+      "id": 54,
+      "name": "comment-write-issue-ref-close-attention-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// pay close attention to the #1 priority here\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'close' as an ordinary adjective ('close attention'), not the verb 'close(s/d)', sits many characters from the digits; the #\\d+ tell now requires the trigger to directly govern the digits, not merely appear somewhere nearby"
+    },
+    {
+      "id": 55,
+      "name": "comment-write-issue-ref-see-guide-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see the #1 best practice guide for details\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'see' is a real trigger, but 'the' intervenes between it and the digits; strict adjacency (see#N or see #N, nothing else between) is what lets genuine 'see #25' keep blocking without this false positive"
+    },
+    {
+      "id": 56,
+      "name": "comment-write-issue-ref-issue-ordinal-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// this list ranks the top vendors; issue #1 is always price sensitivity\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'issue' used in its ordinary-English sense ('the primary issue') immediately before a digit is indistinguishable by surface form from a genuine issue-tracker reference; 'issue' is accepted only as a connector noun after a strong verb (fix/close/resolve/ref/pr), never as a trigger by itself"
+    },
+    {
+      "id": 57,
+      "name": "comment-write-issue-ref-reference-count-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// keep the reference count under #100 to avoid overflow\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'reference' is several words from the digits ('count under' intervenes) and is not a standalone trigger either way; a bare word-proximity check would have wrongly blocked this"
+    },
+    {
+      "id": 58,
+      "name": "comment-write-issue-ref-bug-prose-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// bug in the UI shows #1 instead of #2 for empty state\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'bug' used in its ordinary software sense, not attached to any '#N', and not preceded by a strong verb; 'bug' is accepted only as a connector noun after fix/close/resolve/ref/pr, same rationale as case 56's 'issue'"
+    },
+    {
+      "id": 59,
+      "name": "comment-write-issue-ref-connector-noun-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes issue #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "'issue' directly after the strong verb 'fixes', directly before the digits, is exactly the shape the connector-noun allowance exists for; this must still block even though bare 'issue #N' (cases 56/58) does not"
+    },
+    {
+      "id": 60,
+      "name": "comment-write-version-ref-added-verb-blocks-despite-nearby-noun",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// added v1.2.3 support for the metrics server\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a version reference"
+      ],
+      "reason": "a genuine 'added vX.Y.Z' change-history statement must block even though the unrelated word 'server' sits within the same sentence; the version tell now keys on the governing change verb, not on excluding nearby nouns, so an incidental noun can no longer suppress a real violation"
+    },
+    {
+      "id": 61,
+      "name": "comment-write-version-ref-removed-verb-blocks-despite-nearby-noun",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// removed in v2.0.0 after the old server was decommissioned\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a version reference"
+      ],
+      "reason": "same failure mode as case 60 with 'removed in' and 'server' in the same sentence; the mirror-image false negative of case 52's wire-compatibility shape, now fixed by the same verb-governs mechanism"
+    },
+    {
+      "id": 62,
+      "name": "comment-write-issue-ref-colon-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// Fixes: #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "GitHub's own 'Fixes: #N' closing-keyword syntax (colon between trigger and digits) must block; strict whitespace-only adjacency wrongly missed this"
+    },
+    {
+      "id": 63,
+      "name": "comment-write-issue-ref-references-standalone-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// References #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "'References #N' is GitHub's own linking syntax; 'reference(s)' is safe as a standalone trigger because the strict small-gap requirement still refuses 'keep the reference count under #100' (case 57) — that needs an arbitrary, non-enumerated gap"
+    },
+    {
+      "id": 64,
+      "name": "comment-write-issue-ref-fixes-the-issue-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes the issue #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "'the' may only bridge to a REQUIRED connector noun ('the issue', never a bare 'the #N'); this is the shape that distinguishes 'fixes the issue #58' (blocks) from 'see the #1 best practice guide' (case 55, stays clean)"
+    },
+    {
+      "id": 65,
+      "name": "comment-write-issue-ref-closes-the-issue-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// closes the issue #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "same 'the' + required connector-noun shape as case 64, with the 'close(s/d)' trigger instead of 'fix(es/ed)'"
+    },
+    {
+      "id": 66,
+      "name": "comment-write-issue-ref-see-also-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see also #12\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "'also' bridges directly to the digits without a connector noun (unlike 'the'); a citation-style 'see also #N' has no ordinary-prose reading the way 'the #1' does, so it is safe to allow without requiring a following noun"
+    },
+    {
+      "id": 67,
+      "name": "comment-write-version-ref-parenthetical-tag-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// Categories emitted by prime_project_knowledge (v0.6.0).\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "REVERSED from the prior round: the bare-parenthesis version rule this case pinned as blocking was removed (round-3 Finding 2) because shape alone cannot distinguish 'Categories emitted by prime_project_knowledge (v0.6.0).' from a wire-compatibility sentence that happens to parenthesize its version too (cases 74-77); this shape is now reviewer-led, not regex-led, and must not block"
+    },
+    {
+      "id": 68,
+      "name": "comment-write-version-ref-paren-with-surrounding-prose-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// (see v0.10.0 for compatibility)\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "the parenthetical-tag pattern requires the version to be the ENTIRE parenthetical content (open paren immediately before it, close paren immediately after); a version merely somewhere inside a larger parenthetical remark, with no governing change verb either, must still not block — this is what keeps the new pattern from reopening case 52's or the atstats.go/write.go wire-compatibility false positives, none of which wrap the bare version alone in its own parenthesis"
+    },
+    {
+      "id": 69,
+      "name": "comment-write-trace-carries-session-id",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "stdin_raw": "{\"session_id\": \"eval-session-12345678\", \"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "s=eval-ses"
+        ]
+      },
+      "reason": "the trace line written for this block must carry the session identifier column, not just the block reason, so a shared log stays attributable across concurrent sessions"
+    },
+    {
+      "id": 70,
+      "name": "comment-write-issue-ref-the-item-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// close the item #4 dialog when the user clicks away\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'the item #4' reads as ordinary English (the 4th item), no different from 'the ticket #4' or 'the #1 rule'; the 'the'-bridge is restricted to issue/pr only, so 'item' no longer bridges from 'the'"
+    },
+    {
+      "id": 71,
+      "name": "comment-write-issue-ref-the-ticket-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// resolve the ticket #4 printer jam at the front desk\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'the ticket #4 printer jam' is ordinary English identifying which printer by number, not a tracker reference; 'ticket' no longer bridges from 'the', only its bare form after a strong verb still does"
+    },
+    {
+      "id": 72,
+      "name": "comment-write-issue-ref-the-reference-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see the reference #2 style used throughout this file\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'the reference #2 style' reads as 'the second reference [example]', not a tracker link; a negative lookbehind now refuses 'reference[sd]?' as a standalone trigger when directly preceded by 'the ', closing the gap that survives merely narrowing the bridge (reference is also a standalone trigger, not only a bridge connector)"
+    },
+    {
+      "id": 73,
+      "name": "comment-write-issue-ref-the-bug-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see the bug #7 spray pattern on the windshield\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "'the bug #7 spray pattern' is an entomology comment, not a tracker reference; 'bug' no longer bridges from 'the', matching case 58's bare-form rationale"
+    },
+    {
+      "id": 74,
+      "name": "comment-write-version-ref-paren-wire-compat-backward-compatible-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// backward compatible with (v0.10.0)\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a wire-compatibility statement with its version in parentheses; shape alone (open-paren, version, close-paren) cannot distinguish this from case 67's now-removed genuine-history shape, so the bare-parenthesis rule was dropped rather than narrowed again"
+    },
+    {
+      "id": 75,
+      "name": "comment-write-version-ref-paren-wire-compat-accepts-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// accepts (v0.15.0) or later payloads from the client\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "same wire-compatibility-in-parens shape as case 74, with 'accepts ... or later' instead of 'backward compatible with'"
+    },
+    {
+      "id": 76,
+      "name": "comment-write-version-ref-paren-wire-compat-reads-older-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// still reads the older (v0.10.0) shape for compatibility\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "same wire-compatibility-in-parens shape as cases 74-75, phrased as 'still reads the older ... shape for compatibility'"
+    },
+    {
+      "id": 77,
+      "name": "comment-write-version-ref-paren-wire-compat-daemon-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// matches the wire shape used by the daemon (v0.21.1)\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "same wire-compatibility-in-parens shape as cases 74-76, naming a specific external daemon's wire version rather than this project's own"
+    },
+    {
+      "id": 78,
+      "name": "comment-write-malformed-trace-cap-still-blocks",
+      "hook": "check-comment-write",
+      "tmpdir_fixture": {
+        "trace.log": "preexisting\n"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log",
+        "ANTI_TANGENT_GUARD_TRACE_MAX_BYTES": "not-a-number"
+      },
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "[[ -gt ]] evaluates a non-numeric ANTI_TANGENT_GUARD_TRACE_MAX_BYTES arithmetically; against an already-existing trace log (the tmpdir_fixture above) that aborted the whole script under set -u before reaching the trailing || return 0, letting a violating write's block message reach stderr while the exit code silently stopped being 2 -- the trace log must already exist for this case to exercise the vulnerable [[ -f ]] gate at all"
+    },
+    {
+      "id": 79,
+      "name": "comment-write-trace-session-newline-sanitized",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "stdin_raw": "{\"session_id\": \"ab\\ncd|BLOCK|forged\", \"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "s=abcdBLOC | comment-write | block | comment-hygiene"
+        ]
+      },
+      "reason": "jq -r turns the payload's JSON \\n into a real newline; truncating the extracted session id by character count alone let it (and the |) survive into the printf argument and split one trace() call into two physical lines, the second of which reads as a genuine, unrelated log entry -- the full reconstructed line as a single grep -F needle only matches if the newline and pipes were stripped before truncation, since grep matches within one physical line"
+    },
+    {
+      "id": 80,
+      "name": "comment-write-issue-ref-pr-trigger-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// resolves the PR #14 backport\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "pins that 'pr' still blocks somewhere in the pattern; verified by mutation (removing 'pr' from every role together makes this stop matching). NOTE, found while adding this case: 'PR' sitting directly before '#14' also satisfies pr's OWN standalone-trigger role (same bare-adjacency mechanism as 'fixes #58' / case 63's bare 'References #N') independent of 'resolves the' preceding it — confirmed a bare 'see PR #14' with no 'the' at all blocks too. So this case does NOT cleanly isolate the round-3-restricted 'the'+pr bridge from the pre-existing standalone-pr-trigger path; no test string can, since any 'the pr #N' also satisfies the bare form. Pinning 'pr' as a trigger in general is still real regression coverage — case 59's 'fixes issue #58' plays the equivalent isolating role for the bridge mechanism using 'issue', which has no standalone-trigger role to confound it"
+    },
+    {
+      "id": 81,
+      "name": "comment-write-issue-ref-pull-request-trigger-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see pull request #221 for the rationale\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "pins the 'pull request' trigger, untested until now; verified by mutation (removing 'pull\\s*request' from the trigger alternation makes this stop matching, and 'see' alone cannot reach '#221' through any bridge since 'pull request' is not a connector word — confirmed no other trigger in the line accidentally catches it)"
+    },
+    {
+      "id": 82,
+      "name": "comment-write-issue-ref-bare-bug-connector-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// closes bug #77 in the retry path\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "pins the bare (no 'the') connector-noun form for one of the six connectors (bug/ticket/item/number/no./reference) whose 'the'-bridge was removed in round three but whose bare form after a strong verb was deliberately left working; verified by mutation (removing 'bug' from the bare-connector alternation makes this stop matching)"
+    },
+    {
+      "id": 83,
+      "name": "comment-write-reindent-of-violating-comment-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"func a() {\\n// see #12\\nreturn 1\\n}\",\"new_string\":\"func a() {\\n    // see #12\\nreturn 1\\n}\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "the on-touch rule keys on line bytes, not line position: re-indenting an existing violating comment changes its bytes, so the occurrence-aware diff in added() no longer finds a matching entry to consume and the line counts as added. This is deliberate — changing a line's bytes is touching it — and must block the same as writing the violation fresh."
+    },
+    {
+      "id": 84,
+      "name": "comment-write-pure-move-of-violating-comment-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"// see #12\\nfunc a() {}\\nfunc b() {}\",\"new_string\":\"func b() {}\\n// see #12\\nfunc a() {}\"}}",
+      "expected_exit": 0,
+      "reason": "the mirror of case 83: relocating a comment line without changing a single byte of it leaves an exact match in the old text's occurrence counter, so added() consumes it and reports no added line. A byte-identical move is not a touch, and must not block — the asymmetry with case 83 is the on-touch rule working as designed, not a gap."
+    },
+    {
+      "id": 85,
+      "name": "comment-write-oversized-payload-still-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"session_id\": \"eval-session-12345678\", \"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n// {{PAD}}\\n\"}}",
+      "stdin_pad_bytes": 200000,
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "the payload must reach the Python body on stdin, not in the environment: Linux caps one environment string at MAX_ARG_STRLEN (32 pages, 131072 bytes on x86-64), so passing a Write whose content exceeds that as an environment variable makes exec fail with status 126, which the wrapper's catch-all status branch treats as an internal error and allows. A violating comment inside a 200 KB write must block exactly as the same comment does in a small one"
+    },
+    {
+      "id": 86,
+      "name": "close-diff-path-symlink-refused",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "tmpdir_fixture": {
+        "real.diff": "+++ b/a.go\n+// fixes #58\n"
+      },
+      "tmpdir_symlink": {
+        "link.diff": "{{TMPDIR}}/real.diff"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"{{TMPDIR}}/link.diff\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "final_diff_path is caller-supplied and opened by a hook that runs unsandboxed, so it is opened with O_NOFOLLOW|O_NONBLOCK and rejected unless fstat says it is a regular file -- the same three guards the server applies to this field. The symlink here points at a diff whose content case 37 proves does block when it is reached as a regular file, so the two cases differ only in the symlink: without O_NOFOLLOW this close blocks, with it the scan fails open and the close passes"
+    },
+    {
+      "id": 87,
+      "name": "close-cwd-module-shadow-does-not-disable-guard",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "cwd_fixture": {
+        "json.py": "raise SystemExit(7)\n"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT anti-tangent validate_completion"
+      ],
+      "reason": "python3 -c puts the current working directory first on sys.path, and hooks run unsandboxed in whatever directory the session is in. A json.py sitting in a repo root would then shadow the standard library and take the whole analysis down, which the wrapper reads as a parse error and fails open -- silently disabling the gate for every close made from that directory. -I isolates the interpreter; the explicit sys.path.insert of $ATG_ROOT/hooks still resolves comment_scan under it"
+    },
+    {
+      "id": 88,
+      "name": "comment-write-trace-log-symlink-not-followed",
+      "hook": "check-comment-write",
+      "tmpdir_symlink": {
+        "trace.log": "{{TMPDIR}}/real.log"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "expected_file_absent": [
+        "{{TMPDIR}}/real.log"
+      ],
+      "reason": "the default trace path sits in a world-writable directory, so a symlink planted at it would redirect every appended line into a file of someone else's choosing. The link here dangles, so following it would CREATE real.log -- its continued absence is the assertion, and expected_file_contains cannot express it. The block must still land: refusing to trace is best-effort and must never change an exit status"
+    },
+    {
+      "id": 89,
+      "name": "close-trace-log-symlink-not-followed",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "tmpdir_symlink": {
+        "trace.log": "{{TMPDIR}}/real.log"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT anti-tangent validate_completion"
+      ],
+      "expected_file_absent": [
+        "{{TMPDIR}}/real.log"
+      ],
+      "reason": "the twin of case 88 on the close-time hook, which shares neither trace() nor its rotation with the write-time hook and so needs its own pin. Same dangling link, same assertion: real.log must never be created, and the no-validation block must still fire"
+    },
+    {
+      "id": 90,
+      "name": "comment-write-existing-file-restating-violation-does-not-block",
+      "hook": "check-comment-write",
+      "tmpdir_fixture": {
+        "atg-eval.go": "// fixes #58\npackage x\n"
+      },
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\nfunc a() {}\\n\"}}",
+      "expected_exit": 0,
+      "reason": "every other Write case targets a path that does not exist, so FileNotFoundError is the only branch they take and the existing-file diff is never exercised. Here the violating comment is ALREADY on disk and the Write merely re-states it beside a clean new line: added() consumes the existing occurrence and reports only the clean line, so nothing blocks. If the existing content were not read, every line would count as added and this would block instead"
+    },
+    {
+      "id": 91,
+      "name": "comment-write-existing-file-new-violation-blocks",
+      "hook": "check-comment-write",
+      "tmpdir_fixture": {
+        "atg-eval.go": "package x\n"
+      },
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "the mirror of case 90 on the same existing-file path: reading the old content must not become a way to miss a violation the Write genuinely introduces. The fixture is clean, the Write adds the comment, and the block must land"
+    },
+    {
+      "id": 92,
+      "name": "close-trace-task-id-separators-sanitized",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1|forged\npass"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "no_transcript": true,
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "task=1forgedpass | skip | no-transcript"
+        ]
+      },
+      "reason": "the task id reaches the trace sink straight from the payload and jq -r renders its JSON \\n as a real newline, so one trace() call became two physical lines and the second read as a genuine record. trace() now strips CR, LF and | from every field it is given, which covers the task id, the status and the tool name at once. grep -F matches within one physical line, so this needle only matches if the separators were stripped rather than passed through"
+    },
+    {
+      "id": 93,
+      "name": "comment-write-symlink-target-fails-open",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "tmpdir_fixture": {
+        "real.go": "package x\n"
+      },
+      "tmpdir_symlink": {
+        "link.go": "{{TMPDIR}}/real.go"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/link.go\",\"content\":\"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "comment-write | skip | unreadable-target"
+        ]
+      },
+      "reason": "the write-time counterpart of the final_diff_path symlink case: O_NOFOLLOW refuses the link at the final component, so there is no old text to diff against and the write proceeds unscanned. The exit code discriminates because the link's target is a real regular file whose content the added comment is absent from -- follow the link and the scan sees \"// fixes #58\" as added and blocks with exit 2, so exit 0 can only mean the link was not followed. The trace needle separately pins that this is recorded as an unreadable target rather than a pass"
     }
   ]
 }

@@ -18,7 +18,7 @@ import (
 // free prose directly — we ask for {"summary": "..."} and extract it.
 const summarySchema = `{"type":"object","properties":{"summary":{"type":"string"}},"required":["summary"],"additionalProperties":false}`
 
-const summarySystemPrompt = "You are an operations analyst. Given aggregate, anonymized statistics about an advisory code-review tool's own activity, write a brief (3-6 sentence) descriptive operational report: verdict mix, finding density and dominant categories, latency, model usage, cache/partial rates, and the trend vs the previous window if provided. This tool is advisory and has NO ground truth on whether findings were correct or acted upon — do NOT claim findings were right, wrong, useful, or ignored. Respond with a JSON object: {\"summary\": \"<markdown>\"}."
+const summarySystemPrompt = "You are an operations analyst. Given aggregate, anonymized statistics about an advisory code-review tool's own activity, write a brief (3-6 sentence) descriptive operational report: verdict mix, finding density and dominant categories, which criteria draw findings most often (the per-criterion counts in criterion_histogram), latency, model usage, cache/partial rates, and the trend vs the previous window if provided. This tool is advisory and has NO ground truth on whether findings were correct or acted upon — do NOT claim findings were right, wrong, useful, or ignored. Respond with a JSON object: {\"summary\": \"<markdown>\"}."
 
 type summaryResponse struct {
 	Summary string `json:"summary"`

@@ -129,6 +129,24 @@ Two failure modes to avoid: (1) leaking consumer code or naming into a public is
 
 Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). `validate_plan`, `prime_project_knowledge` and `extract_project_knowledge` each emit one summary line per call, on exit so it can carry the verdict and the duration — plus, where a call degraded rather than failed, at most one warning per degraded surface. A warning must be aggregated to one line per call, never emitted from inside a per-item loop. The other four tools (`validate_task_spec`, `check_progress`, `validate_completion`, `plan_run_report`) emit no per-call line today; that is a gap, not a design choice — if you add logging to one of them, follow the same exit-line shape. Set `ANTI_TANGENT_LOG_LEVEL=debug` to also log prompts and provider responses.
 
+## Comments
+
+The `anti-tangent-guard` plugin enforces this at write time (`Edit`/`Write`) and again at task
+close, when installed — but its scanner only catches full-line comments against a small pattern
+set, so a clean hook run is not proof of compliance; apply the policy yourself.
+
+Comments explain non-trivial behaviour, or a non-obvious invariant or hazard
+that would bite the next editor. The test: the comment reads correctly to
+someone who never saw the change that introduced it.
+
+Comments do NOT carry change history — no issue, pull-request or task
+references, no version references, no "previously" / "no longer" / "this
+replaced". Git holds that, and a comment repeating it goes stale on the next
+change.
+
+When you touch code whose comments break these rules, remove or rewrite them as
+part of your task. There is no separate cleanup pass.
+
 ## What This Repo Is Not
 
 (Lifted from the spec's non-goals; do not propose features it has already ruled out.)
@@ -137,5 +155,5 @@ Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). `
 - No plugin system for custom reviewers.
 - No language-specific code analysis. The reviewer is an LLM, not a linter.
 - No metrics endpoint, no OTel exporter.
-- No automatic correction: **the server is advisory, never blocking.** The v0.18.0 plugins (`anti-tangent-shunt`, `anti-tangent-guard`) **do** block — a PreToolUse hook refuses an oversized read before it happens, and the completion guard detects a task close that skipped `validate_completion` after the fact and returns a blocking instruction to reopen the task, validate, and re-close. (The guard cannot prevent the close: `PostToolUse` fires after the state change. See the guard plugin's README.) That is not a reversal of this non-goal: they are Claude Code plugin hooks the operator installs separately, each with a kill switch. The MCP server itself still never blocks and never corrects. Keep it that way — enforcement belongs in a plugin.
+- No automatic correction: **the server is advisory, never blocking.** The v0.18.0 plugins (`anti-tangent-shunt`, `anti-tangent-guard`) **do** block — a `PreToolUse` hook in `anti-tangent-shunt` refuses an oversized read before it happens. `anti-tangent-guard` blocks two ways of its own: a `PreToolUse` hook on `Edit`/`Write` refuses a write that would add a comment carrying change history before it lands, and a `PostToolUse` hook detects a task close that skipped `validate_completion` (or still carries such a comment) after the fact and returns a blocking instruction to reopen the task, validate, and re-close. (Only the `PostToolUse` half cannot prevent the close itself: it fires after the state change. See the guard plugin's README.) That is not a reversal of this non-goal: they are Claude Code plugin hooks the operator installs separately — `anti-tangent-guard`'s two kill switches are scoped by concern, not by hook: `ANTI_TANGENT_COMPLETION_GUARD=0` silences the whole close-time hook, and `ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning at both write time and close time while leaving the completion gate running (mechanics in the guard README). The MCP server itself still never blocks and never corrects. Keep it that way — enforcement belongs in a plugin.
 - No queueing. Concurrency is what `sync.RWMutex` gives us.

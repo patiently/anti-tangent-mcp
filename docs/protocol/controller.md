@@ -61,10 +61,21 @@ only trace it has that the gate ran.**
 cannot prevent the close — this is post-close detection plus a mandated
 recovery flow, not a block on the close itself. It blocks (`exit 2`,
 returning the reason to the model as something it must address before its
-next action) in two cases: no pass signal is present anywhere in the window,
-or the most recent one carries `verdict: fail`. Both messages name the same
-recovery: reopen with `status=in_progress`, address the findings, re-run
-`validate_completion`, then re-close.
+next action) in three cases: no pass signal is present anywhere in the
+window, the most recent one carries `verdict: fail`, or the submitted diff
+adds comment lines carrying change history (a scan of added lines against a
+small pattern set; see the `anti-tangent-guard` README's "Comment-hygiene
+scan at close" for what it catches and misses). All three name the same recovery:
+reopen with `status=in_progress`, address the findings — or remove/rewrite
+the flagged comment — re-run `validate_completion`, then re-close.
+
+That scan is narrower than the comment policy it enforces (§4.4 of
+`implementer.md`): full-line comments only, against a small fixed pattern
+set, and only when a diff is actually submitted in the same call. Prose
+narration ("previously", "no longer", "this replaced") is deliberately left
+to the reviewer instead of the scanner, since it can't be pattern-matched
+without false positives. A clean hook run means the scanner found nothing —
+it is not proof the comment policy was followed.
 
 Set `ANTI_TANGENT_COMPLETION_GUARD=0` to disable the hook outright — it
 short-circuits to a silent no-op before reading anything. It also fails open
@@ -77,6 +88,18 @@ Like the shunt hooks, this lives in an installable plugin, not in the server
 itself: the server stays advisory (root `CLAUDE.md`, "What This Repo Is
 Not"); enforcement, where a project wants it, is opt-in at the harness
 layer.
+
+**The same plugin also installs a `PreToolUse` hook on `Edit`/`Write`.**
+Unlike the completion guard above, this one can genuinely prevent a write: it
+refuses (`exit 2`) an `Edit` or `Write` that adds a comment carrying change
+history, before the write ever lands — an implementing subagent whose edit is
+refused this way should rewrite the flagged comment and retry, the same
+recovery §4.4 describes. It fires per tool call regardless of which session
+issued it, so it needs no controller-side transcript visibility to reach a
+subagent's own writes. Kill switch: `ANTI_TANGENT_COMMENT_GUARD=0` — separate
+from `ANTI_TANGENT_COMPLETION_GUARD` above, and it also disables the
+completion guard's own close-time comment scan. See the guard plugin's
+README for what the write-time scanner can and cannot see.
 
 ### 5.4 Anti-pattern: don't re-validate completion from the controller
 
@@ -94,6 +117,10 @@ Do NOT have the controller call `validate_completion` itself after the subagent 
 The two analyses overlap intentionally: the plan gate catches plan-wide and per-task issues at handoff; the implementer gate catches anything that changed between handoff and dispatch and produces the session that the rest of the lifecycle uses.
 
 The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`: `plan_verdict` answers "is this dispatchable?" (pass / warn / fail); `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When consecutive `warn` verdicts aren't changing, watch `plan_quality` for convergence — `actionable → rigorous` is meaningful even when the verdict stays `warn`. Ship at `actionable` for ASAP work, `rigorous` for quarterly-rewrite scope.
+
+The same reading applies one level down: a `validate_task_spec` `warn` whose
+findings are all `minor` is a proceed signal, not a defect. Do not send an
+implementer back to re-validate a spec whose findings have stopped moving.
 
 ### 5.6 Per-call tool args and partial-response handling (v0.3.0+)
 

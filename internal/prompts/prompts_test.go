@@ -105,6 +105,15 @@ func TestRenderPre_IncludesTestOnlyGuidance(t *testing.T) {
 	assert.Contains(t, out.User, "one consolidated finding")
 }
 
+func TestRenderPre_CalibratesSeverity(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Consolidate related assumptions into one finding")
+	assert.Contains(t, out.User, "prefer `verdict: pass` with `severity: minor`")
+	assert.Contains(t, out.User, "Reserve `severity: major` for ambiguity that would cause")
+	assert.Contains(t, out.User, "is not, on its own, a major finding")
+}
+
 func TestRenderPre_WithoutControllerVerifiedReferencesOmitsSection(t *testing.T) {
 	out, err := RenderPre(PreInput{Spec: sampleSpec()})
 	require.NoError(t, err)
@@ -898,6 +907,40 @@ func TestRenderPost_IncludesDemotionRule(t *testing.T) {
 	require.Contains(t, out.User, "downgrade the severity to `minor`")
 }
 
+func TestRenderPost_CommentHygieneIsPinnedMinor(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:    sampleSpec(),
+		Summary: "Added Gin handler at /healthz returning \"ok\".",
+		Files: []File{{
+			Path:    "handlers/health.go",
+			Content: "package handlers\nfunc Health(c *gin.Context) { c.String(200, \"ok\") }\n",
+		}},
+		TestEvidence: "PASS: TestHealthReturns200",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "criterion: comment_hygiene")
+	assert.Contains(t, out.User, "always `minor`, never `major` or `critical`")
+	assert.Contains(t, out.User, "read correctly to someone who never saw this change")
+	assert.Contains(t, out.User, "Apply this policy ONLY when a diff is present")
+	assert.Contains(t, out.User, "With `final_files` and no diff")
+}
+
+func TestRenderPost_CommentHygieneVersionCarveOut(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:    sampleSpec(),
+		Summary: "Added Gin handler at /healthz returning \"ok\".",
+		Files: []File{{
+			Path:    "handlers/health.go",
+			Content: "package handlers\nfunc Health(c *gin.Context) { c.String(200, \"ok\") }\n",
+		}},
+		TestEvidence: "PASS: TestHealthReturns200",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "A version reference is not automatically a defect")
+	assert.Contains(t, out.User, "reads the anti-tangent v0.10.0 stats output")
+	assert.Contains(t, out.User, "Only flag a version reference when it narrates a change rather than stating a contract")
+}
+
 func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
 	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
 	require.NoError(t, err)
@@ -906,6 +949,39 @@ func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
 	require.Contains(t, out.User, ".trimMargin()")
 	require.Contains(t, out.User, "textwrap.dedent")
 	require.Contains(t, out.User, "INTEGRATION.md §3.7")
+}
+
+func TestRenderPre_ContextIsAuthoritative(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "`Context:` block in the task spec above resolves under-specification")
+	assert.Contains(t, out.User, "including when it answers it in code rather than prose")
+	assert.Contains(t, out.User, "it does not silently overrule them")
+	assert.Contains(t, out.User, "that is a contradiction, not an ambiguity")
+	assert.Contains(t, out.User, "quoting both sides")
+}
+
+// An AC/`Context:` pair is only a contradiction when nothing says which side
+// governs. pre.tmpl and post.tmpl ask different questions — pre judges the
+// spec, post judges the implementation against it — so they need not agree
+// sentence for sentence, but they must not disagree about whether a deviation
+// `Context:` itself approves is a defect. Without the carve-out pinned here,
+// pre emits a major for exactly the spec shape post is told to accept.
+func TestRenderPre_ContextApprovedDeviationIsNotAContradiction(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "explicitly anticipates or approves the deviation from the AC's literal wording")
+	assert.Contains(t, out.User, "the spec is coherent, not defective")
+	assert.Contains(t, out.User, "Emit no finding for that")
+	assert.Contains(t, out.User, "An explicit approval is sufficient on its own")
+	assert.Contains(t, out.User, "(for example, by naming a framework constraint")
+	assert.Contains(t, out.User, "Reserve the major for the irreconcilable case")
+	assert.Contains(t, out.User, "nothing in the spec indicates which governs")
+
+	post, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", FinalDiff: "d"})
+	require.NoError(t, err)
+	assert.Contains(t, post.User, "explicitly anticipates or approves a deviation")
+	assert.Contains(t, post.User, "Do not emit a finding solely because an AC's literal phrasing conflicts with a deviation that `Context:` permits")
 }
 
 func TestRenderPrime_Basic(t *testing.T) {

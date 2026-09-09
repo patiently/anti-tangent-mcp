@@ -67,6 +67,8 @@ jobs:
             if [ "$BYTES" -ge 16000 ]; then
               echo "::error file=$f::$f is $BYTES bytes; must be < 16000. This file is Read in full by every agent whose role matches it — the cost is paid once per dispatched subagent, not once per session. Split it or move reference detail into docs/team-setup/."
               FAIL=1
+            elif [ "$BYTES" -ge 15500 ]; then
+              echo "::warning file=$f::$f is $BYTES bytes; cap is 16000. Under 500 bytes of headroom left — the next edit here is likely to fail the build. Move reference detail into docs/team-setup/ before adding to it."
             fi
           done
           exit $FAIL
@@ -101,13 +103,20 @@ jobs:
           persist-credentials: false
 
       - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+        # jq ships in the ubuntu-latest image, so this is normally a no-op. Reaching
+        # apt at all makes the job depend on every third-party repo in the runner's
+        # sources: a bad index anywhere -- Google Chrome's, in one observed failure --
+        # exits apt-get update 100 and reds a build that has nothing to do with it.
+        run: command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
 
       - name: Shunt hook evals
         run: bash plugin/anti-tangent-shunt/evals/run.sh
 
       - name: Completion guard evals
         run: bash plugin/anti-tangent-guard/evals/run.sh
+
+      - name: Comment-hygiene false-positive gate
+        run: bash plugin/anti-tangent-guard/evals/fp-report.sh
 
       - name: Benchmark table consistency
         run: bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh
@@ -126,7 +135,12 @@ jobs:
           # with" section legitimately name the provider key env vars a
           # caller needs to set. Everything else this check covers is a hook
           # eval suite that must stay network-free.
-          ! grep -rnE 'curl|wget|nc |ANTHROPIC_API_KEY|OPENAI_API_KEY|GOOGLE_API_KEY' \
+          #
+          # `nc` carries a word boundary. Unanchored, it matches the tail of
+          # every word ending in "nc" followed by a space — "func ", "since ",
+          # "once " — so any eval fixture containing a Go function declaration
+          # trips a check about netcat.
+          ! grep -rnE 'curl|wget|\bnc |ANTHROPIC_API_KEY|OPENAI_API_KEY|GOOGLE_API_KEY' \
               plugin/anti-tangent-shunt/evals plugin/anti-tangent-guard/evals \
               plugin/anti-tangent-shunt/hooks plugin/anti-tangent-guard/hooks \
               --exclude=bench.sh --exclude=benchmarks.md --exclude=benchmarks.tsv

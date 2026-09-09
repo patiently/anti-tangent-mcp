@@ -31,6 +31,12 @@ returned `session_id` — you'll thread it through subsequent calls.
   `severity: major` as "address or explain." If the spec is too ambiguous
   to proceed, stop and ask the controller for clarification rather than
   guessing.
+- A `warn` carrying only `minor` findings is a legitimate place to proceed:
+  iterate while any finding is `critical` or `major`, proceed once every
+  remaining one is `severity: minor`. That is the stop signal. Otherwise, a
+  `major` finding whose wording has stopped changing across rounds will not
+  move by re-validating it again — fix it, or accept it with the
+  one-sentence mitigation described below and proceed on that basis.
 
 **2. During work (OPTIONAL).** Call `check_progress` ONLY if you suspect
 you're drifting mid-task, OR a test that 'should' fail doesn't, OR
@@ -41,11 +47,11 @@ skip it. When you do call, pass: the session_id, a one-sentence
 
 **2b. CodeScene mid-task check (REQUIRED when codescene-mcp is
 configured in your host).** Call `pre_commit_code_health_safeguard` after
-meaningful code changes to catch Code Health regressions on uncommitted/staged files. This is
-deterministic and fast (no LLM call) — complementary to the
-LLM-based `check_progress` and higher-signal mid-task. State any
-deliberate skip in your DONE report. If codescene-mcp is not
-configured, skip this step silently.
+meaningful code changes to catch Code Health regressions on
+uncommitted/staged files — deterministic and fast (no LLM call),
+complementary to the LLM-based `check_progress` and higher-signal
+mid-task. State any deliberate skip in your DONE report. If codescene-mcp
+is not configured, skip this step silently.
 
 **3. Before reporting DONE (REQUIRED).** Call `validate_completion` with
 the session_id, your summary, **a complete `final_diff` (or full
@@ -60,33 +66,30 @@ response carries `submission_defect_only: true`, every blocking finding is
 about what you submitted, not about your code. Attach the missing evidence
 and re-submit; no rework is implied.**
 - Prefer paths over inline content: omit a `final_files` entry's `content` and the server reads
-  its absolute `path`, and pass `final_diff_path` instead of `final_diff` (write it first with
+  its absolute `path`, and pass `final_diff_path` instead of `final_diff`. Write the diff first:
   `git add -- <task paths> && git diff HEAD -- <task paths> > "$(git rev-parse --absolute-git-dir)/anti-tangent-change.diff"` —
-  a repo-local scratch path, guaranteed writable and never tracked by git — then pass that same
-  absolute path as `final_diff_path`; use `--absolute-git-dir`, not `--git-dir`, which prints a
-  relative `.git` in a normal checkout and would make `final_diff_path` fail the server's
-  absolute-path check — `--absolute-git-dir` resolves correctly in both a normal checkout and a
-  worktree, where `.git` is a regular file rather than a directory and `"$PWD/.git/..."` dies with
-  `Not a directory`). **Scope both the `git add` and the `git diff` to your task's own paths —
-  never `git add -A` or bare `git diff HEAD`.** Everything in the diff is sent to a third-party
-  reviewer LLM, so an unscoped `git add -A` stages, and an unscoped diff then discloses, every
-  non-ignored change in the worktree — unrelated tracked edits, scratch files, another task's
-  half-finished work. The task's `**Files:**` list is already the set this task is expected to
-  touch, so use it as the pathspec: `git add -- <task paths> && git diff HEAD -- <task paths>`. A
-  new file must fall inside that same pathspec — `git add -- <new-file-path>` stages it before the
-  scoped diff is generated — or be passed individually as a `final_files[].path` entry; either way,
-  don't fall back to staging the whole worktree just to catch new files. If your task's work is
-  already committed, diff the same pathspec from the commit the task started at instead (`git add
-  -- <task paths> && git diff <task-base-commit> -- <task paths>`), since `git diff HEAD -- <task
-  paths>` is empty too once there is nothing left uncommitted. An empty diff file is rejected with a structured
-  error, not a silent pass, so a wrong recipe surfaces immediately instead of shipping a
-  no-evidence review. Truncation checks still apply to the resolved content — a file containing
-  `// snip` or a bare `...` line is rejected exactly as inline evidence would be. If your host sets
-  `ANTI_TANGENT_PLAN_ROOTS`, whatever scratch location you use must fall inside one of those
-  roots or the server refuses the path — a bare `/tmp` path will NOT satisfy a roots list scoped
-  to your project directories, and neither will `git rev-parse --absolute-git-dir`'s worktree
-  answer of `<main-checkout>/.git/worktrees/<name>` when the roots list is scoped only to the
-  worktree directory itself.
+  a repo-local scratch path, guaranteed writable and never tracked by git — then pass that
+  absolute path as `final_diff_path`. Use `--absolute-git-dir`, not `--git-dir`: the latter prints
+  a relative `.git` in a normal checkout, which fails the server's absolute-path check, while
+  `--absolute-git-dir` also resolves in a worktree, where `.git` is a file and `"$PWD/.git/..."`
+  dies with `Not a directory`. **That filename is fixed per git directory** — if another agent may
+  write to the same one (parallel tasks, a shared worktree), use a task-unique name, or the later
+  write silently clobbers the earlier task's evidence. **Scope both the `git add` and the `git
+  diff` to your task's own paths — never `git add -A` or bare `git diff HEAD`.** Everything in the
+  diff goes to a third-party reviewer LLM, so an unscoped stage-and-diff discloses every
+  non-ignored change in the worktree: unrelated tracked edits, scratch files, another task's
+  half-finished work. The task's `**Files:**` list is already that set, so use it as the pathspec.
+  A new file must fall inside the same pathspec (`git add -- <new-file-path>`, before the diff is
+  generated) or be passed as its own `final_files[].path` entry — never stage the whole worktree
+  just to catch it. If the work is already committed, diff the same pathspec from the commit the
+  task started at (`git diff <task-base-commit> -- <task paths>`), since `git diff HEAD` is empty
+  once nothing is uncommitted. An empty diff file is rejected with a structured error, not a
+  silent pass, so a wrong recipe surfaces immediately. Truncation checks apply to the resolved
+  content — a file containing `// snip` or a bare `...` line is rejected exactly as inline
+  evidence would be. If your host sets `ANTI_TANGENT_PLAN_ROOTS`, the scratch location must fall
+  inside one of those roots or the server refuses the path: a bare `/tmp` path will NOT satisfy a
+  roots list scoped to your project directories, and neither will the worktree answer
+  `<main-checkout>/.git/worktrees/<name>` when the roots list covers only the worktree directory.
 
 **3b. CodeScene pre-DONE check (REQUIRED when codescene-mcp is
 configured in your host).** Call `analyze_change_set` for the full
@@ -141,7 +144,7 @@ Use anti-tangent per the standard dispatch protocol. For this task:
 - If a Project knowledge section is auto-attached, read it before validate_task_spec and pass it verbatim as project_knowledge.
 ````
 
-**Language-scoping prose caveat.** Reviewers can surface `ambiguous_spec` findings around closure/scoping semantics (Kotlin `var` captured by a lambda, Python `nonlocal`, JS `let`/`const` in arrow bodies) when the prose AC reads ambiguously even though the verbatim code block in the plan is unambiguous. Trust the verbatim plan code; only deviate if the *tests* disagree with the prose. If you can't reconcile code and prose, ask the controller.
+**Language-scoping prose caveat.** Reviewers can surface `ambiguous_spec` findings around closure/scoping semantics (Kotlin `var` captured by a lambda, Python `nonlocal`, JS `let`/`const` in arrow bodies) when the prose AC reads ambiguously even though the plan's verbatim code block is not. Trust the verbatim plan code; deviate only if the *tests* disagree with the prose, and ask the controller if you can't reconcile the two.
 
 ### Lightweight protocol mode (v0.3.1+)
 
@@ -163,7 +166,7 @@ CodeScene covers anti-tangent's text-only blind spot (see `## Scope and limits`)
 - Before DONE: `analyze_change_set` for the full branch-vs-base view — see §4.2 step 3b for what to do with the result.
 - Drill-down on a flagged issue: `code_health_review`.
 
-Enforcement is prompt-level: the requirement to call these tools lives here and in §4.2, not in the server. Once you do call `validate_completion`, `ANTI_TANGENT_CODESCENE=required` can deterministically add a `codescene_not_run` / `codescene_skipped` finding server-side (see `core.md`) — but anti-tangent never *fails a verdict* on a CodeScene finding itself. If CodeScene MCP isn't configured, the companion calls above are skipped, as they are on lightweight-protocol tasks (doc-only / mechanical) — but the `codescene` argument to `validate_completion` is a separate requirement under `required` mode; see [Lightweight protocol mode](#lightweight-protocol-mode-v031) above for what a lightweight task must still submit.
+Enforcement is prompt-level: the requirement to call these tools lives here and in §4.2, not in the server. Once you do call `validate_completion`, `ANTI_TANGENT_CODESCENE=required` can deterministically add a `codescene_not_run` / `codescene_skipped` finding server-side (see `core.md`) — but anti-tangent never *fails a verdict* on a CodeScene finding itself. If CodeScene MCP isn't configured, the companion calls above are skipped, as they are on lightweight tasks — but the `codescene` argument to `validate_completion` is a separate requirement under `required` mode; see [Lightweight protocol mode](#lightweight-protocol-mode-v031) above.
 
 **CodeScene stats:** CodeScene keeps no history — see [docs/team-setup/codescene-stats.md](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/codescene-stats.md) to log Code Health to `codescene-events.jsonl`.
 
@@ -185,3 +188,23 @@ answer alone — it carries no reliable line anchors.
 **The retry loop.** Parse failures on the reviewer's response are handled inside the server (one retry with a JSON-only reminder); the implementer does not handle that.
 
 **Session not found.** A `category: session_not_found` finding means the session expired (default TTL 4h) or was never created. Call `validate_task_spec` again to start a fresh session and continue with the new ID.
+
+### 4.4 Comments
+
+Comments explain non-trivial behaviour, or a non-obvious invariant or hazard
+that would bite the next editor. The test: the comment reads correctly to
+someone who never saw the change that introduced it.
+
+Comments do NOT carry change history — no issue, pull-request or task
+references, no version references, no "previously" / "no longer" / "this
+replaced". Git holds that, and a comment repeating it goes stale on the next
+change.
+
+When you touch code whose comments break these rules, remove or rewrite them as
+part of your task. There is no separate cleanup pass.
+
+If `anti-tangent-guard` is installed, a clean scanner run is not evidence
+the policy above was followed; apply the policy yourself. Its `PreToolUse` hook
+can also refuse an `Edit`/`Write` outright — rewrite the flagged comment and
+retry the same edit. Mechanics and limitations: the plugin's
+[README](https://github.com/patiently/anti-tangent-mcp/blob/main/plugin/anti-tangent-guard/README.md).
