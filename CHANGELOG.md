@@ -50,11 +50,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hard-block the close. No new finding category and no schema change. Kill switch
   `ANTI_TANGENT_COMMENT_GUARD=0`, which disables the hook half only.
 
-  The hook half is narrower than the reviewer half by construction: it fires on the *closing*
+  Three layers. A `PreToolUse` hook on `Edit`/`Write` **prevents** a violating comment being
+  written at all — the only layer that prevents rather than detects, and the only one whose reach
+  does not depend on transcript visibility or evidence shape. `post.tmpl`'s reviewer rule covers
+  every execution path, because the diff reaches the reviewer regardless of which agent later
+  closes the task. The `check-task-complete` scan is defence in depth: it fires on the *closing*
   agent's transcript, so on the subagent-driven path — where a subagent validates and the
-  controller closes — it sees only the pasted `summary_block` and no diff. The reviewer half
-  covers every path. The scan is also restricted to added lines in source files; `.md` and config
-  files are excluded, because a changelog entry legitimately carries issue and version references.
+  controller closes — it sees only the pasted `summary_block` and no diff.
+
+  Every scan is restricted to **added** lines in source files. `.md` and config files are
+  excluded: a changelog entry legitimately carries issue and version references, and this repo
+  requires one in every change. `Write` over an existing file is diffed against what is on disk,
+  so rewriting a file does not demand cleanup of every comment already in it.
+
+### Added
+- **`criterion_counts` on stats events.** `stats.Event` recorded `category_counts` but nothing
+  finer, so a `quality` finding about a comment was indistinguishable from any other `quality`
+  finding and the comment policy's effect could not be measured. Counts come from an **allowlist
+  of server-recognised criterion sentinels**, never from raw criterion text: `pre.tmpl` tells the
+  reviewer to quote verbatim acceptance-criterion text as the criterion, and the ledger has until
+  now held no free text at all — every string in it is a bounded enum or a hash. Recording raw
+  criterion would have written task-specification text to disk and given the map one key per
+  acceptance criterion ever reviewed.
 
   As with the completion guard, the blocking half is a Claude Code plugin the operator installs
   and can disable — the MCP server itself remains advisory and never blocks.

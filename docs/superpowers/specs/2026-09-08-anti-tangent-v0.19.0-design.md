@@ -33,8 +33,9 @@ It also carries a **second, unrelated concern** — a comment-hygiene policy and
 reader looking for why this release does two things will not find a technical reason.
 
 No schema change, no new tool input, no envelope field. Parts 1 and 2 are prompt-only; Part 3
-adds a `post.tmpl` rule, a guard-hook check and a plugin version bump. Unlike the design this
-replaces, the effect of Parts 1–2 is measurable with telemetry that already exists.
+adds a `post.tmpl` rule and two guard-plugin hooks; Part 4 adds one bounded map to the stats
+event. Unlike the design this replaces, every part of this one is measurable — Parts 1–2 with
+telemetry that already exists, Part 3 with the field Part 4 adds.
 
 ## Revision: the first diagnosis was wrong
 
@@ -169,10 +170,36 @@ own "POSITIONAL EXTRACTION, NOT FREE SCAN" comment explains a security property;
 would be actively harmful. What must go is the "(task-12b review, Critical #1)" citation attached
 to it.
 
-### Enforcement: reviewer primary, hook supplementary
+### Enforcement: three layers
 
-The two layers are split by what each can decide — a regex cannot tell a good comment from a bad
-one — but also, and this was missed in the first draft, **by what each can see.**
+Split by what each can decide — a regex cannot tell a good comment from a bad one — and by what
+each can see.
+
+**Prevention layer — `PreToolUse` on `Edit` and `Write`, blocking, in `anti-tangent-guard`.** The
+only layer that *prevents* rather than detects, and the only one that reaches every execution
+path, because it fires on the tool call itself rather than on a transcript someone else has to be
+able to read.
+
+- `Edit`: scan the lines of `new_string` that are not present in `old_string`.
+- `Write` to a **new** file: scan all of `content`.
+- `Write` over an **existing** file: read the on-disk file and scan only the added lines. Scanning
+  whole `content` here would demand cleanup of every pre-existing comment in the file — the
+  big-bang sweep the on-touch rule exists to avoid, arriving through the back door.
+- Same tells, same extension allowlist, same kill switch as the other hook layers.
+- `exit 2` returns the reason to the model, which then rewrites the comment before the write
+  lands.
+
+False positives cost much more here than at task close: a bad pattern blocks an edit mid-task
+rather than a close at the end. The zero-false-positive acceptance criterion below is therefore a
+release blocker for this layer specifically, not a nicety.
+
+**Two gaps this layer does not close.** `Bash` writes — a heredoc, `sed -i`, a generated file —
+bypass an `Edit`/`Write` matcher entirely, and this is not hypothetical: agents are routinely
+instructed to prefer Bash for file changes. `anti-tangent-shunt` sets a precedent for matching
+`Bash` (it intercepts `cat`/`head`/`tail` reads), but recognising *written comment content* inside
+arbitrary shell is not tractable, so Bash-written comments fall through to the reviewer layer.
+Second, whether `PreToolUse` fires for tool calls made **inside a subagent** is unverified —
+see [Coverage](#coverage-what-each-layer-reaches).
 
 **Reviewer layer — `post.tmpl`, path-independent, primary.** `validate_completion`'s reviewer
 already receives the full diff, whichever agent submitted it. It gains a rule to emit a finding
@@ -248,7 +275,7 @@ It disables the **hook only** — `internal/config` reads no such variable, so t
 governed by whether the tool is called at all. The first draft named it `..._POLICY`, which
 implied a reach it does not have.
 
-### Coverage: what the finish hook genuinely cannot reach
+### Coverage: what each layer reaches
 
 Stated plainly because the first draft implied more coverage than exists.
 
@@ -259,17 +286,27 @@ pasted `summary_block`, which carries `tool:` / `session_id:` / `verdict:` and *
 `controller.md:52-56` states this as an existing property: "a controller-side hook cannot see
 inside a subagent's own session, so the pasted block is the only trace it has."
 
-So the deterministic layer covers the paths where the closing agent is the calling agent
-(`executing-plans`, or a subagent that closes its own task), and nothing else. **The reviewer
-layer covers every path**, because the diff reaches the reviewer regardless of who later closes
-the task. That is why the reviewer is primary here and the hook is supplementary — the reverse of
-how the first draft framed it.
+So the finish-hook layer covers the paths where the closing agent is the calling agent
+(`executing-plans`, or a subagent that closes its own task), and nothing else. It is defence in
+depth, not the primary gate. `PostToolUse` also fires after the state change, so even where it
+can see, it detects rather than prevents.
 
-`PostToolUse` also fires after the state change, so even where it can see, the hook detects a bad
-comment at close rather than preventing one being written. Full prevention would need a
-`PreToolUse` hook on `Edit`/`Write` — the `anti-tangent-shunt` pattern — which sees every comment
-at write time regardless of execution path or evidence shape. That is not proposed here because
-the requirement named the finish hook, but it is the only mechanism that would close the SDD gap.
+**The reviewer layer covers every path**, because the diff reaches the reviewer regardless of who
+later closes the task.
+
+**The prevention layer's reach turns on one unverified fact, and it must be probed before this is
+built: does `PreToolUse` fire for tool calls issued inside a subagent?**
+
+- If yes, the prevention layer closes the SDD gap completely — the subagent's own `Edit`/`Write`
+  calls are intercepted in its own session, and neither transcript visibility nor evidence shape
+  matters.
+- If no, prevention covers only the controller's own edits, SDD implementer work is covered by
+  the reviewer layer alone, and the honest description of enforcement changes accordingly.
+
+The probe is small: register a `PreToolUse` matcher on `Write` that appends its stdin to a log,
+dispatch a subagent that writes a file, and check whether the log gained an entry naming that
+file. Do this **before** implementing, because the answer determines whether the prevention layer
+is the primary gate or a supplement to the reviewer.
 
 ### Bookkeeping a third block condition drags in
 
@@ -283,7 +320,35 @@ the requirement named the finish hook, but it is the only mechanism that would c
 - `run.sh` materialises only a transcript, so a `final_diff_path` case needs the runner extended
   to write a diff file — otherwise the primary submission route ships with no eval.
 
-## Part 4 — docs
+## Part 4 — bounded `criterion` counts in the stats ledger
+
+Part 3's effect is otherwise unmeasurable: `stats.Event` records `CategoryCounts` but not
+criterion, so comment-hygiene findings would be indistinguishable from every other `quality`
+finding in the ledger. Given the whole reason the earlier draft of this release was thrown out is
+that it could not be evaluated, shipping a second unmeasurable change would repeat the mistake.
+
+**Not raw criterion.** `pre.tmpl` instructs the reviewer to "quote the verbatim AC text" as the
+criterion for AC-quality findings. Recording it raw would:
+
+- write verbatim task-specification text into a plain file on disk, where the ledger currently
+  holds **no free text at all** — every string field is a bounded enum (`tool`, `verdict`,
+  `model`) or a hash, and even the session id is stored as `SessionHash`; and
+- give the map unbounded cardinality, one key per distinct acceptance criterion ever reviewed.
+
+**Instead:** `CriterionCounts map[string]int`, populated only from an allowlist of
+server-recognised criterion sentinels — `comment_hygiene`, `noise_cluster`,
+`codebase_reference_checklist`, `codebase_convention`, `exit_contract`, `spec`, `structure`,
+`max_tokens_override`. Anything else is not counted. Cardinality is bounded by a constant, and no
+reviewer- or caller-authored text reaches the file.
+
+`stats.CountFindings` gains the third return value; `recordStat` passes it through. The allowlist
+lives beside the sentinels it names, and a test asserts that a finding carrying a verbatim AC
+string as its criterion contributes nothing — that test is the guard against the leak, not the
+allowlist itself.
+
+This is the release's only change outside `internal/prompts`, the guard plugin and docs.
+
+## Part 5 — docs
 
 `implementer.md` §4.2 gains two things: the stopping rule (what a `warn` carrying only `minor`
 findings means and when to proceed) and the comment policy, since comments are written by
@@ -333,13 +398,17 @@ The guard against over-correction is `validate_completion`: if recalibration mak
 miss a real spec defect, it surfaces at the post gate rather than silently shipping. That guard
 still holds — Part 3 adds no rule that would mask a spec defect.
 
-But Part 3 makes the two parts' telemetry non-independent. `validate_completion`'s `quality`
-finding count will rise by construction once comment findings land in it, and `stats.Event`
-records `category`, not `criterion`, so comment-hygiene findings are **not separable from other
-`quality` findings in the ledger**. Two consequences: Part 3's own effect is unmeasurable as
-specified, and any post-release comparison of `validate_completion` finding rates must treat the
-0.19.0 boundary as a break rather than a trend. Measuring Part 3 later would need a `criterion`
-field on `stats.Event` — out of scope here, and worth a separate issue.
+Part 3 does make the parts' telemetry non-independent: `validate_completion`'s `quality` finding
+count rises by construction once comment findings land in it, so any comparison of
+`validate_completion`'s raw `quality` rate must treat the 0.19.0 boundary as a break, not a trend.
+Part 4 is what keeps that from being a dead end — `CriterionCounts["comment_hygiene"]` separates
+comment findings from the rest of the `quality` bucket, so both the break and Part 3's own effect
+are quantifiable rather than merely asserted.
+
+Part 3's prevention layer has a second, subtler measurement property worth stating: if it works,
+comment findings should be *rare* at the post gate, because they were blocked at write time. A
+high `comment_hygiene` count after release means the prevention layer is being bypassed — most
+likely by `Bash` writes — rather than that the policy is failing.
 
 ## Testing
 
@@ -365,8 +434,18 @@ field on `stats.Event` — out of scope here, and worth a separate issue.
   reflow or a file move silently becomes a demand to rewrite every historical comment in it.
 - `guard_eval_fixture_test.go` pins `formatEnvelopeSummary` byte-for-byte; no envelope change
   here, so it should stay green — treat a failure as a signal something unintended moved.
-- No changes to `internal/verdict`, `internal/mcpsrv`, `internal/planparser` or `internal/session`,
-  so their suites act as regression evidence rather than needing new cases.
+- `internal/stats`: `CountFindings` returns criterion counts; a test asserts that a finding whose
+  criterion is a verbatim acceptance-criterion string contributes **nothing** to the map. That
+  test is the actual guard against writing task text to disk — the allowlist is just the
+  mechanism.
+- `internal/mcpsrv`: `recordStat` threads the new map through; existing envelope and handler tests
+  act as regression evidence.
+- New `PreToolUse` evals: an `Edit` whose `new_string` adds a violating comment blocks; an `Edit`
+  that leaves an existing violating comment untouched in `old_string` does **not** block; a
+  `Write` to a new file scans all content; a `Write` over an existing file scans only lines added
+  relative to what is on disk; a `.md` write never blocks.
+- No changes to `internal/verdict`, `internal/planparser` or `internal/session`, so their suites
+  act as regression evidence rather than needing new cases.
 - `go test -race ./...`.
 
 ## Compatibility
@@ -374,7 +453,13 @@ field on `stats.Event` — out of scope here, and worth a separate issue.
 Reviewer behaviour changes materially — that is the point — while every type, schema, tool
 argument and envelope field stays byte-identical. No caller has to change anything.
 
-`plugin/anti-tangent-guard` goes **0.1.0 → 0.2.0** (new blocking condition, kill switch, evals),
+The stats ledger gains a `criterion_counts` object on `validate_*` events. It is additive and
+`omitempty`, but anything parsing `events.jsonl` positionally rather than by key should be
+checked — `internal/planrun`'s rollup and the external tray consumer both read this file.
+
+`plugin/anti-tangent-guard` goes **0.1.0 → 0.2.0** (two new hooks, a new blocking condition, kill
+switch, evals). It stops being a completion-gate-only plugin, so its `plugin.json` description,
+marketplace entry and README all need rewriting rather than amending,
 and the marketplace catalog version bumps with it per the convention set in `22c3fbb`. An operator
 running the 0.1.0 hook against a 0.19.0 server sees the completion gate behave exactly as before
 and simply gets no comment enforcement; the two halves are independent.
