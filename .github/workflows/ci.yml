@@ -131,7 +131,12 @@ jobs:
           # with" section legitimately name the provider key env vars a
           # caller needs to set. Everything else this check covers is a hook
           # eval suite that must stay network-free.
-          ! grep -rnE 'curl|wget|nc |ANTHROPIC_API_KEY|OPENAI_API_KEY|GOOGLE_API_KEY' \
+          #
+          # `nc` carries a word boundary. Unanchored, it matches the tail of
+          # every word ending in "nc" followed by a space — "func ", "since ",
+          # "once " — so any eval fixture containing a Go function declaration
+          # trips a check about netcat.
+          ! grep -rnE 'curl|wget|\bnc |ANTHROPIC_API_KEY|OPENAI_API_KEY|GOOGLE_API_KEY' \
               plugin/anti-tangent-shunt/evals plugin/anti-tangent-guard/evals \
               plugin/anti-tangent-shunt/hooks plugin/anti-tangent-guard/hooks \
               --exclude=bench.sh --exclude=benchmarks.md --exclude=benchmarks.tsv
