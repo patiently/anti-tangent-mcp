@@ -268,9 +268,10 @@ because of the comma; `task-<n>` and `#<digits>` already catch that line.
 source file at HEAD (`git show HEAD:<path>` per file, every comment line treated as added); every
 hit was hand-classified TRUE (genuine change history) or FALSE (legitimate comment) via a
 one-to-one `path:line` join between the raw scan and a separate classification file. Final result
-(after the fix round below): 27 hits, 27 true positives, **0 false positives**.
+(after the three fix rounds below): 36 hits, 36 true positives, **0 false positives** — broken
+down by tell as `task-\d+` 16, version 15, `#\d+`/PR 5.
 
-Getting there took two rounds. The first narrowed all three tells, not just the two `#\d+` /
+Getting there took three rounds. The first narrowed all three tells, not just the two `#\d+` /
 `task-\d+` ones found first:
 
 - `task-\d+` gained a lookbehind refusing a match preceded by a word character, `/` or `-` (so
@@ -289,10 +290,10 @@ Getting there took two rounds. The first narrowed all three tells, not just the 
   `live ` and a negative lookahead for a trailing `+` or a nearby `stats output` / `server` /
   `may also receive`.
 
-That round's own review reproduced a Critical against the shipped pattern: the `#\d+` fix keyed on
-trigger-word **proximity** (any of the reference verbs within 20 characters), not grammatical
-attachment, so ordinary prose putting `see`/`issue`/`bug`/`reference` near an unrelated `#N` still
-blocked — `// see the #1 best practice guide for details`, `// issue #1 is always price
+The first round's own review reproduced a Critical against the shipped pattern: the `#\d+` fix
+keyed on trigger-word **proximity** (any of the reference verbs within 20 characters), not
+grammatical attachment, so ordinary prose putting `see`/`issue`/`bug`/`reference` near an unrelated
+`#N` still blocked — `// see the #1 best practice guide for details`, `// issue #1 is always price
 sensitivity`, `// keep the reference count under #100`, `// bug in the UI shows #1 instead of
 #2`. An Important-severity companion finding showed the version tell had the mirror-image flaw:
 its noun-exclusion list could be defeated by an unrelated noun sitting near a genuine change
@@ -319,9 +320,58 @@ The second round changed both from proximity checks to grammar checks:
 Both directions of both fixes are pinned by `check-comment-write` evals — the now-allowed
 proximity-only shapes at `expected_exit: 0`, the connector-noun and verb-governs-despite-nearby-noun
 shapes still blocking at `expected_exit: 2` — alongside the first round's cases
-(`plugin/anti-tangent-guard/evals/guard-evals.json`, cases 46-61). The `"AC #1"`-in-test-fixture
+(`plugin/anti-tangent-guard/evals/guard-evals.json`, cases 46-61).
+
+Re-scanning HEAD after the second round's grammar rewrite dropped the hit count from 67 to 27 — a
+correction to an earlier draft of this section, which attributed that entire drop to the `#\d+`
+change. **It did not.** The tell breakdown at that point was `#\d+`/PR 5, `task-\d+` 16, version 6:
+`#\d+` dropped exactly one hit from round one's 6, while the version tell fell from 45 to 6 — 39 of
+the 40 total hits lost, an 87% recall loss concentrated almost entirely in one tell. The
+verb-governs-only version pattern is precise, but it is precise about a narrower shape than most of
+this project's own genuine version narration actually takes: a bare parenthetical tag naming when
+something shipped (`// Categories emitted by prime_project_knowledge (v0.6.0).`, `// (v0.6.0)
+prime_project_knowledge, ... (v0.18.0) bulk_read and code_write`) has no change verb anywhere in
+the sentence at all, so it fell through entirely, leaving that shape's enforcement resting on the
+reviewer alone rather than the deterministic layer.
+
+The third round decided the version tell deliberately rather than leaving that gap silent. The
+bare-parenthetical shape turned out to be catchable without reopening the wire-compatibility false
+positives: `\(v\d+\.\d+\.\d+\)` — the version alone as the ENTIRE parenthetical content, open paren
+immediately before it and close paren immediately after — matches `(v0.6.0)` and `(v0.18.0)` but
+not `(verdict/quality-gate/problem-points shape, v0.11.0+;` (the version there is not alone in its
+own parenthesis) or any of the other three wire-compat exemptions (none wraps the bare version in
+parentheses at all). Added as a third alternative alongside the two verb-governs branches. This
+recovered 9 of the 39 lost version hits (6 → 15); the remaining 30 — plain prose section headers
+like `// --- v0.6.0 project-knowledge env vars ---` and `// v0.18.0 final review — this Go test
+stayed green` with neither a governing verb nor the parenthetical shape — are not caught by this
+tell. That gap is now a **deliberate, documented** decision rather than a silent one: this class of
+version reference is reviewer-led, not regex-led. `post.tmpl`'s comment-hygiene rule already names
+a version reference as a defect in prose terms, so nothing is unenforced, only undetected by the
+deterministic pre-edit layer specifically.
+
+The same round also fixed an Important-severity finding against the `#\d+` grammar rule from round
+two: strict whitespace-only adjacency between trigger and digits missed GitHub's own canonical
+closing syntax — `Fixes: #58` (a colon), `References #58` (no verb at all, `reference(s)` standalone
+as the trigger itself), `fixes the issue #58` / `closes the issue #58` (an article bridging to a
+connector noun), `see also #12` (the adverb "also" bridging directly). The trigger may now be
+followed by an optional colon and then, per line, EITHER `also` alone, OR an optional `the` that
+may only lead to a REQUIRED connector noun (`issue`, `bug`, `ticket`, `pr`, `item`, `number`, `no`,
+`reference`) — never bare to the digits. That last constraint is what keeps `fixes the issue #58`
+blocking without reopening `see the #1 best practice guide`: `the` alone is not a valid bridge, only
+`the` + a connector noun is. `reference(s)` was promoted from connector-only back to a standalone
+trigger for `References #58`; this is safe because the small, enumerated bridge set still refuses
+`keep the reference count under #100` (an arbitrary, non-enumerated gap — `count under` — sits
+between the trigger and the digits there, and no amount of enumerating gap words admits an
+arbitrary one).
+
+Two ordinary-prose forms found during the third round's own review predate this pattern-set work
+entirely and were deliberately left alone rather than contorted around: `// see #1 below for the
+full list of allowed extensions` and `// ref #1 in the appendix for background` both still block,
+same as they did before any of these three rounds started.
+
+All three rounds' evals are pinned in `guard-evals.json` (cases 46-68). The `"AC #1"`-in-test-fixture
 false-positive family anticipated at the start of this work was not observed in this repo's
-committed comments in either round.
+committed comments in any round.
 
 Kill switch `ANTI_TANGENT_COMMENT_GUARD=0`, matching the existing `ANTI_TANGENT_COMPLETION_GUARD`.
 It disables the **hook only** — `internal/config` reads no such variable, so the reviewer half is

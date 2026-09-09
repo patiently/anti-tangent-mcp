@@ -37,19 +37,23 @@ TELLS = (
     # "see the #1 best practice guide" and "issue #1 is always price
     # sensitivity" both put an ordinary-English sense of a trigger word within
     # a few characters of a "#N" that names nothing. The tell instead requires
-    # the trigger to GOVERN the digits — separated from them by nothing but
-    # optional whitespace and, for a closed set of connector nouns, one of
-    # those nouns — so "see #N" and "fixes issue #N" match while "see the #1
-    # guide" does not (the word "the" is not in the allowed span). Three of
-    # the connectors below — issue, bug, reference — carry ordinary-English
-    # senses "fix"/"close"/"resolve"/"ref"/"pr" do not, so they are accepted
-    # only as the connector after one of those verbs, never as a trigger on
-    # their own; a bare "issue #1" or "bug ... #1" with no governing verb no
-    # longer matches at all, trading recall for precision on exactly the
-    # ambiguous case a regex cannot otherwise resolve.
+    # the trigger to GOVERN the digits, separated from them by nothing but:
+    # optional whitespace, an optional colon (GitHub's own "Fixes: #N"
+    # closing syntax), and then EITHER "also" alone (a citation-style "see
+    # also #N" has no ordinary-prose reading) OR an optional "the" followed by
+    # a REQUIRED connector noun ("the issue #N", "issue #N" — but never a bare
+    # "the #N", which is exactly the ordinary-English shape above; "the" can
+    # only bridge to a connector noun, never straight to the digits). Two of
+    # the connectors — issue, bug — carry ordinary-English senses
+    # "fix"/"close"/"resolve"/"ref"/"pr"/"reference" do not, so they are
+    # accepted only as the connector after one of those verbs, never as a
+    # trigger on their own; a bare "issue #1" or "bug ... #1" with no
+    # governing verb still does not match, trading recall for precision on
+    # exactly the ambiguous case a regex cannot otherwise resolve.
     (re.compile(
-        r"\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?|see|ref(?:s)?|pr|pull\s*request)\b"
-        r"\s*(?:(?:issue|bug|ticket|item|number|no\.?|reference[sd]?)\s*)?"
+        r"\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?|see|ref(?:s)?|pr|"
+        r"pull\s*request|reference[sd]?)\b\s*(?::\s*)?"
+        r"(?:also\s*|(?:the\s+)?(?:issue|bug|ticket|pr|item|number|no\.?|reference[sd]?)\s*)?"
         r"#\d+\b",
         re.I,
     ), "an issue or pull-request reference"),
@@ -65,9 +69,22 @@ TELLS = (
     # version, on either side of it ("added in vX.Y.Z", "since vX.Y.Z",
     # "vX.Y.Z removes ...") — this fails safe: a wire-compatibility sentence
     # like "reads the vX.Y.Z output" or "accepts vX.Y.Z+" has no change verb
-    # anywhere near the version and so never matches, without needing to
-    # name the nouns ("output", "server", "shape") that happen to appear in
-    # it.
+    # anywhere near the version and so never matches, without needing to name
+    # the nouns ("output", "server", "shape") that happen to appear in it. A
+    # third, verb-free shape is common in this project's own history too: a
+    # bare parenthetical version tag naming when something shipped ("Task 4
+    # (vX.Y.Z)", "Categories emitted by prime_project_knowledge (vX.Y.Z)."),
+    # with no governing verb anywhere in the sentence. `\(v\d+\.\d+\.\d+\)`
+    # catches exactly that shape — the open paren immediately before the
+    # version and the close paren immediately after, nothing else inside —
+    # without reopening the wire-compat exemptions above: none of those put
+    # the version alone inside its own parenthesis (v0.11.0+'s "+" sits
+    # before the enclosing paren closes, and the other two have no
+    # parenthesis around the version at all). A version reference with
+    # NEITHER a governing verb NOR this exact parenthetical shape (a plain
+    # "--- v0.6.0 project-knowledge env vars ---" section header, for
+    # example) is not caught by this tell; that gap is deliberate — see the
+    # design spec's Part 3 for the recorded, reviewer-led fallback.
     (re.compile(
         r"\b(?:add(?:s|ed)?|remov(?:es|ed)?|bump(?:s|ed)?|deprecat(?:es|ed)?|"
         r"releas(?:es|ed)?|ship(?:s|ped)?|chang(?:es|ed)?|fix(?:es|ed)?|"
@@ -75,7 +92,9 @@ TELLS = (
         r"|"
         r"\bv\d+\.\d+\.\d+\b\s*(?:add(?:s|ed)?|remov(?:es|ed)?|bump(?:s|ed)?|"
         r"deprecat(?:es|ed)?|releas(?:es|ed)?|ship(?:s|ped)?|chang(?:es|ed)?|"
-        r"fix(?:es|ed)?|introduc(?:es|ed)?)\b",
+        r"fix(?:es|ed)?|introduc(?:es|ed)?)\b"
+        r"|"
+        r"\(v\d+\.\d+\.\d+\)",
         re.I,
     ), "a version reference"),
 )

@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (61 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (68 cases)",
   "evals": [
     {
       "id": 1,
@@ -951,6 +951,80 @@
         "a version reference"
       ],
       "reason": "same failure mode as case 60 with 'removed in' and 'server' in the same sentence; the mirror-image false negative of case 52's wire-compatibility shape, now fixed by the same verb-governs mechanism"
+    },
+    {
+      "id": 62,
+      "name": "comment-write-issue-ref-colon-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// Fixes: #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "GitHub's own 'Fixes: #N' closing-keyword syntax (colon between trigger and digits) must block; strict whitespace-only adjacency wrongly missed this"
+    },
+    {
+      "id": 63,
+      "name": "comment-write-issue-ref-references-standalone-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// References #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "'References #N' is GitHub's own linking syntax; 'reference(s)' is safe as a standalone trigger because the strict small-gap requirement still refuses 'keep the reference count under #100' (case 57) — that needs an arbitrary, non-enumerated gap"
+    },
+    {
+      "id": 64,
+      "name": "comment-write-issue-ref-fixes-the-issue-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes the issue #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "'the' may only bridge to a REQUIRED connector noun ('the issue', never a bare 'the #N'); this is the shape that distinguishes 'fixes the issue #58' (blocks) from 'see the #1 best practice guide' (case 55, stays clean)"
+    },
+    {
+      "id": 65,
+      "name": "comment-write-issue-ref-closes-the-issue-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// closes the issue #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "same 'the' + required connector-noun shape as case 64, with the 'close(s/d)' trigger instead of 'fix(es/ed)'"
+    },
+    {
+      "id": 66,
+      "name": "comment-write-issue-ref-see-also-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// see also #12\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "'also' bridges directly to the digits without a connector noun (unlike 'the'); a citation-style 'see also #N' has no ordinary-prose reading the way 'the #1' does, so it is safe to allow without requiring a following noun"
+    },
+    {
+      "id": 67,
+      "name": "comment-write-version-ref-parenthetical-tag-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// Categories emitted by prime_project_knowledge (v0.6.0).\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a version reference"
+      ],
+      "reason": "a bare parenthetical version tag naming when something shipped, with no governing change verb anywhere in the sentence, is genuine change-history narration common throughout this project's own comments (internal/verdict/verdict.go:81 at HEAD) and must block; the verb-governs-only mechanism from the prior fix round missed this entire shape (39 of the 40 hits the second fix round lost were exactly this)"
+    },
+    {
+      "id": 68,
+      "name": "comment-write-version-ref-paren-with-surrounding-prose-does-not-block",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// (see v0.10.0 for compatibility)\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "the parenthetical-tag pattern requires the version to be the ENTIRE parenthetical content (open paren immediately before it, close paren immediately after); a version merely somewhere inside a larger parenthetical remark, with no governing change verb either, must still not block — this is what keeps the new pattern from reopening case 52's or the atstats.go/write.go wire-compatibility false positives, none of which wrap the bare version alone in its own parenthesis"
     }
   ]
 }

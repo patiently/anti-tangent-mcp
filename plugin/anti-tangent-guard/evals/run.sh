@@ -62,11 +62,26 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # honored when directly followed by one of a small closed set of connector
 # nouns (so "fixes issue #N" still blocks); two pin that a genuine
 # added/removed-in-version statement now blocks even with an unrelated noun
-# in the same sentence, for an exact total. Both checks below must hold or
+# in the same sentence, for a subtotal of 61. A third pass found the
+# grammatical-attachment rule for #\d+ had overshot: requiring bare whitespace
+# between trigger and digits missed GitHub's own "Fixes: #N" / "References #N"
+# syntax, "fixes the issue #N", and "see also #N" — the single most common
+# real forms. Five cases pin those now block, holding a closed, enumerated set
+# of bridge words (a colon; "also" alone; an optional "the" that may only lead
+# to a REQUIRED connector noun, never bare to the digits) rather than a wider
+# gap that would reopen the five prose false positives from the prior round.
+# A sixth pins that a bare parenthetical version tag ("(vX.Y.Z)", the version
+# alone inside its own parenthesis with no governing change verb anywhere in
+# the sentence) now blocks too — a shape the verb-governs-only version tell
+# had been missing entirely, accounting for the great majority of that tell's
+# lost recall in the prior round. A seventh confirms the parenthetical
+# addition stays narrow: a version merely somewhere inside a larger
+# parenthetical remark, not alone in its own parenthesis, still does not
+# block, for an exact total. Both checks below must hold or
 # the count assertion is vacuous: the JSON file must declare
 # EXPECTED_CASE_COUNT cases, AND the loop must actually execute that many (a
 # silently-skipped case would satisfy the first check alone).
-EXPECTED_CASE_COUNT=61
+EXPECTED_CASE_COUNT=68
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Every hook invocation below runs with this as its cwd, run-scoped (inside
