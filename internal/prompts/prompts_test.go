@@ -938,9 +938,13 @@ func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
 func TestRenderPre_ContextIsAuthoritative(t *testing.T) {
 	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
 	require.NoError(t, err)
+	// Suppression: Context resolves under-specification
 	assert.Contains(t, out.User, "`Context:` block in the task spec above resolves under-specification")
 	assert.Contains(t, out.User, "including when it answers it in code rather than prose")
 	assert.Contains(t, out.User, "it does not silently overrule them")
+	// Restriction: Context does not override contradictions
+	assert.Contains(t, out.User, "that is a contradiction, not an ambiguity")
+	assert.Contains(t, out.User, "quoting both sides")
 }
 
 func TestRenderPrime_Basic(t *testing.T) {
