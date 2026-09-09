@@ -11,7 +11,7 @@
     {
       "name": "anti-tangent-protocol",
       "description": "On-demand loader for the anti-tangent-mcp drift-protection protocol. A description-triggered skill that loads only the role-scoped protocol part a task needs, and only when a Goal/Acceptance-criteria task appears — keeping the always-loaded footprint to one line.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "source": "./plugin/anti-tangent-protocol",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"
@@ -27,7 +27,7 @@
     {
       "name": "anti-tangent-shunt",
       "description": "Routes I/O-heavy implementer work to a cheap worker model via PreToolUse hooks. Intercepts oversized Read and Bash calls, delegating them to anti-tangent-mcp's bulk_read tool to keep the implementer's context small and token-efficient.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "source": "./plugin/anti-tangent-shunt",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"
