@@ -109,6 +109,9 @@ jobs:
       - name: Completion guard evals
         run: bash plugin/anti-tangent-guard/evals/run.sh
 
+      - name: Comment-hygiene false-positive gate
+        run: bash plugin/anti-tangent-guard/evals/fp-report.sh
+
       - name: Benchmark table consistency
         run: bash plugin/anti-tangent-shunt/evals/check-benchmark-table.sh
 
