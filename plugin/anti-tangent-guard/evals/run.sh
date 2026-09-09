@@ -139,8 +139,10 @@ run_case() {
     # path needs a stable cwd to resolve against), so a cwd_fixture file left
     # over from an earlier case would otherwise still be on disk when a later
     # case runs, making that later case's outcome depend on execution order.
-    # Reset it before this case gets a chance to populate it again.
-    rm -rf "${HOOK_CWD:?}"/* 2>/dev/null || true
+    # Reset it before this case gets a chance to populate it again. A glob
+    # (HOOK_CWD/*) would silently skip a dotfile; find's -mindepth/-maxdepth
+    # walk does not.
+    find "${HOOK_CWD:?}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true
 
     local case_dir stdin_file stderr_file
     case_dir=$(mktemp -d "$WORKDIR/case-$id.XXXXXX")
