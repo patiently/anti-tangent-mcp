@@ -312,16 +312,24 @@ scratch file with `Write`, then changed it with `Edit`; both calls appear in the
 that subagent's `agent_id`, showing `Edit` is intercepted inside a subagent's session on the same
 footing as `Write`.
 
+Incidental corroboration, not a designed arm: the same log also captured `Edit` and `Write`
+entries from a second, concurrently running subagent (a different `agent_id`) that was doing
+unrelated work and was not instrumented for this experiment. It had no stake in the result, so the
+observation that its calls were intercepted too is independent evidence from a distinct agent
+rather than a repeat of the first.
+
 Both probes exercised one harness and one subagent type (`general-purpose`); no other dispatch
 path or agent type was tried, and the result should not be generalised past `Edit` and `Write`.
 
 So, for the two tool calls this layer matches, it closes the SDD gap: a subagent's `Edit` and
 `Write` calls are intercepted, and blocked before the write lands, by the same hook the controller
-session uses — regardless of transcript visibility or evidence shape. It reaches every path those
-two tools take. The reviewer layer stays the broader-judgment layer: it alone weighs a comment's
-substance rather than match a pattern, so it remains the backstop for the one gap prevention does
-not close (`Bash` writes) and for anything a pattern cannot catch on the paths prevention does
-reach.
+session uses — regardless of transcript visibility or evidence shape. A `PreToolUse` matcher
+selects on tool name, not on which session or agent issued the call, which is the mechanism behind
+that result and the reason it needs no per-session configuration to hold; within the harness
+measured here, every `Edit`/`Write` call seen — from either subagent — was intercepted. The
+reviewer layer stays the broader-judgment layer: it alone weighs a comment's substance rather than
+match a pattern, so it remains the backstop for the one gap prevention does not close (`Bash`
+writes) and for anything a pattern cannot catch on the paths prevention does reach.
 
 ### Bookkeeping a third block condition drags in
 
