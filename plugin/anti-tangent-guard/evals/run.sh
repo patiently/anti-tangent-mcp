@@ -129,7 +129,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # interpreter that does the analysis, which would fail open and silently
 # disable the gate for every close made from that directory.
 #
-# Five cases cover ground the table above left open. Two pin, one per hook,
+# Six cases cover ground the table above left open. Two pin, one per hook,
 # that a symlink planted at the trace-log path is not written through: both
 # use a DANGLING link, so following it would create the target, and the
 # target's continued absence is the assertion — which is why
@@ -138,15 +138,21 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # every other Write case misses by targeting a path that does not exist: a
 # Write re-stating a violating comment already on disk must not block (the
 # occurrence-aware diff consumes it), while one adding a new violation to an
-# existing file must. The last pins that the close-time trace sink strips the
+# existing file must. One pins that the close-time trace sink strips the
 # field separators out of every argument, so a task id carrying a newline
-# cannot forge a second, complete-looking log record.
+# cannot forge a second, complete-looking log record. The last is the
+# write-time counterpart of the final_diff_path symlink refusal: a Write whose
+# target is a symlink is not followed, and traces as an unreadable target
+# rather than a pass, so a write the guard never scanned cannot be read out of
+# the log as a scan that ran and found nothing. Only the directory and symlink
+# shapes of an unreadable target are pinned here; the FIFO and oversized-file
+# shapes share the same code path but have no case of their own.
 #
 # Both checks below must hold or the count assertion is vacuous: the JSON
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=92
+EXPECTED_CASE_COUNT=93
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and

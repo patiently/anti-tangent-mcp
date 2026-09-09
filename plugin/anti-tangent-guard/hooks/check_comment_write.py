@@ -2,8 +2,10 @@
 
 Reads the hook payload as JSON on stdin. The wrapper consumes the hook's own
 stdin and re-feeds it here, so nothing else in this process may read stdin.
-Exit 0 = allow, 2 = block, anything else = internal error the wrapper converts
-to allow.
+Exit 0 = allow, 2 = block, 3 = allow without having scanned (the target could
+not be read), anything else = internal error the wrapper converts to allow.
+Only 2 stops the tool call; 3 exists so the trace log can distinguish a scan
+that ran and found nothing from one that never ran.
 """
 import json
 import os
@@ -37,8 +39,10 @@ else:
     elif existing is None:
         # A symlink, a FIFO, a directory, an oversized or unreadable file.
         # Nothing here can be compared against, and a scan that cannot see the
-        # old text would report the whole file as added.
-        sys.exit(0)
+        # old text would report the whole file as added. Allowing the write is
+        # the right call; reporting it as 3 rather than 0 keeps it out of the
+        # wrapper's "pass" arm, since no scan actually happened.
+        sys.exit(3)
     else:
         lines = added(existing, content)
 

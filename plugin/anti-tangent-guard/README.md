@@ -214,6 +214,35 @@ directs the model to remove the flagged comment and resubmit the edit.
 This hook fires inside dispatched subagents as well as the main agent, since
 `PreToolUse` fires for all `Edit`/`Write` calls regardless of origin.
 
+### Write-time fail-open causes
+
+Like the close-time hook, this one allows the write rather than blocking it
+whenever it cannot do its job. Each cause gets its own trace-log reason, so
+the log distinguishes a write the scanner cleared from one it never looked at:
+
+| Cause | Trace reason |
+| --- | --- |
+| `ANTI_TANGENT_COMMENT_GUARD=0` | `skip \| guard=0` |
+| `python3` absent from `PATH` | `skip \| no-python3` |
+| the scanner body unreadable under `$CLAUDE_PLUGIN_ROOT/hooks/` | `skip \| no-body` |
+| the `Write` target cannot be read: a symlink, a FIFO, a directory, or a file past the 2,000,000-byte read cap | `skip \| unreadable-target` |
+| any other unexpected internal error | `error \| python-exit=N` |
+
+The unreadable-target row is the one worth understanding. A `Write` over an
+existing file is scanned by diffing the new content against what is on disk,
+so a target the hook refuses to read leaves nothing to diff against — and a
+scan that cannot see the old text would report the entire file as added and
+block on comments that were already there. Allowing the write is the right
+call, but it means the write lands **unscanned**: only the close-time scan
+still sees it. The refusal to read is deliberate rather than incidental —
+`O_NOFOLLOW` declines a symlink at the final component, `O_NONBLOCK` keeps a
+FIFO from parking the hook inside `open()`, and an `S_ISREG` check rejects
+everything else — because the path is caller-supplied and the hook runs
+unsandboxed.
+
+Note that a file whose extension is outside the allowlist is *not* a fail-open
+case: it traces `skip | ext=…` and is out of scope by policy, not by failure.
+
 ### On-touch: what counts as an added comment line
 
 Both scans (write-time and close-time) compare line *text*, not line
@@ -312,8 +341,10 @@ awkwardly than a few lines of Python). Both must be on `PATH`.
 
 ## Fail-open policy
 
-This hook never blocks work because it broke. Any of the following makes it
-exit 0 silently, with only a trace-log line (see below) as a record:
+Neither hook blocks work because it broke. The causes below are the close-time
+`PostToolUse` hook's; the write-time hook has its own set, tabulated under
+"Write-time fail-open causes" above. Any of the following makes the close-time
+hook exit 0 silently, with only a trace-log line (see below) as a record:
 
 - a missing or unreadable `transcript_path`
 - `jq` or `python3` absent from `PATH`
@@ -323,8 +354,8 @@ exit 0 silently, with only a trace-log line (see below) as a record:
 
 The comment-hygiene scan (see above) has one fail-open cause of its own: the
 scanner module cannot be imported, most commonly a `CLAUDE_PLUGIN_ROOT` that
-does not resolve to this plugin's `hooks/` directory. This is the one
-fail-open cause that is **not** silent by trace-log-line-only convention
+does not resolve to this plugin's `hooks/` directory. Among the close-time
+causes it is the one that is **not** silent by trace-log-line-only convention
 above — it gets its own distinct reason, `comment-scan-unavailable`, so it
 reads differently from a scan that genuinely ran and found nothing. Without
 that distinction, a misconfigured plugin root would disable the scan
@@ -388,7 +419,7 @@ land — is swallowed and never changes the hook's own exit status.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (92 cases) against both hooks and exits non-zero on
+Runs the full eval suite (93 cases) against both hooks and exits non-zero on
 any mismatch — check-task-complete's three block conditions (the third being
 its own close-time comment-hygiene scan), plus check-comment-write's
 write-time comment-hygiene guard. See `evals/run.sh`'s header comment for the

@@ -6,7 +6,10 @@
 # There is deliberately NO `trap ... ERR` here. The Python body signals a block
 # with exit 2, and an ERR trap fires on that and rewrites it to 0 — which would
 # make this hook incapable of ever blocking. Statuses are handled explicitly
-# instead: 2 blocks, 0 allows, anything else is an internal error and allows.
+# instead: 2 blocks, 3 means the body could not read the target and declined to
+# scan, 0 allows, and anything else is an internal error. Everything but 2
+# allows, so a body that reports a status this wrapper does not know still fails
+# open.
 set -uo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -121,8 +124,15 @@ fi
 printf '%s' "$ATG_INPUT" | ATG_ROOT="$PLUGIN_ROOT" \
     python3 -I -B "$PLUGIN_ROOT/hooks/check_comment_write.py"
 status=${PIPESTATUS[1]}
+# Status 3 allows exactly as 0 does, and exists only so the trace can tell the
+# two apart. A `Write` whose target is a symlink, a FIFO, a directory or a file
+# past the read cap has no old text to diff against, so the body declines to
+# scan and the write proceeds unguarded. Folding that into the 0 arm would log
+# it as a "pass", leaving anyone reading the trace unable to tell a write that
+# was scanned and found clean from one that was never scanned at all.
 case "$status" in
     0) trace "pass" "ext=${ATG_EXT:-?}"; exit 0 ;;
     2) trace "block" "comment-hygiene"; exit 2 ;;
+    3) trace "skip" "unreadable-target"; exit 0 ;;
     *) trace "error" "python-exit=$status"; exit 0 ;;
 esac

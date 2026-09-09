@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (92 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (93 cases)",
   "evals": [
     {
       "id": 1,
@@ -512,9 +512,17 @@
       "id": 32,
       "name": "comment-write-unreadable-target-fails-open",
       "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
       "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}\",\"content\":\"// fixes #58\\n\"}}",
       "expected_exit": 0,
-      "reason": "file_path pointing at a directory: the open succeeds on Linux, so the S_ISREG check is what rejects it. Everything about the target that makes it unreadable -- a directory, a symlink, a FIFO, an oversized file -- must fail open rather than block the write"
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "comment-write | skip | unreadable-target"
+        ]
+      },
+      "reason": "file_path pointing at a directory: the open succeeds on Linux, so the S_ISREG check is what rejects it. An unreadable target must fail open rather than block the write, and the trace must say so -- folded into the pass arm, a write that was never scanned would be indistinguishable in the log from one scanned and found clean. This case exercises the directory shape only; the symlink shape has its own case, and the FIFO and oversized-file shapes are unpinned by this suite"
     },
     {
       "id": 33,
@@ -1353,6 +1361,28 @@
         ]
       },
       "reason": "the task id reaches the trace sink straight from the payload and jq -r renders its JSON \\n as a real newline, so one trace() call became two physical lines and the second read as a genuine record. trace() now strips CR, LF and | from every field it is given, which covers the task id, the status and the tool name at once. grep -F matches within one physical line, so this needle only matches if the separators were stripped rather than passed through"
+    },
+    {
+      "id": 93,
+      "name": "comment-write-symlink-target-fails-open",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "tmpdir_fixture": {
+        "real.go": "package x\n"
+      },
+      "tmpdir_symlink": {
+        "link.go": "{{TMPDIR}}/real.go"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/link.go\",\"content\":\"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "comment-write | skip | unreadable-target"
+        ]
+      },
+      "reason": "the write-time counterpart of the final_diff_path symlink case: O_NOFOLLOW refuses the link at the final component, so there is no old text to diff against and the write proceeds unscanned. The exit code discriminates because the link's target is a real regular file whose content the added comment is absent from -- follow the link and the scan sees \"// fixes #58\" as added and blocks with exit 2, so exit 0 can only mean the link was not followed. The trace needle separately pins that this is recorded as an unreadable target rather than a pass"
     }
   ]
 }
