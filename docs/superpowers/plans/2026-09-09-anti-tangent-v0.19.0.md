@@ -4,7 +4,9 @@
 
 **Goal:** Recalibrate `validate_task_spec`'s pre-hook prompt so its verdict is actionable, and add a comment-hygiene policy enforced at write time, at review time, and at task close.
 
-**Architecture:** Parts 1–2 are prompt-only edits to `pre.tmpl`, ported from wording already proven in `post.tmpl`. Part 3 adds a comment policy with three enforcement layers — a `PreToolUse` hook that prevents, a `post.tmpl` reviewer rule that judges, and a `check-task-complete` scan that is defence in depth — sharing one scanner implementation. Part 4 adds a bounded `criterion` histogram to the stats ledger so Part 3 is measurable.
+**Architecture:** Parts 1–2 are prompt-only edits to `pre.tmpl`, ported from wording already proven in `post.tmpl`. Part 3 adds a comment policy with three enforcement layers — a `PreToolUse` hook that prevents, a `post.tmpl` reviewer rule that judges, and a `check-task-complete` scan that is defence in depth. The two deterministic hook layers share one scanner implementation (`comment_scan.py`); the reviewer layer applies the same policy semantically, through prompt instructions, and shares no code.
+
+**Known coverage hole, by design.** `post.tmpl` accepts completion evidence as `final_files`, `final_diff` or `test_evidence` "in any combination". The deterministic close-time scan needs a diff, so a valid `final_files`-only completion is not scanned by it at all. Task 5 defines what the reviewer does in that case; nothing else closes it. Do not describe close-time enforcement as unconditional. Part 4 adds a bounded `criterion` histogram to the stats ledger so Part 3 is measurable.
 
 **Tech Stack:** Go 1.x (`internal/prompts` text/template + golden tests, `internal/stats`, `internal/mcpsrv`), Bash + Python 3 Claude Code hooks, JSON-driven hook eval harness.
 
@@ -59,8 +61,16 @@
 
 ```bash
 mkdir -p /tmp/claude-hooks
-cp .claude/settings.local.json /tmp/claude-hooks/settings.local.json.bak 2>/dev/null || echo "no settings.local.json yet"
+rm -f /tmp/claude-hooks/settings.local.json.bak /tmp/claude-hooks/settings.existed
+if [[ -f .claude/settings.local.json ]]; then
+    cp .claude/settings.local.json /tmp/claude-hooks/settings.local.json.bak
+    touch /tmp/claude-hooks/settings.existed
+fi
 ```
+
+Clearing the backup first and recording existence with an explicit marker matters: a leftover
+`.bak` from an earlier run would otherwise let Step 7 *create* a settings file that never existed
+before the probe.
 
 - [ ] **Step 2: Register the probe hook**
 
@@ -118,8 +128,12 @@ In `docs/superpowers/specs/2026-09-08-anti-tangent-v0.19.0-design.md`, in the "C
 - [ ] **Step 7: Restore settings and commit**
 
 ```bash
-cp /tmp/claude-hooks/settings.local.json.bak .claude/settings.local.json 2>/dev/null || rm -f .claude/settings.local.json
-git diff --stat .claude/settings.local.json
+if [[ -f /tmp/claude-hooks/settings.existed ]]; then
+    cp /tmp/claude-hooks/settings.local.json.bak .claude/settings.local.json
+else
+    rm -f .claude/settings.local.json
+fi
+git status --porcelain .claude/
 git add docs/superpowers/specs/2026-09-08-anti-tangent-v0.19.0-design.md
 git commit -m "docs(spec): record measured PreToolUse subagent reach"
 ```
@@ -455,6 +469,7 @@ git commit -m "feat(stats): record bounded criterion counts on review events"
 
 **Acceptance Criteria:**
 - [ ] `post.tmpl` states the policy (behaviour/invariant allowed, change-history banned) and names the banned forms
+- [ ] The rule states explicitly what to do for `final_files`-only evidence (judge only code the summary calls new) and for no file evidence (skip the policy) — this layer covers the deterministic scan's blind spot, so it cannot be left implicit
 - [ ] The rule pins `category: quality`, `criterion: comment_hygiene`, `severity: minor`, and says explicitly that it is never major or critical however many are found
 - [ ] A new test asserts the passage renders and that the severity pin is present verbatim
 - [ ] All four `post_*.golden` files regenerated and the diff read
@@ -493,7 +508,9 @@ In `internal/prompts/templates/post.tmpl`, insert immediately BEFORE the final l
 
 Comments added by this change must explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next editor. The test is that a comment reads correctly to someone who never saw this change.
 
-A comment is a defect when it narrates change history — an issue, pull-request or task reference; a version reference; "previously", "no longer", "this replaced" — or when it restates what the code plainly does, or describes the code inaccurately. Judge only comments the diff ADDS; an untouched comment is out of scope.
+A comment is a defect when it narrates change history — an issue, pull-request or task reference; a version reference; "previously", "no longer", "this replaced" — or when it restates what the code plainly does, or describes the code inaccurately.
+
+Judge only comments this change ADDS; an untouched comment is out of scope. When the evidence is a diff, added comments are the `+` lines. When the evidence is whole files (`final_files`) with no diff, you cannot distinguish an added comment from a pre-existing one — judge only comments in code the summary identifies as NEW, and emit nothing about the rest. When there is no file evidence at all, skip this policy rather than guessing.
 
 Emit these as `category: quality`, `criterion: comment_hygiene`, and `severity: minor` — always `minor`, never `major` or `critical`, however many you find. Quote the offending comment in `evidence`, and give the rewritten comment or an explicit removal in `suggestion`.
 ```
@@ -541,9 +558,11 @@ git commit -m "feat(post.tmpl): flag change-history comments as minor quality fi
 - [ ] `ANTI_TANGENT_COMMENT_GUARD=0` disables the hook
 - [ ] The hook fails open on every internal error (missing python3, unreadable file, malformed JSON)
 - [ ] A newly added DUPLICATE of a comment already present in the file is still scanned (proving `added` is occurrence-aware, not set-based)
-- [ ] New evals pass and `EXPECTED_CASE_COUNT` matches the new total (29)
+- [ ] Every fail-open path named above has its own eval asserting exit 0: malformed JSON, missing body file, unreadable target, absent `python3`
+- [ ] Each eval that writes or reads a target file uses a per-case temporary directory, so no case depends on a file another case left behind
+- [ ] New evals pass, and `EXPECTED_CASE_COUNT` (33) and the `description` string agree
 
-**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all 29 cases pass
+**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all 33 cases pass
 
 **Steps:**
 
@@ -747,19 +766,20 @@ Replace `plugin/anti-tangent-guard/hooks/hooks.json` with:
 
 ```bash
 export CLAUDE_PLUGIN_ROOT="$PWD/plugin/anti-tangent-guard"
-echo '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x.go","content":"// fixes #58\npackage x\n"}}' \
+SMOKE=$(mktemp -d); trap 'rm -rf "$SMOKE"' EXIT
+echo '{"tool_name":"Write","tool_input":{"file_path":"'"$SMOKE"'/x.go","content":"// fixes #58\npackage x\n"}}' \
   | ./plugin/anti-tangent-guard/hooks/check-comment-write; echo "exit=$?"
 ```
 Expected: exit=2, stderr naming the issue reference.
 
 ```bash
-echo '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x.md","content":"// fixes #58\n"}}' \
+echo '{"tool_name":"Write","tool_input":{"file_path":"'"$SMOKE"'/x.md","content":"// fixes #58\n"}}' \
   | ./plugin/anti-tangent-guard/hooks/check-comment-write; echo "exit=$?"
 ```
 Expected: exit=0 — markdown is never scanned.
 
 ```bash
-echo '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x.go","content":"// POSITIONAL EXTRACTION, NOT FREE SCAN\npackage x\n"}}' \
+echo '{"tool_name":"Write","tool_input":{"file_path":"'"$SMOKE"'/x.go","content":"// POSITIONAL EXTRACTION, NOT FREE SCAN\npackage x\n"}}' \
   | ./plugin/anti-tangent-guard/hooks/check-comment-write; echo "exit=$?"
 ```
 Expected: exit=0 — invariant-why is legitimate.
@@ -827,13 +847,64 @@ Append these to the `evals` array in `plugin/anti-tangent-guard/evals/guard-eval
   "expected_exit": 2,
   "expected_stderr_contains": ["an issue or pull-request reference"],
   "reason": "a set-based diff discards this newly added duplicate; the occurrence-aware one must catch it"
+},
+{
+  "id": 30,
+  "name": "comment-write-malformed-json-fails-open",
+  "hook": "check-comment-write",
+  "stdin_raw": "not json at all",
+  "expected_exit": 0,
+  "reason": "a malformed payload must never block work"
+},
+{
+  "id": 31,
+  "name": "comment-write-missing-body-fails-open",
+  "hook": "check-comment-write",
+  "env": { "CLAUDE_PLUGIN_ROOT": "/nonexistent-plugin-root" },
+  "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/a.go\",\"content\":\"// fixes #58\\n\"}}",
+  "expected_exit": 0,
+  "reason": "a missing python body must fail open, not block"
+},
+{
+  "id": 32,
+  "name": "comment-write-unreadable-target-fails-open",
+  "hook": "check-comment-write",
+  "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}\",\"content\":\"// fixes #58\\n\"}}",
+  "expected_exit": 0,
+  "reason": "file_path pointing at a directory raises on open; must fail open"
+},
+{
+  "id": 33,
+  "name": "comment-write-no-python3-fails-open",
+  "hook": "check-comment-write",
+  "env": { "PATH": "/nonexistent-bin" },
+  "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/a.go\",\"content\":\"// fixes #58\\n\"}}",
+  "expected_exit": 0,
+  "reason": "no python3 on PATH must fail open"
 }
 ```
+
+Note case 32 relies on `file_path` being a directory, which `open()` rejects — a portable way to
+exercise the unreadable-target arm without chmod games.
+
+- [ ] **Step 5b: Give every case its own temp directory**
+
+Several cases write and read target files, and `Write`-over-an-existing-file deliberately
+subtracts what is already on disk. Sharing one path between cases makes outcomes depend on
+execution order and on residue from earlier runs. In `run.sh`, before each case:
+
+```bash
+case_tmp=$(mktemp -d "${TMPDIR:-/tmp}/atg-eval-XXXXXX")
+```
+
+substitute `{{TMPDIR}}` in `stdin_raw` and `input` with `$case_tmp` exactly as `{{TRANSCRIPT}}` is
+already substituted, and `rm -rf "$case_tmp"` afterwards. Update the existing cases 23–29 to use
+`{{TMPDIR}}/...` paths rather than the fixed `/tmp/atg-eval.go`.
 
 - [ ] **Step 6: Teach run.sh to dispatch by hook and bump the count**
 
 In `plugin/anti-tangent-guard/evals/run.sh`:
-- change `EXPECTED_CASE_COUNT=22` to `EXPECTED_CASE_COUNT=29`
+- change `EXPECTED_CASE_COUNT=22` to `EXPECTED_CASE_COUNT=33`
 - where the runner invokes the hook, read `.evals[$idx].hook` and default to `check-task-complete`:
 
 ```bash
@@ -841,12 +912,12 @@ hook_name=$(jq -r ".evals[$idx].hook // \"check-task-complete\"" "$EVALS_FILE")
 ```
 then invoke `"$HOOK_DIR/$hook_name"` instead of the hardcoded script.
 
-Also update the `description` string in `guard-evals.json` from `(22 cases)` to `(28 cases)`.
+Also update the `description` string in `guard-evals.json` from `(22 cases)` to `(33 cases)`. `EXPECTED_CASE_COUNT` and this string must agree.
 
 - [ ] **Step 7: Run the evals**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: all 29 pass.
+Expected: all 33 pass.
 
 - [ ] **Step 8: Commit**
 
@@ -870,14 +941,15 @@ git commit -m "feat(guard): prevent comments carrying change history at write ti
 - [ ] The transcript walk retains each `validate_completion` call's `input`, not only its index and id
 - [ ] Only the LAST `validate_completion` in the task window is scanned
 - [ ] Inline `final_diff` is scanned; `final_diff_path` is read with an absolute-path check and a size cap, failing open on any error
+- [ ] A `final_files`-only completion (no diff of any kind) passes this layer without a block, and the README records that such closes rely on the reviewer layer alone
 - [ ] Only `+`-prefixed lines in scannable files are considered, reusing `comment_scan.py`
 - [ ] The block message is textually distinct from the two existing block messages
 - [ ] A `trace()` line records the new block reason
 - [ ] `ANTI_TANGENT_COMMENT_GUARD=0` skips the comment scan while the completion gate still runs
 - [ ] Existing 22 cases still pass
-- [ ] Every acceptance criterion above has at least one eval: last-call selection, absolute `final_diff_path`, relative-path fail-open, and the kill switch
+- [ ] Every acceptance criterion above has at least one eval: last-call selection, absolute `final_diff_path`, relative-path fail-open, the size cap, the kill switch, and the `trace()` reason
 
-**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all 35 cases pass
+**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all 41 cases pass
 
 **Steps:**
 
@@ -941,11 +1013,11 @@ The comment scan must be skipped when `ANTI_TANGENT_COMMENT_GUARD=0`, while the 
 
 - [ ] **Step 3: Add evals**
 
-Append to `guard-evals.json`, ids 29–30:
+Append to `guard-evals.json`, ids 34–35 (Task 6 ends at 33 — do not reuse an id, the fixture test keys on it):
 
 ```json
 {
-  "id": 29,
+  "id": 34,
   "name": "close-with-history-comment-blocks",
   "input": {
     "tool_name": "TaskUpdate",
@@ -962,7 +1034,7 @@ Append to `guard-evals.json`, ids 29–30:
   "reason": "a passing verdict must not let a change-history comment through"
 },
 {
-  "id": 30,
+  "id": 35,
   "name": "close-with-clean-comment-allows",
   "input": {
     "tool_name": "TaskUpdate",
@@ -979,29 +1051,36 @@ Append to `guard-evals.json`, ids 29–30:
 }
 ```
 
-Add four more, ids 32–35, so every acceptance criterion of this task has an eval rather than only
+Add six more, ids 36–41, so every acceptance criterion of this task has an eval rather than only
 the two happy paths:
 
-- **32 `close-last-call-wins`** — two `validate_completion` calls in the window, the FIRST carrying
+- **36 `close-last-call-wins`** — two `validate_completion` calls in the window, the FIRST carrying
   a violating `final_diff` and the SECOND a clean one. `expected_exit: 0`. Without last-call
   selection a comment that was fixed can never be closed.
-- **33 `close-diff-path-blocks`** — `final_diff_path` set to an absolute path the runner has
+- **37 `close-diff-path-blocks`** — `final_diff_path` set to an absolute path the runner has
   materialised, containing a violating added line. `expected_exit: 2`. This needs `run.sh`
   extended to write a `{{DIFFFILE}}` fixture the way it already writes `{{TRANSCRIPT}}`; do it in
   this step, because `final_diff_path` is the route §4.2 tells implementers to PREFER and would
   otherwise ship with no coverage at all.
-- **34 `close-relative-diff-path-fails-open`** — `final_diff_path` set to a relative path.
+- **38 `close-relative-diff-path-fails-open`** — `final_diff_path` set to a relative path.
   `expected_exit: 0`, proving the absolute-path check fails open rather than blocking.
-- **35 `close-comment-kill-switch`** — `env: {"ANTI_TANGENT_COMMENT_GUARD": "0"}` with case 29's
+- **39 `close-oversized-diff-path-fails-open`** — an absolute `final_diff_path` whose file exceeds
+  the 2,000,000-byte cap. `expected_exit: 0`, proving the cap fails open rather than blocking. The
+  cap is an acceptance criterion of this task and would otherwise ship unexercised.
+- **40 `close-comment-kill-switch`** — `env: {"ANTI_TANGENT_COMMENT_GUARD": "0"}` with case 34's
   violating diff and a passing `validate_completion` in the transcript. `expected_exit: 0`,
   proving the comment scan is skipped while the completion gate still runs.
+- **41 `close-trace-records-comment-hygiene`** — case 34's payload with
+  `env: {"ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"}`, `expected_exit: 2`, and an
+  assertion that the trace file contains `comment-hygiene`. The `trace()` line is an acceptance
+  criterion; without this case nothing proves it fires.
 
-Bump `EXPECTED_CASE_COUNT` to 35 and the `description` to `(35 cases)`.
+Bump `EXPECTED_CASE_COUNT` to 41 and the `description` to `(41 cases)`.
 
 - [ ] **Step 4: Run the evals**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: all 35 pass, including the original 22.
+Expected: all 41 pass, including the original 22.
 
 - [ ] **Step 5: Commit**
 
@@ -1019,7 +1098,7 @@ git commit -m "feat(guard): scan the submitted diff for change-history comments 
 > **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it "verified inline", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.
 
 **Files:**
-- Create: `/tmp/claude-hooks/fp-run.txt` (scratch evidence, not committed)
+- Create: `/tmp/claude-hooks/fp-raw.tsv`, `/tmp/claude-hooks/fp-class.tsv`, `/tmp/claude-hooks/fp-report.sh` (scratch evidence, not committed)
 - Modify: `plugin/anti-tangent-guard/hooks/comment_scan.py` (only if a tell must be narrowed)
 - Modify: `docs/superpowers/specs/2026-09-08-anti-tangent-v0.19.0-design.md` (record the result)
 
@@ -1027,8 +1106,9 @@ git commit -m "feat(guard): scan the submitted diff for change-history comments 
 - [ ] The scanner is run over every tracked source file at HEAD, treating every comment line as "added"
 - [ ] Every hit is hand-classified as a TRUE positive (genuine change history) or a FALSE positive (legitimate comment)
 - [ ] The false-positive count is **zero**, either because none were found or because the offending tell was narrowed or moved to the reviewer layer
-- [ ] The raw scan (`fp-raw.txt`) and the durable classification (`fp-class.tsv`) are kept in SEPARATE files, so re-running the scan cannot destroy the classification
-- [ ] `fp-report.sh` prints `FALSE POSITIVES: 0` and exits 0, having verified every raw hit carries exactly one classification; its output is quoted in the completion report
+- [ ] The scan reads HEAD blobs (`git show HEAD:<path>`), not the working tree, and exits non-zero rather than silently skipping any tracked source file it cannot read
+- [ ] The raw scan (`fp-raw.tsv`) and the durable classification (`fp-class.tsv`) are kept in SEPARATE files, joined on a stable `path:line:occurrence` key
+- [ ] `fp-report.sh` performs a one-to-one join and rejects unclassified keys, unknown keys and duplicate classifications before counting; it prints `FALSE POSITIVES: 0` and exits 0, and its output is quoted in the completion report
 - [ ] Any narrowing is covered by a new eval case
 
 **Verify:** `bash /tmp/claude-hooks/fp-report.sh` → prints `FALSE POSITIVES: 0` (it refuses to print that unless every hit in the raw scan carries exactly one TRUE/FALSE classification)
@@ -1039,41 +1119,57 @@ git commit -m "feat(guard): scan the submitted diff for change-history comments 
 
 ```bash
 cd /home/pgilmore/Development/Patiently/anti-tangent-mcp
-python3 - > /tmp/claude-hooks/fp-raw.txt <<'PY'
-import subprocess, sys, os
+python3 - > /tmp/claude-hooks/fp-raw.tsv <<'PY'
+import subprocess, sys
 sys.path.insert(0, "plugin/anti-tangent-guard/hooks")
 from comment_scan import violations, scannable
-files = subprocess.run(["git","ls-files"], capture_output=True, text=True).stdout.split()
-total = 0
+
+# HEAD blobs, not the working tree: the gate is about what is committed, and a
+# dirty worktree would otherwise silently change the result.
+names = subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True).stdout
+files = [f for f in names.split("\0") if f]
+
+total, failed = 0, 0
 for f in files:
-    if not scannable(f) or not os.path.exists(f):
+    if not scannable(f):
         continue
-    try:
-        lines = open(f, errors="replace").read().splitlines()
-    except Exception:
+    blob = subprocess.run(["git", "show", "HEAD:" + f], capture_output=True, text=True)
+    if blob.returncode != 0:
+        # Never skip silently: an unscannable tracked source file invalidates the run.
+        print("UNREADABLE\t%s" % f, file=sys.stderr)
+        failed += 1
         continue
-    for line, why in violations(f, lines):
-        total += 1
-        print("%s\t%s\t%s" % (f, why, line[:120]))
+    for n, raw in enumerate(blob.stdout.splitlines(), 1):
+        for line, why in violations(f, [raw]):
+            total += 1
+            # key = path:line:occurrence — stable, unique, and immune to the
+            # comment text being truncated or containing tabs.
+            print("%s:%d:1\t%s\t%s" % (f, n, why, line.replace("\t", " ")[:200]))
 print("TOTAL HITS: %d" % total)
+if failed:
+    print("UNREADABLE FILES: %d" % failed)
+    sys.exit(1)
 PY
-tail -1 /tmp/claude-hooks/fp-raw.txt
+tail -2 /tmp/claude-hooks/fp-raw.tsv
 ```
 
-Note the split: `fp-raw.txt` is the regenerable scanner output and Step 3 overwrites it on every
+Note the split: `fp-raw.tsv` is the regenerable scanner output and Step 3 overwrites it on every
 re-run. `fp-class.tsv` is the durable classification. Keeping them in one file would mean each
-re-run silently destroyed the classification work.
+re-run silently destroyed the classification work. Re-running the scan after narrowing a tell
+changes the key set, so re-classify against the NEW raw file — the report below fails loudly if a
+classification refers to a key that no longer exists.
 
 - [ ] **Step 2: Hand-classify every hit**
 
-Read `/tmp/claude-hooks/fp-raw.txt` in full. For each hit decide:
+Read `/tmp/claude-hooks/fp-raw.tsv` in full. Each line begins with a unique key `path:line:1`. For each hit decide:
 
 - **TRUE positive** — the comment genuinely narrates change history ("added in v0.5.0", "see #25", "task-12b review"). No action; the on-touch rule handles it when that code is next edited.
 - **FALSE positive** — the comment is legitimate and the reference is load-bearing. Known families to expect: a comment describing the product's own input grammar; a version string stating a wire-compatibility contract ("reads the v0.10.0 stats output"); a test fixture describing a criterion string such as `"AC #1"`.
 
 Write the classification to `/tmp/claude-hooks/fp-class.tsv`, one line per hit, as
-`<TRUE|FALSE><TAB><file><TAB><comment text><TAB><reason>`. Every hit in `fp-raw.txt` must appear
-exactly once.
+`<key><TAB><TRUE|FALSE><TAB><reason>` — where `<key>` is copied verbatim from column 1 of the raw
+file. Keying on `path:line:occurrence` rather than on the comment text is what makes the join
+below exact: two identical comments in one file, or a comment containing a tab, cannot collide.
 
 - [ ] **Step 3: Drive false positives to zero**
 
@@ -1091,21 +1187,39 @@ hit is classified, so the gate cannot be satisfied by a partial pass:
 ```bash
 cat > /tmp/claude-hooks/fp-report.sh <<'SH'
 set -u
-RAW=/tmp/claude-hooks/fp-raw.txt
+RAW=/tmp/claude-hooks/fp-raw.tsv
 CLS=/tmp/claude-hooks/fp-class.tsv
-hits=$(grep -vc '^TOTAL HITS:' "$RAW")
-cls=$(grep -c . "$CLS")
-if [[ "$hits" -ne "$cls" ]]; then
-    echo "INCOMPLETE: $hits hits but $cls classifications" >&2; exit 1
-fi
-tp=$(grep -c '^TRUE' "$CLS"); fp=$(grep -c '^FALSE' "$CLS")
-if [[ $((tp + fp)) -ne "$cls" ]]; then
-    echo "MALFORMED: every line must start TRUE or FALSE" >&2; exit 1
-fi
-echo "TOTAL HITS: $hits"
-echo "TRUE POSITIVES: $tp"
-echo "FALSE POSITIVES: $fp"
-[[ "$fp" -eq 0 ]]
+python3 - "$RAW" "$CLS" <<'PY'
+import collections, sys
+raw_p, cls_p = sys.argv[1], sys.argv[2]
+raw = [l.split("\t")[0] for l in open(raw_p).read().splitlines()
+       if l and not l.startswith(("TOTAL HITS:", "UNREADABLE"))]
+cls = collections.defaultdict(list)
+for l in open(cls_p).read().splitlines():
+    if not l.strip():
+        continue
+    parts = l.split("\t")
+    if len(parts) < 2 or parts[1] not in ("TRUE", "FALSE"):
+        print("MALFORMED: %s" % l, file=sys.stderr); sys.exit(1)
+    cls[parts[0]].append(parts[1])
+
+# One-to-one join. Counting lines is not enough: duplicate classifications for
+# one hit would mask another hit having none.
+missing = [k for k in raw if k not in cls]
+unknown = [k for k in cls if k not in set(raw)]
+dupes = [k for k, v in cls.items() if len(v) > 1]
+for label, ks in (("UNCLASSIFIED", missing), ("UNKNOWN KEY", unknown), ("DUPLICATE", dupes)):
+    if ks:
+        print("%s: %d -> %s" % (label, len(ks), ks[:5]), file=sys.stderr)
+if missing or unknown or dupes:
+    sys.exit(1)
+
+fp = sum(1 for k in raw if cls[k][0] == "FALSE")
+print("TOTAL HITS: %d" % len(raw))
+print("TRUE POSITIVES: %d" % (len(raw) - fp))
+print("FALSE POSITIVES: %d" % fp)
+sys.exit(0 if fp == 0 else 1)
+PY
 SH
 bash /tmp/claude-hooks/fp-report.sh
 ```
@@ -1175,7 +1289,7 @@ In `.claude-plugin/marketplace.json`, update the `anti-tangent-guard` entry's `v
 - [ ] **Step 4: Verify no stale claims**
 
 ```bash
-grep -rn "exactly two cases\|blocks in two" plugin/anti-tangent-guard/README.md || echo "clean"
+grep -rn "two cases" plugin/anti-tangent-guard/README.md || echo "clean"   # broad on purpose: review EVERY match
 jq -r '.version' plugin/anti-tangent-guard/.claude-plugin/plugin.json
 jq -r '.plugins[] | select(.name=="anti-tangent-guard") | .version' .claude-plugin/marketplace.json
 # descriptions must match between plugin.json and the marketplace entry
@@ -1296,13 +1410,25 @@ diff -r docs/protocol plugin/anti-tangent-protocol/protocol && echo "in sync"
 ```bash
 bash scripts/check-protocol-docs.sh
 
+# core.md must be untouched, and nothing may reach the cap
+git diff --exit-code -- docs/protocol/core.md && echo "ok core.md unchanged"
+awk 'END{}' /dev/null; for f in docs/protocol/*.md; do
+  n=$(wc -c < "$f"); [[ "$n" -lt 16000 ]] || { echo "OVER CAP: $f ($n)"; exit 1; }
+done; echo "ok every part under 16000"
+
 # the stopping rule reached both audiences
 grep -q "have stopped changing" docs/protocol/implementer.md && echo "ok implementer stopping rule"
 grep -q "have stopped moving" docs/protocol/controller.md && echo "ok controller stopping rule"
 
 # the comment policy is stated SOMEWHERE authoritative, and CLAUDE.md carries it
-grep -rqE "no .previously. / .no longer. / .this replaced.|not carry change history" \
-  docs/protocol/implementer.md docs/protocol/authoring.md && echo "ok policy in protocol"
+if grep -q "not carry change history" docs/protocol/implementer.md; then
+  echo "ok policy in implementer.md"
+else
+  # fallback shape: full policy in authoring.md AND an explicit pointer left behind
+  grep -q "not carry change history" docs/protocol/authoring.md && \
+    grep -q "authoring.md" docs/protocol/implementer.md && \
+    echo "ok policy in authoring.md with pointer from implementer.md"
+fi
 grep -q "change history" CLAUDE.md && echo "ok policy in CLAUDE.md"
 
 # no stale block-count claim survives
