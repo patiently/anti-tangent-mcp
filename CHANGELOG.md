@@ -87,7 +87,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   question in `Context:` (including in verbatim code) was still failed for leaving it open in the
   acceptance criteria above. This was the shape of one of the two field reports in
   [#58](https://github.com/patiently/anti-tangent-mcp/issues/58): every finding on a fully
-  specified task was about prose the brief's own code answered directly below it.
+  specified task was about prose the brief's own code answered directly below it. The
+  contradiction rule that comes with it is scoped to match: only an irreconcilable AC/`Context:`
+  pair, where nothing in the spec indicates which side governs, is a `major` `ambiguous_spec`.
+  Where `Context:` explicitly anticipates or approves a deviation from an AC's literal wording,
+  the spec is coherent and the pre reviewer emits nothing — the same call `post.tmpl` already
+  makes about that shape, so a task can no longer draw a `major` before implementation for
+  precisely what the final review is told to accept.
 - **The pre-task gate's terminal state is documented.** `implementer.md` §4.2 told an implementer
   to treat `critical` as blocking and `major` as address-or-explain, and stopped — leaving no
   stopping rule for a `warn` that will not move. It now states one.

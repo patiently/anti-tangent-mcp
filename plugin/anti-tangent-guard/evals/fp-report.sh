@@ -40,7 +40,17 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLASS_FILE="$SCRIPT_DIR/fp-class.tsv"
-RAW_FILE="$(mktemp "${TMPDIR:-/tmp}/atg-fp-raw.XXXXXX.tsv")"
+# The template ends in its run of X's, and so carries no extension: BSD/macOS
+# mktemp rejects a template with anything after the X's. Nothing downstream
+# reads this file by name — awk takes it as a positional argument — so the
+# missing ".tsv" costs nothing. The result is checked before the redirect
+# below and before the trap, because this script runs without `set -e` and a
+# failed mktemp would otherwise leave an empty path on both.
+RAW_FILE="$(mktemp "${TMPDIR:-/tmp}/atg-fp-raw.XXXXXX")"
+if [[ ! -f "$RAW_FILE" ]]; then
+    echo "mktemp failed — refusing to run the scan without a scratch file to hold it."
+    exit 1
+fi
 trap 'rm -f "$RAW_FILE"' EXIT
 
 if [[ ! -f "$CLASS_FILE" ]]; then

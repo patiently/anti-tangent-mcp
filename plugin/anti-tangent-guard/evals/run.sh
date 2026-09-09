@@ -218,10 +218,14 @@ build_stub_dir() {
 # path beneath it) still lands on a recognized extension — otherwise the
 # unreadable-target case would exit 0 via the unrelated "extension not
 # scanned" gate instead of the open()-on-a-directory path it means to
-# exercise. It is created under WORKDIR, not $TMPDIR, because this function
-# returns early on several failure paths: only the module-level `trap cleanup
-# EXIT` is guaranteed to run, and a single `rm -rf "$WORKDIR"` there reclaims
-# every case's directory including those of an interrupted run.
+# exercise. That component cannot be part of the mktemp template: BSD/macOS
+# mktemp requires the run of X's to END the template and rejects anything
+# after it, so uniqueness comes from an mktemp'd parent and the ".go"
+# directory is created with a fixed name inside it. The pair lives under
+# WORKDIR, not $TMPDIR, because this function returns early on several
+# failure paths: only the module-level `trap cleanup EXIT` is guaranteed to
+# run, and a single `rm -rf "$WORKDIR"` there reclaims every case's
+# directory including those of an interrupted run.
 run_case() {
     local idx="$1"
     local id name reason expected_exit hook_name case_hook
@@ -232,8 +236,20 @@ run_case() {
     hook_name=$(jq -r ".evals[$idx].hook // \"check-task-complete\"" "$EVALS_FILE")
     case_hook="$HOOK_DIR/$hook_name"
 
-    local case_tmp
-    case_tmp=$(mktemp -d "$WORKDIR/atg-eval-XXXXXX.go")
+    local case_tmp case_parent
+    case_parent=$(mktemp -d "$WORKDIR/atg-eval-XXXXXX")
+    # Checked rather than assumed: this script runs without `set -e`, so a
+    # failed mktemp would otherwise leave case_parent empty and every
+    # {{TMPDIR}} substitution below would silently resolve against "/target.go".
+    if [[ ! -d "$case_parent" ]]; then
+        echo "mktemp -d failed under $WORKDIR — case $id cannot be given an isolated {{TMPDIR}}."
+        exit 1
+    fi
+    case_tmp="$case_parent/target.go"
+    if ! mkdir "$case_tmp"; then
+        echo "could not create $case_tmp — case $id cannot be given an isolated {{TMPDIR}}."
+        exit 1
+    fi
 
     # HOOK_CWD is shared across every case (that is the point — a relative
     # path needs a stable cwd to resolve against), so a cwd_fixture file left

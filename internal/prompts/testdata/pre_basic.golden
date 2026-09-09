@@ -45,7 +45,7 @@ If a Normative test bodies section is present, treat each entry as binding test 
 
 The `Context:` block in the task spec above resolves under-specification. Do not emit `ambiguous_spec` or `missing_acceptance_criterion` for an ambiguity that `Context:` already answers — including when it answers it in code rather than prose.
 
-This applies only where an acceptance criterion is SILENT or VAGUE and `Context:` fills the gap. Where an acceptance criterion and `Context:` state incompatible requirements, that is a contradiction, not an ambiguity: emit it as `ambiguous_spec` at `severity: major`, quoting both sides. `Context:` clarifies acceptance criteria; it does not silently overrule them.
+This applies only where an acceptance criterion is SILENT or VAGUE and `Context:` fills the gap. Where an acceptance criterion and `Context:` state incompatible requirements, separate two cases. If `Context:` explicitly anticipates or approves the deviation from the AC's literal wording — naming the framework constraint, upstream design decision, or in-flight refactor that motivates it — the spec is coherent, not defective: an implementer reading both builds the right thing. Emit no finding for that. Reserve the major for the irreconcilable case, where the two state opposing requirements and nothing in the spec indicates which governs: that is a contradiction, not an ambiguity, so emit it as `ambiguous_spec` at `severity: major`, quoting both sides. `Context:` clarifies acceptance criteria; it does not silently overrule them.
 
 Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
 

@@ -954,13 +954,32 @@ func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
 func TestRenderPre_ContextIsAuthoritative(t *testing.T) {
 	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
 	require.NoError(t, err)
-	// Suppression: Context resolves under-specification
 	assert.Contains(t, out.User, "`Context:` block in the task spec above resolves under-specification")
 	assert.Contains(t, out.User, "including when it answers it in code rather than prose")
 	assert.Contains(t, out.User, "it does not silently overrule them")
-	// Restriction: Context does not override contradictions
 	assert.Contains(t, out.User, "that is a contradiction, not an ambiguity")
 	assert.Contains(t, out.User, "quoting both sides")
+}
+
+// An AC/`Context:` pair is only a contradiction when nothing says which side
+// governs. pre.tmpl and post.tmpl ask different questions — pre judges the
+// spec, post judges the implementation against it — so they need not agree
+// sentence for sentence, but they must not disagree about whether a deviation
+// `Context:` itself approves is a defect. Without the carve-out pinned here,
+// pre emits a major for exactly the spec shape post is told to accept.
+func TestRenderPre_ContextApprovedDeviationIsNotAContradiction(t *testing.T) {
+	out, err := RenderPre(PreInput{Spec: session.TaskSpec{Title: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}}})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "explicitly anticipates or approves the deviation from the AC's literal wording")
+	assert.Contains(t, out.User, "the spec is coherent, not defective")
+	assert.Contains(t, out.User, "Emit no finding for that")
+	assert.Contains(t, out.User, "Reserve the major for the irreconcilable case")
+	assert.Contains(t, out.User, "nothing in the spec indicates which governs")
+
+	post, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", FinalDiff: "d"})
+	require.NoError(t, err)
+	assert.Contains(t, post.User, "explicitly anticipates or approves a deviation")
+	assert.Contains(t, post.User, "Do not emit a finding solely because an AC's literal phrasing conflicts with a deviation that `Context:` permits")
 }
 
 func TestRenderPrime_Basic(t *testing.T) {
