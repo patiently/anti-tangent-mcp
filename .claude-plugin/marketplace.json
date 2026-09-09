@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "anti-tangent-mcp",
   "version": "0.10.0",
-  "description": "Anti-tangent MCP server companions: the anti-tangent-protocol on-demand protocol plugin, the bm-scribe Basic Memory note-writing plugin, and I/O-delegation hooks (anti-tangent-shunt for bulk reads, anti-tangent-guard for completion enforcement).",
+  "description": "Anti-tangent MCP server companions: the anti-tangent-protocol on-demand protocol plugin, the bm-scribe Basic Memory note-writing plugin, and I/O-delegation hooks (anti-tangent-shunt for bulk reads, anti-tangent-guard for completion enforcement and comment hygiene, which also refuses Edit/Write calls that add comments carrying change history).",
   "owner": {
     "name": "Patrick Gilmore",
     "email": "p@patiently.io"

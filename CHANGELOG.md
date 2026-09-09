@@ -59,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   criterion would have written task-specification text to disk and given the map one key per
   acceptance criterion ever reviewed.
 
+- **A re-runnable zero-false-positive gate for the comment-hygiene scanner**, under
+  `plugin/anti-tangent-guard/evals/`. `fp-scan.py` runs the shipped scanner over every tracked
+  source file's HEAD blob, treating every comment line as added; `fp-class.tsv` records what each
+  hit is; `fp-report.sh` joins the two strictly in both directions — rejecting unclassified,
+  unknown, duplicate and stale entries before counting — and fails unless the false-positive count
+  is zero. Wired into CI, so widening a tell can no longer quietly reopen a false positive.
+
 ### Fixed
 - **`validate_task_spec` now reserves `major` for ambiguity that would actually cause
   misimplementation.** Across 191 real calls, the tool returned `fail` 58% of the time and `warn`
@@ -88,6 +95,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES`. Both are best-effort: a trace failure never changes a
   hook's exit status. `ANTI_TANGENT_GUARD_TRACE_LOG` still repoints the path for anyone wanting
   per-session isolation.
+- **The write-time guard no longer has a size ceiling.** The hook handed its payload to the
+  Python body as an environment variable, and Linux caps a single environment string at
+  `MAX_ARG_STRLEN` (32 pages, 131072 bytes on x86-64) — so a `Write` of a large file made `exec`
+  fail, which the wrapper read as an internal error and allowed. The payload travels on stdin
+  now. A `Write` over a file that is huge or not valid UTF-8 no longer fails the scan open either:
+  the existing content is read in binary, capped, and decoded with `errors="replace"`, matching
+  the close-time scan exactly.
+- **Both guard hooks harden the paths they open and the log they write.** `final_diff_path` in the
+  close-time hook is opened with `O_NOFOLLOW|O_NONBLOCK` and rejected unless `fstat` reports a
+  regular file — the same three guards the server applies to that field — so a symlink is refused
+  and a FIFO cannot park the hook. The close-time analysis runs under `python3 -I`, so a
+  `json.py`, `re.py` or `collections.py` in the working directory can no longer shadow the
+  standard library inside a hook that runs unsandboxed. Neither hook writes `__pycache__` into an
+  installed plugin tree. The trace directory is created mode `700` and neither hook appends
+  through a symlink at the log path; both checks stay best-effort and never change an exit status.
+  Matched comment lines echoed into the close-time block message are truncated, so one very long
+  diff line cannot reach the model as megabytes of hook stderr.
+- **`criterion_counts` now reaches `rollup.json`.** The per-event counts were written but never
+  aggregated, so `criterion_histogram` — and with it the comment-hygiene numbers in the LLM
+  summary and the tray consumer — did not exist. Criterion lookups also normalise case and
+  surrounding whitespace before the allowlist test: criterion is free reviewer text, and a
+  reviewer writing `Comment_Hygiene` silently vanished from the metric.
+- **The write-time guard skips an unscanned file without starting an interpreter**, deciding from
+  the extension in the wrapper. It also traces the allow path, so the trace log records every
+  decision as its documentation says. `check-comment-write`'s copy of the extension list and
+  `comment_scan.py`'s `SCAN_EXTS` are asserted identical by the eval suite; an extension in only
+  one of them would be silently unguarded.
+- **The version tell no longer backtracks quadratically** over a long whitespace run: its optional
+  preposition bridge gave the whitespace two greedy owners with an optional group between them.
+- **`README.md` and the marketplace catalog description described the guard as a single
+  close-time hook.** Both now name the `PreToolUse` write-refusal hook and both kill switches,
+  so installing from the README no longer produces a hook that rejects edits with no warning it
+  exists. The guard's own limitations list gains `code_write`, which writes server-side and so
+  bypasses the `Edit`/`Write` matcher exactly as `Bash` writes do — and whose generated code never
+  enters the agent's context to be self-reviewed either.
 
 No schema, tool-argument or envelope change: the verdict distribution shifts, but every type and
 field is byte-identical. Callers that calibrated against the observed distribution will see it

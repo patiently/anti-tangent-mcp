@@ -239,6 +239,11 @@ rather than treating the reflow as separate from the touch.
 - `Bash` writes (heredocs, sed -i, and similar) bypass the `Edit`/`Write`
   matcher entirely — comments written through `Bash` are caught, if at all,
   only by the close-time scan.
+- anti-tangent-mcp's own `code_write` tool, called with `target_path`, bypasses
+  it the same way: the server writes the file itself, so no `Edit`/`Write` ever
+  reaches this hook. It is the sharper case of the two, because the generated
+  code never enters the agent's context either, so there is no self-review
+  step to fall back on — only the close-time scan and the reviewer layer see it.
 - `PostToolUse` detects rather than prevents: the close-time scan fires
   **after** the state change to `completed`, so a comment reaching disk
   through `Bash` blocks further progress only at close time, not at write time.
@@ -347,6 +352,12 @@ when something needs debugging. The session column below is what keeps that
 shared file attributable instead of an unlabeled interleave. If you want true
 per-session isolation instead, point `ANTI_TANGENT_GUARD_TRACE_LOG` at a
 session-specific path.
+
+Because it sits in a world-writable directory, both hooks create the
+containing directory mode `700` and refuse to append when the log path is a
+symlink, so a link planted there cannot redirect the trace into a file of
+someone else's choosing. Both checks are best-effort: a trace that cannot be
+written is dropped and never changes a hook's exit status.
 
 Override the location with `ANTI_TANGENT_GUARD_TRACE_LOG`. Tail it while
 debugging:

@@ -581,7 +581,13 @@ See [`plugin/anti-tangent-shunt/README.md`](plugin/anti-tangent-shunt/README.md)
 
 ### anti-tangent-guard
 
-A single `PostToolUse` hook that enforces anti-tangent-mcp's `validate_completion` gate at task close. When a task is marked completed without running `validate_completion`, the guard detects this post-close and returns a blocking instruction to reopen, validate, and re-close.
+Two hooks that enforce anti-tangent-mcp's conventions, both of which block.
+
+A `PostToolUse` hook on `TaskUpdate` enforces the `validate_completion` gate at task close: when a task is marked completed without running `validate_completion`, or the diff it was validated against adds comments carrying change history, the guard returns a blocking instruction to reopen, fix, and re-close. It detects rather than prevents — `PostToolUse` fires after the state change, so it cannot stop the close itself.
+
+A `PreToolUse` hook on `Edit`/`Write` refuses a write that adds such a comment, before it lands. **Installing this plugin means some of your edits will be rejected until the comment is rewritten.**
+
+Kill switches: `ANTI_TANGENT_COMPLETION_GUARD=0` silences the close-time hook; `ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning at both write time and close time while leaving the completion gate running.
 
 **Install:**
 
