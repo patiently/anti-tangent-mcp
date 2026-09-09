@@ -119,13 +119,30 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # reindentation — is treated as added and does block, since changing a
 # line's bytes is touching it.
 #
+# Three final cases pin the hooks against their own hostile environment: a
+# Write whose payload exceeds the kernel's cap on a single environment string
+# must still block (the payload reaches the Python body on stdin, so it never
+# has to fit in the environment at all); a final_diff_path that is a symlink
+# must be refused rather than followed, which shows up as the close passing
+# where the identical content reached as a regular file blocks; and a
+# repo-root json.py must not shadow the standard library inside the
+# interpreter that does the analysis, which would fail open and silently
+# disable the gate for every close made from that directory.
+#
 # Both checks below must hold or the count assertion is vacuous: the JSON
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=84
+EXPECTED_CASE_COUNT=87
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
+# Both hooks default their trace log to a fixed shared path under /tmp, and
+# rotate it by rename once it passes a size cap. Left unset, a run of this
+# suite would append 80-odd lines to whatever real session log is living
+# there and could rotate it away entirely. Point every case at a run-scoped
+# file instead; a case that sets ANTI_TANGENT_GUARD_TRACE_LOG in its own "env"
+# block still wins, since `env` applies after this export.
+export ANTI_TANGENT_GUARD_TRACE_LOG="$WORKDIR/trace.log"
 # Every hook invocation below runs with this as its cwd, run-scoped (inside
 # WORKDIR, so isolated from a concurrent run.sh invocation) rather than
 # per-case, so a "cwd_fixture" case can place a real file at a RELATIVE path
@@ -134,13 +151,8 @@ WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # a relative path that merely doesn't exist anywhere.
 HOOK_CWD="$WORKDIR/hook-cwd"
 mkdir -p "$HOOK_CWD"
-CASE_TMPDIRS=()
 cleanup() {
     rm -rf "$WORKDIR"
-    local d
-    for d in "${CASE_TMPDIRS[@]:-}"; do
-        [[ -n "$d" ]] && rm -rf "$d"
-    done
 }
 trap cleanup EXIT
 
@@ -187,9 +199,10 @@ build_stub_dir() {
 # path beneath it) still lands on a recognized extension — otherwise the
 # unreadable-target case would exit 0 via the unrelated "extension not
 # scanned" gate instead of the open()-on-a-directory path it means to
-# exercise. Registered in CASE_TMPDIRS (not cleaned up locally) because this
-# function returns early on several failure paths, and only the module-level
-# `trap cleanup EXIT` is guaranteed to run on all of them.
+# exercise. It is created under WORKDIR, not $TMPDIR, because this function
+# returns early on several failure paths: only the module-level `trap cleanup
+# EXIT` is guaranteed to run, and a single `rm -rf "$WORKDIR"` there reclaims
+# every case's directory including those of an interrupted run.
 run_case() {
     local idx="$1"
     local id name reason expected_exit hook_name case_hook
@@ -201,8 +214,7 @@ run_case() {
     case_hook="$HOOK_DIR/$hook_name"
 
     local case_tmp
-    case_tmp=$(mktemp -d "${TMPDIR:-/tmp}/atg-eval-XXXXXX.go")
-    CASE_TMPDIRS+=("$case_tmp")
+    case_tmp=$(mktemp -d "$WORKDIR/atg-eval-XXXXXX.go")
 
     # HOOK_CWD is shared across every case (that is the point — a relative
     # path needs a stable cwd to resolve against), so a cwd_fixture file left
@@ -282,12 +294,43 @@ run_case() {
         done < <(jq -r ".evals[$idx].tmpdir_fixture | keys[]" "$EVALS_FILE")
     fi
 
+    # Optional "tmpdir_symlink": {link_relative_path: target} — creates a real
+    # symlink under this case's {{TMPDIR}}. Needed to exercise the hooks' refusal
+    # to open a caller-supplied path through a symlink, which cannot be asserted
+    # against a fixture the harness only ever materialises as a regular file.
+    local has_tmpdir_symlink
+    has_tmpdir_symlink=$(jq -r ".evals[$idx] | has(\"tmpdir_symlink\")" "$EVALS_FILE")
+    if [[ "$has_tmpdir_symlink" == "true" ]]; then
+        local link_rel
+        while IFS= read -r link_rel; do
+            [[ -n "$link_rel" ]] || continue
+            local link_target
+            link_target=$(jq -r --arg k "$link_rel" ".evals[$idx].tmpdir_symlink[\$k]" "$EVALS_FILE")
+            link_target="${link_target//\{\{TMPDIR\}\}/$case_tmp}"
+            link_target="${link_target//\{\{DIFFFILE\}\}/$difffile_path}"
+            mkdir -p "$(dirname "$case_tmp/$link_rel")"
+            ln -sfn "$link_target" "$case_tmp/$link_rel"
+        done < <(jq -r ".evals[$idx].tmpdir_symlink | keys[]" "$EVALS_FILE")
+    fi
+
     local stdin_raw
     stdin_raw=$(jq -r ".evals[$idx].stdin_raw // empty" "$EVALS_FILE")
 
     if [[ -n "$stdin_raw" ]]; then
         stdin_raw="${stdin_raw//\{\{TMPDIR\}\}/$case_tmp}"
         stdin_raw="${stdin_raw//\{\{DIFFFILE\}\}/$difffile_path}"
+        # Optional "stdin_pad_bytes": expands the literal "{{PAD}}" token into
+        # that many filler characters. A case pinning a size limit measured in
+        # hundreds of kilobytes (the kernel's cap on one environment string,
+        # for instance) would otherwise have to carry that many bytes inline in
+        # guard-evals.json, which no reader could diff.
+        local pad_bytes
+        pad_bytes=$(jq -r ".evals[$idx].stdin_pad_bytes // 0" "$EVALS_FILE")
+        if [[ "$pad_bytes" -gt 0 ]]; then
+            local pad
+            pad=$(head -c "$pad_bytes" /dev/zero | tr '\0' 'x')
+            stdin_raw="${stdin_raw//\{\{PAD\}\}/$pad}"
+        fi
         printf '%s' "$stdin_raw" > "$stdin_file"
     else
         local no_transcript transcript_path
@@ -415,13 +458,34 @@ run_case() {
 
 # ── Main ──
 
+# check-comment-write carries a copy of comment_scan.py's SCAN_EXTS so it can
+# decide "this file is never scanned" without paying for a python3 start. That
+# duplication is safe only while the two agree: an extension added to the
+# Python set alone would be skipped in bash and never reach the scanner, which
+# looks exactly like a clean pass. Compare them here, where a mismatch fails
+# the suite instead.
+hook_exts=$(sed -n 's/^ATG_SCAN_EXTS="\(.*\)"$/\1/p' "$HOOK_DIR/check-comment-write" \
+    | tr ' ' '\n' | sed '/^$/d' | sort -u)
+py_exts=$(sed -n '/^SCAN_EXTS = {/,/^}/p' "$HOOK_DIR/comment_scan.py" \
+    | grep -oE '"\.[a-z0-9_]+"' | tr -d '"' | sort -u)
+if [[ -z "$hook_exts" || -z "$py_exts" ]]; then
+    echo "could not read the extension list out of check-comment-write or comment_scan.py — the drift check below would pass vacuously."
+    exit 1
+fi
+if [[ "$hook_exts" != "$py_exts" ]]; then
+    echo "check-comment-write's ATG_SCAN_EXTS and comment_scan.py's SCAN_EXTS disagree:"
+    diff <(printf '%s\n' "$py_exts") <(printf '%s\n' "$hook_exts") | sed 's/^/  /'
+    echo "an extension in only one of them is silently unguarded — update both."
+    exit 1
+fi
+
 json_count=$(jq -r '.evals | length' "$EVALS_FILE")
 if [[ "$json_count" -ne "$EXPECTED_CASE_COUNT" ]]; then
     echo "guard-evals.json declares $json_count case(s), expected exactly $EXPECTED_CASE_COUNT — update run.sh's EXPECTED_CASE_COUNT if this table grew on purpose."
     exit 1
 fi
 
-echo "check-task-complete evals"
+echo "anti-tangent-guard hook evals (check-task-complete + check-comment-write)"
 echo "────────────────────────────────────────────────────────────────"
 
 for ((i = 0; i < json_count; i++)); do

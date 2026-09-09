@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (84 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (87 cases)",
   "evals": [
     {
       "id": 1,
@@ -1037,7 +1037,7 @@
       ],
       "expected_file_contains": {
         "{{TMPDIR}}/trace.log": [
-          "s="
+          "s=eval-ses"
         ]
       },
       "reason": "the trace line written for this block must carry the session identifier column, not just the block reason, so a shared log stays attributable across concurrent sessions"
@@ -1194,6 +1194,67 @@
       "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"// see #12\\nfunc a() {}\\nfunc b() {}\",\"new_string\":\"func b() {}\\n// see #12\\nfunc a() {}\"}}",
       "expected_exit": 0,
       "reason": "the mirror of case 83: relocating a comment line without changing a single byte of it leaves an exact match in the old text's occurrence counter, so added() consumes it and reports no added line. A byte-identical move is not a touch, and must not block — the asymmetry with case 83 is the on-touch rule working as designed, not a gap."
+    },
+    {
+      "id": 85,
+      "name": "comment-write-oversized-payload-still-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"session_id\": \"eval-session-12345678\", \"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// fixes #58\\npackage x\\n// {{PAD}}\\n\"}}",
+      "stdin_pad_bytes": 200000,
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "the payload must reach the Python body on stdin, not in the environment: Linux caps one environment string at MAX_ARG_STRLEN (32 pages, 131072 bytes on x86-64), so passing a Write whose content exceeds that as an environment variable makes exec fail with status 126, which the wrapper's catch-all status branch treats as an internal error and allows. A violating comment inside a 200 KB write must block exactly as the same comment does in a small one"
+    },
+    {
+      "id": 86,
+      "name": "close-diff-path-symlink-refused",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "tmpdir_fixture": {
+        "real.diff": "+++ b/a.go\n+// fixes #58\n"
+      },
+      "tmpdir_symlink": {
+        "link.diff": "{{TMPDIR}}/real.diff"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"{{TMPDIR}}/link.diff\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "final_diff_path is caller-supplied and opened by a hook that runs unsandboxed, so it is opened with O_NOFOLLOW|O_NONBLOCK and rejected unless fstat says it is a regular file -- the same three guards the server applies to this field. The symlink here points at a diff whose content case 37 proves does block when it is reached as a regular file, so the two cases differ only in the symlink: without O_NOFOLLOW this close blocks, with it the scan fails open and the close passes"
+    },
+    {
+      "id": 87,
+      "name": "close-cwd-module-shadow-does-not-disable-guard",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "cwd_fixture": {
+        "json.py": "raise SystemExit(7)\n"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT anti-tangent validate_completion"
+      ],
+      "reason": "python3 -c puts the current working directory first on sys.path, and hooks run unsandboxed in whatever directory the session is in. A json.py sitting in a repo root would then shadow the standard library and take the whole analysis down, which the wrapper reads as a parse error and fails open -- silently disabling the gate for every close made from that directory. -I isolates the interpreter; the explicit sys.path.insert of $ATG_ROOT/hooks still resolves comment_scan under it"
     }
   ]
 }
