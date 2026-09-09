@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.19.0] - 2026-09-09
 
 ### Added
-- **A comment-hygiene policy, prevented at write time and backstopped at task close.** Comments
+- **A comment-hygiene policy, enforced at write time and backstopped at task close.** Comments
   may explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next
   editor — the test is that they read correctly to someone who never saw the change. They may not
   carry change history: issue, PR or task references, version references, review references, or
@@ -105,13 +105,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES`. Both are best-effort: a trace failure never changes a
   hook's exit status. `ANTI_TANGENT_GUARD_TRACE_LOG` still repoints the path for anyone wanting
   per-session isolation.
-- **The write-time guard no longer has a size ceiling.** The hook handed its payload to the
+- **A large `Write` no longer slips past the write-time guard.** The hook handed its payload to the
   Python body as an environment variable, and Linux caps a single environment string at
   `MAX_ARG_STRLEN` (32 pages, 131072 bytes on x86-64) — so a `Write` of a large file made `exec`
   fail, which the wrapper read as an internal error and allowed. The payload travels on stdin
-  now. A `Write` over a file that is huge or not valid UTF-8 no longer fails the scan open either:
-  the existing content is read in binary, capped, and decoded with `errors="replace"`, matching
-  the close-time scan exactly.
+  now, so payload size is no longer a ceiling. A `Write` over an existing file that is not valid
+  UTF-8 no longer crashes the scan into a silent allow either: the content is read in binary and
+  decoded with `errors="replace"`, matching the close-time scan exactly. That read stays capped
+  at 2,000,000 bytes, and a target above it is still skipped — deliberately, and now traced as
+  `skip | unreadable-target` rather than logged as a clean pass.
 - **Both guard hooks harden the paths they open and the log they write.** The three guards the
   server applies to a caller-supplied path — `O_NOFOLLOW` refusing a symlink at the final
   component, `O_NONBLOCK` keeping a FIFO from parking the hook inside `open()`, and an `S_ISREG`
@@ -172,8 +174,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guard-bypass caveat — and nothing in the release workflow bumps a plugin, so both are bumped by
   hand here together with their `.claude-plugin/marketplace.json` entries.
 
-No schema, tool-argument or envelope change: the verdict distribution shifts, but every type and
-field is byte-identical. Callers that calibrated against the observed distribution will see it
+No schema, tool-argument or envelope change: the verdict distribution shifts, but every public
+type and field is byte-identical. The one addition is internal to the opt-in stats ledger —
+`stats.Event` gains an optional `criterion_counts` map, omitted entirely when empty. Callers that calibrated against the observed distribution will see it
 move, which is why this is a minor rather than a patch.
 
 ## [0.18.2] - 2026-09-08
