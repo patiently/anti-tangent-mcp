@@ -149,8 +149,21 @@ trace() {
     # choosing. Every failure path here is swallowed: a trace that cannot be
     # written must never change this hook's exit status.
     [[ -L "$TRACE_LOG" ]] && return 0
+    # Scrub the field separators out of every argument, at the sink, so no
+    # caller has to remember to. The task id, the status and the tool name all
+    # arrive here straight from the hook payload, and jq -r renders a JSON
+    # "\n" as a real newline: a newline reaching printf splits one call into
+    # two physical lines, and the second parses as a genuine record — a
+    # "pass", say. A "|" does the same to the column layout. Only the session
+    # id is sanitized where it is captured instead, because it is also
+    # truncated there and truncating an unsanitized value is what lets a
+    # newline through.
+    local task=${1:-?} ev=${2:-?} detail=${3:-}
+    task=${task//[$'\r\n|']/}
+    ev=${ev//[$'\r\n|']/}
+    detail=${detail//[$'\r\n|']/}
     printf '%s | s=%s | guard | task=%s | %s%s\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ATG_SESSION" "${1:-?}" "${2:-?}" "${3:+ | $3}" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ATG_SESSION" "${task:-?}" "${ev:-?}" "${detail:+ | $detail}" \
         >> "$TRACE_LOG" 2>/dev/null || true
 }
 
@@ -180,7 +193,7 @@ TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null | tr 
 # call carries its own taskId, so no reconstruction from creation order is
 # needed.
 PY='
-import json, os, re, stat, sys
+import json, os, re, sys
 path, task_id = sys.argv[1], str(sys.argv[2])
 try:
     lines = open(path).readlines()
@@ -301,37 +314,14 @@ def diff_added_lines(inp):
         p = inp.get("final_diff_path") or ""
         if not p or not os.path.isabs(p):
             return {}
-        # This path is caller-supplied and opened by a hook that runs
-        # unsandboxed, so it gets the same three guards the server applies to
-        # the same field: O_NOFOLLOW refuses a symlink at the final component,
-        # O_NONBLOCK keeps a FIFO from parking the hook forever inside open(),
-        # and S_ISREG rejects every other kind of special file. Every failure
-        # fails OPEN -- this scan is defence in depth, and an unreadable diff
-        # must not turn into a blocked task close.
-        fd = -1
-        try:
-            fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                return {}
-            with os.fdopen(fd, "rb") as fh:
-                fd = -1
-                # Read one byte past the cap rather than trusting a prior stat:
-                # the file can grow between getsize() and read(). Binary mode,
-                # and the cap counted on the raw bytes: a text-mode read counts
-                # decoded characters, so a multibyte file could pass a
-                # byte-cap check while actually exceeding it.
-                raw = fh.read(2_000_001)
-            if len(raw) > 2_000_000:
-                return {}
-            text = raw.decode("utf-8", errors="replace")
-        except Exception:
+        # read_text_capped applies the same three guards the server applies to
+        # this field -- O_NOFOLLOW, O_NONBLOCK, S_ISREG -- plus the byte cap
+        # and the replacing decode. Anything but text fails OPEN here: this
+        # scan is defence in depth, and an unreadable diff must not turn into
+        # a blocked task close.
+        text = read_text_capped(p)
+        if not isinstance(text, str):
             return {}
-        finally:
-            if fd >= 0:
-                try:
-                    os.close(fd)
-                except Exception:
-                    pass
     out, cur = {}, None
     for line in text.splitlines():
         if line.startswith("+++ b/"):
@@ -355,6 +345,7 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
     try:
         sys.path.insert(0, os.path.join(os.environ.get("ATG_ROOT", ""), "hooks"))
         from comment_scan import violations as scan_violations
+        from comment_scan import read_text_capped
     except Exception:
         scan_violations = None
         comment_scan_unavailable = True

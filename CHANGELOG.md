@@ -106,16 +106,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now. A `Write` over a file that is huge or not valid UTF-8 no longer fails the scan open either:
   the existing content is read in binary, capped, and decoded with `errors="replace"`, matching
   the close-time scan exactly.
-- **Both guard hooks harden the paths they open and the log they write.** `final_diff_path` in the
-  close-time hook is opened with `O_NOFOLLOW|O_NONBLOCK` and rejected unless `fstat` reports a
-  regular file — the same three guards the server applies to that field — so a symlink is refused
-  and a FIFO cannot park the hook. The close-time analysis runs under `python3 -I`, so a
-  `json.py`, `re.py` or `collections.py` in the working directory can no longer shadow the
-  standard library inside a hook that runs unsandboxed. Neither hook writes `__pycache__` into an
-  installed plugin tree. The trace directory is created mode `700` and neither hook appends
-  through a symlink at the log path; both checks stay best-effort and never change an exit status.
-  Matched comment lines echoed into the close-time block message are truncated, so one very long
-  diff line cannot reach the model as megabytes of hook stderr.
+- **Both guard hooks harden the paths they open and the log they write.** The three guards the
+  server applies to a caller-supplied path — `O_NOFOLLOW` refusing a symlink at the final
+  component, `O_NONBLOCK` keeping a FIFO from parking the hook inside `open()`, and an `S_ISREG`
+  check rejecting everything else — now live in one helper in `comment_scan.py` that both hooks
+  call, alongside the byte cap and the replacing decode, so the write-time `Write` target and the
+  close-time `final_diff_path` cannot drift apart again. Every one of those refusals fails open.
+  Both hooks run their Python under `python3 -I`, so neither a `json.py` in the working directory
+  nor a `PYTHONPATH` entry can shadow the standard library inside a hook that runs unsandboxed,
+  and neither writes `__pycache__` into an installed plugin tree. The trace directory is created
+  mode `700`, neither hook appends through a symlink at the log path, and both trace sinks strip
+  CR, LF and `|` out of every field they are handed — a task id, status or tool name carrying a
+  newline could otherwise split one log call into two physical lines, the second reading as a
+  genuine record. Those checks stay best-effort and never change an exit status. Matched comment
+  lines echoed into either hook's block message are truncated, so one very long line cannot reach
+  the model as megabytes of hook stderr.
 - **`criterion_counts` now reaches `rollup.json` and the tray.** The per-event counts were written
   but never aggregated, so `criterion_histogram` — and with it the comment-hygiene numbers in the
   LLM summary — did not exist. The gnome-topbar stats page decodes the key and renders it as a

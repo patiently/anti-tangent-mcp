@@ -5,7 +5,62 @@ Behaviour and invariants belong in comments; change history belongs in git.
 """
 import os
 import re
+import stat
 from collections import Counter
+
+# Cap on how much of a caller-supplied file either hook will read.
+READ_CAP_BYTES = 2_000_000
+
+# Returned by read_text_capped when nothing exists at the path. Distinct from
+# None ("something is there, but it must not or cannot be read") because the
+# two hooks want opposite things from the two cases: a Write to a path that
+# does not exist yet means every line of the new content is added and worth
+# scanning, while a path that cannot be read is one neither hook may act on.
+MISSING = object()
+
+
+def read_text_capped(path):
+    """Read path as decoded text. Returns MISSING, or None if unusable.
+
+    The path is caller-supplied and both hooks run unsandboxed, so it gets the
+    three guards the server applies to the same kind of field: O_NOFOLLOW
+    refuses a symlink at the final component, O_NONBLOCK keeps a FIFO from
+    parking the hook forever inside open(), and S_ISREG rejects every other
+    kind of special file — a directory included.
+
+    One byte past the cap is read rather than trusting a prior stat, since the
+    file can grow in between. The cap is counted on raw bytes because a
+    text-mode read counts decoded characters and would let a multibyte file
+    slip past a byte cap. errors="replace" keeps a file that is not valid UTF-8
+    (one stray Latin-1 byte is enough) from raising and taking the whole scan
+    down with it.
+
+    None means "no usable content", and every caller must fail OPEN on it: a
+    file that cannot be read must never turn into a blocked write or a blocked
+    task close. This project weights a false block above a miss.
+    """
+    fd = -1
+    try:
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return MISSING
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1
+            raw = fh.read(READ_CAP_BYTES + 1)
+        if len(raw) > READ_CAP_BYTES:
+            return None
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
 
 SCAN_EXTS = {
     ".go", ".sh", ".bash", ".py", ".ts", ".tsx", ".js", ".jsx",

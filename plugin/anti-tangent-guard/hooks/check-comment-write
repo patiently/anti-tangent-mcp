@@ -51,8 +51,16 @@ trace() {
     # choosing. Every failure path here is swallowed: a trace that cannot be
     # written must never change this hook's exit status.
     [[ -L "$TRACE_LOG" ]] && return 0
+    # Scrub the field separators out of every argument, at the sink, so no
+    # caller has to remember to. Arguments are derived from the hook payload,
+    # and jq -r renders a JSON "\n" as a real newline: a newline reaching
+    # printf splits one call into two physical lines, and the second parses as
+    # a genuine record. A "|" does the same to the column layout.
+    local ev=${1:-?} detail=${2:-}
+    ev=${ev//[$'\r\n|']/}
+    detail=${detail//[$'\r\n|']/}
     printf '%s | s=%s | comment-write | %s%s\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ATG_SESSION" "${1:-?}" "${2:+ | $2}" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ATG_SESSION" "${ev:-?}" "${detail:+ | $detail}" \
         >> "$TRACE_LOG" 2>/dev/null || true
 }
 
@@ -102,8 +110,16 @@ fi
 # internal error, which this hook must treat as "allow" — so a large enough
 # write would walk straight past the guard. The hook's own stdin is consumed
 # once, above, and re-fed here; the body must not read the original descriptor.
+# -I isolates the interpreter: it drops the current working directory, the
+# script's own directory and the user site directory from sys.path, so a
+# json.py or a stray installed package cannot shadow the standard library
+# inside a hook that runs unsandboxed. The body names the hooks directory on
+# sys.path explicitly, so its comment_scan import is unaffected. -B suppresses
+# __pycache__ writes into the installed plugin tree, which an uninstall would
+# leave behind; it is a flag rather than PYTHONDONTWRITEBYTECODE because -I
+# implies -E and would ignore the environment variable.
 printf '%s' "$ATG_INPUT" | ATG_ROOT="$PLUGIN_ROOT" \
-    python3 -B "$PLUGIN_ROOT/hooks/check_comment_write.py"
+    python3 -I -B "$PLUGIN_ROOT/hooks/check_comment_write.py"
 status=${PIPESTATUS[1]}
 case "$status" in
     0) trace "pass" "ext=${ATG_EXT:-?}"; exit 0 ;;
