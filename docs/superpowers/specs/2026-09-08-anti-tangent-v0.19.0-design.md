@@ -1,4 +1,4 @@
-# anti-tangent-mcp v0.19.0 — recalibrating the pre-task gate
+# anti-tangent-mcp v0.19.0 — pre-task gate calibration, and comment hygiene
 
 **Status:** design
 **Date:** 2026-09-08 (**revised 2026-09-09** — see [Revision](#revision-the-first-diagnosis-was-wrong))
@@ -28,9 +28,13 @@ lacks:
 
 Plus a docs correction stating the pre-gate's expected terminal state.
 
-No schema change, no new tool input, no envelope field, no plugin bump. It is a prompt-and-docs
-release, and — unlike the design it replaces — its effect is measurable with telemetry that
-already exists.
+It also carries a **second, unrelated concern** — a comment-hygiene policy and its enforcement
+(Part 3). The two ship together because they were requested together; they share no code. A
+reader looking for why this release does two things will not find a technical reason.
+
+No schema change, no new tool input, no envelope field. Parts 1 and 2 are prompt-only; Part 3
+adds a `post.tmpl` rule, a guard-hook check and a plugin version bump. Unlike the design this
+replaces, the effect of Parts 1–2 is measurable with telemetry that already exists.
 
 ## Revision: the first diagnosis was wrong
 
@@ -141,15 +145,99 @@ That last clause is Case A. Its brief carried the complete Go source for the typ
 signature and the tests, and every finding was about prose the code directly below it answered.
 The channel was already open; nothing told the reviewer the material was binding.
 
-## Part 3 — docs
+## Part 3 — comment hygiene and its enforcement
 
-`implementer.md` §4.2 gains the stopping rule: what a `warn` carrying only `minor` findings means
-and when to proceed. `controller.md` gets the matching sentence. `authoring.md` and README need
-no change under this design.
+Separate concern from #58, requested alongside it. Agents write comments that mislead other
+agents, and that narrate why a change was made and which issue it referenced. That is history;
+git already holds it, and a comment repeating it goes stale the moment the next change lands.
 
-**Size constraint.** CI enforces < 16,000 bytes per protocol part, and `core.md` is at 15,891 —
-**109 bytes of headroom**, so nothing lands there. Current: `implementer.md` 14,521,
-`controller.md` 12,645, `authoring.md` 6,878, `project-knowledge.md` 10,401. Resync the plugin
+### The policy
+
+**A comment may** explain non-trivial behaviour, or a non-obvious invariant or hazard that would
+bite the next editor. The test is that it reads correctly to someone who never saw the change
+that introduced it.
+
+**A comment may not** carry change history: issue, PR or task references; version references
+("added in v0.5.0"); review references ("task-12b review, Critical #1"); or narration of what the
+code used to do ("previously", "no longer", "this replaced").
+
+**On touch**, a comment that fails these criteria is removed or rewritten as part of the task
+that touches it. There is no separate cleanup pass — roughly 135 comment lines in this repo
+currently match the banned patterns, and a big-bang sweep would be a large mechanical diff mixed
+into a release about something else. The codebase converges as it is worked on.
+
+Note the boundary deliberately preserves *invariant*-why while banning *change*-why. The guard
+hook's own "POSITIONAL EXTRACTION, NOT FREE SCAN" comment explains a security property; deleting
+it would be actively harmful. What must go is the "(task-12b review, Critical #1)" citation
+attached to it.
+
+### Enforcement: two layers, split on what each can actually judge
+
+A regex cannot tell a good comment from a bad one. An LLM cannot be relied on to catch every
+instance. So the split is by decidability, not by preference:
+
+**Deterministic — `plugin/anti-tangent-guard`'s `check-task-complete`, blocking.** The hook
+already walks the transcript and parses each `mcp__anti-tangent__validate_completion` tool_use's
+`input`, so the submitted `final_diff` (or the file named by `final_diff_path`) is reachable in
+the loop that already runs. It scans **added lines only** (`+`-prefixed) that are comments, for
+the unambiguous mechanical tells:
+
+- an issue or PR reference — `#<digits>`
+- a version reference — `v<major>.<minor>.<patch>`
+- a task or review reference — `Task <n>` / `task-<n>` / `review Critical|Important|Major`
+
+On a match it blocks the close with the same reopen-fix-revalidate recovery flow the guard
+already uses for a missing `validate_completion`.
+
+Deliberately **excluded** from the deterministic layer: prose-history tells like "previously",
+"used to" and "no longer". They cannot be matched without false positives — `verdict.go:2` says
+"JSON schema **used to** constrain provider responses", which is a correct comment, and blocking
+a task close on it would be worse than missing a violation. Those go to the reviewer.
+
+**Judgement — `post.tmpl`, advisory.** `validate_completion`'s reviewer already receives the full
+diff. It gains a rule to emit a finding for a comment that misleads, restates obvious code, or
+narrates history. Emitted as `category: quality` with `criterion: comment_hygiene`, following the
+existing convention where `criterion` discriminates a sub-type (`noise_cluster`,
+`codebase_reference_checklist`) — so **no new category, and no schema change.** That matters more
+than it looks: `schema_invariants_test.go`'s category-enum lockstep requires every non-plan schema
+to carry exactly the canonical category set, so a new category would touch every schema in the
+package.
+
+Kill switch `ANTI_TANGENT_COMMENT_POLICY=0`, mirroring the guard's existing
+`ANTI_TANGENT_COMPLETION_GUARD=0`. Fail open on every error, as the guard already does.
+
+The standing non-goal that "the server is advisory, never blocking" is not violated: the blocking
+half is a Claude Code plugin hook the operator installs separately and can disable, exactly as
+the completion guard already is. The MCP server still never blocks.
+
+### What this cannot do
+
+`PostToolUse` fires after the state change, so the hook detects a bad comment at task close, it
+does not prevent one being written — the same limitation the guard's README already documents for
+the completion gate. Preventing it would need a `PreToolUse` hook on `Edit`/`Write`, which is the
+`anti-tangent-shunt` pattern and is not proposed here. The scan is also diff-shaped: a task that
+submits only `final_files` with no diff has nothing for the deterministic layer to read, and falls
+through to the reviewer layer alone.
+
+## Part 4 — docs
+
+`implementer.md` §4.2 gains two things: the stopping rule (what a `warn` carrying only `minor`
+findings means and when to proceed) and the comment policy, since comments are written by
+implementers. `controller.md` gets the matching stopping-rule sentence.
+
+This repo's own `CLAUDE.md` gets the comment policy too. The policy ships as a product surface —
+the guard hook and `post.tmpl` enforce it for every consumer — and this repo picks it up like any
+other consumer, but stating it in `CLAUDE.md` puts it in front of agents working here without a
+protocol read.
+
+`authoring.md` and README need no change.
+
+**Size constraint, and it is now tight.** CI enforces < 16,000 bytes per protocol part.
+`core.md` is at 15,891 — **109 bytes of headroom**, so nothing lands there. `implementer.md` is
+at 14,521, leaving **1,479 bytes** to absorb both the stopping rule and the comment policy. That
+is enough for a terse policy but not a discursive one; if it does not fit, the comment policy
+moves to `authoring.md` (6,878, ample room) and `implementer.md` carries a one-line pointer.
+`controller.md` 12,645, `project-knowledge.md` 10,401. Resync the plugin
 bundle in the same commit:
 
 ```bash
@@ -188,14 +276,29 @@ defects, they surface at the post gate rather than silently shipping.
 - `internal/prompts`: the render tests must assert the new clauses appear for the pre phase, and
   that the `Phase: post` branch of `pre.tmpl` (post-hoc baseline) still renders coherently with
   them.
-- No changes to `internal/verdict`, `internal/mcpsrv`, `internal/planparser`, `internal/session`
-  or either plugin, so their suites act as regression evidence rather than needing new cases.
+- `internal/prompts`: `post.tmpl` goldens regenerated for the comment-hygiene rule, reviewed the
+  same way.
+- `plugin/anti-tangent-guard/evals/guard-evals.json`: new cases for the comment scan — one per
+  banned pattern class (issue/PR, version, task/review reference), one asserting a `+`-prefixed
+  comment is required (an unchanged context line carrying an old violation must NOT block, or the
+  on-touch rule becomes a big-bang sweep by the back door), one asserting a legitimate
+  invariant-why comment passes, and one asserting the `used to` false positive from `verdict.go:2`
+  does not block. CI runs these as the `hook-evals` job.
+- `guard_eval_fixture_test.go` pins `formatEnvelopeSummary` byte-for-byte; no envelope change
+  here, so it should stay green — treat a failure as a signal something unintended moved.
+- No changes to `internal/verdict`, `internal/mcpsrv`, `internal/planparser` or `internal/session`,
+  so their suites act as regression evidence rather than needing new cases.
 - `go test -race ./...`.
 
 ## Compatibility
 
 Reviewer behaviour changes materially — that is the point — while every type, schema, tool
 argument and envelope field stays byte-identical. No caller has to change anything.
+
+`plugin/anti-tangent-guard` goes **0.1.0 → 0.2.0** (new blocking condition, kill switch, evals),
+and the marketplace catalog version bumps with it per the convention set in `22c3fbb`. An operator
+running the 0.1.0 hook against a 0.19.0 server sees the completion gate behave exactly as before
+and simply gets no comment enforcement; the two halves are independent.
 
 Versioned as **0.19.0** rather than a patch because a caller that has calibrated anything against
 the observed verdict distribution will see it shift substantially; the repo's convention reserves

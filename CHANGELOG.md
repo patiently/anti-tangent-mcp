@@ -29,6 +29,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to treat `critical` as blocking and `major` as address-or-explain, and stopped — leaving no
   stopping rule for a `warn` that will not move. It now states one.
 
+### Added
+- **A comment-hygiene policy, enforced at task close.** Comments may explain non-trivial
+  behaviour, or a non-obvious invariant or hazard that would bite the next editor — the test is
+  that they read correctly to someone who never saw the change. They may not carry change
+  history: issue, PR or task references, version references, review references, or narration of
+  what the code used to do. Git already holds that, and a comment repeating it goes stale on the
+  next change. A comment failing these criteria is removed or rewritten by whatever task next
+  touches it; there is no big-bang cleanup.
+
+  Enforced in two layers, split by what each can actually decide. `anti-tangent-guard`'s
+  `check-task-complete` hook (**0.1.0 → 0.2.0**) scans the added comment lines of the diff
+  submitted to `validate_completion` for the unambiguous mechanical tells — issue/PR references,
+  version references, task/review references — and blocks the close with the existing
+  reopen-fix-revalidate flow. Prose-history tells like "previously" and "used to" are deliberately
+  left out of that scan: they cannot be matched without false positives, so `post.tmpl` handles
+  them, with `validate_completion`'s reviewer emitting `category: quality` /
+  `criterion: comment_hygiene` findings. No new finding category and no schema change. Kill
+  switch `ANTI_TANGENT_COMMENT_POLICY=0`.
+
+  As with the completion guard, the blocking half is a Claude Code plugin the operator installs
+  and can disable — the MCP server itself remains advisory and never blocks.
+
 No schema, tool-argument or envelope change: the verdict distribution shifts, but every type and
 field is byte-identical. Callers that calibrated against the observed distribution will see it
 move, which is why this is a minor rather than a patch.
