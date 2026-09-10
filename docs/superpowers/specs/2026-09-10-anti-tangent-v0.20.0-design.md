@@ -358,9 +358,16 @@ Part 3 makes three existing statements false. All three change in the same commi
 | `docs/protocol/implementer.md:157` | Instructs lightweight tasks to pass `{"ran": false, "skip_reason": "lightweight task"}` — the exact input now drawing a major |
 | `README.md:329` | Describes the old three-rung ladder verbatim |
 
-`examples/lightweight-dispatch.md` needs no change. It tells lightweight tasks to skip the CodeScene
-*companion calls* (`pre_commit_code_health_safeguard`, `analyze_change_set`), which stays true —
-Part 3 governs the `codescene` argument to `validate_completion`, which is a separate requirement.
+**`examples/lightweight-dispatch.md` DOES need changing — this paragraph originally said it did not,
+and that was wrong by the time the design was finished.** The reasoning held when it was written:
+skipping the *companion calls* was orthogonal to the `codescene` *argument*. Part 3 then made the
+mode itself decide, so under `required` a lightweight task must RUN `analyze_change_set` — and the
+earlier conclusion, which rested on the two being independent, was never revisited.
+
+That file is the template `implementer.md` and `README.md` both tell controllers to copy, so left
+uncorrected it hands implementers instructions that draw a `major` by design. Both its
+"what lightweight mode skips" bullet and its "pass these fields verbatim" list need the
+mode-dependent treatment, worded to match `implementer.md`'s so the two cannot drift.
 
 `core.md` has **109 bytes** of headroom, so its rewrite must be equal-or-shorter. The
 `implementer.md:157` paragraph is 673 bytes and is being rewritten anyway — **that rewrite is the
