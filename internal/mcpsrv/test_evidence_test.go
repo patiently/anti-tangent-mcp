@@ -26,6 +26,37 @@ func TestTestEvidenceFindingsStaysQuiet(t *testing.T) {
 		"human-summary":            "all 4 tests pass",
 		"go-passing":               "ok  \tgithub.com/x/y\t0.412s",
 		"pytest-real":              "collected 4 items\n\n=== 4 passed in 0.10s ===",
+
+		// Every fixture above stays quiet because no no-execution marker
+		// ever matches — the executionMarkers suppression loop is never
+		// reached, let alone exercised. Each fixture below DOES trip a
+		// no-execution marker for real, so staying quiet can only happen
+		// through genuine suppression; each is built so a specific
+		// executionMarkers entry is the one doing the suppressing.
+
+		// Suppressed by the unannotated-Gradle-test-task regex
+		// (`^> Task :...test\s*$`): moduleA's own test task genuinely is
+		// NO-SOURCE (its task path ends right at "test", unlike
+		// processTestResources above), and would fire alone — moduleB's
+		// unannotated test line is what suppresses it.
+		"gradle-multimodule-suppressed": "> Task :moduleA:test NO-SOURCE\n> Task :moduleB:test\nBUILD SUCCESSFUL in 12s",
+		// Suppressed by the `^ok\s+\S+\s+\d` regex: one package in a
+		// `go test ./...` run has no test files, a sibling package passed.
+		"go-multipackage-suppressed": "?   \tgithub.com/x/a\t[no test files]\nok  \tgithub.com/x/b\t0.412s",
+		// Suppressed by "N tests|examples passed|ran|completed", not by the
+		// plainer "N passed" regex below it — there is no bare "4 passed"
+		// substring here, only "4 tests passed".
+		"tests-passed-suppressed": "suite A: no tests ran\nsuite B: 4 tests passed",
+		// Suppressed by the plain "N passed" regex: pytest's own summary
+		// line carries a count with no "tests"/"examples" word beside it.
+		"pytest-multimodule-suppressed": "moduleA: no tests ran\n\n=== 4 passed in 0.10s ===",
+		// Trips "N tests completed" too, but that pattern is a strict
+		// subset of "N tests|examples passed|ran|completed" above it in the
+		// list — every string it matches also matches that broader regex,
+		// which is checked first — so it can never be the sole or
+		// first-matching reason evidence stays quiet. Kept anyway to prove
+		// the combination still suppresses correctly.
+		"tests-completed-also-matches-broader-regex": "moduleA: no tests ran\nmoduleB: 4 tests completed",
 	} {
 		t.Run(name, func(t *testing.T) {
 			assert.Empty(t, testEvidenceFindings(evidence))
