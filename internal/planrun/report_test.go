@@ -196,3 +196,93 @@ func TestCodesceneCellCapsEvidenceAtTheRuneBoundary(t *testing.T) {
 		"a cut cell must end in the ellipsis that marks it as cut")
 	assert.True(t, utf8.ValidString(shown), "the cut must fall on a rune boundary")
 }
+
+// A CodeScene skip carries the failing tool's own output verbatim, so the
+// cell can receive any byte the tool printed. Two of them decide whether the
+// row survives as a row.
+func TestCodesceneCellStaysOnOneRow(t *testing.T) {
+	cell := func(reason, evidence string) string {
+		return codesceneCell(TaskRow{
+			CodesceneState: StateSkipped,
+			Codescene: &codescene.Digest{
+				SkipReason:   reason,
+				SkipEvidence: evidence,
+			},
+		})
+	}
+
+	for name, got := range map[string]string{
+		"lf in evidence":   cell("not configured", "MCP error:\ntool not found"),
+		"crlf in evidence": cell("not configured", "MCP error:\r\ntool not found"),
+		"cr in evidence":   cell("not configured", "MCP error:\rtool not found"),
+		"lf in reason":     cell("not\nconfigured", "MCP error"),
+		"lf in both":       cell("not\nconfigured", "MCP error:\ntool not found"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.NotContains(t, got, "\n", "a line break would split the row")
+			assert.NotContains(t, got, "\r", "a carriage return would overwrite the row")
+			assert.Contains(t, got, "MCP error", "the text itself must survive")
+		})
+	}
+
+	// A category key is caller-supplied too, and reaches the other branch.
+	ran := codesceneCell(TaskRow{
+		CodesceneState: StateRan,
+		Codescene: &codescene.Digest{
+			Ran: true, QualityGate: "failed", NetPP: -2,
+			CategoryCounts: map[string]int{"Complex\nMethod": 3},
+		},
+	})
+	assert.NotContains(t, ran, "\n", "a line break in a category key would split the row too")
+}
+
+// The fold sentinel EscapeContinuationLines writes is "| ". Cell text that
+// carries its own pipe must not be able to read as one this renderer put
+// there.
+func TestCodesceneCellMarksPipes(t *testing.T) {
+	got := codesceneCell(TaskRow{
+		CodesceneState: StateSkipped,
+		Codescene: &codescene.Digest{
+			SkipReason:   "not configured",
+			SkipEvidence: "usage: tool | grep x",
+		},
+	})
+	assert.Contains(t, got, `usage: tool \| grep x`)
+}
+
+// The two properties of the ordering: the cap counts what is DISPLAYED, so a
+// line break spends one rune of it as a space rather than buying a whole
+// extra row; and the pipe mark is applied after the cut, so no cell can end
+// in the dangling half of one.
+func TestCodesceneCellEscapesAroundTheCap(t *testing.T) {
+	cell := func(evidence string) string {
+		return codesceneCell(TaskRow{
+			CodesceneState: StateSkipped,
+			Codescene:      &codescene.Digest{SkipReason: "r", SkipEvidence: evidence},
+		})
+	}
+	shown := func(got string) string {
+		return strings.TrimPrefix(strings.TrimSuffix(got, ")"), "skipped (r: ")
+	}
+
+	overCap := shown(cell(strings.Repeat("a", 100) + "\n" + strings.Repeat("b", 200)))
+	assert.Equal(t, reportCellEvidenceRunes, utf8.RuneCountInString(overCap),
+		"a line break must cost one rune of the cap, not a row")
+	assert.Contains(t, overCap, strings.Repeat("a", 100)+" b")
+
+	// The last rune the cap retains is the pipe: escaped before the cut, its
+	// backslash would be the rune the cut discards.
+	atEdge := shown(cell(strings.Repeat("a", 198) + "|" + strings.Repeat("x", 10)))
+	assert.True(t, strings.HasSuffix(atEdge, `a\|…`),
+		"the pipe mark must survive the cut whole, got %q", atEdge[len(atEdge)-8:])
+}
+
+// The row count of a whole report is what a reader's eye and any line-oriented
+// consumer both depend on.
+func TestRenderKeepsOneRowPerTask(t *testing.T) {
+	r := sampleRun()
+	before := strings.Count(Render(r), "\n")
+	r.Rows[1].Codescene.SkipEvidence = "MCP error:\n  at frame 1\n  at frame 2"
+	assert.Equal(t, before, strings.Count(Render(r), "\n"),
+		"evidence carrying line breaks must not add rows to the report")
+}
