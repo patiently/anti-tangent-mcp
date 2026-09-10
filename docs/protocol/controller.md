@@ -64,25 +64,31 @@ cannot prevent the close — this is post-close detection plus a mandated
 recovery flow, not a block on the close itself. It blocks (`exit 2`,
 returning the reason to the model as something it must address before its
 next action) in three cases: no pass signal is present anywhere in the
-window, the most recent one carries `verdict: fail`, or the submitted diff
-adds comment lines carrying change history (a scan of added lines against a
-small pattern set; see the `anti-tangent-guard` README's "Comment-hygiene
-scan at close" for what it catches and misses). All three name the same recovery:
-reopen with `status=in_progress`, address the findings — or remove/rewrite
-the flagged comment — re-run `validate_completion`, then re-close.
+window, the most recent one carries `verdict: fail`, or the evidence that
+call submitted adds comment lines carrying change history (a scan of added
+lines against a small pattern set; see the `anti-tangent-guard` README's
+"Comment-hygiene scan at close" for what it catches and misses). All three
+name the same recovery: reopen with `status=in_progress`, address the
+findings — or remove/rewrite the flagged comment — re-run
+`validate_completion`, then re-close.
 
 That scan is narrower than the comment policy it enforces (§4.4 of
-`implementer.md`): full-line comments only, against a small fixed pattern
-set, and only when a diff is actually submitted in the same call. Prose
-narration ("previously", "no longer", "this replaced") is deliberately left
-to the reviewer instead of the scanner, since it can't be pattern-matched
-without false positives. A clean hook run means the scanner found nothing —
+`implementer.md`): a small fixed pattern set, read over full-line comments,
+trailing comments, one-line `/* … */` blocks and starred block interiors —
+an unstarred block interior is a known miss. It reads a submitted diff or,
+for a completion carrying `final_files` instead, the lines git reports as
+added, which means work already committed before the close has no added
+lines and is not scanned at all. Prose narration ("previously", "no longer",
+"this replaced") is deliberately left to the reviewer instead of the scanner,
+since it can't be pattern-matched without false positives. A clean hook run means the scanner found nothing —
 it is not proof the comment policy was followed.
 
-Set `ANTI_TANGENT_COMPLETION_GUARD=0` to disable the hook outright — it
-short-circuits to a silent no-op before reading anything. It also fails open
-on its own errors (missing transcript, absent `jq`/`python3`, malformed
-input): it never blocks a close because the hook itself broke. Requires a
+`ANTI_TANGENT_COMPLETION_GUARD=0` turns off the completion gate only and
+`ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning; setting both is
+what disables the hook outright, short-circuiting it to a silent no-op
+before it reads anything. It also fails open on its own errors (missing
+transcript, absent `jq`/`python3`, malformed input): it never blocks a close
+because the hook itself broke. Requires a
 server ≥ 0.18.0 — an older server never emits the `tool:` tag the guard keys
 on, so every close backed only by a pasted block (no direct tool call in the
 window) blocks with the no-signal message even when the gate genuinely ran.
