@@ -328,13 +328,30 @@ def diff_added_lines(inp):
     with an extension the scan excludes skips it. What is left for the
     parser to get right is diffs written oddly but in good faith.
 
-    One shape stays wrong and is not worth chasing. A hunk that declares
-    FEWER added lines than it delivers spends its count early, and from
-    there an added line whose content starts with "++ " reads as a file
-    header again -- re-pointing the scan at a path named by the diff body
-    itself, and dropping every added line after it when that path has no
-    scannable extension. Nothing in the bytes separates that from the real
-    header it is shaped like.
+    Three shapes stay wrong, and none of them is worth chasing.
+
+    UNDER-DECLARED COUNT: a hunk that declares FEWER added lines than it
+    delivers spends its count early, so a later added line whose content
+    starts with "++ " reads as a file header and re-points the scan at a
+    path the diff body itself named.
+
+    OVER-DECLARED COUNT UNDER A BARE HEADER: a hunk that declares MORE
+    added lines than it delivers is still open when the next file starts,
+    so a "+++ " header with no "--- " line above it is charged to that hunk
+    rather than read as a header, and every added line after it is filed
+    under the path above. Two tells rescue the ordinary spellings -- a
+    "--- "/"+++ " pair, and a header an "@@" follows while the hunk owes at
+    least two added lines -- and what neither tell reaches is the residual.
+
+    A DIFF OF A DIFF: the price of the pair tell. A removed line whose
+    content starts "-- " sitting immediately above an added line whose
+    content starts "++ " ends its hunk and re-points the scan at whatever
+    that second line names.
+
+    Each of the three goes silent when the path the scan lands on has no
+    scannable extension, which is what makes them worth writing down. Each
+    has an eval case pinning the behaviour described here, so the boundary
+    is asserted rather than rediscovered.
     """
     text = inp.get("final_diff") or ""
     if not text:
@@ -354,9 +371,11 @@ def diff_added_lines(inp):
     # Lines the open hunk still owes on each side; 0/0 means no hunk is open.
     # The bytes of a "+++ " file header and of an added line whose content
     # starts with "++ " are identical, so the line alone cannot say which it
-    # is. What can is the length the hunk declared for itself: while a hunk
-    # still owes added lines, a "+++ " belongs to its body; once the count is
-    # spent the hunk is closed and the next one is a header again.
+    # is. Two things can. The length the hunk declared for itself: while a
+    # hunk still owes added lines a "+++ " belongs to its body, and once the
+    # count is spent the hunk is closed and the next one is a header again.
+    # And a "--- " sitting immediately above it, which no declared count
+    # overrides.
     old_left = new_left = 0
     for i, line in enumerate(lines):
         m = HUNK_HEADER_RE.match(line)
@@ -365,16 +384,26 @@ def diff_added_lines(inp):
             old_left = 1 if m.group(1) is None else int(m.group(1))
             new_left = 1 if m.group(2) is None else int(m.group(2))
             continue
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        # A "--- " line immediately above a "+++ " line is a file header
+        # pair whatever an open hunk still owes: every file boundary in a
+        # unified diff emits those two lines adjacent, and no count a hunk
+        # declared for itself makes the pair mean anything else. Closing the
+        # hunk here re-anchors the scan on the path the pair names, instead
+        # of charging both lines to the file above and filing every later
+        # added line there too. What it costs is a diff OF a diff -- see the
+        # docstring.
+        if line.startswith("--- ") and nxt.startswith("+++ "):
+            old_left = new_left = 0
         if old_left or new_left:
-            nxt = lines[i + 1] if i + 1 < len(lines) else ""
             # Each body line is charged to the side it belongs to, except
             # the no-newline marker, which belongs to neither. Three things
             # end the hunk early instead of being charged: a line carrying no
             # diff marker at all, a marker the declared counts have no room
             # left for, and a "+++ " that a new "@@" follows WHILE THE HUNK
-            # STILL OWES MORE THAN ONE ADDED LINE -- the signature of a diff
-            # cut short of its declared length, whose remaining files must
-            # not be swallowed. The "more than one" is load-bearing: when the
+            # STILL OWES AT LEAST TWO ADDED LINES -- a diff cut short of the
+            # length it declared, whose remaining files must not be
+            # swallowed. The "at least two" is load-bearing: when the
             # "+++ " is the LAST added line the hunk owes, a following "@@" is
             # exactly what a well-formed diff produces -- under -U0 the next
             # hunk of the same file starts on the very next line -- so ending

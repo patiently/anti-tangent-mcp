@@ -156,9 +156,9 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # trace line must show submitted>0 with scanned=0, which is what separates
 # "there was nothing to scan" from "the scan never ran".
 #
-# Thirty-four cases cover the write-time scanner's span boundaries, the
-# optional ticket pattern, the two kill switches, and the close hook's
-# final_files fallback — four groups.
+# Thirty-five cases cover the write-time scanner's span boundaries, the
+# optional ticket pattern at both hooks, the two kill switches, and the close
+# hook's final_files fallback — four groups.
 #
 # Seventeen pin where a comment span starts and stops, which is what decides
 # whether a tell is even reached. Three confirm the ordinary comment shapes
@@ -184,13 +184,17 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # unstarred block interior is a documented MISS with a case of its own, so
 # the gap is pinned rather than left to be rediscovered.
 #
-# Five pin the optional project ticket pattern: a configured pattern is a
+# Six pin the optional project ticket pattern. Five drive the write-time
+# hook: a configured pattern is a
 # tell, an unset one adds nothing (there is no built-in ticket tell), an
 # uncompilable one is dropped without disabling the other tells, one past
 # the length cap is dropped — the fixture is an alternation, so a pass is
 # evidence the cap fired rather than an accident of the pattern never
 # matching — and a catastrophically backtracking one is bounded by the scan
-# deadline and fails open instead of hanging the hook.
+# deadline and fails open instead of hanging the hook. A sixth drives the
+# CLOSE-time hook rather than the write-time one: the tell is appended to
+# TELLS when comment_scan is imported, so both hooks honour the variable, and
+# the other five all target check-comment-write.
 #
 # Four pin the two kill switches as one truth table: each names its own
 # concern and leaves the other armed (completion gate off still scans
@@ -210,19 +214,32 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # EMPTY final_diff still wins (presence, not content, is the key), and a
 # repository with overridden diff prefixes is handled end to end.
 #
-# Six more pin how the close-time scan divides a diff into files, on one
+# Ten more pin how the close-time scan divides a diff into files, on one
 # irreducible ambiguity: an added line whose content starts with "++ " reaches
-# the parser as the bytes "+++ ", byte-identical to a file header, and only
-# the line count the enclosing hunk declared for itself tells them apart.
+# the parser as the bytes "+++ ", byte-identical to a file header, and the
+# line on its own says nothing about which it is.
 # Four are a bare multi-file diff with no "diff --git" or "--- " line to
 # close the first hunk, an added line that really does start with "++ ", a
 # "+++ /dev/null" deletion header that must not enter the scan as a path, and
 # a hunk that delivers fewer lines than it declared, after which the next file
-# header must still be read as one. The other two hold the opposite edge of
+# header must still be read as one. Two hold the opposite edge of
 # that last rule, where the "+++ " is the hunk's LAST owed added line and the
 # "@@" after it is the next hunk of the SAME file — what git diff -U0 emits
 # as a matter of course — in both spellings of the declared count, explicit
-# ("+4,2") and omitted ("+4").
+# ("+4,2") and omitted ("+4"). A seventh pins the tell that reaches where a
+# declared count cannot: a "--- " line immediately above a "+++ " line is a
+# header pair whatever the open hunk still owes, so a hunk over-declaring by
+# a single line does not swallow the next file's real header.
+#
+# The last three are the shapes that stay wrong, each pinned at its actual
+# behaviour with expected_exit 0 and a trace assertion, so the boundary is
+# asserted rather than rediscovered: a hunk that UNDER-declares its count,
+# where a genuine body line is read as a header; a hunk that OVER-declares it
+# under a bare header with no "--- " above and no "@@" after, where a genuine
+# header is read as body; and a diff OF a diff, where a removed line starting
+# "-- " above an added line starting "++ " trips the header-pair tell. The
+# trace assertion carries these: a case expecting exit 0 would otherwise pass
+# against a scan that never ran at all.
 #
 # The per-group counts above PARTITION this table: every case belongs to
 # exactly one group, and they sum to EXPECTED_CASE_COUNT. Adding a case means
@@ -233,7 +250,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=135
+EXPECTED_CASE_COUNT=140
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and

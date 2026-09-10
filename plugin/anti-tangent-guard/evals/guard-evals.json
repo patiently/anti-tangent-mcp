@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (135 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (140 cases)",
   "evals": [
     {
       "id": 1,
@@ -2030,6 +2030,145 @@
         ]
       },
       "reason": "the same hunk boundary in the omitted-count spelling: @@ -3,0 +4 @@ declares exactly one added line, and that one line is an added line whose content starts with ++ . One owed line is the smallest form of the well-formed case, so a truncation rule that does not require more than one owed line drops the whole rest of the file onto a path the hunk body named"
+    },
+    {
+      "id": 136,
+      "name": "close-header-pair-reanchors-after-over-declared-hunk",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/notes.txt\\n+++ b/notes.txt\\n@@ -1,2 +1,3 @@\\n plain\\n+one\\n--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=2 lines=2"
+        ]
+      },
+      "reason": "the first hunk declares a line more than it delivers on each side, so a parser counting alone is still inside it when the next file's real header arrives: the --- line is charged as a removed line and the +++ line as an added one, the scan never re-anchors, and every later added line lands under notes.txt, which has no scannable extension, so the close passes. A shortfall of exactly a single line is below the more-than-one threshold the truncation tell needs, so only the header pair reaches this shape"
+    },
+    {
+      "id": 137,
+      "name": "close-under-declared-hunk-misses-later-comment",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+plain\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=2 lines=2"
+        ]
+      },
+      "reason": "a documented MISS, pinned at its actual behaviour so the boundary is asserted rather than rediscovered. The hunk declares two added lines and delivers three, spending its count before the last of them, so an added line whose content starts with ++ is read as a file header and the violation on the next line is filed under notes.txt, which has no scannable extension. The trace assertion is what proves the scan ran and split the diff this way, which exit 0 alone cannot say"
+    },
+    {
+      "id": 138,
+      "name": "close-over-declared-hunk-under-bare-header-misses-later-comment",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1,2 @@\\n+plain\\n+++ b/pkg/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=1 scanned=1 lines=3"
+        ]
+      },
+      "reason": "the same ambiguity read the other way round, and the second documented MISS. The hunk declares two added lines and delivers one, so it is still open when the next file starts; with no --- line above that header to pair with and no @@ after it, the header is charged to the open hunk, pkg/a.go never enters the result and every line stays under notes.txt. Ending the hunk here instead would break the -U0 boundary cases 134 and 135 pin"
+    },
+    {
+      "id": 139,
+      "name": "close-diff-of-a-diff-ends-its-hunk",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1,2 +1,3 @@\\n package x\\n--- b/notes.txt\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=1 lines=1"
+        ]
+      },
+      "reason": "the price of the header-pair tell, and the third documented MISS. In a diff OF a diff a removed line whose content starts with -- can sit immediately above an added line whose content starts with ++ , which is byte-identical to a file header pair: the pair ends its own hunk and re-points the scan at the path the second line names, so the violation after it is filed under notes.txt. Strictly rarer than the truncation shapes the tell reaches"
+    },
+    {
+      "id": 140,
+      "name": "close-ticket-pattern-blocks",
+      "env": {
+        "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// ABC-1234: hold the lock\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "a.go: // ABC-1234: hold the lock",
+        "a tracker reference"
+      ],
+      "reason": "the ticket tell is appended to TELLS when comment_scan is imported, so the close-time scan over a submitted diff honours ANTI_TANGENT_TICKET_PATTERN exactly as the write-time hook does. Every other case for this variable drives check-comment-write, which left the close-time half of it asserted nowhere and describable either way"
     }
   ]
 }

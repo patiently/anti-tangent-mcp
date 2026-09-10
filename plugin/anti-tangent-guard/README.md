@@ -479,7 +479,7 @@ bash evals/run.sh
 ```
 
 Runs the hooks' own unit tests (`hooks/*_test.py`) first, then the full eval
-suite (135 cases) against both hooks, and exits non-zero on either — the
+suite (140 cases) against both hooks, and exits non-zero on either — the
 cases cover check-task-complete's three block conditions (the third being its
 own close-time comment-hygiene scan), plus check-comment-write's write-time
 comment-hygiene guard. See `evals/run.sh`'s header comment for the
