@@ -55,9 +55,9 @@ gate becomes visible from the controller's own transcript). It blocks
    history.** A scan of added lines — from the submitted diff, or from git
    for a completion that submits `final_files` — detects comments matching a
    pattern set (patterns stored in `comment_scan.py`), the same patterns the
-   write-time hook applies to `Edit` and `Write` calls. This scan detects rather than
-   prevents, catching comments that reached disk through `Bash` or other
-   pathways the write-time hook cannot intercept.
+   write-time hook applies to `Edit` and `Write` calls. This scan detects
+   rather than prevents, catching comments that reached disk through `Bash`
+   or other pathways the write-time hook cannot intercept.
 
 The first two messages state the same recovery flow explicitly: reopen the task with
 `status=in_progress`, address whatever the gate is asking for, run
@@ -440,6 +440,17 @@ missing-`jq`/`python3` skip — where the hook genuinely does not know it yet),
 the task id for `check-task-complete` (or `?` if the hook exited before
 reaching one), and the decision plus its reason (e.g. `skip | no-jq`,
 `pass | called=true block=false`, `block | verdict-fail`).
+
+A close whose comment scan ran also emits a `scan` line — for example
+`scan | src=final_files submitted=3 scanned=0 lines=0` — naming which
+evidence the scan read and how much of it there was to read. `submitted`
+counts the paths the evidence named, `scanned` the ones that yielded added
+lines, and `lines` those added lines. A completion whose files were all
+committed traces `submitted=3 scanned=0`, which is what distinguishes it
+from a scan of a real diff that legitimately found nothing; a walk that ran
+out of its budget appends `budget-exhausted`. No `scan` line at all means no
+scan ran — the guard was off, no `validate_completion` fell inside the
+window, or the scanner could not be loaded (`skip | comment-scan-unavailable`).
 
 The log is capped so it cannot grow without bound: past
 `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES` (default 1,048,576 — 1 MiB), the next
