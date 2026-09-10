@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (106 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (110 cases)",
   "evals": [
     {
       "id": 1,
@@ -1499,6 +1499,44 @@
       "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\nvar y = 1 /* fixes */ z /* #1 */\\n\"}}",
       "expected_exit": 0,
       "reason": "tells run per span; joining them would synthesise `fixes #1` from two harmless fragments"
+    },
+    {
+      "id": 107,
+      "name": "comment-write-kdoc-plain-prose-scanned-no-tell-matches",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * ABC-1234: the inbound HELP keyword.\\n */\\nobject X\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a starred KDoc continuation is a comment span reaching the tells exactly like any other; this text carries no task/issue/version shape, so nothing matches and the write proceeds. Paired with cases 94-96 (which show the same block/trailing shapes DO block when they carry a real tell), this pins that ordinary narrative prose inside a block comment is read and simply found clean, not skipped over unscanned"
+    },
+    {
+      "id": 108,
+      "name": "comment-write-block-comment-quote-parity-is-segment-scoped",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\n/* say \\\"hi */ s = \\\"a // fixes task-42\\\"\\n\"}}",
+      "expected_exit": 0,
+      "reason": "the block comment `/* say \"hi */` carries one unescaped quote in its own text, and the code after it opens a string containing `//`. Quote parity is counted only over the segment since the last block terminator, not the whole line, so the comment's own internal quote cannot leak into the count that decides whether the later `//` sits inside that string. If parity were counted over the whole prefix instead, the comment's quote and the string's opening quote would appear to cancel out, the `//` would misread as a real comment opener, and `fixes task-42` would wrongly block"
+    },
+    {
+      "id": 109,
+      "name": "comment-write-line-opening-block-comment-yields-spans-after-terminator",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\n/* it's fine */ x = 1 // fixes task-42\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "a line that OPENS with a block comment must still be walked past that comment's terminator instead of stopping there: the block span (\"it's fine\") is clean, but the walk resumes afterward and finds the trailing `// fixes task-42`, which must still block. Stopping at the first span, as a naive single-match scan would, misses this"
+    },
+    {
+      "id": 110,
+      "name": "comment-write-column-zero-hash-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.sh\",\"content\":\"# fixes task-42\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "the delimiter walk used for mid-line `#` requires whitespace before it, which a `#` sitting at column zero has not got -- comment_spans handles a line-leading `#` as its own case precisely so this shape is not missed. A shell comment starting at the very first column of the line must still block on a genuine task reference"
     }
   ]
 }
