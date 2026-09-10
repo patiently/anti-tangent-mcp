@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (115 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (119 cases)",
   "evals": [
     {
       "id": 1,
@@ -1596,6 +1596,79 @@
       "expected_exit": 0,
       "case_timeout_seconds": 20,
       "reason": "the scan deadline bounds a backtracking pattern and fails open rather than hanging the hook"
+    },
+    {
+      "id": 116,
+      "name": "switch-completion-off-comment-on-still-blocks",
+      "env": {"ANTI_TANGENT_COMPLETION_GUARD": "0", "ANTI_TANGENT_COMMENT_GUARD": "1"},
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": ["COMMENTS CARRYING CHANGE HISTORY"],
+      "reason": "COMPLETION_GUARD names the completion gate only; comment scanning survives it"
+    },
+    {
+      "id": 117,
+      "name": "switch-completion-off-no-validation-allows",
+      "env": {"ANTI_TANGENT_COMPLETION_GUARD": "0", "ANTI_TANGENT_COMMENT_GUARD": "1"},
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "with the completion gate off, a close that never validated is allowed"
+    },
+    {
+      "id": 118,
+      "name": "switch-comment-off-no-validation-blocks",
+      "env": {"ANTI_TANGENT_COMPLETION_GUARD": "1", "ANTI_TANGENT_COMMENT_GUARD": "0"},
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": ["WITHOUT anti-tangent validate_completion"],
+      "reason": "COMMENT_GUARD names comment scanning only; the completion gate survives it"
+    },
+    {
+      "id": 119,
+      "name": "switch-both-off-allows",
+      "env": {
+        "ANTI_TANGENT_COMPLETION_GUARD": "0",
+        "ANTI_TANGENT_COMMENT_GUARD": "0",
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "expected_file_contains": {"{{TMPDIR}}/trace.log": ["| skip | guard=0"]},
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "both concerns disabled is the only early exit"
     }
   ]
 }

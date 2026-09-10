@@ -167,11 +167,17 @@ trace() {
         >> "$TRACE_LOG" 2>/dev/null || true
 }
 
-[[ "${ANTI_TANGENT_COMPLETION_GUARD:-1}" == "0" ]] && { trace "?" "skip" "guard=0"; exit 0; }
-# Separate switch from the one above: with the comment guard off, the
-# completion gate itself (called / block_found / verdict) still runs in
-# full — only the comment-hygiene scan over the submitted diff is skipped.
+# Two switches, two concerns. COMPLETION_GUARD governs whether a close is
+# checked for having run validate_completion at all; COMMENT_GUARD governs
+# the comment-hygiene scan over the evidence that call submitted. Neither
+# implies the other, so the hook exits early only when both are off — a
+# variable that names one concern must not silently disable the other.
+COMPLETION_GUARD="${ANTI_TANGENT_COMPLETION_GUARD:-1}"
 COMMENT_GUARD="${ANTI_TANGENT_COMMENT_GUARD:-1}"
+if [[ "$COMPLETION_GUARD" == "0" && "$COMMENT_GUARD" == "0" ]]; then
+    trace "?" "skip" "guard=0"
+    exit 0
+fi
 trap 'trace "?" "error" "trap-ERR"; exit 0' ERR
 command -v jq >/dev/null 2>&1      || { trace "?" "skip" "no-jq"; exit 0; }
 command -v python3 >/dev/null 2>&1 || { trace "?" "skip" "no-python3"; exit 0; }
@@ -391,6 +397,45 @@ trace "$TASK_ID" "parsed" "called=$CALLED block=$BLOCK verdict=$VERDICT"
 [[ "$(echo "$RESULT" | jq -r '.comment_scan_unavailable // false')" == "true" ]] && \
     trace "$TASK_ID" "skip" "comment-scan-unavailable"
 
+# Comment hygiene runs on its own switch, ahead of the completion gate and
+# independent of its verdict: a close that skipped validation entirely, and
+# one that passed, are both closes whose evidence can carry a bad comment.
+if [[ "$COMMENT_GUARD" != "0" ]]; then
+    VIOLATIONS=$(echo "$RESULT" | jq -c '.comment_violations // []')
+    VIOLATIONS_COUNT=$(echo "$VIOLATIONS" | jq 'length')
+    if [[ "$VIOLATIONS_COUNT" -gt 0 ]]; then
+        trace "$TASK_ID" "block" "comment-hygiene"
+        {
+            echo "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
+            echo
+            echo "Task #$TASK_ID was closed, and the evidence its last validate_completion"
+            echo "submitted carries added comment(s) referencing change history."
+            echo
+            # Both fields come from the submitted evidence and are unbounded
+            # there; a single very long line would otherwise reach the model as
+            # megabytes of hook stderr it is expected to act on.
+            echo "$VIOLATIONS" | jq -r '.[0:10][] | "  " + .path[0:200] + ": " + .line[0:200] + "\n    -> contains " + .why'
+            echo
+            echo "Comments must explain non-trivial behaviour or a non-obvious invariant, and must read"
+            echo "correctly to someone who never saw this change. Issue, task and version references belong"
+            echo "in the commit message, not the code. Rewrite the comment(s), then:"
+            echo
+            echo "  1. TaskUpdate taskId=$TASK_ID status=in_progress"
+            echo "  2. Fix the flagged comment(s)"
+            echo "  3. Call mcp__anti-tangent__validate_completion again with the updated evidence"
+            echo "  4. Re-close once the verdict is pass"
+            echo
+            echo "(Disable: ANTI_TANGENT_COMMENT_GUARD=0. Trace: $TRACE_LOG)"
+        } >&2
+        exit 2
+    fi
+fi
+
+if [[ "$COMPLETION_GUARD" == "0" ]]; then
+    trace "$TASK_ID" "skip" "completion-guard=0"
+    exit 0
+fi
+
 if [[ "$VERDICT" == "fail" ]]; then
     trace "$TASK_ID" "block" "verdict-fail"
     {
@@ -417,36 +462,6 @@ if [[ "$VERDICT" == "fail" ]]; then
 fi
 
 if [[ "$CALLED" == "true" || "$BLOCK" == "true" ]]; then
-    VIOLATIONS=$(echo "$RESULT" | jq -c '.comment_violations // []')
-    VIOLATIONS_COUNT=$(echo "$VIOLATIONS" | jq 'length')
-    if [[ "$VIOLATIONS_COUNT" -gt 0 ]]; then
-        trace "$TASK_ID" "block" "comment-hygiene"
-        {
-            echo "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
-            echo
-            echo "Task #$TASK_ID's completion gate passed, but the diff it was validated"
-            echo "against still carries added comment(s) referencing change history — a"
-            echo "Bash heredoc or similar write that never passed through Edit/Write, where"
-            echo "this project's write-time guard would have caught it."
-            echo
-            # Both fields come from the submitted diff and are unbounded there;
-            # a single very long line would otherwise reach the model as
-            # megabytes of hook stderr it is expected to act on.
-            echo "$VIOLATIONS" | jq -r '.[0:10][] | "  " + .path[0:200] + ": " + .line[0:200] + "\n    -> contains " + .why'
-            echo
-            echo "Comments must explain non-trivial behaviour or a non-obvious invariant, and must read"
-            echo "correctly to someone who never saw this change. Issue, task and version references belong"
-            echo "in the commit message, not the code. Rewrite the comment(s), then:"
-            echo
-            echo "  1. TaskUpdate taskId=$TASK_ID status=in_progress"
-            echo "  2. Fix the flagged comment(s)"
-            echo "  3. Call mcp__anti-tangent__validate_completion again with the updated diff"
-            echo "  4. Re-close once the verdict is pass"
-            echo
-            echo "(Disable: ANTI_TANGENT_COMMENT_GUARD=0. Trace: $TRACE_LOG)"
-        } >&2
-        exit 2
-    fi
     trace "$TASK_ID" "pass" "called=$CALLED block=$BLOCK"
     exit 0
 fi
