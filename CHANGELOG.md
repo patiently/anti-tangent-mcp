@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-09-10
+
+Closes the ten comment-hygiene and completion-gate gaps reported in
+[#71](https://github.com/patiently/anti-tangent-mcp/issues/71). Design:
+`docs/superpowers/specs/2026-09-10-anti-tangent-v0.20.0-design.md`.
+
+### Added
+
+### Changed
+
+### Fixed
+
 ## [0.19.0] - 2026-09-09
 
 ### Added
