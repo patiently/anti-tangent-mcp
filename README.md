@@ -330,7 +330,13 @@ When CodeScene MCP is configured in your host alongside anti-tangent, these call
 - `pre_commit_code_health_safeguard` mid-task — deterministic Code Health check on uncommitted/staged files. Fast, cheap, and complementary to anti-tangent's optional `check_progress`.
 - `analyze_change_set` before reporting DONE — full branch-vs-base Code Health analysis. Cite the delta (e.g. `CodeScene: Code Health 9.1 → 9.1, no regression`) and any findings in the DONE summary alongside anti-tangent's `summary_block`.
 
-**In-band attribution (v0.15.0+).** Pass the `analyze_change_set` result to `validate_completion` as a structured `codescene` argument instead of (or alongside) the hook below: `{ran, skip_reason, skip_evidence, tool, quality_gate, files_analyzed, verdicts: {improved, degraded, stable}, trend, net_pp, category_counts}`. Anti-tangent attributes it to the task in `plan_run_report`, rather than only the content-free aggregate the hook writes to `codescene-events.jsonl`. Set `ANTI_TANGENT_CODESCENE=required` to make the check observable server-side: a `validate_completion` call with no `codescene` argument emits a `major codescene_not_run` finding; `{"ran": false}` with no `skip_reason` also emits `codescene_not_run`; `{"ran": false, "skip_reason": "…"}` with no `skip_evidence` emits a `major codescene_skipped`, graded exactly as silence is; adding `skip_evidence` with the failing tool's own error text lowers it to `minor`; `{"ran": true, ...}` emits nothing from the adoption check. Left unset (the default), the adoption check never fires. Independently of that setting, a submitted digest with `trend: "regression"` always surfaces as an advisory `minor` quality finding — surfaced deterministically server-side. No CodeScene finding alone reaches `fail`: the regression finding is pinned `minor` and a lone adoption `major` only lifts the verdict to `warn` — but that adoption `major` can be the second `major` (alongside a reviewer finding or the `test_evidence` check) that tips a verdict to `fail`.
+**In-band attribution (v0.15.0+).** Pass the `analyze_change_set` result to `validate_completion` as a structured `codescene` argument instead of (or alongside) the hook below: `{ran, skip_reason, tool, quality_gate, files_analyzed, verdicts: {improved, degraded, stable}, trend, net_pp, category_counts}`, plus `skip_evidence` (v0.20.0+). Anti-tangent attributes it to the task in `plan_run_report`, rather than only the content-free aggregate the hook writes to `codescene-events.jsonl`.
+
+**The `required` adoption check (v0.15.0+).** Set `ANTI_TANGENT_CODESCENE=required` to make the check observable server-side: a `validate_completion` call with no `codescene` argument emits a `major codescene_not_run` finding; `{"ran": false}` with no `skip_reason` also emits `codescene_not_run`; `{"ran": true, ...}` emits nothing from the adoption check. Left unset (the default), the adoption check never fires.
+
+**The skip ladder (v0.20.0+).** `{"ran": false, "skip_reason": "…"}` with no `skip_evidence` emits a `major codescene_skipped`, graded exactly as silence is; adding `skip_evidence` with the failing tool's own error text lowers it to `minor`. On v0.15.0–v0.19.x a non-empty `skip_reason` on its own buys that `minor`, and `skip_evidence` is not read at all.
+
+Independently of `ANTI_TANGENT_CODESCENE`, a submitted digest with `trend: "regression"` always surfaces as an advisory `minor` quality finding — surfaced deterministically server-side. No CodeScene finding alone reaches `fail`: the regression finding is pinned `minor` and a lone adoption `major` only lifts the verdict to `warn` — but that adoption `major` can be the second `major` (alongside a reviewer finding or the `test_evidence` check) that tips a verdict to `fail`.
 
 The requirement is prompt-level: the pairing stays **advisory** on the anti-tangent side — a CodeScene finding feeds the same severity ladder as every other finding, with no CodeScene-specific override or separate fail path, and the calls are skipped silently when CodeScene MCP isn't configured. See [`docs/protocol/implementer.md`](docs/protocol/implementer.md)'s "CodeScene MCP companion" section for the dispatch-clause integration details.
 
@@ -517,6 +523,19 @@ The middle three (`validate_task_spec`, `check_progress`, `validate_completion`)
 ## Project knowledge (optional)
 
 On epic-scale projects with multiple agents and authors, implementers drift away from decisions already taken and modules already shaped. v0.6.0 adds an optional knowledge-base loop alongside the review loop: `prime_project_knowledge` recommends notes to attach before a task starts, `extract_project_knowledge` proposes new notes from a completion envelope, and `validate_task_spec` / `validate_plan` accept an optional `project_knowledge` string the reviewer treats as authoritative grounding (same posture as `pinned_by`). The knowledge itself lives in [Basic Memory](https://github.com/basicmachines-co/basic-memory) (recommended) or any markdown-backed store — anti-tangent never reads or writes that store directly.
+
+**The eight note types, and when each became available.** `extract_project_knowledge` proposes only the types the server it runs on knows about, so a taxonomy read against an older server promises types that server will never propose. What each type is for is in [`docs/protocol/project-knowledge.md`](docs/protocol/project-knowledge.md#eight-note-types-in-three-groups).
+
+| Type | Layer | Since |
+|---|---|---|
+| `decision` | durable | v0.6.0+ |
+| `module` | durable | v0.6.0+ |
+| `feature` | durable | v0.6.0+ |
+| `glossary` | durable | v0.6.0+ |
+| `epic` | operational | v0.6.0+ |
+| `story` | operational | v0.7.0+ |
+| `gotcha` | lessons-learned | v0.8.0+ |
+| `howto` | durable | v0.9.0+ |
 
 - Design: [`docs/superpowers/specs/2026-05-18-project-knowledge-design.md`](docs/superpowers/specs/2026-05-18-project-knowledge-design.md)
 - Integration playbook: [`docs/protocol/project-knowledge.md`, "Project knowledge (optional)"](docs/protocol/project-knowledge.md#project-knowledge-optional)

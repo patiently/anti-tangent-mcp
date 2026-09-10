@@ -58,7 +58,7 @@ Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the t
 | `story` | operational | live dashboard: brief, multi-PR table, subtasks, deployment state, decisions produced |
 | `gotcha` | lessons-learned | module-scoped lesson learned; ADR-numbered slug; supersede chain |
 
-Templates: [`examples/project-knowledge/`](https://github.com/patiently/anti-tangent-mcp/tree/main/examples/project-knowledge); frozen real examples: [`examples/project-knowledge/dogfood/`](https://github.com/patiently/anti-tangent-mcp/tree/main/examples/project-knowledge/dogfood). Per-project tuning: [`docs/team-setup/project-knowledge-conventions.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/project-knowledge-conventions.md).
+Templates: [`examples/project-knowledge/`](https://github.com/patiently/anti-tangent-mcp/tree/main/examples/project-knowledge); frozen real examples: [`examples/project-knowledge/dogfood/`](https://github.com/patiently/anti-tangent-mcp/tree/main/examples/project-knowledge/dogfood). Per-project tuning: [`docs/team-setup/project-knowledge-conventions.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/project-knowledge-conventions.md). Not every server proposes all eight — which types yours knows depends on its version, tabulated in [`README.md`, "Project knowledge (optional)"](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md#project-knowledge-optional).
 
 ### v0.7.0 canonical layout
 
