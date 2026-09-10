@@ -196,6 +196,11 @@ TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null | tr 
 # direct string comparison against TaskUpdate.input.taskId — every TaskUpdate
 # call carries its own taskId, so no reconstruction from creation order is
 # needed.
+#
+# NO APOSTROPHES ANYWHERE BELOW, code or comment: the whole body is one
+# single-quoted bash string, so a lone ' closes it and the rest of the
+# program becomes shell words. Use double quotes in Python, and rephrase
+# English possessives.
 PY='
 import json, os, re, sys, time
 path, task_id = sys.argv[1], str(sys.argv[2])
@@ -312,7 +317,25 @@ if qualifying:
 # must close on the diff it submitted, not on an earlier submission in the
 # same window.
 def diff_added_lines(inp):
-    """Return {path: [added lines]} from a validate_completion input dict."""
+    """Return {path: [added lines]} from a validate_completion input dict.
+
+    This parser is a robustness surface for honest-but-odd diffs, NOT a
+    security control. `final_diff` is written by the party being checked,
+    and two documented behaviours defeat the scan outright without going
+    near the parser: an explicitly empty `final_diff` still wins by
+    precedence over `final_files`, leaving nothing to read; and the path in
+    a "+++ " header is taken on trust, so a submitter who names their file
+    with an extension the scan excludes skips it. What is left for the
+    parser to get right is diffs written oddly but in good faith.
+
+    One shape stays wrong and is not worth chasing. A hunk that declares
+    FEWER added lines than it delivers spends its count early, and from
+    there an added line whose content starts with "++ " reads as a file
+    header again -- re-pointing the scan at a path named by the diff body
+    itself, and dropping every added line after it when that path has no
+    scannable extension. Nothing in the bytes separates that from the real
+    header it is shaped like.
+    """
     text = inp.get("final_diff") or ""
     if not text:
         p = inp.get("final_diff_path") or ""
@@ -348,11 +371,18 @@ def diff_added_lines(inp):
             # the no-newline marker, which belongs to neither. Three things
             # end the hunk early instead of being charged: a line carrying no
             # diff marker at all, a marker the declared counts have no room
-            # left for, and a "+++ " that a new "@@" follows -- which only a
-            # diff cut short of its own declared length can produce, and
-            # which must not swallow the files after the cut.
+            # left for, and a "+++ " that a new "@@" follows WHILE THE HUNK
+            # STILL OWES MORE THAN ONE ADDED LINE -- the signature of a diff
+            # cut short of its declared length, whose remaining files must
+            # not be swallowed. The "more than one" is load-bearing: when the
+            # "+++ " is the LAST added line the hunk owes, a following "@@" is
+            # exactly what a well-formed diff produces -- under -U0 the next
+            # hunk of the same file starts on the very next line -- so ending
+            # the hunk there would file the rest of that file under a path
+            # invented by the hunk body itself.
             if (line.startswith("+") and new_left
-                    and not (line.startswith("+++ ") and nxt.startswith("@@"))):
+                    and not (line.startswith("+++ ") and nxt.startswith("@@")
+                             and new_left > 1)):
                 new_left -= 1
                 if cur:
                     out[cur].append(line[1:])
@@ -455,9 +485,12 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
         # is still a statement about which lines the author added -- reading
         # it as absent would reconstruct from the working tree instead.
 
-        # What the git walk alone knows: whether its own budget stopped it,
-        # and how many paths the vendored exemption dropped. Both shrink the
-        # result without leaving a trace in it.
+        # What the git walk alone knows, none of it visible in the result
+        # it returns: whether its own budget stopped it, how many paths the
+        # vendored exemption dropped, and whether git answered 129 to
+        # --no-optional-locks so the walk ran without it. The first two shrink
+        # the result; the third changes nothing about it and only says the
+        # developer index was refreshed after all.
         git_stats = {}
         if ("final_diff" in last_completion or
                 "final_diff_path" in last_completion):
@@ -487,10 +520,13 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
             # loop below can only add to it.
             "truncated": bool(git_stats.get("truncated")),
             "vendored_skipped": int(git_stats.get("vendored_skipped") or 0),
-            # A git too old for --no-optional-locks made every call in the
-            # walk run without it. Nothing in the counts moves, so a run that
-            # refreshed the developer index it promised to leave alone reads
-            # identically to one that did not.
+            # git answered 129 -- its generic usage error -- to a call
+            # carrying --no-optional-locks, so the walk dropped the flag and
+            # every later call ran without it. Nothing in the counts moves, so
+            # a run that refreshed the developer index it promised to leave
+            # alone reads identically to one that did not. The marker says
+            # what the walk did, never that the flag was what git objected
+            # to: any malformed command line exits 129.
             "optional_locks_dropped": bool(git_stats.get("optional_locks_dropped")),
         }
         # The deadline inside violations() bounds one file, not the walk over
@@ -547,8 +583,8 @@ trace "$TASK_ID" "parsed" "called=$CALLED block=$BLOCK verdict=$VERDICT"
 # which a scan of a real diff never does. Two of the suffixes say why a
 # result is smaller than what was submitted -- a budget stopped the work, or
 # the vendored exemption dropped paths -- neither of which the counts show.
-# The third says the git walk ran without --no-optional-locks, which the
-# counts do not show either.
+# The third says the git walk dropped --no-optional-locks after a 129 and
+# ran without it, which the counts do not show either.
 SCAN=$(echo "$RESULT" | jq -r '.scan | select(. != null) | "src=\(.source) submitted=\(.submitted) scanned=\(.scanned) lines=\(.lines)" + (if (.vendored_skipped // 0) > 0 then " vendored-skipped=\(.vendored_skipped)" else "" end) + (if .truncated then " budget-exhausted" else "" end) + (if .optional_locks_dropped then " optional-locks-dropped" else "" end)' 2>/dev/null)
 [[ -n "$SCAN" ]] && trace "$TASK_ID" "scan" "$SCAN"
 

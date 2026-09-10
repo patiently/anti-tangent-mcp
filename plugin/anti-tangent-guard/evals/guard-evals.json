@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (133 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (135 cases)",
   "evals": [
     {
       "id": 1,
@@ -1968,6 +1968,68 @@
         ]
       },
       "reason": "the hunk declares nine added lines and delivers one, so counting alone would still be inside it at the next file header and would swallow every file after the cut. A hunk header cannot appear in a hunk body, so a +++ line followed by one ends the hunk instead"
+    },
+    {
+      "id": 134,
+      "name": "close-u0-hunk-boundary-keeps-the-same-file",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -3,0 +4,2 @@ func A() {}\\n+// helper text\\n+++ b/notes\\n@@ -9,0 +12 @@ func B() {}\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=1 scanned=1 lines=3"
+        ]
+      },
+      "reason": "git diff -U0 emits no context, so the line after a hunk body is the next @@ of the SAME file. Here the hunk declares two added lines and the second is an added line whose content starts with ++ , so it reaches the parser as the bytes +++ followed by that file's next @@. A parser that reads a +++ before an @@ as a truncation boundary re-points the scan at notes, which has no scannable extension, and the comment in the second hunk is never scanned. Only a hunk still owing MORE THAN ONE added line can have been cut short"
+    },
+    {
+      "id": 135,
+      "name": "close-single-owed-added-line-keeps-the-same-file",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -3,0 +4 @@ func A() {}\\n+++ b/notes\\n@@ -9,0 +12 @@ func B() {}\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=1 scanned=1 lines=2"
+        ]
+      },
+      "reason": "the same hunk boundary in the omitted-count spelling: @@ -3,0 +4 @@ declares exactly one added line, and that one line is an added line whose content starts with ++ . One owed line is the smallest form of the well-formed case, so a truncation rule that does not require more than one owed line drops the whole rest of the file onto a path the hunk body named"
     }
   ]
 }

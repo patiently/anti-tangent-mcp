@@ -454,13 +454,15 @@ committed traces `submitted=3 scanned=0`, which is what distinguishes it
 from a scan of a real diff that legitimately found nothing. Either budget
 running out — the git walk's or the scan's — appends `budget-exhausted`, and
 paths dropped by the vendored-directory exemption append
-`vendored-skipped=N`; both shrink the result silently otherwise. A git too old
-for `--no-optional-locks` makes the walk drop that flag and appends
-`optional-locks-dropped`, which the counts never show: the walk returns the
-same answer, having refreshed the index it meant to leave alone. No `scan`
-line at all means no scan ran — the guard was off, no `validate_completion`
-fell inside the window, or the scanner could not be loaded
-(`skip | comment-scan-unavailable`).
+`vendored-skipped=N`; both shrink the result silently otherwise. A git that
+answers `129` — its generic usage error, which a git that does not know
+`--no-optional-locks` returns and so does a command line malformed any other
+way — makes the walk drop that flag and appends `optional-locks-dropped`,
+which the counts never show: the walk returns the same answer, having
+refreshed the index it meant to leave alone. The marker names what the walk
+did, not what git objected to. No `scan` line at all means no scan ran — the
+guard was off, no `validate_completion` fell inside the window, or the
+scanner could not be loaded (`skip | comment-scan-unavailable`).
 
 The log is capped so it cannot grow without bound: past
 `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES` (default 1,048,576 — 1 MiB), the next
@@ -477,7 +479,7 @@ bash evals/run.sh
 ```
 
 Runs the hooks' own unit tests (`hooks/*_test.py`) first, then the full eval
-suite (133 cases) against both hooks, and exits non-zero on either — the
+suite (135 cases) against both hooks, and exits non-zero on either — the
 cases cover check-task-complete's three block conditions (the third being its
 own close-time comment-hygiene scan), plus check-comment-write's write-time
 comment-hygiene guard. See `evals/run.sh`'s header comment for the

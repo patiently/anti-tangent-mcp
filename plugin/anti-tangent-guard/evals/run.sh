@@ -156,21 +156,84 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # trace line must show submitted>0 with scanned=0, which is what separates
 # "there was nothing to scan" from "the scan never ran".
 #
-# Four more pin how that scan divides a diff into files, which turns on one
+# Thirty-four cases cover the write-time scanner's span boundaries, the
+# optional ticket pattern, the two kill switches, and the close hook's
+# final_files fallback — four groups.
+#
+# Seventeen pin where a comment span starts and stops, which is what decides
+# whether a tell is even reached. Three confirm the ordinary comment shapes
+# ARE scanned and do block on a real tell (a KDoc block interior, a one-line
+# block comment, a trailing comment on a code line). Seven hold the opposite
+# boundary, where something that merely looks like a delimiter is not one: a
+# "*" not followed by whitespace is a dereference, a tell inside a string
+# literal is not comment text, a "#" inside a shell string and a "#" straight
+# after a "$" are not comment openers, "*/" is a terminator and never an
+# opener, and block text stops at its terminator — pinned once for a block
+# that opens its line and once for a block that starts mid-line — so the code
+# after it never reaches the tells. Two more pin that the walk covers a whole
+# line rather than stopping at the first span it finds: a benign trailing
+# comment cannot hide a violating one earlier on the line, and a line that
+# OPENS with a clean block comment must still be walked past the terminator
+# to the trailing violation. The last
+# four are one apiece: tells run per span, so two harmless fragments never
+# join into one; quote parity is counted per segment, so a block comment's
+# own quote cannot leak into the parity that decides whether a later "//"
+# sits inside a string; plain narrative prose inside a block comment is read
+# and simply found clean rather than skipped unscanned; and a "#" at column
+# zero, which the mid-line delimiter walk cannot see, still blocks. An
+# unstarred block interior is a documented MISS with a case of its own, so
+# the gap is pinned rather than left to be rediscovered.
+#
+# Five pin the optional project ticket pattern: a configured pattern is a
+# tell, an unset one adds nothing (there is no built-in ticket tell), an
+# uncompilable one is dropped without disabling the other tells, one past
+# the length cap is dropped — the fixture is an alternation, so a pass is
+# evidence the cap fired rather than an accident of the pattern never
+# matching — and a catastrophically backtracking one is bounded by the scan
+# deadline and fails open instead of hanging the hook.
+#
+# Four pin the two kill switches as one truth table: each names its own
+# concern and leaves the other armed (completion gate off still scans
+# comments, comment scanning off still gates the close), and only both off
+# is an early exit.
+#
+# Eight pin the final_files fallback, the path taken when no diff was
+# submitted at all. Three are the git classification itself: an untracked
+# file has every line added and blocks, a tracked unmodified file's
+# pre-existing comment is not an added line, and a gitignored path — which
+# exits from ls-files exactly like an untracked one — is separated from it
+# by check-ignore. Two are rooting: a path outside any repository cannot be
+# classified and is skipped, and a nested worktree is resolved against its
+# own root rather than the hook cwd, pinned by a TRACKED fixture expecting a
+# pass so that only the correct rooting passes. Three are precedence: a
+# submitted diff wins even when it adds nothing, an explicitly present but
+# EMPTY final_diff still wins (presence, not content, is the key), and a
+# repository with overridden diff prefixes is handled end to end.
+#
+# Six more pin how the close-time scan divides a diff into files, on one
 # irreducible ambiguity: an added line whose content starts with "++ " reaches
 # the parser as the bytes "+++ ", byte-identical to a file header, and only
 # the line count the enclosing hunk declared for itself tells them apart.
-# The four are a bare multi-file diff with no "diff --git" or "--- " line to
+# Four are a bare multi-file diff with no "diff --git" or "--- " line to
 # close the first hunk, an added line that really does start with "++ ", a
 # "+++ /dev/null" deletion header that must not enter the scan as a path, and
 # a hunk that delivers fewer lines than it declared, after which the next file
-# header must still be read as one.
+# header must still be read as one. The other two hold the opposite edge of
+# that last rule, where the "+++ " is the hunk's LAST owed added line and the
+# "@@" after it is the next hunk of the SAME file — what git diff -U0 emits
+# as a matter of course — in both spellings of the declared count, explicit
+# ("+4,2") and omitted ("+4").
+#
+# The per-group counts above PARTITION this table: every case belongs to
+# exactly one group, and they sum to EXPECTED_CASE_COUNT. Adding a case means
+# growing the group that describes it, or writing a new group; a breakdown
+# that no longer sums is a breakdown nobody can use to find anything.
 #
 # Both checks below must hold or the count assertion is vacuous: the JSON
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=133
+EXPECTED_CASE_COUNT=135
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
