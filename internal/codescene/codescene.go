@@ -33,6 +33,7 @@ type Verdicts struct {
 type Digest struct {
 	Ran            bool           `json:"ran,omitempty"`
 	SkipReason     string         `json:"skip_reason,omitempty"`
+	SkipEvidence   string         `json:"skip_evidence,omitempty"`
 	Tool           string         `json:"tool,omitempty"`
 	QualityGate    string         `json:"quality_gate,omitempty"` // passed|failed
 	FilesAnalyzed  int            `json:"files_analyzed,omitempty"`
@@ -61,6 +62,15 @@ const qualityGateUnrecognized = "unrecognized"
 // the reviewer prompt and plan-runs.jsonl; a few hundred runes is generous
 // for a one-line reason.
 const codesceneSkipReasonMaxRunes = 300
+
+// codesceneSkipEvidenceMaxRunes bounds SkipEvidence's length in Normalize.
+// It is an order of magnitude above the SkipReason cap because the two hold
+// different things: a reason is a sentence a caller composes, while evidence
+// is a tool's own error output pasted verbatim, and a useful stack or MCP
+// error easily runs past a few hundred runes. Like SkipReason it is outside
+// the request-level payload cap and lands in plan-runs.jsonl, so it needs a
+// bound of its own.
+const codesceneSkipEvidenceMaxRunes = 2000
 
 // codesceneCategoryCountsMax bounds how many CategoryCounts entries
 // Normalize retains. CategoryCounts is an unbounded caller-supplied map that,
@@ -98,6 +108,7 @@ func (d *Digest) Normalize() {
 		d.QualityGate = qualityGateUnrecognized
 	}
 	d.SkipReason = truncateRunes(strings.TrimSpace(d.SkipReason), codesceneSkipReasonMaxRunes)
+	d.SkipEvidence = truncateRunes(strings.TrimSpace(d.SkipEvidence), codesceneSkipEvidenceMaxRunes)
 	d.CategoryCounts = capCategoryCounts(d.CategoryCounts, codesceneCategoryCountsMax, codesceneCategoryKeyMaxRunes)
 }
 
