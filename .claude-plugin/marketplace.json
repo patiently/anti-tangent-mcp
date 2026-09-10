@@ -11,7 +11,7 @@
     {
       "name": "anti-tangent-protocol",
       "description": "On-demand loader for the anti-tangent-mcp drift-protection protocol. A description-triggered skill that loads only the role-scoped protocol part a task needs, and only when a Goal/Acceptance-criteria task appears — keeping the always-loaded footprint to one line.",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "source": "./plugin/anti-tangent-protocol",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"
@@ -35,7 +35,7 @@
     {
       "name": "anti-tangent-guard",
       "description": "Two hooks enforcing anti-tangent-mcp's conventions. A PostToolUse hook on TaskUpdate mandates the validate_completion gate at task close and, when the submitted diff adds comments carrying change history, returns a blocking instruction to reopen and fix. It detects rather than prevents: PostToolUse fires after the state change, so it cannot stop the close itself. A PreToolUse hook on Edit/Write refuses such a comment before it is written. Kill switches: ANTI_TANGENT_COMPLETION_GUARD=0, ANTI_TANGENT_COMMENT_GUARD=0.",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "source": "./plugin/anti-tangent-guard",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"
