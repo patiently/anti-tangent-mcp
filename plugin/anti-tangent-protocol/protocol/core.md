@@ -137,7 +137,7 @@ If you're unsure, look for the structured task block. No block → no protocol. 
 - `codescene: {"ran": false}` with no `skip_reason` → `codescene_not_run`, `severity: major`, same as no argument at all. **An undeclared skip is treated exactly like a non-run** — the server can't tell "forgot to run it" from "ran it and didn't say" without a stated reason, so state one.
 - `codescene: {"ran": true, …}` → no adoption finding.
 
-Fix: pass the `codescene` argument (see [`implementer.md`](implementer.md) §4.2 step 3b), or if you deliberately skipped, always include `skip_reason`.
+Fix: pass the `codescene` argument (see [`implementer.md`](implementer.md) §4.2 step 3b), or if you deliberately skipped, include both `skip_reason` and `skip_evidence` — `skip_reason` alone still draws a major.
 
 **What is `submission_defect_only: true`?** Every blocking finding on that `validate_completion`
 response is about what you submitted — absent evidence, malformed evidence, or a CodeScene run

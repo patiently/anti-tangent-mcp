@@ -6,7 +6,9 @@ What lightweight mode skips:
 
 - **Skip** `validate_task_spec` (the spec is fully prescriptive; no design choices for the reviewer to shape).
 - **Skip** `check_progress` (already optional in full mode).
-- **Skip** the CodeScene MCP companion calls (`pre_commit_code_health_safeguard`, `analyze_change_set`) — there's nothing meaningful for static analysis on a trivial doc edit.
+- **Skip** the CodeScene MCP companion calls (`pre_commit_code_health_safeguard`, `analyze_change_set`) — but only when `ANTI_TANGENT_CODESCENE` is unset. There's nothing meaningful for static analysis on a trivial doc edit, and `codescene` is optional on the `validate_completion` call.
+
+**`ANTI_TANGENT_CODESCENE=required` overrides the bullet above.** The mode is an operator assertion that CodeScene is present on this host, so lightweight tasks must **run `analyze_change_set` and submit its result, exactly as any other task** — being lightweight is not a skip reason. `{"ran": false, "skip_reason": "…", "skip_evidence": "<the tool's own error text>"}` is for an attempted run that failed, never one not attempted; a skip carrying no `skip_evidence` draws a major, the same as omitting the argument.
 
 ## Drift-protection protocol (lightweight)
 
