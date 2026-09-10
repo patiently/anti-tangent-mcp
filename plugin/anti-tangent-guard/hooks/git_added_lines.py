@@ -4,9 +4,15 @@ Imported by check-task-complete's embedded Python. It lives in a module
 rather than in that heredoc so its git calls can be stubbed by a test: the
 check-ignore branch below has no other way to be exercised, because a
 fixture repository cannot reliably produce an unanswerable status.
+
+An untracked path is judged on the `content` the completion submitted,
+falling back to the file on disk only when the entry carried none. That is
+the hook's contract -- it scans the evidence the last validate_completion
+submitted -- and it is also the text the reviewer saw.
 """
 import os
 import subprocess
+import time
 
 from comment_scan import read_text_capped
 
@@ -15,17 +21,20 @@ def _git(cwd, *args):
     """Run git rooted at cwd with output formatting pinned. -> (rc, stdout).
 
     final_files_added_lines below only checks a diff line for a leading
-    "+++", which every prefix style still produces, so these flags are not
-    load-bearing for it. They are pinned anyway to keep this module's diff
-    output in the canonical "a/"/"b/" shape with unquoted paths -- the shape
-    diff_added_lines (this hook's other parser, which matches "+++ b/"
-    specifically to pull a path out of a multi-file diff) needs from
-    whatever diff text it is handed.
+    "+++", which every prefix style still produces, so the diff pins are not
+    load-bearing for it. They are pinned anyway so this module's own parsing
+    never has to anticipate the prefix and quoting styles a developer's git
+    configuration can produce. core.fsmonitor is pinned for a different
+    reason: a repository config can point it at an arbitrary command, which
+    git would otherwise run from inside this hook. --no-optional-locks keeps
+    these read-only questions from writing an index.
     """
     cmd = ["git", "-C", cwd,
            "-c", "diff.noprefix=false",
            "-c", "diff.mnemonicPrefix=false",
            "-c", "core.quotePath=false",
+           "-c", "core.fsmonitor=false",
+           "--no-optional-locks",
            "--no-pager"] + list(args)
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
@@ -34,7 +43,26 @@ def _git(cwd, *args):
     return p.returncode, p.stdout
 
 
-def final_files_added_lines(inp):
+# A wall-clock bound on the whole per-path walk. Each path can cost two git
+# calls of up to ten seconds each and nothing caps how many paths a
+# completion names, so a stalled git -- index.lock contention, a network
+# filesystem -- would otherwise hold the developer's session for minutes.
+# Running out stops the walk and returns what was gathered: this scan is
+# defence in depth, and a partial answer must never become a blocked close.
+GIT_BUDGET_SECONDS = 20.0
+
+# Directory names whose contents were written somewhere else. Every line of
+# an untracked file counts as added, so a vendored source file whose header
+# narrates its own upstream history would block the close and demand a
+# rewrite of code this repository does not own.
+VENDORED_DIRS = frozenset(("vendor", "third_party", "node_modules"))
+
+
+def _is_vendored(path):
+    return any(seg in VENDORED_DIRS for seg in path.replace("\\", "/").split("/"))
+
+
+def final_files_added_lines(inp, deadline=None):
     """{path: [added lines]} for a completion that submitted final_files.
 
     final_files carries whole file contents and no signal for which lines are
@@ -54,7 +82,11 @@ def final_files_added_lines(inp):
     status licenses treating a file as new.
     """
     out = {}
+    if deadline is None:
+        deadline = time.monotonic() + GIT_BUDGET_SECONDS
     for entry in (inp.get("final_files") or []):
+        if time.monotonic() > deadline:
+            break
         path = (entry or {}).get("path") or ""
         if not path or not os.path.isabs(path):
             continue
@@ -64,7 +96,7 @@ def final_files_added_lines(inp):
         rc, _ = _git(parent, "ls-files", "--error-unmatch", "--", path)
         if rc == 0:
             rc_diff, diff = _git(parent, "diff", "--no-color", "--no-ext-diff",
-                                 "HEAD", "--", path)
+                                 "--no-textconv", "HEAD", "--", path)
             if rc_diff != 0:
                 continue
             lines = [ln[1:] for ln in diff.splitlines()
@@ -80,6 +112,8 @@ def final_files_added_lines(inp):
         # this hook was never able to classify.
         rc_ign, _ = _git(parent, "check-ignore", "-q", "--", path)
         if rc_ign != 1:
+            continue
+        if _is_vendored(path):
             continue
         content = (entry or {}).get("content")
         if not isinstance(content, str):

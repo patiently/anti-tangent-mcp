@@ -579,7 +579,7 @@ run_case() {
 # ── Main ──
 
 echo "== module tests =="
-python3 -m unittest discover -s "$HOOK_DIR" -p '*_test.py' -v || exit 1
+python3 -B -m unittest discover -s "$HOOK_DIR" -p '*_test.py' -v || exit 1
 
 # check-comment-write carries a copy of comment_scan.py's SCAN_EXTS so it can
 # decide "this file is never scanned" without paying for a python3 start. That

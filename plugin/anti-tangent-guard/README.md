@@ -292,6 +292,11 @@ rather than treating the reflow as separate from the touch.
   patterns cannot catch — an engineer writing a sentence like "I rewrote this
   for clarity" in a comment passes the scanner but may be flagged by the
   reviewer.
+- An untracked path under `vendor/`, `third_party/` or `node_modules/` is
+  not scanned at close time. Every line of an untracked file counts as
+  added, so a vendored file whose header narrates its own upstream history
+  would otherwise block the close and demand a rewrite of code this
+  repository did not write.
 - The extension allowlist (`comment_scan.py`'s `SCAN_EXTS`) is keyed on
   `os.path.splitext`, so a file with no extension — including this plugin's
   own extensionless `check-task-complete` and `check-comment-write` hook
@@ -357,7 +362,7 @@ A regex for your tracker's key shape, e.g. `ABC-\d+`. Set it per project in `.cl
 { "env": { "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+" } }
 ```
 
-**There is no default, and without it a comment like `// ABC-1234: the keyword` is not detected.** A generic pattern cannot be made safe: measured over real comment lines, `[A-Z]+-\d+` matches hardware identifiers (`HDMI-0`, `DP-0`) and prose labels (`ROUND-1`) far more often than tracker keys, and this hook blocks writes. An uncompilable or over-long pattern is ignored, and the whole scan runs under a two-second deadline that fails open.
+**There is no default, and without it a comment like `// ABC-1234: the keyword` is not detected.** A generic pattern cannot be made safe: measured over real comment lines, `[A-Z]+-\d+` matches hardware identifiers (`HDMI-0`, `DP-0`) and prose labels (`ROUND-1`) far more often than tracker keys, and this hook blocks writes. An uncompilable or over-long pattern is ignored, and each file's scan runs under a two-second deadline that fails open. The close-time walk over every file a completion named is bounded in turn — a twenty-second budget over the git questions and another over the scans — so neither a stalled git nor a slow pattern can hold the session for minutes. What a budget cuts short is recorded on the trace line rather than reported as a clean scan.
 
 ## Kill switches
 

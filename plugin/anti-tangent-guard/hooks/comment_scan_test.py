@@ -117,5 +117,44 @@ class IndeterminateCheckIgnore(unittest.TestCase):
                          "no diff or content read may follow an unanswerable status")
 
 
+class VendoredUntrackedPath(unittest.TestCase):
+    # Every line of an untracked file counts as added, so a vendored source
+    # file whose header narrates its own upstream history would block the
+    # close and demand a rewrite of code this repository does not own. The
+    # exemption is by directory name and applies only to the untracked
+    # branch: a tracked file under vendor/ diffs to the lines someone here
+    # actually changed, and those are fair game.
+    def test_untracked_vendored_path_is_not_scanned(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+
+        real_git = g._git
+
+        def fake_git(cwd, *args):
+            if args[0] == "ls-files":
+                return 1, ""       # unmatched -> untracked
+            if args[0] == "check-ignore":
+                return 1, ""       # definitely not ignored
+            raise AssertionError("unexpected git call: %r" % (args,))
+
+        tmp = tempfile.mkdtemp()
+        vendored_dir = os.path.join(tmp, "vendor", "lib")
+        os.makedirs(vendored_dir)
+        vendored = os.path.join(vendored_dir, "u.go")
+        own = os.path.join(tmp, "own.go")
+        for p in (vendored, own):
+            with open(p, "w") as fh:
+                fh.write("// fixes #1\npackage x\n")
+        g._git = fake_git
+        try:
+            out = g.final_files_added_lines(
+                {"final_files": [{"path": vendored}, {"path": own}]})
+        finally:
+            g._git = real_git
+        self.assertEqual(sorted(out), [own],
+                         "an untracked path under vendor/ must be skipped, and one "
+                         "outside it must still be scanned")
+
+
 if __name__ == "__main__":
     unittest.main()
