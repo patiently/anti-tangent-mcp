@@ -14,10 +14,13 @@ from comment_scan import read_text_capped
 def _git(cwd, *args):
     """Run git rooted at cwd with output formatting pinned. -> (rc, stdout).
 
-    Prefixes are pinned because the hunk parser matches "+++ b/" only, and a
-    user with diff.mnemonicPrefix=true gets "+++ w/" while diff.noprefix=true
-    gets a bare path — either one silently yields zero files rather than an
-    error. core.quotePath=false keeps non-ASCII paths readable.
+    final_files_added_lines below only checks a diff line for a leading
+    "+++", which every prefix style still produces, so these flags are not
+    load-bearing for it. They are pinned anyway to keep this module's diff
+    output in the canonical "a/"/"b/" shape with unquoted paths -- the shape
+    diff_added_lines (this hook's other parser, which matches "+++ b/"
+    specifically to pull a path out of a multi-file diff) needs from
+    whatever diff text it is handed.
     """
     cmd = ["git", "-C", cwd,
            "-c", "diff.noprefix=false",

@@ -1807,7 +1807,7 @@
       ],
       "expected_exit": 2,
       "expected_stderr_contains": ["COMMENTS CARRYING CHANGE HISTORY"],
-      "reason": "with diff.mnemonicPrefix set the repo emits `+++ w/`; the pinned -c flags are what keep the hunk parser from silently seeing zero files"
+      "reason": "establishes that a repository with diff.mnemonicPrefix=true / diff.noprefix=false is handled end-to-end and its added line is still extracted correctly. It does NOT prove the -c pins are load-bearing for final_files_added_lines: that function's filter only checks for a leading +++, which every prefix style still produces, so it is prefix-agnostic by construction. The pins matter for diff_added_lines (this hook's other parser, keyed on +++ b/ specifically), not for this one"
     }
   ]
 }
