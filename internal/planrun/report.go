@@ -95,6 +95,12 @@ func codesceneCell(row TaskRow) string {
 		if row.Codescene != nil && strings.TrimSpace(row.Codescene.SkipReason) != "" {
 			reason = strings.TrimSpace(row.Codescene.SkipReason)
 		}
+		// The evidence is what distinguishes a skip a reader can check from
+		// one they cannot. Omitting it here would leave the ledger showing
+		// only the caller's own sentence.
+		if row.Codescene != nil && strings.TrimSpace(row.Codescene.SkipEvidence) != "" {
+			return "skipped (" + reason + ": " + strings.TrimSpace(row.Codescene.SkipEvidence) + ")"
+		}
 		return "skipped (" + reason + ")"
 	default:
 		return "not run"

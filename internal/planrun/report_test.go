@@ -150,3 +150,16 @@ func TestTotals(t *testing.T) {
 	assert.Equal(t, 1, tot.CodesceneMissing)
 	assert.InDelta(t, -1.5, tot.NetPP, 0.0001)
 }
+
+func TestCodesceneCellShowsEvidence(t *testing.T) {
+	row := TaskRow{
+		CodesceneState: StateSkipped,
+		Codescene: &codescene.Digest{
+			SkipReason:   "not configured",
+			SkipEvidence: "MCP error: tool not found",
+		},
+	}
+	got := codesceneCell(row)
+	assert.Contains(t, got, "not configured")
+	assert.Contains(t, got, "MCP error: tool not found")
+}
