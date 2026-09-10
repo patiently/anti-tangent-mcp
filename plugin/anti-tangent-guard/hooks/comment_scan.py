@@ -67,14 +67,125 @@ SCAN_EXTS = {
     ".rs", ".java", ".kt", ".rb", ".c", ".h", ".cc", ".cpp", ".hpp",
 }
 
-# Line-comment openers per extension. Block-comment interiors, trailing
-# comments and comment-like text inside string literals are out of scope:
-# a partial implementation that half-detects them would produce false
-# blocks, which cost more here than a missed violation.
+# Comment openers per extension. Hash-family files have no block comment
+# form; C-family files do, and two of its shapes are recognised here: an
+# opener `/*`, and a continuation `*`.
+#
+# `*/` is NOT an opener. A line beginning with it carries no comment text --
+# `*/` alone is empty and `*/ y = x - 1;` is code -- so admitting it and
+# returning the tail would hand ordinary code to the tells.
 LINE_COMMENT = {
     ".py": ("#",), ".sh": ("#",), ".bash": ("#",), ".rb": ("#",),
 }
-DEFAULT_COMMENT = ("//",)
+DEFAULT_COMMENT = ("//", "/*", "*")
+
+
+def _quotes_balanced(prefix):
+    """True when no quote style is left open at the end of prefix.
+
+    A counting test, not a parser: it cannot tell which style opened a span,
+    only whether an odd number of some style is outstanding. Odd means the
+    delimiter that follows sits inside a string literal. Backslash-escaped
+    quotes do not count, so 'a\\'b' reads as balanced.
+    """
+    counts = {'"': 0, "'": 0, "`": 0}
+    esc = False
+    for ch in prefix:
+        if esc:
+            esc = False
+        elif ch == "\\":
+            esc = True
+        elif ch in counts:
+            counts[ch] += 1
+    return all(n % 2 == 0 for n in counts.values())
+
+
+_HASH_DELIM = re.compile(r"(?<=\s)#")
+_SLASH_DELIM = re.compile(r"//|/\*")
+
+
+def _line_comment_spans(opens, raw):
+    """Every comment span on a code line, concatenated, else "".
+
+    Walks delimiters LEFT TO RIGHT and takes the first whose preceding quote
+    counts are all even; an odd count means that delimiter sits inside a
+    string literal, so it is skipped and the walk continues. Taking the last
+    delimiter instead would let a benign trailing comment hide a violating
+    one earlier on the same line (`x = 1 /* fixes #1 */ // ok`).
+
+    A `/* ... */` span ends at its terminator and the walk RESUMES after it,
+    so the code between two block comments is never scanned and a second
+    comment on the line is not lost. A `//` or `#` span runs to end of line
+    and ends the walk.
+
+    Within the quoting shapes counted by _quotes_balanced, this can decline a
+    genuine comment but will not promote code to comment. In hash-family files
+    the delimiter must be whitespace-preceded, so shell parameter expansion
+    (`${url#https://…}`) is not a comment.
+    """
+    delim = _HASH_DELIM if "#" in opens else _SLASH_DELIM
+    out, pos, seg = [], 0, 0
+    while pos < len(raw):
+        m = delim.search(raw, pos)
+        if m is None:
+            break
+        start = m.start()
+        # Parity is counted over the CURRENT CODE SEGMENT, not the whole
+        # prefix. An earlier block comment's text is not code, and counting
+        # its quotes corrupts the answer for every delimiter after it: an
+        # unbalanced quote inside `/* say "hi */` would make a later `//`
+        # sitting inside a string look balanced, promoting string content to
+        # comment text. `seg` advances past each block terminator.
+        if not _quotes_balanced(raw[seg:start]):
+            pos = m.end()
+            continue
+        if m.group(0) == "/*":
+            end = raw.find("*/", m.end())
+            if end < 0:
+                out.append(raw[m.end():])
+                break
+            out.append(raw[m.end():end])
+            pos = seg = end + 2
+            continue
+        out.append(raw[m.end():])
+        break
+    return [t for t in out if t.strip()]
+
+
+def comment_spans(path, raw):
+    """Every comment span on one line, as a list; empty when there are none.
+
+    A LIST, not one joined string. Tells are matched per span, because joining
+    them can synthesise a reference that exists in neither: "/* fixes */ x
+    /* #1 */" concatenates into text the issue tell matches, while each span
+    alone stays clean.
+
+    Almost everything goes through the left-to-right walk above; only a block
+    continuation `*` and a column-zero `#` are handled directly, because
+    neither is a delimiter that walk recognises.
+    """
+    opens = openers(path)
+    line = raw.strip()
+    # Only two shapes are handled here. A block CONTINUATION `*` and a
+    # column-zero `#` are not delimiters the walk recognises -- _HASH_DELIM
+    # requires whitespace before the `#`, which a line-leading one has not
+    # got. `//` and `/*` ARE recognised, and sending them through the walk is
+    # what lets a line carrying both a block opener and a trailing `//`
+    # yield BOTH spans, instead of stopping at the first and missing
+    # whatever the second one says.
+    if "*" in opens and line.startswith("*") and not line.startswith("*/"):
+        rest = line[1:]
+        # `*p = x - 1;` is a dereference and a subtraction, not a comment.
+        if rest and not rest[0].isspace():
+            return []
+        end = rest.find("*/")
+        if end >= 0:
+            rest = rest[:end]
+        return [rest] if rest.strip() else []
+    if "#" in opens and line.startswith("#"):
+        rest = line[1:]
+        return [rest] if rest.strip() else []
+    return _line_comment_spans(opens, raw)
 
 TELLS = (
     # Anchored on both sides: bare `\bboundary` still let a digit run straight
@@ -185,15 +296,12 @@ def violations(path, added_lines):
     """Return [(line, why)] for added comment lines carrying change history."""
     if not scannable(path):
         return []
-    opens = openers(path)
     out = []
     for raw in added_lines:
-        line = raw.strip()
-        if not any(line.startswith(o) for o in opens):
-            continue
-        for pat, why in TELLS:
-            if pat.search(line):
-                out.append((line, why))
+        for span in comment_spans(path, raw):
+            hit = next((why for pat, why in TELLS if pat.search(span)), None)
+            if hit is not None:
+                out.append((raw.strip(), hit))
                 break
     return out
 

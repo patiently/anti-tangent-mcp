@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (93 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (106 cases)",
   "evals": [
     {
       "id": 1,
@@ -1383,6 +1383,122 @@
         ]
       },
       "reason": "the write-time counterpart of the final_diff_path symlink case: O_NOFOLLOW refuses the link at the final component, so there is no old text to diff against and the write proceeds unscanned. The exit code discriminates because the link's target is a real regular file whose content the added comment is absent from -- follow the link and the scan sees \"// fixes #58\" as added and blocks with exit 2, so exit 0 can only mean the link was not followed. The trace needle separately pins that this is recorded as an unreadable target rather than a pass"
+    },
+    {
+      "id": 94,
+      "name": "comment-write-kdoc-issue-ref-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * Fixes #123\\n */\\nobject X\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "a KDoc block interior is comment text and must be scanned"
+    },
+    {
+      "id": 95,
+      "name": "comment-write-block-comment-one-line-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"/* fixes task-42 */\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "a single-line block comment must be scanned"
+    },
+    {
+      "id": 96,
+      "name": "comment-write-trailing-comment-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"val x = 1 // fixes task-42\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "a trailing comment on a code line must be scanned"
+    },
+    {
+      "id": 97,
+      "name": "comment-write-dereference-not-a-comment",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.c\",\"content\":\"int f(void){ int task=1;\\n*p = task-42;\\nreturn 0; }\\n\"}}",
+      "expected_exit": 0,
+      "reason": "`*` opens a comment only when followed by whitespace; *p is a dereference"
+    },
+    {
+      "id": 98,
+      "name": "comment-write-tell-inside-string-allowed",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\nvar s = \\\"a\\\" + \\\"b//c fixes #1\\\"\\n\"}}",
+      "expected_exit": 0,
+      "reason": "an odd quote count before the delimiter means it is inside a literal"
+    },
+    {
+      "id": 99,
+      "name": "comment-write-shell-string-hash-allowed",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.sh\",\"content\":\"echo \\\"a #b fixes #1\\\"\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a # inside a shell string literal is not a comment"
+    },
+    {
+      "id": 100,
+      "name": "comment-write-shell-param-expansion-allowed",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.sh\",\"content\":\"url=${url#https://t/task-42}\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a # not preceded by whitespace is parameter expansion, not a comment"
+    },
+    {
+      "id": 101,
+      "name": "comment-write-block-terminator-not-an-opener",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.c\",\"content\":\"int f(void){ int task=1; int *p=&task;\\n*/ *p = task-42;\\nreturn 0; }\\n\"}}",
+      "expected_exit": 0,
+      "reason": "`*/` is not an opener; code after a block terminator is code, not comment text"
+    },
+    {
+      "id": 102,
+      "name": "comment-write-block-text-stops-at-terminator",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.c\",\"content\":\"int f(void){ int task=1; int *p=&task;\\n/* note */ *p = task-42;\\nreturn 0; }\\n\"}}",
+      "expected_exit": 0,
+      "reason": "block-opener text stops at the first `*/`, so the trailing subtraction is not scanned"
+    },
+    {
+      "id": 103,
+      "name": "comment-write-unstarred-block-interior-is-a-known-miss",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"/*\\nfixes task-42\\n*/\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "an unstarred block interior has no opener on its middle line; documented miss, backstopped by post.tmpl when a diff is present"
+    },
+    {
+      "id": 104,
+      "name": "comment-write-midline-block-stops-at-terminator",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.c\",\"content\":\"int f(void){ int task=1; int *p=&task;\\nint q=1; /* note */ *p = task-42;\\nreturn 0; }\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a block comment starting mid-line ends at its terminator; the code after it must not reach the tells"
+    },
+    {
+      "id": 105,
+      "name": "comment-write-earlier-comment-not-hidden-by-later-one",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\nvar y = 1 /* fixes #1 */ // ok\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "spans are walked left to right, so a benign trailing comment cannot hide a violating one earlier on the line"
+    },
+    {
+      "id": 106,
+      "name": "comment-write-fragments-across-spans-do-not-join",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\nvar y = 1 /* fixes */ z /* #1 */\\n\"}}",
+      "expected_exit": 0,
+      "reason": "tells run per span; joining them would synthesise `fixes #1` from two harmless fragments"
     }
   ]
 }
