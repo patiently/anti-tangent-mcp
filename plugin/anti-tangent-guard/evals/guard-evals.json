@@ -2257,6 +2257,10 @@
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "hack.go: // fixes #58"
+      ],
       "expected_file_contains": {
         "{{TMPDIR}}/trace.log": [
           "scan | src=final_diff submitted=2 scanned=1 lines=1"
