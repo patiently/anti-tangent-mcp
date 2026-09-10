@@ -24,7 +24,10 @@ an excuse cost less than staying silent.**
   submitted reason — "CodeScene MCP not configured in this project" — was false.
 - Test output showing no execution was accepted as evidence of a passing run.
 
-This release closes all ten.
+This release closes all ten, plus an eleventh (**G11**) found while preparing to dispatch this
+release's own execution: nothing requires a plan to tell its implementers the comment policy, so
+an implementer without the protocol plugin loaded is told nothing and pays a round discovering it.
+See [5c](#5c-g11--a-plan-must-tell-implementers-the-comment-policy).
 
 **What it does not do, stated up front:** on a project that has not set
 `ANTI_TANGENT_TICKET_PATTERN`, this release does **not** catch the reported incident. See
@@ -422,16 +425,72 @@ listing the offending fences**, not one finding per fence.
 
 Twelve `plan_*.golden` files regenerate. The diff is reviewed by hand, not trusted.
 
+### 5c. G11 — a plan must tell implementers the comment policy
+
+Not in #71; found while preparing to dispatch this plan's own execution.
+
+**The gap.** `validate_plan` enforces nothing about comments, and neither does `validate_task_spec`.
+The policy exists in `implementer.md §4.4`, and the protocol skill routes implementers to read it —
+but only when the `anti-tangent-protocol` plugin is installed *and* the subagent invokes its skill.
+Without that the implementer is told nothing, writes a comment carrying change history, and pays a
+round: `post.tmpl`'s `comment_hygiene` rule or the guard's block, a fix, and a re-validation.
+
+**Why §4.4 is not sufficient even when it is loaded.** Normative code in a plan is *binding* —
+`post.tmpl` calls normative bodies "authoritative for fixture state, exact strings, and
+assertions". An implementer that read §4.4 will still transcribe a tracker-key comment sitting in a
+binding fence, because the plan outranks its own judgment. That is exactly how #71's comment
+reached the repository. 5b keeps such comments out of the fence; 5c makes the plan carry the rule
+for everything the implementer writes itself. The two are complementary, not alternatives.
+
+**The check.** A plan-level finding when the plan gives implementers neither the comment policy nor
+a pointer to it:
+
+```
+severity:  major
+category:  other
+criterion: comment_policy_absent
+```
+
+**`category: other` is load-bearing, not laziness.** The semantically obvious choice,
+`convention_deviation`, carries a parser-side severity floor — `applySeverityFloor`
+(`parser_partial.go:19-27`) forces both it and `unverifiable_codebase_claim` to `minor`, and the
+plan parser applies the floor through `validateFinding`. Emitting this as `convention_deviation`
+at `major` would be silently downgraded and the gate would never fire. `other` has no floor, and it
+is what the existing plan-level major already uses (`task_order_contradiction`,
+`file_consistency.go:178-180`).
+
+One major yields `warn` (`FinalizePlanVerdict` delegates to `FinalizeVerdict`), which the
+plan-handoff gate treats as stop-and-justify. That is the intended strength.
+
+**Satisfied by either form**, and the pointer is the cheaper one:
+
+- a statement of the policy in the plan's own constraints section, or
+- one line naming `anti-tangent-protocol`'s `implementer.md §4.4`.
+
+A pointer cannot drift out of sync with the policy the way a copied paragraph can, so it is the
+form the rule should recommend.
+
+**Reviewer-led, not deterministic.** A regex can spot a pointer but not a policy stated in prose,
+and for a *gate* a false positive — blocking a plan that does carry the policy — costs more than an
+occasional miss. The reviewer judges intent. This trades some reliability for far less friction,
+and it is the same call made in 5b.
+
 ## Part 6 — documentation (G10 and the rest)
 
-### 6a. The controller note
+### 6a. Authoring guidance for the new plan requirement
+
+`docs/protocol/authoring.md` gains a line telling plan authors that a plan must carry the comment
+policy or a pointer to `implementer.md §4.4`, and that `validate_plan` now emits a plan-level
+major when it carries neither. It has 7,541 bytes of headroom, so this is unconstrained.
+
+### 6b. The controller note
 
 `docs/protocol/controller.md`: a `pass` after N rounds does not mean earlier rounds inspected
 everything. A defect present from round 1 was first reported in round 4. Not a bug — worth stating
 so a controller does not read an Nth-round pass as an audit of rounds 1..N-1. `controller.md` has
 1,564 bytes of headroom.
 
-### 6b. The byte budget
+### 6c. The byte budget
 
 The protocol parts are CI-capped at **strictly under 16,000 bytes**, with a warning band at 15,500
 (`.github/workflows/ci.yml:61-74`):
@@ -464,6 +523,7 @@ Both parts resync into `plugin/anti-tangent-protocol/protocol/` in the same comm
 | Test evidence (Part 4) | **Negatives first**: `UP-TO-DATE`, `FROM-CACHE`, Go `(cached)`, a human summary — all must stay clean. Then the four positives |
 | Regex (5a) | The Part 5a table, as a table test |
 | Plan rule (5b) | A plan with three tracker-key fences → exactly one consolidated minor; a plan with a diff fence removing a bad comment → clean |
+| Plan rule (5c) | A plan carrying neither policy nor pointer → one major, `category: other`, `criterion: comment_policy_absent`. A plan carrying only the one-line pointer → clean. **Assert the severity survives the parser**, since the obvious category would have been floored to minor |
 | Goldens | `go test ./internal/prompts/... -update`, twelve files, diff read by hand |
 | Protocol size + bundle | `.github/workflows/ci.yml:61-91` — these are inline CI steps, **not** `scripts/check-protocol-docs.sh`, which checks relative links and section-ID uniqueness only |
 | Everything | `go test -race ./...`, `evals/run.sh`, `fp-report.sh` (all CI-gated) |
@@ -497,6 +557,10 @@ either finding alone warns. **Both on the same lightweight close stack to two ma
 hook blocks.** A lightweight task under `required` that skips CodeScene without evidence *and*
 pastes a `NO-SOURCE` test run will be blocked where today it closes clean. That is the intended
 outcome and the sharpest edge in the release.
+
+**Plans without a comment policy start drawing a major.** Every plan reviewed after this release
+that gives implementers neither the policy nor a pointer to it returns `warn` at plan level. The
+remedy is one line, and the finding's suggestion names it.
 
 **One documented behaviour reverses.** `ANTI_TANGENT_COMPLETION_GUARD=0` stops disabling the
 comment scan. Anyone relying on it as a master switch must set both variables.

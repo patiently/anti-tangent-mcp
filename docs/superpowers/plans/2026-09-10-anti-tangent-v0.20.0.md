@@ -19,7 +19,7 @@
 - **`EXPECTED_CASE_COUNT` in `evals/run.sh:155` must equal the case count in `guard-evals.json`.** Every task adding eval cases updates it in the same commit.
 - **Protocol parts are capped at strictly under 16,000 bytes** (`.github/workflows/ci.yml:61-74`), with a warning at 15,500. `core.md` has 109 bytes of headroom and `implementer.md` has 407 — rewrites in those two files must come in at or under the length they replace.
 - **`plugin/anti-tangent-protocol/protocol/` must be byte-identical to `docs/protocol/`.** Resync in the same commit as any protocol edit: `rm -f plugin/anti-tangent-protocol/protocol/*.md && cp docs/protocol/*.md plugin/anti-tangent-protocol/protocol/`
-- **Comments follow the project policy** they are enforcing: they explain behaviour, invariants and hazards, and carry no issue, task or version references. Test fixtures containing `// fixes #58` are data, not comments, and are exempt.
+- **Comments: `anti-tangent-protocol` `implementer.md` §4.4.** In full, because this plan is enforcing it: comments explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next editor, and must read correctly to someone who never saw the change that introduced it. They carry no issue, pull-request, task or version references and no "previously" / "no longer" / "this replaced" — git holds that. Where you touch code whose comments break these rules, rewrite them as part of the task. Test fixtures containing `// fixes #58` are data, not comments, and are exempt.
 - **`VERSION` is not edited on this branch.** The release workflow bumps it.
 
 **User decisions (already made):**
@@ -1546,9 +1546,9 @@ git commit -m "feat(mcpsrv): reject test evidence stating no test executed"
 
 ---
 
-### Task 9: Comment hygiene over normative plan code fences
+### Task 9: Comment rules for plans — fences and policy
 
-**Goal:** `validate_plan` flags a tracker-key or change-history comment inside plan code that will be transcribed verbatim into the repository.
+**Goal:** `validate_plan` flags a change-history comment inside plan code that will be transcribed verbatim into the repository (G8), and gates on a plan that gives its implementers no comment policy at all (G11).
 
 **Files:**
 - Modify: `internal/prompts/templates/plan_rules.tmpl`
@@ -1557,12 +1557,17 @@ git commit -m "feat(mcpsrv): reject test evidence stating no test executed"
 
 **Acceptance Criteria:**
 - [ ] `plan_rules.tmpl` carries a comment-hygiene section naming tracker keys, issue/PR references and change narration
-- [ ] The section states the finding is `minor` with criterion `comment_hygiene`
+- [ ] The section states the fence finding is `minor` with criterion `comment_hygiene`
 - [ ] The section exempts diff fences' `-` lines, expected-output fences, and test-fixture fences
 - [ ] The section asks for ONE consolidated plan-level finding listing the offending fences, not one per fence
+- [ ] The section requires the plan to carry the comment policy OR a pointer to `implementer.md §4.4`, and emits `severity: major`, `category: other`, `criterion: comment_policy_absent` when it carries neither
+- [ ] The policy finding uses `category: other` — **not** `convention_deviation`, which `applySeverityFloor` would silently downgrade to `minor`
+- [ ] A plan carrying only the one-line pointer draws no policy finding
 - [ ] All twelve `plan_*.golden` files regenerate and the diff contains only the new section
 
 **Verify:** `go test -race ./internal/prompts/...` → PASS
+
+**Why both rules live in one task:** they are two paragraphs of the same `plan_rules.tmpl` section and share one regeneration of the same twelve golden files. Splitting them would mean regenerating twelve goldens twice and reading the same diff twice.
 
 **Steps:**
 
@@ -1578,7 +1583,17 @@ Code inside a fence in this plan is transcribed into the repository as written, 
 Three exemptions, and they matter more than the rule: a fence showing a DIFF exempts its `-` lines, because removing such a comment is the fix; a fence showing EXPECTED OUTPUT or a TEST FIXTURE is data, not code that lands in the repository, and a plan whose subject is comment scanning will legitimately contain strings like `// fixes #1` as fixtures. When in doubt about whether a fence is transcribed, do not flag it.
 
 Emit at most ONE finding for the whole plan: `category: quality`, `criterion: comment_hygiene`, `severity: minor`, with `evidence` listing each offending task and comment, and `suggestion` giving the rewrites. One finding per fence would push a plan with three of them to `warn` on finding count alone.
+
+### Comment policy for implementers
+
+A plan is the one artifact every implementing subagent reads. If it says nothing about how comments are to be written, an implementer working without the `anti-tangent-protocol` plugin loaded has no policy at all, writes a comment carrying change history, and spends a review round discovering it.
+
+Check whether the plan gives implementers the comment policy in EITHER form: a statement of it in a constraints or conventions section, or a one-line pointer to `anti-tangent-protocol`'s `implementer.md` §4.4. Either satisfies this; the pointer is preferable because it cannot drift out of sync with the policy it names.
+
+When the plan carries neither, emit ONE plan-level finding: `category: other`, `criterion: comment_policy_absent`, `severity: major`, with `suggestion` giving the exact line the author can paste. Do not emit it per task, and do not emit it when the plan carries either form.
 ```
+
+**`category: other` is not a fallback here — it is required.** `applySeverityFloor` (`internal/verdict/parser_partial.go:19-27`) forces `convention_deviation` and `unverifiable_codebase_claim` to `minor`, and the plan parser applies the floor through `validateFinding`. Emitting the policy finding as `convention_deviation` at `major` would be silently downgraded and the gate would never fire. `other` has no floor, and it is what the existing plan-level major already uses (`task_order_contradiction`, `internal/mcpsrv/file_consistency.go:178-180`).
 
 - [ ] **Step 2: Add a template test asserting the section renders**
 
@@ -1592,6 +1607,11 @@ func TestPlanRulesCarriesCommentHygiene(t *testing.T) {
 	assert.Contains(t, body, "Comment hygiene in normative code")
 	assert.Contains(t, body, "criterion: comment_hygiene")
 	assert.Contains(t, body, "Emit at most ONE finding")
+	// The policy gate is a major, and the category it is emitted under is the
+	// only one of the plausible choices that survives applySeverityFloor.
+	assert.Contains(t, body, "criterion: comment_policy_absent")
+	assert.Contains(t, body, "`category: other`")
+	assert.NotContains(t, body, "convention_deviation")
 }
 ```
 
@@ -1634,6 +1654,7 @@ git commit -m "feat(prompts): flag change-history comments in normative plan fen
 - Modify: `docs/protocol/core.md:133-137`
 - Modify: `docs/protocol/implementer.md:157`
 - Modify: `docs/protocol/controller.md`
+- Modify: `docs/protocol/authoring.md`
 - Modify: `README.md:329`
 - Modify: `CLAUDE.md`
 - Modify: `plugin/anti-tangent-guard/README.md`
@@ -1647,6 +1668,7 @@ git commit -m "feat(prompts): flag change-history comments in normative plan fen
 - [ ] `CLAUDE.md`'s "silences the whole close-time hook" sentence matches the new switch behaviour
 - [ ] The guard README documents `ANTI_TANGENT_TICKET_PATTERN` and states that without it the tracker-key shape is not detected
 - [ ] The guard README's claim that the hook exits "before it reads stdin" is corrected — with only one switch set it now reads stdin and runs the other half
+- [ ] `docs/protocol/authoring.md` tells plan authors that a plan must carry the comment policy or a pointer to `implementer.md` §4.4, and that `validate_plan` now emits a plan-level major when it carries neither
 - [ ] `diff -r docs/protocol plugin/anti-tangent-protocol/protocol` is empty
 
 **Verify:** `bash scripts/check-protocol-docs.sh && for f in docs/protocol/*.md; do echo "$f $(wc -c < $f)"; done` → all under 16000, script passes
@@ -1743,6 +1765,20 @@ A regex for your tracker's key shape, e.g. `ABC-\d+`. Set it per project in `.cl
 **There is no default, and without it a comment like `// ABC-1234: the keyword` is not detected.** A generic pattern cannot be made safe: measured over real comment lines, `[A-Z]+-\d+` matches hardware identifiers (`HDMI-0`, `DP-0`) and prose labels (`ROUND-1`) far more often than tracker keys, and this hook blocks writes. An uncompilable or over-long pattern is ignored, and the whole scan runs under a two-second deadline that fails open.
 ```
 
+- [ ] **Step 8a: Tell plan authors about the new requirement**
+
+In `docs/protocol/authoring.md`, in the section on what a plan must contain, add:
+
+```markdown
+**State the comment policy, or point at it.** A plan is the one artifact every implementing
+subagent reads, and an implementer working without this plugin loaded has no comment policy
+otherwise. Either restate the policy in the plan's constraints section, or carry one line:
+`Comments: anti-tangent-protocol implementer.md §4.4`. `validate_plan` emits a plan-level
+`major` (`criterion: comment_policy_absent`) when a plan carries neither.
+```
+
+`authoring.md` is 8,459 bytes with 7,541 of headroom, so this is unconstrained — but it is still a protocol part and resyncs with the rest in the next step.
+
 - [ ] **Step 9: Resync the protocol bundle**
 
 ```bash
@@ -1783,6 +1819,7 @@ git commit -m "docs: correct the ladder, the kill switches, and the plan-round c
 - [ ] `CHANGELOG.md`'s `## [0.20.0] - 2026-09-10` block has populated `### Added`, `### Changed` and `### Fixed` sections
 - [ ] The two behaviour changes that fail verdicts passing today are under **Changed**, not Fixed, and name the stacking interaction
 - [ ] The entry states that without `ANTI_TANGENT_TICKET_PATTERN` the reported tracker-key shape is still not detected
+- [ ] The entry records that plans lacking a comment policy now draw a plan-level major
 - [ ] `anti-tangent-guard` is `0.3.0` in both its `plugin.json` and `marketplace.json`
 - [ ] `anti-tangent-protocol` is `0.2.2` in both
 - [ ] `VERSION` is untouched
@@ -1811,6 +1848,7 @@ Replace the empty `### Added` / `### Changed` / `### Fixed` headings under `## [
 ### Fixed
 - `validate_plan` no longer reports an existing file as missing when a `Files:` bullet anchors more than two line numbers (`docs/x.md:60,166,174,419`). The anchor pattern permitted only one separator per group, so it matched the first pair and then failed the whole anchor, leaving the digits attached to the path. `a.kt:27-30,40-50` was broken the same way.
 - `validate_plan` flags change-history comments inside normative code fences, which is where the transcribed-into-the-repository ones come from.
+- `validate_plan` emits a plan-level `major` (`criterion: comment_policy_absent`) when a plan gives its implementers neither the comment policy nor a pointer to `implementer.md` §4.4. Without it, an implementer working without the protocol plugin loaded is told nothing and spends a review round discovering the policy. One line satisfies it, and the finding's suggestion gives that line.
 ```
 
 - [ ] **Step 2: Bump the plugin versions**
