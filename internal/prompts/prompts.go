@@ -118,6 +118,54 @@ type MidInput struct {
 	Questions     []string
 }
 
+// fenceMinRun is the shortest backtick fence a prompt block may use. Four
+// rather than three, so ordinary fenced code inside an untrusted value does
+// not end the block that quotes it.
+const fenceMinRun = 4
+
+// fence returns the delimiter to open and close a block quoting parts: a run
+// of backticks one longer than the longest run anywhere in them, and never
+// shorter than fenceMinRun.
+//
+// A fixed delimiter is ended by any line of the quoted value carrying a run
+// at least as long, and everything after that line reaches the reviewer as
+// prompt rather than as quoted data. Every value fenced this way is
+// caller-supplied — file contents, a unified diff, test output — so nothing
+// stops one carrying such a line, by accident or by design; this
+// repository's own templates and golden files contain them.
+func fence(parts ...string) string {
+	longest, run := 0, 0
+	for _, s := range parts {
+		run = 0
+		for _, r := range s {
+			if r != '`' {
+				run = 0
+				continue
+			}
+			run++
+			if run > longest {
+				longest = run
+			}
+		}
+	}
+	if longest < fenceMinRun {
+		return strings.Repeat("`", fenceMinRun)
+	}
+	return strings.Repeat("`", longest+1)
+}
+
+// fenceFiles returns one delimiter safe for every block in a section that
+// quotes several files under one heading, so the section's prose can name a
+// single run of backticks. A path is quoted inside the block alongside the
+// body, and can carry a backtick as readily as one.
+func fenceFiles(files []File) string {
+	parts := make([]string, 0, 2*len(files))
+	for _, f := range files {
+		parts = append(parts, f.Path, f.Content)
+	}
+	return fence(parts...)
+}
+
 type PostInput struct {
 	Spec                           session.TaskSpec
 	Summary                        string
@@ -572,8 +620,16 @@ func RenderExtract(in ExtractInput) (Output, error) {
 // edit drifts. Parsing eight small templates costs microseconds and always
 // precedes an HTTP call to a reviewer LLM, so the waste is unmeasurable next
 // to what it prevents.
+// templateFuncs are the helpers the templates call. Everything here computes
+// prompt STRUCTURE from untrusted content, which is why it lives in Go and
+// not in the templates: a template cannot measure the value it interpolates.
+var templateFuncs = template.FuncMap{
+	"fence":      fence,
+	"fenceFiles": fenceFiles,
+}
+
 func render(name string, data any) (string, error) {
-	tmpl, err := template.ParseFS(templatesFS, "templates/*.tmpl")
+	tmpl, err := template.New("prompts").Funcs(templateFuncs).ParseFS(templatesFS, "templates/*.tmpl")
 	if err != nil {
 		return "", fmt.Errorf("parse templates: %w", err)
 	}

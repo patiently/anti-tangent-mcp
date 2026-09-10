@@ -42,7 +42,7 @@ Closes the ten comment-hygiene and completion-gate gaps reported in
 - The `anti-tangent-guard` eval harness (`plugin/anti-tangent-guard/evals/run.sh`) no longer inherits the invoking shell's `ANTI_TANGENT_TICKET_PATTERN`, `ANTI_TANGENT_COMPLETION_GUARD` or `ANTI_TANGENT_COMMENT_GUARD`. A case with no `env` block of its own used to see whatever the developer's or CI's shell happened to have exported instead of the documented default, so a switch-combination case could produce a false pass as easily as a false failure. Anyone who ran that suite with any of the three set in their own environment may have been reading a result about their shell, not the code — `ANTI_TANGENT_TICKET_PATTERN` included, which is the variable this same release asks operators to export per project.
 
 ### Security
-- `test_evidence` reaches the reviewer inside the same four-backtick untrusted-data fence as `final_diff` and `final_files` do. It was the one evidence field interpolated at instruction level, so text an implementer composed could read to the reviewer as an instruction rather than as evidence to weigh.
+- `test_evidence` reaches the reviewer inside the same untrusted-data fence as `final_diff` and `final_files` do. It was the one evidence field interpolated at instruction level, so text an implementer composed could read to the reviewer as an instruction rather than as evidence to weigh. All three fences are chosen from the value they quote — a run of backticks one longer than the longest run inside it, and never fewer than four — so evidence that carries a fence of its own cannot close the block quoting it and leave the remainder arriving as prompt.
 
 ## [0.19.0] - 2026-09-09
 
