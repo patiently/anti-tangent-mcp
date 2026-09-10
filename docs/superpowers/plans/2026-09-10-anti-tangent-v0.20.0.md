@@ -142,7 +142,7 @@ git commit -m "fix(planparser): accept multi-element line anchors on Files bulle
 - Modify: `plugin/anti-tangent-guard/evals/run.sh:155`
 
 **Acceptance Criteria:**
-- [ ] ` * ABC-1234: the inbound HELP keyword.` is scanned as comment text (no tell matches it without a configured pattern, but the text reaches `TELLS`)
+- [ ] ` * ABC-1234: the inbound HELP keyword.` is scanned as comment text — asserted on `comment_spans`' return value, since no tell matches it without a configured pattern and `violations` therefore cannot show it was read at all
 - [ ] ` * Fixes #123` is flagged as an issue reference
 - [ ] `/* fixes task-42 */` is flagged
 - [ ] `val x = 1 // fixes task-42` is flagged
@@ -778,6 +778,7 @@ these are `TestCase` methods.
 Create `plugin/anti-tangent-guard/hooks/comment_scan_test.py`:
 
 ```python
+import json
 import os
 import subprocess
 import sys
@@ -800,6 +801,30 @@ def _scan(line, pattern=None, path="X.kt"):
     if r.returncode != 0:
         raise AssertionError(r.stderr)
     return r.stdout.strip() == "True"
+
+
+class CommentSpanExtraction(unittest.TestCase):
+    # The tracker-key line from the field report. No tell matches it without a
+    # configured pattern, so a violations() assertion cannot show it was
+    # scanned at all -- only comment_spans can, which is why this asserts the
+    # extracted text rather than the outcome.
+    def test_kdoc_continuation_text_is_extracted(self):
+        code = ("import sys, json; sys.path.insert(0, %r);"
+                "from comment_scan import comment_spans;"
+                "print(json.dumps(comment_spans('X.kt',"
+                " ' * ABC-1234: the inbound HELP keyword.')))" % HOOKS)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(json.loads(r.stdout), [" ABC-1234: the inbound HELP keyword."],
+                         r.stderr)
+
+    def test_terminator_line_yields_no_span(self):
+        code = ("import sys, json; sys.path.insert(0, %r);"
+                "from comment_scan import comment_spans;"
+                "print(json.dumps(comment_spans('X.c', '*/ *p = task-42;')))" % HOOKS)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(json.loads(r.stdout), [], r.stderr)
 
 
 class TicketPatternLength(unittest.TestCase):
@@ -854,7 +879,7 @@ Confirm it actually runs and passes:
 ```bash
 python3 -m unittest discover -s plugin/anti-tangent-guard/hooks -p '*_test.py' -v
 ```
-Expected: 3 tests, OK.
+Expected: 5 tests, OK.
 
 - [ ] **Step 11: Run both suites**
 
@@ -1019,7 +1044,12 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
 {
   "id": 115,
   "name": "switch-both-off-allows",
-  "env": {"ANTI_TANGENT_COMPLETION_GUARD": "0", "ANTI_TANGENT_COMMENT_GUARD": "0"},
+  "env": {
+    "ANTI_TANGENT_COMPLETION_GUARD": "0",
+    "ANTI_TANGENT_COMMENT_GUARD": "0",
+    "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+  },
+  "expected_file_contains": {"{{TMPDIR}}/trace.log": ["| skip | guard=0"]},
   "input": {
     "tool_name": "TaskUpdate",
     "tool_input": {"status": "completed", "taskId": "1"},
@@ -1035,7 +1065,7 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
 }
 ```
 
-Case 115 deliberately carries the bad-comment transcript: with both switches off it must still exit 0, which is what proves the early exit is reached rather than the comment block being skipped by accident.
+Case 115 deliberately carries the bad-comment transcript: with both switches off it must still exit 0, which is what proves the early exit is reached rather than the comment block being skipped by accident. The exit code alone cannot show WHICH path produced it, so the case also pins the trace line — `run.sh` already supports `expected_file_contains`, and the case gives itself a private `ANTI_TANGENT_GUARD_TRACE_LOG` so it is not reading another case's log.
 
 - [ ] **Step 5: Update the case count**
 
@@ -1440,7 +1470,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
 }
 ```
 
-Case 110's `{{TMPDIR}}` is itself inside the harness `WORKDIR`, which is not a git repository, so `ls-files` there exits 128 and the path is skipped. If the harness workdir is ever moved inside a repo this case silently changes meaning — assert the exit code, and if it starts passing for the wrong reason, point the case at `/tmp` explicitly.
+Case 118's `{{TMPDIR}}` is itself inside the harness `WORKDIR`, which is not a git repository, so `ls-files` there exits 128 and the path is skipped. If the harness workdir is ever moved inside a repo this case silently changes meaning — assert the exit code, and if it starts passing for the wrong reason, point the case at `/tmp` explicitly.
 
 - [ ] **Step 6a: Test the check-ignore status the eval table cannot force**
 
@@ -2143,6 +2173,9 @@ git commit -m "feat(mcpsrv): reject test evidence stating no test executed"
 - [ ] A plan carrying only the one-line pointer draws no policy finding, asserted by an `e2e`-tagged test that issues a real `validate_plan` call — the template test proves only that the instruction renders
 - [ ] That same test asserts the emitted finding arrives as `major`/`other`, which is what would catch a floored category
 - [ ] The e2e test pins the provider and model its neighbours pin, asserts presence on the no-policy plan and only absence on the pointer plan, and asserts no total finding count
+- [ ] A second e2e test covers the FENCE half: three violating fences consolidate into exactly one `minor` `comment_hygiene` finding, and a plan whose only fences are a diff, an expected-output block and a test fixture draws none
+- [ ] The e2e fixture writes the pointer exactly as `plan_rules.tmpl` prescribes it, section sign included
+- [ ] Stability is measured, not assumed: five consecutive passes before the test is considered reliable
 - [ ] All twelve `plan_*.golden` files regenerate and the diff contains only the new section
 
 **Verify:** `go test -race ./internal/prompts/...` → PASS, and `go test -tags=e2e ./internal/mcpsrv/... -run TestCommentPolicyFindingE2E` → PASS (needs provider keys; e2e is not run on every PR)
@@ -2226,8 +2259,11 @@ const planBody = "# P\n\n" + "###" + " Task 1: Add a helper\n\n" +
 	"**Acceptance criteria:**\n- [ ] Helper() exists\n\n" +
 	"**Steps:**\n\n- [ ] Write it\n"
 
+// The pointer is written EXACTLY as plan_rules.tmpl prescribes it, section
+// sign included. A fixture that paraphrases the accepted form would test a
+// looser rule than the template states.
 const policyPointer = "## Global Constraints\n\n" +
-	"Comments: anti-tangent-protocol implementer.md 4.4.\n\n"
+	"Comments: anti-tangent-protocol `implementer.md` \u00a74.4.\n\n"
 
 // A plan naming the policy pointer must draw no policy finding; the same plan
 // without it must draw exactly one, at major. The severity is the load-bearing
@@ -2251,6 +2287,50 @@ func TestCommentPolicyFindingE2E(t *testing.T) {
 	assert.Equal(t, "major/other", got[0],
 		"a floored category would arrive as minor and never gate")
 }
+
+// The fence half of the rule needs its own coverage: a violating normative
+// fence must draw exactly ONE consolidated minor however many fences carry a
+// comment, and the three exemptions must stay silent. Consolidation is the
+// assertion that matters -- one finding per fence would push a three-fence
+// plan to warn on count alone, which is the behaviour the template text was
+// written to avoid.
+func TestCommentHygieneFenceFindingE2E(t *testing.T) {
+	fence := func(body string) string {
+		return "```" + "go\n" + body + "\n```" + "\n\n"
+	}
+	violating := policyPointer + "# P\n\n" + "###" + " Task 1: Add helpers\n\n" +
+		"**Goal:** add three helpers.\n\n**Acceptance criteria:**\n- [ ] they exist\n\n" +
+		"**Steps:**\n\n" +
+		fence("// fixes task-42\nfunc A() {}") +
+		fence("// see issue #7\nfunc B() {}") +
+		fence("// added in v0.5.0\nfunc C() {}")
+
+	res := runValidatePlanE2E(t, violating)
+	var hygiene int
+	for _, f := range res.PlanFindings {
+		if f.Criterion == "comment_hygiene" {
+			hygiene++
+			assert.Equal(t, "minor", string(f.Severity))
+		}
+	}
+	assert.Equal(t, 1, hygiene,
+		"three violating fences must consolidate into ONE finding, not three")
+
+	// The exemptions: a diff fence REMOVING a bad comment, an expected-output
+	// fence, and a test-fixture fence. None is transcribed into the codebase.
+	exempt := policyPointer + "# P\n\n" + "###" + " Task 1: Clean up\n\n" +
+		"**Goal:** remove a bad comment and add a fixture.\n\n" +
+		"**Acceptance criteria:**\n- [ ] it is gone\n\n**Steps:**\n\n" +
+		"```" + "diff\n-// fixes task-42\n+// explains the invariant\n```" + "\n\n" +
+		"Expected output:\n\n```" + "text\n// fixes task-42\n```" + "\n\n" +
+		"Test fixture:\n\n```" + "json\n{\"content\": \"// fixes task-42\"}\n```" + "\n\n"
+
+	res = runValidatePlanE2E(t, exempt)
+	for _, f := range res.PlanFindings {
+		assert.NotEqual(t, "comment_hygiene", f.Criterion,
+			"diff, expected-output and fixture fences are exempt: %s", f.Evidence)
+	}
+}
 ```
 
 Match `runValidatePlanE2E` to whatever helper `plan_caching_e2e_test.go` already uses to issue a `validate_plan` call; do not add a second harness if one exists. If no such helper exists, build the request the same way that file does and extract the plan findings from the returned envelope.
@@ -2263,9 +2343,18 @@ the pointer-carrying plan asserts only the ABSENCE of that criterion and says no
 else the reviewer emits. Do not assert a total finding count on either — that is reviewer-dependent
 and would make the test flake on unrelated prose.
 
-If the finding proves genuinely non-deterministic across runs, that is a signal the `plan_rules`
-wording is too weak to gate on, not a reason to loosen the test: tighten the template text in
-Step 1 until it is stable, and record what changed.
+**Stability has a number, not a feeling.** Run it five times back to back before calling it stable;
+five for five is the bar. Anything less means the `plan_rules` wording is too weak to gate on —
+tighten the template text in Step 1 and re-measure rather than loosening the assertion. Record the
+observed pass count in the commit message so a later flake can be compared against a baseline
+instead of argued about.
+
+```bash
+for i in 1 2 3 4 5; do
+  go test -tags=e2e ./internal/mcpsrv/... -run TestCommentPolicyFindingE2E -count=1 \
+    || echo "RUN $i FAILED"
+done
+```
 
 - [ ] **Step 4: Regenerate the goldens**
 
@@ -2468,8 +2557,10 @@ git commit -m "docs: correct the ladder, the kill switches, and the plan-round c
 - [ ] `anti-tangent-guard` is `0.3.0` in both its `plugin.json` and `marketplace.json`
 - [ ] `anti-tangent-protocol` is `0.2.2` in both
 - [ ] `VERSION` is untouched
+- [ ] The `e2e`-tagged reviewer tests are run when provider keys are present, and an explicit SKIPPED line is recorded when they are not — `go test -race ./...` does not build them
+- [ ] The branch-name-to-changelog check the goal names is actually executed, not assumed
 
-**Verify:** `git diff --stat VERSION` → empty, and `jq -r '.plugins[] | "\(.name) \(.version)"' .claude-plugin/marketplace.json` matches each `plugin.json`
+**Verify:** `git diff --stat VERSION` → empty; `jq -r '.plugins[] | "\(.name) \(.version)"' .claude-plugin/marketplace.json` matches each `plugin.json`; and the branch-name-to-changelog check in Step 4a reports the entry present for 0.20.0
 
 **Steps:**
 
@@ -2516,7 +2607,7 @@ git diff --stat VERSION
 ```
 Expected: guard `0.3.0` and protocol `0.2.2` in both listings; the `VERSION` diff is empty.
 
-- [ ] **Step 4: Run everything**
+- [ ] **Step 4: Run everything, and say what "everything" excludes**
 
 ```bash
 go test -race ./... && \
@@ -2526,6 +2617,37 @@ bash plugin/anti-tangent-shunt/evals/run.sh && \
 bash scripts/check-protocol-docs.sh
 ```
 Expected: all pass.
+
+`go test -race ./...` does NOT build the `e2e`-tagged tests, so the two Task 9 tests — the only
+behavioural coverage G11 and G8's fence rule have — are excluded from that line. Run them
+separately when provider credentials are present, and record the outcome either way:
+
+```bash
+if [ -n "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}${GOOGLE_API_KEY:-}" ]; then
+  go test -tags=e2e ./internal/mcpsrv/... \
+    -run 'TestCommentPolicyFindingE2E|TestCommentHygieneFenceFindingE2E' -count=1
+else
+  echo "SKIPPED: e2e reviewer tests — no provider key set. G11 and the fence rule ship unverified."
+fi
+```
+
+A skip here is a legitimate outcome, but it must be stated in the release notes for this branch
+rather than passing silently — "all tests pass" is false if the only test of a new gate never ran.
+
+- [ ] **Step 4a: Confirm the CI check the goal names**
+
+The goal says CI's branch-name-to-changelog check passes; the Verify line only compares versions.
+That check lives in `.github/workflows/ci.yml` ("Verify CHANGELOG.md entry for branch version") and
+is reproducible locally:
+
+```bash
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+[[ "$BRANCH" =~ ^version/([0-9]+\.[0-9]+\.[0-9]+)$ ]] \
+  && grep -q "^## \[${BASH_REMATCH[1]}\]" CHANGELOG.md \
+  && echo "changelog entry present for ${BASH_REMATCH[1]}" \
+  || echo "MISSING changelog entry"
+```
+Expected: `changelog entry present for 0.20.0`.
 
 - [ ] **Step 5: Commit**
 
