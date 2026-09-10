@@ -51,10 +51,11 @@ gate becomes visible from the controller's own transcript). It blocks
    surviving only as escapes inside one JSON string, so the hook parses that
    JSON directly for `verdict` rather than pattern-matching the escaped
    text.
-3. **The submitted diff contains added comment lines carrying change history.**
-   A scan of added lines in the diff detects comments matching a pattern set
-   (patterns stored in `comment_scan.py`), the same patterns the write-time
-   hook applies to `Edit` and `Write` calls. This scan detects rather than
+3. **The evidence that call submitted adds comment lines carrying change
+   history.** A scan of added lines — from the submitted diff, or from git
+   for a completion that submits `final_files` — detects comments matching a
+   pattern set (patterns stored in `comment_scan.py`), the same patterns the
+   write-time hook applies to `Edit` and `Write` calls. This scan detects rather than
    prevents, catching comments that reached disk through `Bash` or other
    pathways the write-time hook cannot intercept.
 
@@ -276,8 +277,10 @@ rather than treating the reflow as separate from the touch.
 - `PostToolUse` detects rather than prevents: the close-time scan fires
   **after** the state change to `completed`, so a comment reaching disk
   through `Bash` blocks further progress only at close time, not at write time.
-- The scanner reads full-line comments only. Multi-line comments, including
-  those that span across lines, are not detected.
+- The scanner reads one line at a time: a full-line comment, a comment
+  trailing code on the same line, a `/* … */` opened and closed on one line,
+  and a starred block-continuation line. An *unstarred* block interior is a
+  known miss — nothing on such a line marks it as sitting inside a comment.
 - The starred block-continuation shape (a KDoc/Javadoc body line) has no
   quote-parity check behind it — the prefix before a line-leading `*` is
   always whitespace, so parity cannot tell it apart from a markdown bullet
@@ -320,14 +323,22 @@ above, and is recorded to the trace log the same way. Set
 `ANTI_TANGENT_COMMENT_GUARD=0` to skip this scan while the completion gate
 above still runs in full.
 
-**What this scan cannot see.** A completion whose evidence is `final_files`
-or `test_evidence` alone carries no diff of any kind, so there is nothing
-here to read — the close is not blocked on comment hygiene, one way or the
-other. That gap is not filled elsewhere: the reviewer's own rule for a
-change-history comment applies only when a diff is present in the same
-call, so a diff-less completion gets no comment scrutiny from the reviewer
-either. Such a close is covered by the write-time `Edit`/`Write` hook alone
-— and by nothing at all if the code reached disk through `Bash`.
+**What this scan cannot see.** A completion that submits `final_files` is
+read through git rather than through a diff, and git reports a line as added
+only while it is uncommitted or its file is untracked. **Work already
+committed before the close therefore yields no added lines and is not
+scanned** — and committing per task before closing it is the common shape,
+so this is the case to plan around, not an edge. The same holds for a
+completion whose only evidence is `test_evidence`, and for a `final_files`
+path git cannot classify (outside a repository, or gitignored). That gap is
+not filled elsewhere: the reviewer's own rule for a change-history comment
+applies only when a diff is present in the same call, so such a completion
+gets no comment scrutiny from the reviewer either. It is covered by the
+write-time `Edit`/`Write` hook alone — and by nothing at all if the code
+reached disk through `Bash`. To have committed work scanned, submit it as a
+diff from the commit the task started at
+(`git diff <task-base-commit> -- <task paths>`) rather than as
+`final_files`.
 
 ## Dependencies
 
@@ -439,10 +450,11 @@ land — is swallowed and never changes the hook's own exit status.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (93 cases) against both hooks and exits non-zero on
-any mismatch — check-task-complete's three block conditions (the third being
-its own close-time comment-hygiene scan), plus check-comment-write's
-write-time comment-hygiene guard. See `evals/run.sh`'s header comment for the
+Runs the hooks' own unit tests (`hooks/*_test.py`) first, then the full eval
+suite (127 cases) against both hooks, and exits non-zero on either — the
+cases cover check-task-complete's three block conditions (the third being its
+own close-time comment-hygiene scan), plus check-comment-write's write-time
+comment-hygiene guard. See `evals/run.sh`'s header comment for the
 full breakdown by case. Cases 18/19 are deliberately un-escaped fixtures — they
 test positional extraction against an older server. Cases 20/21 are the
 current server's own rendering, pinned byte-for-byte to the formatters by

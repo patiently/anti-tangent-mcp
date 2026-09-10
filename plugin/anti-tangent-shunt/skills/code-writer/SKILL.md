@@ -24,12 +24,13 @@ and `anti-tangent-guard`'s write-time comment hook never sees it. Only the
 close-time scan over your submitted diff, and the reviewer, will catch a
 generated comment that carries change history.
 
-Both of those remaining defences read a DIFF, so close the task with
-`final_diff` or `final_diff_path` on the `validate_completion` call. A
-completion carrying only `final_files` or only `test_evidence` gives the
-close-time scan no diff to read, and the reviewer applies its comment-hygiene
-rule only when a diff is present in the same call — so a `target_path` write
-closed without diff evidence is scanned by nothing at all.
+Close the task with `final_diff` or `final_diff_path` on the
+`validate_completion` call. The close-time scan does read a `final_files`
+completion, but it asks git which lines are new, so it sees a generated
+file's comments only while they are uncommitted or the file is untracked;
+the reviewer, meanwhile, applies its comment-hygiene rule only when a diff is
+present in the same call. A `target_path` write closed on already-committed
+`final_files`, or on `test_evidence` alone, is scanned by nothing at all.
 
     mcp__anti-tangent__code_write
       spec:           "Table test for Add covering zero, negative and overflow"

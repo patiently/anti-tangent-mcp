@@ -135,7 +135,9 @@ The comment policy (`implementer.md` §4.4) can be enforced, not just stated. If
 `anti-tangent-guard` plugin is installed, its `PreToolUse` hook on `Edit`/`Write` refuses — `exit
 2`, before the write ever lands — a write that adds a comment matching one of a small set of
 mechanical tells: an issue, pull-request or task reference, or a version reference narrating when
-something changed. Prose narration ("previously", "no longer", "this replaced") cannot be matched
+something changed. A tracker key (`ABC-1234:`) is matched only where the project sets
+`ANTI_TANGENT_TICKET_PATTERN` to its own key shape; there is deliberately no default, so an
+unconfigured project gets no tracker tell at all. Prose narration ("previously", "no longer", "this replaced") cannot be matched
 without false positives, so that half of the policy is reviewer-led instead — `post.tmpl` catches
 it at completion time — and a clean write-time pass is not proof the whole of §4.4 was followed. A
 refused `Edit`/`Write` is not a bug in your call; it is the policy holding. Rewrite the flagged

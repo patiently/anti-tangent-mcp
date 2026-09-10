@@ -132,8 +132,10 @@ Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). `
 ## Comments
 
 The `anti-tangent-guard` plugin enforces this at write time (`Edit`/`Write`) and again at task
-close, when installed — but its scanner only catches full-line comments against a small pattern
-set, so a clean hook run is not proof of compliance; apply the policy yourself.
+close, when installed — but its scanner reads one line at a time against a small pattern set, so
+it misses an unstarred block-comment interior, and at close time it sees a `final_files`
+submission only through git, which reports nothing for work already committed. A clean hook run
+is not proof of compliance; apply the policy yourself.
 
 Comments explain non-trivial behaviour, or a non-obvious invariant or hazard
 that would bite the next editor. The test: the comment reads correctly to

@@ -240,6 +240,10 @@ ANTI_TANGENT_WORKER_MAX_TOKENS=4096      # output cap for worker calls; clamped 
 # NOTE: ANTI_TANGENT_SHUNT_MIN_LINES is read by the Claude Code plugin hooks ONLY, never by the server itself.
 ANTI_TANGENT_SHUNT_MIN_LINES=350         # threshold file line count; Reads exceeding this are delegated to bulk_read
 
+# --- Plugin hooks (anti-tangent-guard comment scan) ---
+# NOTE: ANTI_TANGENT_TICKET_PATTERN is read by the Claude Code plugin hooks ONLY, never by the server itself.
+ANTI_TANGENT_TICKET_PATTERN=             # optional regex for your tracker's key shape, e.g. ABC-\d+; no default, so tracker keys go undetected until you set it
+
 # --- Opt-in statistics (off unless ANTI_TANGENT_STATS_DIR is set) ---
 # Output directory; enables the subsystem. Files in ANTI_TANGENT_STATS_DIR:
 #   events.jsonl          — per-call counts (server-written)
@@ -583,11 +587,11 @@ See [`plugin/anti-tangent-shunt/README.md`](plugin/anti-tangent-shunt/README.md)
 
 Two hooks that enforce anti-tangent-mcp's conventions, both of which block.
 
-A `PostToolUse` hook on `TaskUpdate` enforces the `validate_completion` gate at task close: when a task is marked completed without running `validate_completion`, or the diff it was validated against adds comments carrying change history, the guard returns a blocking instruction to reopen, fix, and re-close. It detects rather than prevents — `PostToolUse` fires after the state change, so it cannot stop the close itself.
+A `PostToolUse` hook on `TaskUpdate` enforces the `validate_completion` gate at task close: when a task is marked completed without running `validate_completion`, or the evidence it was validated against adds comments carrying change history, the guard returns a blocking instruction to reopen, fix, and re-close. It detects rather than prevents — `PostToolUse` fires after the state change, so it cannot stop the close itself.
 
 A `PreToolUse` hook on `Edit`/`Write` refuses a write that adds such a comment, before it lands. **Installing this plugin means some of your edits will be rejected until the comment is rewritten.**
 
-Kill switches: `ANTI_TANGENT_COMPLETION_GUARD=0` silences the close-time hook; `ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning at both write time and close time while leaving the completion gate running.
+Kill switches: `ANTI_TANGENT_COMPLETION_GUARD=0` turns off the completion gate only; `ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning at both write time and close time; setting both is what silences the close-time hook entirely.
 
 **Install:**
 

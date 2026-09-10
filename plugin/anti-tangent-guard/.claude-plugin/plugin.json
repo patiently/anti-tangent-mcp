@@ -1,6 +1,6 @@
 {
   "name": "anti-tangent-guard",
-  "description": "Two hooks enforcing anti-tangent-mcp's conventions. A PostToolUse hook on TaskUpdate mandates the validate_completion gate at task close and, when the submitted diff adds comments carrying change history, returns a blocking instruction to reopen and fix. It detects rather than prevents: PostToolUse fires after the state change, so it cannot stop the close itself. A PreToolUse hook on Edit/Write refuses such a comment before it is written. Kill switches: ANTI_TANGENT_COMPLETION_GUARD=0, ANTI_TANGENT_COMMENT_GUARD=0.",
+  "description": "Two hooks enforcing anti-tangent-mcp's conventions. A PostToolUse hook on TaskUpdate mandates the validate_completion gate at task close and, when the evidence that call submitted adds comments carrying change history, returns a blocking instruction to reopen and fix — reading the submitted diff, or a final_files completion through git, which reports nothing for work already committed. It detects rather than prevents: PostToolUse fires after the state change, so it cannot stop the close itself. A PreToolUse hook on Edit/Write refuses such a comment before it is written; set ANTI_TANGENT_TICKET_PATTERN to your tracker's key shape to have tracker keys caught too. Kill switches: ANTI_TANGENT_COMPLETION_GUARD=0 (completion gate only), ANTI_TANGENT_COMMENT_GUARD=0 (comment scan, both hooks).",
   "version": "0.3.0",
   "author": {
     "name": "Patrick Gilmore",
