@@ -25,8 +25,8 @@ this plan is a `unittest.TestCase` method.
 - **`EXPECTED_CASE_COUNT` in `evals/run.sh:155` must equal the case count in `guard-evals.json`.** Every task adding eval cases updates it in the same commit.
 - **Protocol parts are capped at strictly under 16,000 bytes** (`.github/workflows/ci.yml:61-74`), with a warning at 15,500. `core.md` has 109 bytes of headroom and `implementer.md` has 407 — rewrites in those two files must come in at or under the length they replace.
 - **`plugin/anti-tangent-protocol/protocol/` must be byte-identical to `docs/protocol/`.** Resync in the same commit as any protocol edit: `rm -f plugin/anti-tangent-protocol/protocol/*.md && cp docs/protocol/*.md plugin/anti-tangent-protocol/protocol/`
-- **Comments: `anti-tangent-protocol` `implementer.md` §4.4.** In full, because this plan is enforcing it: comments explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next editor, and must read correctly to someone who never saw the change that introduced it. They carry no issue, pull-request, task or version references and no "previously" / "no longer" / "this replaced" — git holds that.
-- **Scope of that rule in THIS release: comments you add or edit, and nothing else.** `evals/run.sh` and `check-task-complete` already contain comments the policy would flag ("Task 16", "Task 8's pinned re-validation semantics", "final review Important #1"), and Tasks 2–5 all edit those files. Rewriting every such comment is a file-wide cleanup with a large diff and no test behind it, which is not what any of these tasks is for. Leave pre-existing comments alone unless the lines you are changing carry them; a cleanup pass is its own release.
+- **Comments: `anti-tangent-protocol` `implementer.md` §4.4**, with ONE clause superseded for this release (the next bullet). Restated here because this plan is enforcing it: comments explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next editor, and must read correctly to someone who never saw the change that introduced it. They carry no issue, pull-request, task or version references and no "previously" / "no longer" / "this replaced" — git holds that.
+- **Superseding §4.4's cleanup sentence: in THIS release the rule covers comments you add or edit, and nothing else.** §4.4 says "when you touch code whose comments break these rules, remove or rewrite them as part of your task"; that sentence does not apply here. `evals/run.sh` and `check-task-complete` already contain comments the policy would flag ("Task 16", "Task 8's pinned re-validation semantics", "final review Important #1"), and Tasks 2–5 all edit those files. Rewriting every such comment is a file-wide cleanup with a large diff and no test behind it, which is not what any of these tasks is for. Leave pre-existing comments alone unless the lines you are changing carry them; a cleanup pass is its own release.
 - **Test fixtures containing `// fixes #58` are data, not comments, and are exempt** — this release's own eval table is full of them by necessity.
 - **`VERSION` is not edited on this branch.** The release workflow bumps it.
 
@@ -152,6 +152,9 @@ git commit -m "fix(planparser): accept multi-element line anchors on Files bulle
 - [ ] `x = 1; /* note */ y = task-42;` is NOT flagged — the same truncation applies to a block comment that starts mid-line, not only to one at the start
 - [ ] `x = 1 /* fixes #1 */ // ok` IS flagged — spans are walked left to right, so a benign trailing comment cannot hide a violating one before it
 - [ ] `var y = 1 /* fixes */ z /* #1 */` is NOT flagged — tells run against each span separately; joining spans would synthesise a reference present in neither
+- [ ] `/* say "hi */ s = "a // fixes task-42"` is NOT flagged — parity is counted over the current code segment, so an unbalanced quote inside an earlier comment cannot make a delimiter inside a later string look balanced
+- [ ] `/* it's fine */ x = 1 // fixes task-42` IS flagged — a line opening with `/*` still yields the spans after its terminator instead of stopping at the first
+- [ ] `# fixes task-42` at column zero in a `.sh` file IS flagged — the whitespace-preceded delimiter rule cannot see a line-leading `#`
 - [ ] An unstarred block interior (`/*` / `fixes task-42` / `*/` across three lines) is a DOCUMENTED miss with an eval asserting exit 0, not a silent gap
 - [ ] `x = "a" + "b//c"` is NOT flagged even with a tell inside the string
 - [ ] `echo "a #b"` in a `.sh` file is NOT flagged
@@ -248,13 +251,19 @@ def _line_comment_spans(opens, raw):
     (`${url#https://…}`) is not a comment.
     """
     delim = _HASH_DELIM if "#" in opens else _SLASH_DELIM
-    out, pos = [], 0
+    out, pos, seg = [], 0, 0
     while pos < len(raw):
         m = delim.search(raw, pos)
         if m is None:
             break
         start = m.start()
-        if not _quotes_balanced(raw[:start]):
+        # Parity is counted over the CURRENT CODE SEGMENT, not the whole
+        # prefix. An earlier block comment's text is not code, and counting
+        # its quotes corrupts the answer for every delimiter after it: an
+        # unbalanced quote inside `/* say "hi */` would make a later `//`
+        # sitting inside a string look balanced, promoting string content to
+        # comment text. `seg` advances past each block terminator.
+        if not _quotes_balanced(raw[seg:start]):
             pos = m.end()
             continue
         if m.group(0) == "/*":
@@ -263,7 +272,7 @@ def _line_comment_spans(opens, raw):
                 out.append(raw[m.end():])
                 break
             out.append(raw[m.end():end])
-            pos = end + 2
+            pos = seg = end + 2
             continue
         out.append(raw[m.end():])
         break
@@ -278,27 +287,29 @@ def comment_spans(path, raw):
     /* #1 */" concatenates to "fixes   #1", which the issue tell matches while
     each span alone is clean.
 
-    Two shapes. A line whose first non-space characters open a comment yields
-    everything after the opener. A line that starts with code yields the spans
-    found by the left-to-right walk above.
+    Almost everything goes through the left-to-right walk above; only a block
+    continuation `*` and a column-zero `#` are handled directly, because
+    neither is a delimiter that walk recognises.
     """
     opens = openers(path)
     line = raw.strip()
-    for o in opens:
-        if not line.startswith(o):
-            continue
-        rest = line[len(o):]
-        # A bare `*` opens a comment only as a block continuation — `* text`
-        # or a lone `*`. `*p = task-42;` is a dereference and a subtraction,
-        # and reading it as comment text would let ordinary C block a write.
-        if o == "*" and rest and not rest[0].isspace():
-            continue
-        # Everything past the block terminator is code again. Without this,
-        # `/* note */ y = task-42;` hands the subtraction to the tells.
-        if o in ("/*", "*"):
-            end = rest.find("*/")
-            if end >= 0:
-                rest = rest[:end]
+    # Only two shapes are handled here. A block CONTINUATION `*` and a
+    # column-zero `#` are not delimiters the walk recognises -- _HASH_DELIM
+    # requires whitespace before the `#`, which a line-leading one has not
+    # got. `//` and `/*` ARE recognised, and sending them through the walk is
+    # what lets `/* a */ x // fixes task-42` yield BOTH of its comments
+    # instead of stopping at the first and missing the violation.
+    if "*" in opens and line.startswith("*") and not line.startswith("*/"):
+        rest = line[1:]
+        # `*p = task-42;` is a dereference and a subtraction, not a comment.
+        if rest and not rest[0].isspace():
+            return []
+        end = rest.find("*/")
+        if end >= 0:
+            rest = rest[:end]
+        return [rest] if rest.strip() else []
+    if "#" in opens and line.startswith("#"):
+        rest = line[1:]
         return [rest] if rest.strip() else []
     return _line_comment_spans(opens, raw)
 ```
@@ -475,7 +486,7 @@ git commit -m "feat(guard): scan block-comment interiors and trailing comments"
 
 ### Task 3: Optional project ticket pattern, bounded by a wall clock
 
-**Goal:** A project can name its tracker-key shape and have the scanner enforce it, with no default and no way for a bad pattern to hang a blocking hook.
+**Goal:** A project can name its tracker-key shape and have the scanner enforce it, with no default, and with a wall-clock bound on the scan wherever that bound can be installed — which is the hook's own environment: the main thread of a CPython process on a platform with `SIGALRM`.
 
 **Files:**
 - Modify: `plugin/anti-tangent-guard/hooks/comment_scan.py`
@@ -490,7 +501,8 @@ git commit -m "feat(guard): scan block-comment interiors and trailing comments"
 - [ ] With the variable unset, the same line is clean
 - [ ] A pattern that fails to compile is ignored, and the scanner still runs its other tells
 - [ ] A pattern longer than 200 characters is ignored
-- [ ] A catastrophic-backtracking pattern causes the scan to return no violations rather than hanging
+- [ ] A catastrophic-backtracking pattern causes the scan to return no violations rather than hanging, **in the hook's own environment** — main thread, `SIGALRM` present. That is where the hook runs; the bound is not claimed anywhere else
+- [ ] Where the timer cannot be installed the scan runs UNBOUNDED rather than failing — a missing deadline must not become a missing scan. The two ACs are complementary, not contradictory: one bounds the supported environment, the other keeps the unsupported one scanning
 - [ ] A 201-character pattern is refused and a 200-character one is accepted, asserted by a test rather than by inspection
 - [ ] `scan_deadline` running where the timer cannot be installed (a non-main thread) still SCANS, rather than failing open and disabling every tell
 - [ ] `fp-scan.py` and `fp-report.sh` unset the variable so the false-positive gate does not depend on the developer's environment
@@ -1351,7 +1363,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
 
 ```json
 {
-  "id": 116,
+  "id": 117,
   "name": "final-files-untracked-blocks",
   "setup_script": "mkdir -p r && cd r && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
   "input": {
@@ -1369,7 +1381,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "an untracked file submitted as final_files has every line added"
 },
 {
-  "id": 117,
+  "id": 118,
   "name": "final-files-tracked-unmodified-allows",
   "setup_script": "mkdir -p r2 && cd r2 && git init -q . && git config user.email t@t && git config user.name t && printf '// fixes #1\\npackage x\\n' > old.go && git add old.go && git commit -qm i",
   "input": {
@@ -1386,7 +1398,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "a pre-existing comment in an unmodified tracked file is not an added line"
 },
 {
-  "id": 118,
+  "id": 119,
   "name": "final-files-outside-repo-skipped",
   "setup_script": "mkdir -p nr && printf '// fixes #1\\npackage x\\n' > nr/loose.go",
   "input": {
@@ -1403,7 +1415,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "a path outside any repository cannot be classified and is skipped"
 },
 {
-  "id": 119,
+  "id": 120,
   "name": "final-files-nested-worktree-resolves-against-the-worktree",
   "setup_script": "mkdir -p w && cd w && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && printf '.wt/\\n' > .gitignore && git add seed .gitignore && git commit -qm i && git worktree add -q .wt/feat -b feat && printf '// fixes #1\\npackage x\\n' > .wt/feat/tracked.go && git -C .wt/feat add tracked.go && git -C .wt/feat commit -qm base && printf '// fixes #1\\npackage x\\n\\nfunc F() {}\\n' > .wt/feat/tracked.go",
   "hook_cwd": "{{TMPDIR}}/w",
@@ -1421,7 +1433,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "THIS FIXTURE DISCRIMINATES, which the obvious one does not. The worktree file is TRACKED and already carries `// fixes #1`; the only line this task adds is clean. Rooted correctly at the file's own directory, git diffs it, sees one harmless added line, and the close is allowed. Rooted at the hook cwd -- the main checkout -- ls-files reports the path unmatched, the hook treats every line as new, and the pre-existing comment blocks. Expecting exit 0 is therefore a test only the correct rooting passes. An untracked fixture expecting exit 2 would pass under BOTH implementations and could never fail."
 },
 {
-  "id": 120,
+  "id": 121,
   "name": "final-files-gitignored-path-skipped",
   "setup_script": "mkdir -p g && cd g && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && printf 'build/\\n' > .gitignore && git add seed .gitignore && git commit -qm i && mkdir -p build && printf '// fixes #1\\npackage x\\n' > build/gen.go",
   "input": {
@@ -1438,7 +1450,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "a gitignored path exits 1 from ls-files like an untracked one; check-ignore is what separates them"
 },
 {
-  "id": 121,
+  "id": 122,
   "name": "final-files-diff-wins-even-when-it-adds-nothing",
   "setup_script": "mkdir -p d && cd d && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
   "input": {
@@ -1455,7 +1467,24 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "a submitted diff with zero added lines still wins; falling back to final_files here would block on a comment the diff's author never claimed"
 },
 {
-  "id": 122,
+  "id": 116,
+  "name": "final-files-empty-diff-still-wins",
+  "setup_script": "mkdir -p e && cd e && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
+  "input": {
+    "tool_name": "TaskUpdate",
+    "tool_input": {"status": "completed", "taskId": "1"},
+    "transcript_path": "{{TRANSCRIPT}}"
+  },
+  "transcript_raw_lines": [
+    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"\", \"final_files\": [{\"path\": \"{{TMPDIR}}/e/new.go\"}]}}]}}",
+    "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+  ],
+  "expected_exit": 0,
+  "reason": "an EXPLICITLY PRESENT but empty final_diff must still win. This is distinct from the deletion-diff case: that one tests a diff that parses to nothing, this one tests a field that is falsy. Precedence keys on presence, so the dirty final_files entry must not be scanned"
+},
+{
+  "id": 123,
   "name": "final-files-honours-overridden-diff-prefixes",
   "setup_script": "mkdir -p m && cd m && git init -q . && git config user.email t@t && git config user.name t && git config diff.mnemonicPrefix true && git config diff.noprefix false && printf 'package x\\n' > mod.go && git add mod.go && git commit -qm i && printf '// fixes #1\\npackage x\\n' > mod.go",
   "input": {
@@ -1526,12 +1555,12 @@ Add `import tempfile` to the file's imports.
 
 - [ ] **Step 7: Update the case count**
 
-`EXPECTED_CASE_COUNT=122` in `run.sh:155`, and `(122 cases)` in the JSON `description`.
+`EXPECTED_CASE_COUNT=123` in `run.sh:155`, and `(123 cases)` in the JSON `description`.
 
 - [ ] **Step 8: Run the suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: 122 cases pass. A `SETUP FAILED` line means the Step 5 harness hook is wrong, not the case.
+Expected: 123 cases pass. A `SETUP FAILED` line means the Step 5 harness hook is wrong, not the case.
 
 - [ ] **Step 9: Commit**
 
@@ -1555,7 +1584,7 @@ git commit -m "feat(guard): scan final_files completions using git for added lin
 
 **Acceptance Criteria:**
 - [ ] `Digest.SkipEvidence` marshals as `skip_evidence` and is omitted when empty
-- [ ] `Normalize()` trims it and truncates it to 2,000 runes with a single ellipsis
+- [ ] `Normalize()` trims it and truncates it to **2,000 RETAINED runes plus one ellipsis** — a truncated value is 2,001 runes long, which is what the existing `truncateRunes` does and what `SkipReason` has always done. The cap counts content, not the marker
 - [ ] A multi-byte string is not split mid-codepoint
 - [ ] `SkipReason`'s existing 300-rune cap is unchanged, asserted by a regression test on both the constant and the truncation, not by inspection
 
@@ -1571,6 +1600,8 @@ Add to `internal/codescene/codescene_test.go`:
 func TestNormalizeBoundsSkipEvidence(t *testing.T) {
 	d := &Digest{SkipEvidence: "  " + strings.Repeat("é", 2500) + "  "}
 	d.Normalize()
+	// max RETAINED runes plus the ellipsis: truncateRunes appends the marker
+	// beyond the cap rather than inside it, matching SkipReason's behaviour.
 	got := []rune(d.SkipEvidence)
 	if len(got) != codesceneSkipEvidenceMaxRunes+1 {
 		t.Fatalf("got %d runes, want %d (cap plus ellipsis)",
@@ -1915,7 +1946,7 @@ git commit -m "feat(codescene): grade an unevidenced skip as harshly as silence"
 - [ ] `:app:test UP-TO-DATE`, `:app:test FROM-CACHE` and `ok  pkg  0.01s (cached)` yield **nothing**
 - [ ] A Gradle log with several `UP-TO-DATE` compile tasks and one executed test task yields nothing
 - [ ] A Gradle log with `:app:processTestResources NO-SOURCE` **and** an executed `> Task :app:test` yields nothing — `NO-SOURCE` is scoped to test tasks, and an unannotated test-task line counts as execution
-- [ ] `:app:testClasses NO-SOURCE` alone does NOT fire — it is not a test-running task
+- [ ] `:app:testClasses NO-SOURCE` **with no executed test line anywhere in the output** does NOT fire — it is not a test-running task, and a fixture carrying an executed line would pass even if it were wrongly classified
 - [ ] A no-execution marker paired with a ZERO count (`no tests ran` beside `0 passed`) still fires — an execution marker must carry a positive count
 - [ ] A human-written summary ("all 4 tests pass") yields nothing
 - [ ] Empty `test_evidence` yields nothing
@@ -1949,7 +1980,11 @@ func TestTestEvidenceFindingsStaysQuiet(t *testing.T) {
 		"go-cached":        "ok  \tgithub.com/x/y\t(cached)",
 		"gradle-mixed":     "> Task :app:compileKotlin UP-TO-DATE\n> Task :app:test\nBUILD SUCCESSFUL in 12s",
 		"gradle-nosource-nontest": "> Task :app:processTestResources NO-SOURCE\n> Task :app:test\nBUILD SUCCESSFUL in 12s",
-		"gradle-testclasses":      "> Task :app:testClasses NO-SOURCE\n> Task :app:test\nBUILD SUCCESSFUL in 9s",
+		// Alone, with no executed test task anywhere in the output: an
+		// executed line would suppress the finding by itself and the case
+		// would pass even if testClasses were wrongly read as a test task.
+		"gradle-testclasses-alone": "> Task :app:testClasses NO-SOURCE\nBUILD SUCCESSFUL in 9s",
+		"gradle-testclasses":       "> Task :app:testClasses NO-SOURCE\n> Task :app:test\nBUILD SUCCESSFUL in 9s",
 		"human-summary":    "all 4 tests pass",
 		"go-passing":       "ok  \tgithub.com/x/y\t0.412s",
 		"pytest-real":      "collected 4 items\n\n=== 4 passed in 0.10s ===",
@@ -2382,11 +2417,17 @@ observed pass count in the commit message so a later flake can be compared again
 instead of argued about.
 
 ```bash
+PASSES=0
 for i in 1 2 3 4 5; do
-  go test -tags=e2e ./internal/mcpsrv/... -count=1 \
-    -run 'TestCommentPolicyFindingE2E|TestCommentHygieneFenceFindingE2E' \
-    || echo "RUN $i FAILED"
+  if go test -tags=e2e ./internal/mcpsrv/... -count=1 \
+       -run 'TestCommentPolicyFindingE2E|TestCommentHygieneFenceFindingE2E'; then
+    PASSES=$((PASSES + 1))
+  else
+    echo "RUN $i FAILED"
+  fi
 done
+echo "stability: $PASSES/5"
+[ "$PASSES" -eq 5 ] || { echo "NOT STABLE — tighten plan_rules.tmpl, do not loosen the test"; exit 1; }
 ```
 
 - [ ] **Step 4: Regenerate the goldens**
@@ -2680,7 +2721,9 @@ if [ -n "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}${GOOGLE_API_KEY:-}" ]; then
   done
   printf '# v0.20.0 reviewer e2e result\n\nRan: %s\nModel: %s\nPasses: %d/5\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${ANTI_TANGENT_MODEL:-<default>}" "$PASSES" > "$NOTE"
-  [ "$PASSES" -eq 5 ] || echo "NOT STABLE: $PASSES/5 — tighten plan_rules.tmpl before merging"
+  # The result file is written first so a failure still leaves diagnostics,
+  # then the task fails: a release must not be cut on an unstable gate.
+  [ "$PASSES" -eq 5 ] || { echo "NOT STABLE: $PASSES/5 — tighten plan_rules.tmpl before merging"; exit 1; }
 else
   printf '# v0.20.0 reviewer e2e result\n\nRan: %s\nSKIPPED: no provider key set.\nG11 and the fence rule ship without behavioural verification.\n' \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$NOTE"
