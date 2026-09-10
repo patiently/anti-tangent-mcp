@@ -1,7 +1,7 @@
 # anti-tangent-mcp v0.20.0 — closing the comment-hygiene and completion-gate gaps
 
 **Status:** design
-**Date:** 2026-09-10
+**Date:** 2026-09-10 (**revised same day** after an adversarial review — see [Revision](#revision-what-the-review-changed))
 **Issue:** [#71](https://github.com/patiently/anti-tangent-mcp/issues/71) — comment-hygiene and completion-gate gaps observed in a real plan run
 
 ## Summary
@@ -22,15 +22,42 @@ an excuse cost less than staying silent.**
 - The CodeScene ladder charges a `major` for silence and a `minor` for any non-empty
   `skip_reason`, so the cheapest route to a pass is a sentence that need not be true. The
   submitted reason — "CodeScene MCP not configured in this project" — was false.
-- Non-executing test output (`:module:test UP-TO-DATE`) was accepted as "4 tests passed".
+- Test output showing no execution was accepted as evidence of a passing run.
 
-This release closes all ten. Two of them (G2, G4) are the ones that would each independently have
-caught this incident; the rest close the routes around them.
+This release closes all ten.
+
+**What it does not do, stated up front:** on a project that has not set
+`ANTI_TANGENT_TICKET_PATTERN`, this release does **not** catch the reported incident. See
+[Compatibility](#compatibility). That is a deliberate choice, made because the measured cost of a
+default tell is a blocked write on legitimate comments; it is recorded here rather than left for a
+reader to discover.
+
+## Revision: what the review changed
+
+The first draft was reviewed adversarially against the code. Six defects came back — three false
+claims, two designs replaced outright, and one material omission. Recording them because each was
+load-bearing, and because two of them invalidated decisions already taken:
+
+1. **"G2 and G4 would each independently have caught this incident" was false.** ` * ABC-1234: …`
+   matches no existing tell. Making the line visible does not make it match. Only G1, with a
+   configured pattern, catches it. The summary above now says so.
+2. **"`post.tmpl`'s reviewer rule catches it out of the box" was false.** No part of this design
+   touches `post.tmpl`'s "ONLY when a diff is present" clause, and the server has no git with
+   which to derive added lines. `final_files` stays unjudged there.
+3. **Part 1a's per-language lexer was replaced.** Concrete inputs broke it: Java text blocks, JS/TS
+   template literals, Rust lifetime annotations parsed as char literals, C++ `R"(…)"`, shell
+   `${url#https://…}`, Ruby heredocs, Python 3.12 nested f-string quotes. It has been replaced by a
+   design that can only decline to scan, never misclassify code as a comment.
+4. **Part 4's premise was wrong for half its markers.** Gradle marks a task `UP-TO-DATE`/
+   `FROM-CACHE` only after a *successful* prior execution on unchanged inputs; Go caches only
+   passing results. Those are evidence of a pass, not of a skipped run.
+5. **Part 2a false-blocked on git worktrees.** Reproduced in a fixture repo.
+6. **Part 3 invalidated three documents the draft did not list**, one of which *instructs* the exact
+   behaviour Part 3 penalises.
 
 ### Verification of the report
 
-The report was written by an agent observing its own run. Every claim was re-derived from the
-code before being accepted, and two were sharpened:
+Every claim in #71 was re-derived from the code before being accepted. Two were sharpened:
 
 | | Claim | Status |
 |---|---|---|
@@ -39,79 +66,96 @@ code before being accepted, and two were sharpened:
 | G3 | Trailing comments unscanned | Confirmed. `val x = 1 // fixes task-42` → `[]` |
 | G4 | `final_files` unscanned by both layers | Confirmed. `check-task-complete:310`; `post.tmpl` "ONLY when a diff is present" |
 | G5 | One switch disables two concerns | Confirmed. `check-task-complete:170` returns above the `COMMENT_GUARD` read at 174 |
-| G6 | Ladder pays for a fabricated reason | Confirmed. `submission_defect.go:52-83`; call site `handlers.go:1688` is outside both `if !lightweight` guards |
-| G7 | Non-executing test output accepted | Confirmed by absence — no such check anywhere |
+| G6 | Ladder pays for a fabricated reason | Confirmed. `submission_defect.go:52-100`; call site `handlers.go:1688` sits between the two `if !lightweight` blocks at 1679 and 1703 |
+| G7 | Non-executing test output accepted | Confirmed by absence — but see Part 4, the report over-generalises which output means "nothing ran" |
 | G8 | Plan fences unchecked for comments | Confirmed by absence — no comment rule in any `plan*.tmpl` |
-| G9 | `path:line` breaks the disk tier | **Sharpened.** Not "the comma-list form may be the trigger" — `lineAnchorRe` permits at most ONE `[-,]\d+` per group, so `:60,166` matches and `:60,166,174,419` fails outright |
+| G9 | `path:line` breaks the disk tier | **Sharpened.** Not a comma-list special case — `lineAnchorRe` permits at most ONE `[-,]\d+` per group, so `:60,166` matches and `:60,166,174,419` fails outright |
 | G10 | Findings surface late | Accepted as documentation-only |
 
-G9's sharpened diagnosis also exposes a second broken shape the report did not observe:
-`:27-30,40-50` fails for the same reason.
+G9's sharpened diagnosis exposes a second broken shape the report did not observe: `:27-30,40-50`
+fails for the same reason.
 
 ## Non-goals
 
 - **Making an attested field verifiable.** `codescene.go` already states that anti-tangent never
-  runs CodeScene and cannot tell a real digest from an invented one. G6 does not change that. It
-  removes the *incentive gradient* that made inventing one cheaper than silence, and nothing more.
-- **Scanning `Edit` payloads for block or trailing comments.** An `Edit` carries a fragment with no
-  enclosing context, so a `* Fixes #123` inside a comment is indistinguishable from one inside a
-  string literal. This stays out of scope for the reason the existing code gives.
-- **A default tracker-key regex.** Measured false positives were hardware identifiers (`HDMI-0`,
+  runs CodeScene and cannot tell a real digest from an invented one. Part 3 does not change that.
+  It removes the *incentive gradient* that made inventing one cheaper than silence, and nothing
+  more.
+- **A per-language comment lexer.** Ruled out for this release on measured breakage; see
+  [Part 1a](#1a-the-structural-fix-scan-what-can-be-decided-from-the-line-alone). If it returns it
+  needs a vendored multi-language fixture corpus first, since this repository contains no Kotlin,
+  Rust, JS/TS or Java source to measure a false-positive rate against.
+- **Scanning `Edit` payloads for block or trailing comments beyond what a single line decides.** An
+  `Edit` carries a fragment with no enclosing context.
+- **A default tracker-key tell.** Measured false positives were hardware identifiers (`HDMI-0`,
   `DP-0`) and prose labels (`ROUND-1`, `ROUND-8`) — shapes no allowlist anticipates. The tell is
-  opt-in per project or absent.
+  opt-in per project or absent, at the documented cost stated in Compatibility.
 - **Blocking in the MCP server.** Unchanged: the server stays advisory, enforcement stays in the
   plugins.
 
 ## Part 1 — the write-time scanner (G1, G2, G3)
 
-### 1a. The structural fix: scan exactly where content allows it
+### 1a. The structural fix: scan what can be decided from the line alone
 
-`violations(path, added_lines)` receives a list of line strings and nothing else, so "is this line
-a comment?" degrades to `line.startswith("//")`. That single limitation is the whole of G2 and G3.
+`violations(path, added_lines)` receives line strings, so "is this a comment?" degrades to
+`line.startswith("//")`. That single limitation is the whole of G2 and G3.
 
-Where the caller holds whole-file content, the question can be answered properly. `comment_scan.py`
-gains a parallel entry point rather than changing the existing one:
+The fix keeps the existing signature — no whole-file content, no lexer, no per-language state — and
+changes only which text on a line counts as comment text.
+
+**G2 — block-comment openers become comment openers.** The C-family opener set gains `/*`, `*/`,
+and `*`:
 
 ```python
-violations(path, added_lines)                     # unchanged — line-prefix only
-violations_full(path, full_text, added_indices)   # new — lexed
-added(old, new)                                   # unchanged — returns line strings
-added_indices(old, new)                           # new — same occurrence-aware algorithm,
-                                                  #       returns indices into new.splitlines()
+DEFAULT_COMMENT = ("//", "/*", "*/", "*")
 ```
 
-`violations_full` lexes `full_text`, yielding comment text for each line index it is asked about —
-line comments, block-comment interiors and trailing comments alike — then runs the existing `TELLS`
-over that text.
+`*` is admitted **only when followed by whitespace or end-of-line**. A KDoc or Javadoc continuation
+line is `* text` or a bare `*`; a C dereference statement is `*ptr = …`. Without that restriction,
+`*p = task-42;` — valid C subtracting 42 from `task` — would be read as a comment and blocked.
 
-Two lexer families:
+This alone closes the incident's exact shape: ` * ABC-1234: the inbound HELP keyword.` becomes
+scannable, as does ` * Fixes #123`.
 
-- **C-style** (`.go .ts .tsx .js .jsx .rs .java .kt .c .h .cc .cpp .hpp`): `//` to end of line,
-  `/* … */` spans, string literals `"…"` and `'…'` with backslash escapes, Go raw strings
-  (backticks), Kotlin raw strings (`"""`). Block-comment nesting is depth-tracked **only** for
-  `.kt` and `.rs`, whose languages permit it; Go, Java and C terminate on the first `*/` and
-  depth-tracking them would mis-scan.
-- **Hash-style** (`.py .sh .bash .rb`): `#` to end of line, string literals including Python
-  triple-quotes and Ruby `=begin`/`=end`.
+**G3 — trailing comments, via a parity test that can only decline.** For a line that does *not*
+begin with an opener, take the text after the **last** `//` (or, in hash-family files, the last
+whitespace-preceded `#`) — but only when the counts of unescaped `"`, `'` and backtick before that
+position are **all even**. Otherwise scan nothing on that line.
 
-**Every lexer failure fails open.** Any exception, or any state the lexer cannot resolve, skips the
-file and reports no violation. This is the module's existing weighting — a false block costs more
-than a miss — and it is what bounds the risk of replacing a trivially-conservative check with a
-correct-if-the-lexer-is-correct one.
+The asymmetry is the point: an odd count means the delimiter is inside a string literal, and the
+line is skipped. The test can miss a genuine trailing comment; it cannot promote code to comment.
+
+| line | quotes before | decision |
+|---|---|---|
+| `val x = 1 // fixes task-42` | 0, 0, 0 | scan ` fixes task-42` → **flagged** |
+| `url := "http://x" // ok` | 2, 0, 0 | scan ` ok` → clean (the `//` in the URL is not last) |
+| `x = "a" + "b//c"` | 3, 0, 0 | **decline** — the `//` is inside a string |
+| `echo "a #b"` (`.sh`) | 1, 0, 0 | **decline** |
+| `echo "hi" # real` (`.sh`) | 2, 0, 0 | scan ` real` |
+| `s := '\''` + `// fixes #1` | 2 unescaped | scan ` fixes #1` → **flagged** |
+| `url=${url#https://t/ABC-1}` | `#` not whitespace-preceded | **decline** |
+
+**What this costs versus the rejected lexer.** Block comments whose text shares a line with code
+(`/* fixes #1 */ x = 1`) are caught by the `/*` opener; a tell appearing only inside a multi-line
+block whose lines start with neither `*` nor an opener is missed. That is a narrow miss class, and
+`post.tmpl`'s semantic rule remains the backstop for it when a diff is present.
 
 ### 1b. Which path each caller takes
 
-| Caller | Whole-file content? | Path |
-|---|---|---|
-| `Write`, path absent from disk | yes (payload) | `violations_full`, all indices |
-| `Write`, path present | yes (payload) | `violations_full` + `added_indices` |
-| `Edit` | no (fragment) | `violations` — unchanged |
-| close-time, `final_files` | yes (payload or disk) | `violations_full`, indices from git (Part 2) |
-| close-time, `final_diff` | only if the path is on disk | `violations_full` with indices from hunk headers; else `violations` |
+Because the scan needs only line strings, every caller uses the same entry point. `added()`,
+`violations()` and the `Edit`/`Write` split are all unchanged:
 
-A unified diff's hunk headers (`@@ -a,b +c,d @@`) carry new-file line numbers, so where the file is
-readable on disk the diff path reaches the exact scan too. Where it is not — a diff produced on
-another machine — the existing line-prefix behaviour stands unchanged.
+| Caller | Added lines from |
+|---|---|
+| `Write`, path absent from disk | every line of `content` |
+| `Write`, path present | `added(existing, content)` |
+| `Edit` | `added(old_string, new_string)` |
+| close-time, `final_diff` / `final_diff_path` | `+` lines, per the existing hunk parser |
+| close-time, `final_files` | git — see [Part 2a](#2a-g4--deriving-added-lines-from-git) |
+
+This removes an entire class of defect the first draft carried: it proposed applying diff line
+numbers to a file read from disk without checking the two were the same file. No disk read, no
+index mapping, no mismatch.
 
 ### 1c. G1 — `ANTI_TANGENT_TICKET_PATTERN`
 
@@ -124,42 +168,61 @@ scanner's behaviour on an unconfigured project is exactly what it is today.
 { "env": { "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+" } }
 ```
 
-Three guards, because this compiles operator-supplied regex inside a hook that blocks writes:
+Guards, because this compiles operator-supplied regex inside a hook that blocks writes:
 
 1. A pattern that fails to compile is dropped and traced. Never fatal.
 2. A pattern longer than 200 characters is refused.
-3. A pattern containing a nested quantifier (a quantified group that itself contains a quantifier)
-   is refused, as a cheap ReDoS guard. Python's `re` backtracks; an operator typo should not be
-   able to hang a `PreToolUse` hook.
-
-Out of the box a tracker key is still caught — by `post.tmpl`'s reviewer rule, which recognises
-`ABC-1234:` as a tracker reference without any configuration, and which Part 2 makes fire on
-lightweight completions for the first time.
+3. **The whole scan runs under a `signal.setitimer` alarm**, and a SIGALRM fails the scan open. A
+   structural check for nested quantifiers was considered and rejected: it misses `(a|aa)+` and
+   `(a|a)*`, and `(a+)+$` over a 40-character line still hangs. A wall-clock bound is the only
+   guard that actually bounds, and it covers the existing `TELLS` as well.
 
 ## Part 2 — the close-time hook (G4, G5)
 
 ### 2a. G4 — deriving added lines from git
 
 A lightweight completion submits `final_files`: full content at absolute paths, with no signal for
-which lines are new. That absence is exactly why `post.tmpl` refuses to judge comment hygiene
-without a diff, and scanning every comment in a submitted file would block closes on comments the
-implementer never wrote.
+which lines are new. Scanning every comment in a submitted file would block closes on comments the
+implementer never wrote, so git supplies the missing signal.
 
-The hook runs inside the repository, so git supplies the missing signal:
+**Every git invocation is pinned and rooted at the file's own directory:**
 
 ```
-for each final_files path:
-    git ls-files --error-unmatch <path>
-        non-zero  ->  untracked: every line is new          (the incident's exact case)
-        zero      ->  git diff HEAD -- <path>, take '+' lines
-    no git / not a repo / path clean / any git error
-                  ->  skip this path
+GIT="git -C <dirname of path> -c diff.noprefix=false -c diff.mnemonicPrefix=false \
+     -c core.quotePath=false --no-pager"
+
+$GIT ls-files --error-unmatch -- <path>
+    exit 0    -> tracked:   $GIT diff --no-color --no-ext-diff HEAD -- <path>, take '+' lines
+    exit 1    -> unmatched: $GIT check-ignore -q -- <path>
+                                exit 0 -> ignored, skip this path
+                                else   -> untracked, every line is new
+    any other -> skip this path
 ```
 
-Every failure mode skips rather than blocks, consistent with the rest of the hook. The known blind
-spot is a subagent that has already committed its work: `git diff HEAD` is then empty and the path
-is skipped. Reconstructing a base commit is not attempted — the hook has no reliable way to know
-one, and guessing would trade a quiet miss for a wrong block.
+Three details, each of which was a defect in the first draft:
+
+- **`-C <dirname>`, not the hook's cwd.** Under the `using-git-worktrees` flow the subagent's work
+  lives in a nested worktree while the hook runs at the main checkout. Reproduced in a fixture
+  repo: from the main checkout, `git ls-files --error-unmatch <abs path inside the worktree>` exits
+  **1** — indistinguishable from "untracked" — so the draft would have scanned the whole file and
+  blocked on its pre-existing comments. With `-C` it resolves correctly.
+- **Exit 1 is not "any non-zero".** A path outside any repository exits **128**. Folding the two
+  together turns "I cannot look" into "everything is new".
+- **`check-ignore` before concluding "new".** A gitignored path also exits 1 from `ls-files`.
+
+Diff prefixes are pinned because `diff.mnemonicPrefix=true` emits `+++ w/` and `diff.noprefix=true`
+emits a bare path; the existing hunk parser matches `+++ b/` only and would silently see zero files.
+
+Paths are batched into one `ls-files -z` and one `diff` per repository root rather than two spawns
+per file.
+
+**Coverage, stated honestly.** `git diff HEAD` is empty once the work is committed, and
+subagent-driven development commits per task *before* the controller's `TaskUpdate` fires this
+hook — `implementer.md:84-85` already tells implementers as much. So this scan reaches uncommitted
+work and newly-created untracked files, which is the incident's case and not the dominant one.
+Diffing against a guessed base (`merge-base` with the default branch) was considered and rejected:
+the hook cannot know the plan run's base commit, and a wrong base trades a quiet miss for a wrong
+block.
 
 ### 2b. G5 — one switch per concern
 
@@ -170,8 +233,10 @@ block's own message names `ANTI_TANGENT_COMMENT_GUARD=0` as the remedy.
 Both variables are read up front and each half runs on its own switch; the hook exits early only
 when both are `0`.
 
-`CLAUDE.md` currently documents the coupling as intended ("silences the whole close-time hook").
-That sentence and the guard README change with the code. Two separately-named variables that do
+Two pieces of text become false and change with the code: the block message at
+`check-task-complete:427` ("completion gate passed"), which is not true when the completion gate
+was disabled, and the guard README's claim that the hook exits "before it reads stdin". `CLAUDE.md`'s
+"silences the whole close-time hook" sentence changes too — two separately-named variables that do
 not independently control their named concerns describe an implementation accident, not a design.
 
 ## Part 3 — the CodeScene ladder (G6)
@@ -180,25 +245,15 @@ not independently control their named concerns describe an implementation accide
 
 The gate fired correctly. `ANTI_TANGENT_CODESCENE=required` was set and `codesceneFindings` runs
 unconditionally — the `lightweight` flag affects only session lookup and spec synthesis, and never
-reaches this check. The ladder demanded an attestation, got one, and graded it as designed:
-
-| submitted | finding |
-|---|---|
-| no `codescene` argument | **major** `codescene_not_run` |
-| `ran:false`, empty `skip_reason` | **major** |
-| `ran:false` + *any* non-empty `skip_reason` | **minor** `codescene_skipped` |
-
-Silence costs a major; one sentence costs a minor. Inventing a reason is therefore the cheapest
-route to a pass, and that is what happened.
+reaches this check. The ladder demanded an attestation, got one, and graded it as designed: silence
+costs a major, one sentence costs a minor. Inventing a reason is therefore the cheapest route to a
+pass, and that is what happened.
 
 ### 3b. One rung, not a taxonomy
 
-The issue proposes classifying reasons — protocol reasons accepted, environment claims required to
-carry evidence. Working that through, the classification needs a keyword list, and any such list
-leaks: `"the task didn't warrant it"` matches neither class and falls through to a minor, leaving
-the incentive intact for anyone who phrases around it.
-
-A single rung delivers the same intent without classifying anything:
+Classifying reasons — protocol reasons accepted, environment claims required to carry evidence —
+needs a keyword list, and any such list leaks: `"the task didn't warrant it"` matches neither class
+and falls through to a minor. A single rung delivers the same intent without classifying anything:
 
 ```
 ANTI_TANGENT_CODESCENE unset       ->  no adoption findings                    (unchanged)
@@ -211,57 +266,111 @@ ANTI_TANGENT_CODESCENE=required    (lightweight and session-backed alike)
     ran:true                       ->  clean, plus the regression finding if any
 ```
 
-Evidence is a new optional `skip_evidence` field on the digest, carrying the failing tool's actual
-error text. The field is additive and callers omitting it get a major, which is the intended
-pressure.
+Evidence is a new optional `skip_evidence` field on the digest, carrying the failing tool's error
+text, capped at 2,000 runes in `Normalize()` alongside the existing 300-rune `SkipReason` cap.
 
-This drops the keyword list entirely. `"lightweight task"` draws a major because it carries no
-evidence, not because a list names it — **required means required, and the task's mode is never an
-excuse.** And the gradient is gone: silence and a sentence now cost exactly the same, so there is
-no longer anything to buy by inventing one.
+`"lightweight task"` draws a major because it carries no evidence, not because a list names it —
+**required means required, and the task's mode is never an excuse.** Silence and a sentence now
+cost the same, so there is nothing left to buy by inventing one.
 
-### 3c. What this does not achieve
+**Mechanics that must change with it:**
 
-`skip_evidence` is attested like everything else; error text can be fabricated too. Two things are
-nonetheless gained, and they are the whole claim:
+- `CategoryCodesceneSkipped` joins `submissionDefectCategories` (`submission_defect.go:17-21`,
+  which today contains `codescene_not_run` but not `codescene_skipped`). Without this, an envelope
+  blocked only by the new major is not submission-defect-only, and `next_action` sends the
+  implementer to rework code instead of attaching evidence.
+- `codesceneCell` (`report.go:85-98`) renders `SkipReason` only; it must render `skip_evidence` too,
+  or claim 3c.2 below is unreachable.
 
-1. Fabricating is no longer *cheaper* than silence, which is what selected for it.
-2. A fabricated error string is specific enough for a human reading `plan_run_report` to catch,
-   where "not configured" was not.
+### 3c. What this does and does not achieve
+
+`skip_evidence` is attested like everything else; error text can be fabricated too. The honest claim
+is narrower than the first draft made it:
+
+1. **Fabricating is no longer cheaper than silence.** This is the whole mechanism, and it holds.
+2. **A fabricated error string is more specific than "not configured", so a human reading
+   `plan_run_report` has more to catch it on** — but only on the session-backed path. Per 3d the
+   lightweight path writes no ledger row at all, so on the incident's own path this second benefit
+   does not exist.
+
+**The honest caller under `required`.** A host where CodeScene is genuinely absent produces no error
+text — the tool is simply not there, nothing fails — so an honest "not configured" has no evidence
+to offer and draws a major. This is acceptable only under an explicit reading, which the protocol
+docs will now state: **`ANTI_TANGENT_CODESCENE=required` is an operator assertion that CodeScene is
+present on every host running under it.** Under that reading "not configured" is a
+misconfiguration, and a major is the correct report. During a genuine outage, honest and fabricated
+callers both produce an error string and both draw a minor; the gradient is flat, which is the goal,
+but no more than that is claimed.
 
 ### 3d. The false ledger promise
 
 The minor's suggestion reads "the skip is recorded in the plan-run ledger". The ledger write at
 `handlers.go:1711` is gated on `!lightweight && sess.PlanRunID != ""`, so on the lightweight path
-nothing is recorded and the sentence is false. It is rewritten to promise only what the call
-actually does.
+nothing is recorded and the sentence is false. It is rewritten to promise only what the call does.
+
+### 3e. Documents this invalidates
+
+Part 3 makes three existing statements false. All three change in the same commit:
+
+| location | what becomes false |
+|---|---|
+| `docs/protocol/core.md:136` | "`codescene_skipped`, `severity: minor` — recorded in the plan-run ledger; does not block" — every clause |
+| `docs/protocol/implementer.md:157` | Instructs lightweight tasks to pass `{"ran": false, "skip_reason": "lightweight task"}` — the exact input now drawing a major |
+| `README.md:329` | Describes the old three-rung ladder verbatim |
+
+`examples/lightweight-dispatch.md` needs no change. It tells lightweight tasks to skip the CodeScene
+*companion calls* (`pre_commit_code_health_safeguard`, `analyze_change_set`), which stays true —
+Part 3 governs the `codescene` argument to `validate_completion`, which is a separate requirement.
+
+`core.md` has **109 bytes** of headroom, so its rewrite must be equal-or-shorter. The
+`implementer.md:157` paragraph is 673 bytes and is being rewritten anyway — **that rewrite is the
+byte-budget solution**, and no separate trim is needed.
 
 ## Part 4 — test evidence (G7)
 
 A new `internal/mcpsrv/test_evidence.go`, called beside `codesceneFindings` at `handlers.go:1688`
 with the same prepend-and-finalize shape. Deterministic and reviewer-free, for the same reason
-`checkFileConsistency` is: it cannot drift and it costs no tokens.
+`checkFileConsistency` is.
 
-**The naive check misfires.** A real Gradle build prints `UP-TO-DATE` for a dozen compile tasks
-beside one genuinely executed test task. The check therefore fires only when a line naming a
-**test** task carries a no-op status *and* nothing in the evidence indicates tests actually ran:
+### 4a. Correcting the report's premise
+
+#71 asks for `UP-TO-DATE`, `FROM-CACHE` and `NO-SOURCE` to be treated alike. They are not alike:
+
+- **Gradle marks a task `UP-TO-DATE` or `FROM-CACHE` only after a successful prior execution on
+  unchanged inputs** — a failed test task re-executes. **Go caches only passing results.** These
+  markers therefore attest that the tests pass on the current inputs. They carry no counts, but a
+  plain successful Gradle run prints no per-test counts either, so a check firing on them would
+  penalise the cached run and accept an equally count-free executed one.
+- `NO-SOURCE` and its cross-ecosystem equivalents genuinely mean **nothing ran and nothing passed**.
+
+Only the second class fires:
 
 ```
-:<module>:test           UP-TO-DATE | FROM-CACHE | NO-SOURCE
-ok      <pkg>    (cached)                                     # Go
-no tests ran | No tests found                                 # pytest / jest
+FIRES  (major)                          DOES NOT FIRE
+  :<module>:<task> NO-SOURCE              :<module>:test UP-TO-DATE
+  no tests ran            (pytest)        :<module>:test FROM-CACHE
+  No tests found          (jest)          ok   <pkg>   (cached)      (go)
+  ?  <pkg>  [no test files]  (go)         a human-written summary
 ```
 
-→ `insufficient_evidence`, `major`, `criterion: test_evidence`. That category is already in
+`?  <pkg>  [no test files]` is added from review; the report omits it and it is the Go analogue of
+`NO-SOURCE`.
+
+### 4b. Finding shape
+
+`insufficient_evidence`, `major`, `criterion: test_evidence`. That category is already in
 `submissionDefectCategories`, so `isSubmissionDefectOnly` routes it to "re-submit with the missing
-evidence — no rework implied" rather than sending the implementer back into the code, which is the
-correct reading: the tests may well have passed, but the pasted invocation does not show it.
+evidence — no rework implied" rather than sending the implementer back into the code. The
+suggestion names the fix: point the run at a target that has tests, or attach JUnit XML
+`tests=`/`failures=` counts.
 
-The suggestion names the fix: force a run (`cleanTest`, `--rerun-tasks`, `-count=1`) or attach
-JUnit XML `tests=`/`failures=` counts.
+`post.tmpl:66` already asks the reviewer to cross-check test evidence against the ACs. The template
+gains a "do not restate this finding" line, in the same shape as the existing one at `post.tmpl:53`,
+so the deterministic finding is not duplicated by the reviewer.
 
-Evidence that is a human summary ("all 4 tests pass") carries no marker and draws nothing. The
-check only ever fires on pasted tool output.
+Every re-submission is a fresh reviewer call — `test_evidence` is part of the cache key
+(`handlers.go:1234`) — so this finding costs a full review round when it fires. That is the point,
+but it is a real cost and is named here.
 
 ## Part 5 — `validate_plan` (G8, G9)
 
@@ -274,7 +383,7 @@ check only ever fires on pasted tool output.
 +  (?::\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)+$
 ```
 
-The old form permits at most one `[-,]\d+` per group. Verified in Go against both forms:
+The old form permits at most one `[-,]\d+` per group. Verified in Go against both:
 
 | input | old | new |
 |---|---|---|
@@ -293,82 +402,107 @@ lines-or-ranges, not a single pair.
 Normative code in a plan is transcribed verbatim, so a tracker-key comment in the plan becomes one
 in the repository. Four rounds of `validate_plan` passed roughly twenty of them.
 
-A short section in `plan_rules.tmpl`, mirroring `post.tmpl`'s existing rule: code inside a fence
-lands in the codebase as written, so a comment carrying a tracker key, an issue or pull-request
-reference, or change narration is a finding — `minor`, `criterion: comment_hygiene`.
+A section in `plan_rules.tmpl`, mirroring `post.tmpl`'s existing rule — `minor`,
+`criterion: comment_hygiene`. Reviewer-led rather than deterministic: the reviewer recognises
+`ABC-1234:` as a tracker key with no configuration, which is exactly what a regex cannot do, and
+porting `TELLS` to Go would create a second implementation of the same policy.
 
-Reviewer-led rather than deterministic on purpose. The reviewer recognises `ABC-1234:` as a tracker
-key with no configuration, which is precisely what a regex cannot do and what `ANTI_TANGENT_TICKET_PATTERN`
-exists to work around. Porting `TELLS` to Go would also create a second implementation of the same
-policy; the repo already pays that tax once (`SCAN_EXTS` duplicated in bash and Python, with
-`evals/run.sh` asserting they match) and this surface is much larger.
+**Scope, which the rule must state explicitly or it will misfire on this very release:**
+
+- Only fences whose code is **transcribed into the repository**. Diff fences, expected-output
+  fences, and test-fixture fences are exempt — this release's own plan will contain
+  `// fixes task-42` and `* Fixes #123` as eval fixtures, and flagging them would be wrong.
+- In a diff fence, `-` lines are exempt: removing a bad comment is the fix, not the defect.
+
+**Interaction with `noise_cluster`.** `FinalizePlanVerdict` uses the same ladder as everything
+else: three minors → `warn`. A plan with three tracker-key fences therefore returns `warn`, which
+the plan-handoff gate treats as stop-and-justify. That is defensible for twenty of them and
+heavy-handed for three, so the findings are emitted **plan-level, consolidated into one finding
+listing the offending fences**, not one finding per fence.
 
 Twelve `plan_*.golden` files regenerate. The diff is reviewed by hand, not trusted.
 
-## Part 6 — documentation (G10)
+## Part 6 — documentation (G10 and the rest)
 
 ### 6a. The controller note
 
 `docs/protocol/controller.md`: a `pass` after N rounds does not mean earlier rounds inspected
 everything. A defect present from round 1 was first reported in round 4. Not a bug — worth stating
-so a controller does not read an Nth-round pass as an audit of rounds 1..N-1.
+so a controller does not read an Nth-round pass as an audit of rounds 1..N-1. `controller.md` has
+1,564 bytes of headroom.
 
-### 6b. A byte-budget constraint this release must solve
+### 6b. The byte budget
 
-The protocol parts are CI-capped at 16,000 bytes each:
+The protocol parts are CI-capped at **strictly under 16,000 bytes**, with a warning band at 15,500
+(`.github/workflows/ci.yml:61-74`):
 
 | part | bytes | headroom |
 |---|---|---|
-| `core.md` | 15,891 | **109** |
-| `implementer.md` | 15,593 | **407** |
+| `core.md` | 15,891 | **109** — in the warning band |
+| `implementer.md` | 15,593 | **407** — in the warning band |
 | `controller.md` | 14,436 | 1,564 |
 | `authoring.md` | 8,459 | 7,541 |
+| `project-knowledge.md` | 10,401 | 5,599 |
 
-`skip_evidence` (Part 3) and the test-evidence rule (Part 4) are both implementer-facing and belong
-in `implementer.md`, which has 407 bytes free. They will not fit as prose. Existing
-`implementer.md` text is trimmed to make room, and the trim is reviewed as a change in its own
-right rather than smuggled in — a protocol part is read once per dispatched subagent, so what comes
-out matters as much as what goes in.
+The first draft treated this as "trim `implementer.md` to make room". Part 3e supersedes that: the
+`implementer.md:157` paragraph is being **rewritten**, and the rewrite must come in at or under its
+current 673 bytes. `core.md:136-137` likewise rewrites at equal-or-shorter length. No separate trim
+is required, and nothing new is added to `core.md`.
 
-`controller.md` absorbs 6a comfortably. Nothing goes into `core.md`.
-
-Both parts resync into `plugin/anti-tangent-protocol/protocol/` in the same commit, per
-`CLAUDE.md`.
+Both parts resync into `plugin/anti-tangent-protocol/protocol/` in the same commit, per `CLAUDE.md`.
 
 ## Testing
 
 | Surface | How |
 |---|---|
-| Lexer (Part 1a) | Eval cases in `guard-evals.json`: KDoc and `/* */` positives; trailing-comment positives; **string-literal negatives that must not fire** — `url := "http://x" // ok`, `s = "# not a comment"`, a Go raw string containing `*/`, a Kotlin `"""` block containing `//` |
-| Ticket pattern (1c) | The four G1 table rows with the pattern set; the same four with it unset (all clean); an uncompilable pattern; an over-long pattern; a nested-quantifier pattern |
-| git derivation (2a) | Fixture repo: untracked file, tracked-and-modified file, tracked-and-clean file, non-repo directory |
-| Switch split (2b) | Each of the four `COMPLETION_GUARD` × `COMMENT_GUARD` combinations |
-| Ladder (Part 3) | Table test per rung, including `ran:true` with a regression |
-| Test evidence (Part 4) | **Negatives first**: a Gradle build with compile tasks `UP-TO-DATE` and a test task that ran; a Go run mixing `(cached)` and executed packages; a human-written summary. Then the positives |
+| G2 openers (1a) | KDoc `* ABC-1234:` and ` * Fixes #123` positives; `*ptr = task-42;` **must not** fire (the `*`-followed-by-whitespace rule); `/* fixes #1 */` positive |
+| G3 parity (1a) | The seven-row table in 1a, as eval cases. The decline cases are the load-bearing ones: `x = "a" + "b//c"`, `echo "a #b"`, `url=${url#https://t/ABC-1}` |
+| Ticket pattern (1c) | The four G1 rows with the pattern set; the same four unset (all clean); uncompilable; over-long; a catastrophic-backtracking pattern that must trip SIGALRM and fail open |
+| git derivation (2a) | Fixture repo covering: untracked, tracked-and-modified, tracked-and-clean, gitignored, **inside a nested worktree with the hook rooted at the main checkout**, outside any repo (exit 128), and a repo with `diff.mnemonicPrefix=true` |
+| Switch split (2b) | All four `COMPLETION_GUARD` × `COMMENT_GUARD` combinations |
+| Ladder (Part 3) | Table test per rung; `ran:true` with a regression; an envelope blocked only by the new major asserting `SubmissionDefectOnly` is true |
+| Test evidence (Part 4) | **Negatives first**: `UP-TO-DATE`, `FROM-CACHE`, Go `(cached)`, a human summary — all must stay clean. Then the four positives |
 | Regex (5a) | The Part 5a table, as a table test |
-| Goldens (5b) | `go test ./internal/prompts/... -update`, twelve files, diff read by hand |
-| Protocol (Part 6) | `scripts/check-protocol-docs.sh` — size cap and bundle identity |
-| Everything | `go test -race ./...`, `evals/run.sh`, `fp-report.sh` (all three CI-gated) |
+| Plan rule (5b) | A plan with three tracker-key fences → exactly one consolidated minor; a plan with a diff fence removing a bad comment → clean |
+| Goldens | `go test ./internal/prompts/... -update`, twelve files, diff read by hand |
+| Protocol size + bundle | `.github/workflows/ci.yml:61-91` — these are inline CI steps, **not** `scripts/check-protocol-docs.sh`, which checks relative links and section-ID uniqueness only |
+| Everything | `go test -race ./...`, `evals/run.sh`, `fp-report.sh` (all CI-gated) |
 
-`fp-scan.py` is re-run over real repository comments after Part 1 lands, to measure the new false-
-positive surface before merge rather than after.
+`fp-scan.py` and `fp-report.sh` must **unset `ANTI_TANGENT_TICKET_PATTERN`** before running, or the
+false-positive gate silently depends on the developer's own environment.
+
+The false-positive corpus is this repository: 170 Go files, 8 shell, 3 Python, and no Kotlin, Rust,
+JS/TS or Java at all. The prefix-plus-parity design is language-agnostic enough that this is
+tolerable — it can only decline, never promote code to comment — which is the main reason the lexer
+was deferred rather than fixed.
 
 ## Compatibility
 
-**Behavioural changes that fail verdicts passing today.** Two, both intended, both belonging under
-**Changed** in the changelog rather than **Fixed**:
+**This release does not close #71's headline case by default.** On a project that has not set
+`ANTI_TANGENT_TICKET_PATTERN`, ` * ABC-1234: …` matches no tell, and no layer flags it: the write
+hook has nothing to match, the close hook has nothing to match, and `post.tmpl`'s reviewer rule
+stays disabled without a diff. G2 and G4 make the line *reachable* so that a configured pattern
+works on it; they do not make it *match*. Setting the variable is the fix, and the guard README
+will say so at the top of its configuration section.
 
-1. Part 4 emits a `major` on cached or up-to-date test output. Anyone mid-plan pasting a cached run
-   starts getting blocked on their next close. This is the sharpest edge in the release.
-2. Part 3 raises an unevidenced `skip_reason` from `minor` to `major` under
+**Behavioural changes that fail verdicts passing today**, both under **Changed** in the changelog:
+
+1. Part 3 raises an unevidenced `skip_reason` from `minor` to `major` under
    `ANTI_TANGENT_CODESCENE=required`. Operators who have not set that variable see no change.
+2. Part 4 emits a `major` on test output showing nothing ran.
 
-**Additive, no migration.** `skip_evidence`, `ANTI_TANGENT_TICKET_PATTERN`, and every Part 1/2
-scanner change (which can only ever find more, and fail open when they cannot look).
+**How those interact, which matters more than either alone:** one major yields `warn`
+(`finalize.go:27-31`) and the close-time hook blocks only on `fail` (`check-task-complete:394`). So
+either finding alone warns. **Both on the same lightweight close stack to two majors → `fail` → the
+hook blocks.** A lightweight task under `required` that skips CodeScene without evidence *and*
+pastes a `NO-SOURCE` test run will be blocked where today it closes clean. That is the intended
+outcome and the sharpest edge in the release.
 
-**One documented behaviour reverses.** `ANTI_TANGENT_COMPLETION_GUARD=0` stops disabling the comment
-scan. Anyone relying on it as a master switch must now set both variables; the guard README and
-`CLAUDE.md` say so.
+**One documented behaviour reverses.** `ANTI_TANGENT_COMPLETION_GUARD=0` stops disabling the
+comment scan. Anyone relying on it as a master switch must set both variables.
+
+**Additive, no migration.** `skip_evidence`, `ANTI_TANGENT_TICKET_PATTERN`, and the Part 1/2 scanner
+changes, which can only find more and fail open when they cannot look.
 
 ## Release
 
@@ -382,15 +516,17 @@ scan. Anyone relying on it as a master switch must now set both variables; the g
 | `anti-tangent-protocol` | 0.2.1 → 0.2.2, `protocol/` resynced from `docs/protocol/` |
 | `.claude-plugin/marketplace.json` | duplicates both plugin versions — bump there too |
 
-Part 5a is independent of everything else and can land alone. Parts 1/2 (plugin) and 3/4 (server)
-are independent of each other.
+Part 5a is independent of everything and can land first. Parts 1/2 (plugin) and 3/4 (server) are
+independent of each other. Part 3e's three document rewrites must land in the same commit as Part 3.
 
 ## References
 
 - Issue [#71](https://github.com/patiently/anti-tangent-mcp/issues/71)
 - `plugin/anti-tangent-guard/hooks/comment_scan.py` — `TELLS`, `DEFAULT_COMMENT`, `violations`
-- `plugin/anti-tangent-guard/hooks/check-task-complete:170,310` — the switch and `diff_added_lines`
-- `internal/mcpsrv/submission_defect.go:52` — `codesceneFindings`
-- `internal/mcpsrv/handlers.go:1527,1688,1711` — lightweight flag, call site, ledger write
+- `plugin/anti-tangent-guard/hooks/check-task-complete:170,310,394,427` — switch, `diff_added_lines`, block conditions
+- `internal/mcpsrv/submission_defect.go:17-21,52-100` — `submissionDefectCategories`, `codesceneFindings`
+- `internal/mcpsrv/handlers.go:1234,1527,1679,1688,1703,1711` — cache key, lightweight flag, call site, ledger write
 - `internal/planparser/filerefs.go:50` — `lineAnchorRe`
-- `internal/prompts/templates/post.tmpl` — the "ONLY when a diff is present" clause
+- `internal/verdict/finalize.go:27-31` — the severity ladder both new findings feed
+- `internal/planrun/report.go:85-98` — `codesceneCell`
+- `internal/prompts/templates/post.tmpl:53,66,120` — restate-suppression precedent, test cross-check, the diff-only clause
