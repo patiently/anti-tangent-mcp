@@ -624,7 +624,9 @@ func TestPlanRulesCarriesCommentHygiene(t *testing.T) {
 		"the canonical pointer line must appear verbatim; authoring.md and the e2e fixture copy it")
 	assert.Contains(t, body, "Emit at most ONE finding for the whole plan",
 		"consolidation is what keeps a three-fence plan off warn")
-	assert.Contains(t, body, "severity: minor")
+	assert.Contains(t, body, "severity: minor", "the hygiene finding's severity")
+	assert.Contains(t, body, "severity: major",
+		"the policy gate's severity -- this is the half of the mechanism applySeverityFloor would silently defeat if it regressed to minor")
 	for _, exemption := range []string{"DIFF", "EXPECTED OUTPUT", "TEST FIXTURE"} {
 		assert.Contains(t, body, exemption,
 			"each fence exemption must be named in the rule, not implied")
