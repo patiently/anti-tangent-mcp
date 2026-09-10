@@ -980,7 +980,7 @@ func TestRenderPre_IncludesTrimIndentHeuristic(t *testing.T) {
 	require.Contains(t, out.User, ".trimIndent()")
 	require.Contains(t, out.User, ".trimMargin()")
 	require.Contains(t, out.User, "textwrap.dedent")
-	require.Contains(t, out.User, "INTEGRATION.md §3.7")
+	require.Contains(t, out.User, "authoring.md §3.7")
 }
 
 func TestRenderPre_ContextIsAuthoritative(t *testing.T) {
