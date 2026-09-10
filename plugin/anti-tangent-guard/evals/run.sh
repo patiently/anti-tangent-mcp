@@ -231,15 +231,25 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # header pair whatever the open hunk still owes, so a hunk over-declaring by
 # a single line does not swallow the next file's real header.
 #
-# The last three are the shapes that stay wrong, each pinned at its actual
+# The last three are the shapes read wrong, each pinned at its actual
 # behaviour with expected_exit 0 and a trace assertion, so the boundary is
 # asserted rather than rediscovered: a hunk that UNDER-declares its count,
 # where a genuine body line is read as a header; a hunk that OVER-declares it
 # under a bare header with no "--- " above and no "@@" after, where a genuine
-# header is read as body; and a diff OF a diff, where a removed line starting
-# "-- " above an added line starting "++ " trips the header-pair tell. The
-# trace assertion carries these: a case expecting exit 0 would otherwise pass
-# against a scan that never ran at all.
+# header is read as body; and ordinary source text carrying a removed line
+# starting "-- " immediately above an added line starting "++ ", which trips
+# the header-pair tell -- the price of that tell, and the only one of the
+# three that misreads a well-formed diff. A real diff OF a diff does not trip
+# it; git writes those with four markers. The trace assertion carries these:
+# a case expecting exit 0 would otherwise pass against a scan that never ran
+# at all. All three pin the SILENT direction, where the invented path has no
+# scannable extension.
+#
+# An eleventh pins the other direction, which is the one that costs a user
+# their close: where the path a collision lands on DOES carry a scannable
+# extension, the same shapes block instead, naming a file the diff never
+# touched. Widening the header-pair tell fails there loudly rather than
+# costing closes quietly.
 #
 # The per-group counts above PARTITION this table: every case belongs to
 # exactly one group, and they sum to EXPECTED_CASE_COUNT. Adding a case means
@@ -250,7 +260,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=140
+EXPECTED_CASE_COUNT=141
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and

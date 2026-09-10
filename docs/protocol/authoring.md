@@ -107,8 +107,9 @@ Rules the parser actually applies:
   `/` (`Create/Modify:`) for a file one task creates and another edits; both are recorded.
 - The path may be backtick-quoted or bare. Bare takes the first whitespace-delimited token.
 - A trailing parenthetical (`(the roots parsing)`) is dropped, and so is a trailing line anchor
-  — `:57`, `:57-70`, `:57,70`, and repeated forms like `:57:12` — so anchoring a `Modify:` to
-  the lines you are editing is safe.
+  — `:57`, `:57-70`, `:57,70`, a comma-separated list of either (`:60,166,174,419`,
+  `:57-70,90-95`), and repeated forms like `:57:12` — so anchoring a `Modify:` to the lines you
+  are editing is safe.
 - Paths are repo-relative. Collection stops at the first line that is neither a bullet nor
   blank, so a following `**Steps:**` section is never harvested.
 
@@ -137,7 +138,8 @@ The comment policy (`implementer.md` §4.4) can be enforced, not just stated. If
 mechanical tells: an issue, pull-request or task reference, or a version reference narrating when
 something changed. A tracker key (`ABC-1234:`) is matched only where the project sets
 `ANTI_TANGENT_TICKET_PATTERN` to its own key shape; there is deliberately no default, so an
-unconfigured project gets no tracker tell at all. Prose narration ("previously", "no longer", "this replaced") cannot be matched
+unconfigured project gets no tracker tell at all. Both hooks honour it: the pattern is compiled
+once and the close-time scan reads the same tell set this write-time one does. Prose narration ("previously", "no longer", "this replaced") cannot be matched
 without false positives, so that half of the policy is reviewer-led instead — `post.tmpl` catches
 it at completion time — and a clean write-time pass is not proof the whole of §4.4 was followed. A
 refused `Edit`/`Write` is not a bug in your call; it is the policy holding. Rewrite the flagged

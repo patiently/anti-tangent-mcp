@@ -328,7 +328,9 @@ def diff_added_lines(inp):
     with an extension the scan excludes skips it. What is left for the
     parser to get right is diffs written oddly but in good faith.
 
-    Three shapes stay wrong, and none of them is worth chasing.
+    Three shapes are read wrong, and none of them is worth chasing. Two are
+    inherited from the declared counts; the third is the price of the pair
+    tell and is the only one here that misreads a WELL-FORMED diff.
 
     UNDER-DECLARED COUNT: a hunk that declares FEWER added lines than it
     delivers spends its count early, so a later added line whose content
@@ -343,15 +345,22 @@ def diff_added_lines(inp):
     "--- "/"+++ " pair, and a header an "@@" follows while the hunk owes at
     least two added lines -- and what neither tell reaches is the residual.
 
-    A DIFF OF A DIFF: the price of the pair tell. A removed line whose
-    content starts "-- " sitting immediately above an added line whose
-    content starts "++ " ends its hunk and re-points the scan at whatever
-    that second line names.
+    A "-- "/"++ " CONTENT COLLISION: the price of the pair tell. A removed
+    line whose content starts "-- " sitting immediately above an added line
+    whose content starts "++ " ends its hunk and re-points the scan at
+    whatever that second line names. A real diff OF a diff does NOT do this:
+    git writes those with four markers, "---- a/x" above "++++ b/x", which
+    the tell does not match. The trigger is ordinary source text.
 
-    Each of the three goes silent when the path the scan lands on has no
-    scannable extension, which is what makes them worth writing down. Each
-    has an eval case pinning the behaviour described here, so the boundary
-    is asserted rather than rediscovered.
+    Each of the three lands the added lines that follow on a path the diff
+    body named rather than the one it meant, and what that costs depends on
+    the invented path. Where it has no scannable extension the scan goes
+    SILENT and a comment carrying a tell reaches disk unflagged. Where it
+    has one the close is BLOCKED against a file the diff never touched, and
+    nothing the implementer can edit clears it -- the worse direction of the
+    two, because this hook is built to fail open. Each has an eval case
+    pinning the behaviour described here, so the boundary is asserted rather
+    than rediscovered.
     """
     text = inp.get("final_diff") or ""
     if not text:
