@@ -66,14 +66,16 @@ about what you submitted, not about your code. Attach the missing evidence
 and re-submit; no rework is implied.**
 - Prefer paths over inline content: omit a `final_files` entry's `content` and the server reads
   its absolute `path`, and pass `final_diff_path` instead of `final_diff`. Write the diff first:
-  `git add -- <task paths> && git diff HEAD -- <task paths> > "$(git rev-parse --absolute-git-dir)/anti-tangent-change.diff"` —
-  a repo-local scratch path, guaranteed writable and never tracked by git — then pass that
-  absolute path as `final_diff_path`. Use `--absolute-git-dir`, not `--git-dir`: the latter prints
+  `f=$(mktemp "$(git rev-parse --absolute-git-dir)/anti-tangent-change-XXXXXX") && git add -- <task paths> && git diff HEAD -- <task paths> > "$f"` —
+  a repo-local scratch path, guaranteed writable and never tracked by git — then pass `$f` as
+  `final_diff_path`. Use `--absolute-git-dir`, not `--git-dir`: the latter prints
   a relative `.git` in a normal checkout, which fails the server's absolute-path check, and it is
   also the form that resolves in a worktree, where `.git` is a file and `"$PWD/.git/..."` dies
-  with `Not a directory`. **That filename is fixed per git directory** — where another agent may
-  write to the same one (parallel tasks, a shared worktree), use a task-unique name or the later
-  write silently clobbers the earlier evidence. **Scope both the `git add` and the `git diff` to
+  with `Not a directory`. **`mktemp` is what keeps the name unique to your task**: a fixed name in
+  a git directory another agent also writes to (parallel tasks, a shared worktree) is clobbered by
+  whoever writes last, and `validate_completion` then reviews — and discloses — the other task's
+  evidence. Let the run of `X`s END the template; BSD/macOS `mktemp` rejects a suffix after it, and
+  the server reads the file by path, not by extension. **Scope both the `git add` and the `git diff` to
   your task's own paths — never `git add -A` or bare `git diff HEAD`.** The whole diff goes to a
   third-party reviewer LLM, so an unscoped stage-and-diff discloses every non-ignored change in
   the worktree: unrelated tracked edits, scratch files, another task's half-finished work. The
