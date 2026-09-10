@@ -1689,6 +1689,10 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		result.Findings = append(cs, result.Findings...)
 		result = verdict.FinalizeVerdict(result)
 	}
+	if te := testEvidenceFindings(args.TestEvidence); len(te) > 0 {
+		result.Findings = append(te, result.Findings...)
+		result = verdict.FinalizeVerdict(result)
+	}
 
 	env := Envelope{
 		Tool:       "validate_completion",

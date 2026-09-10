@@ -52,6 +52,7 @@ func Health(c *gin.Context) { c.String(200, "ok") }
 ## Test evidence
 
 PASS: TestHealthReturns200
+anti-tangent independently flags test evidence whose own text states that no test executed; do not emit a separate finding solely restating that. Cross-check the evidence against the AC list as described above.
 
 
 When the provided evidence addresses every AC and the implementer's narrative is internally consistent with it, prefer `verdict: pass` with a `category: quality` finding for nit-level concerns over `verdict: fail`. Reserve `severity: critical` and `severity: major` for evidence that affirmatively contradicts an AC, OR for an AC that is left unaddressed by any of the provided evidence. The bias toward `pass` applies only when every AC has been addressed — not when evidence is absent for an AC.
