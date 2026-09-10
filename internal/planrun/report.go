@@ -102,7 +102,7 @@ func codesceneCell(row TaskRow) string {
 		// are 40 wide, so the cell carries the head of it and the ledger
 		// keeps the whole.
 		if row.Codescene != nil && strings.TrimSpace(row.Codescene.SkipEvidence) != "" {
-			ev := truncateRunes(strings.TrimSpace(row.Codescene.SkipEvidence), reportCellEvidenceRunes)
+			ev := fitRunes(strings.TrimSpace(row.Codescene.SkipEvidence), reportCellEvidenceRunes)
 			return "skipped (" + reason + ": " + ev + ")"
 		}
 		return "skipped (" + reason + ")"
@@ -114,9 +114,12 @@ func codesceneCell(row TaskRow) string {
 // reportCellEvidenceRunes is how much of a skip evidence a table cell shows.
 const reportCellEvidenceRunes = 200
 
-// truncateRunes shortens s to at most n runes, spending the last one on an
-// ellipsis so a reader can tell the cell from a complete short value.
-func truncateRunes(s string, n int) string {
+// fitRunes shortens s so the RESULT is at most n runes, spending the last of
+// them on an ellipsis so a reader can tell a cut cell from a complete short
+// value: n-1 runes of s plus the marker. internal/codescene has a
+// truncateRunes whose bound counts only the RETAINED runes and appends the
+// marker on top, so a cap moved between the two shifts by one rune.
+func fitRunes(s string, n int) string {
 	if utf8.RuneCountInString(s) <= n {
 		return s
 	}

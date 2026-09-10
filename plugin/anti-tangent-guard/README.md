@@ -366,7 +366,9 @@ A regex for your tracker's key shape, e.g. `ABC-\d+`. Set it per project in `.cl
 { "env": { "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+" } }
 ```
 
-**There is no default, and without it a comment like `// ABC-1234: the keyword` is not detected.** A generic pattern cannot be made safe: measured over real comment lines, `[A-Z]+-\d+` matches hardware identifiers (`HDMI-0`, `DP-0`) and prose labels (`ROUND-1`) far more often than tracker keys, and this hook blocks writes. An uncompilable or over-long pattern is ignored, and each file's scan runs under a two-second deadline that fails open. The close-time walk over every file a completion named is bounded in turn — a twenty-second budget over the git questions and another over the scans — so neither a stalled git nor a slow pattern can hold the session for minutes. What a budget cuts short is recorded on the trace line rather than reported as a clean scan.
+Both hooks honour it: the tell is appended to the scanner's set when `comment_scan` is imported, so it is live in the write-time `Edit`/`Write` guard and in the close-time scan over a completion's submitted evidence alike.
+
+**There is no default, and without it a comment like `// ABC-1234: the keyword` is not detected.** A generic pattern cannot be made safe: measured over real comment lines, `[A-Z]+-\d+` matches hardware identifiers (`HDMI-0`, `DP-0`) and prose labels (`ROUND-1`) far more often than tracker keys, and the write-time hook blocks writes. An uncompilable or over-long pattern is ignored, and each file's scan runs under a two-second deadline that fails open. The close-time walk over every file a completion named is bounded in turn — a twenty-second budget over the git questions and another over the scans — so neither a stalled git nor a slow pattern can hold the session for minutes. What a budget cuts short is recorded on the trace line rather than reported as a clean scan.
 
 ## Kill switches
 

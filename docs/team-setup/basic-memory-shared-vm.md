@@ -1106,6 +1106,6 @@ docker logs basic-memory --since 2h 2>&1 | grep -E "32602|session|invalid" | tai
 
 ## See also
 
-- [`INTEGRATION.md`](../../INTEGRATION.md) — the project-knowledge integration playbook (how anti-tangent and BM compose in a Claude Code session).
-- [`examples/project-knowledge/`](../../examples/project-knowledge/) — note templates (decision, module, feature, epic, glossary) the team's agents should produce.
+- [`docs/protocol/project-knowledge.md` § "Project knowledge (optional)"](../protocol/project-knowledge.md#project-knowledge-optional) — the project-knowledge integration playbook (how anti-tangent and BM compose in a Claude Code session). [`INTEGRATION.md`](../../INTEGRATION.md) is the router over the protocol parts.
+- [`examples/project-knowledge/`](../../examples/project-knowledge/) — note templates (decision, module, feature, epic, glossary, story, gotcha, howto) the team's agents should produce.
 - [Basic Memory upstream](https://github.com/basicmachines-co/basic-memory) — install, tool reference, schema details.

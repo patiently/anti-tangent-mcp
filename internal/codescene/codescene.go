@@ -113,7 +113,10 @@ func (d *Digest) Normalize() {
 }
 
 // truncateRunes returns s if its rune count is at or below max; otherwise the
-// first max runes followed by a single UTF-8 ellipsis. Rune-based truncation
+// first max runes followed by a single UTF-8 ellipsis -- max counts the
+// RETAINED runes, so a truncated result is max+1 runes long. internal/planrun
+// has a fitRunes whose bound covers the whole result instead, so a cap moved
+// between the two shifts by one rune. Rune-based truncation
 // avoids splitting multi-byte UTF-8 characters mid-codepoint. Duplicated from
 // (rather than sharing) internal/mcpsrv/summary.go's truncate: codescene is a
 // leaf package (see the package doc) and must not import internal/mcpsrv.
