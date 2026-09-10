@@ -163,3 +163,36 @@ func TestCodesceneCellShowsEvidence(t *testing.T) {
 	assert.Contains(t, got, "not configured")
 	assert.Contains(t, got, "MCP error: tool not found")
 }
+
+// The evidence a cell can carry arrives capped at 2,000 runes, and the cell
+// shows the head of it. Short evidence passes through either way, so the cap
+// is only observable at its own boundary — and only in runes: a multi-byte
+// evidence cut by byte count would come out both shorter than the boundary
+// and, on an unlucky offset, invalid UTF-8.
+func TestCodesceneCellCapsEvidenceAtTheRuneBoundary(t *testing.T) {
+	cell := func(evidence string) string {
+		return codesceneCell(TaskRow{
+			CodesceneState: StateSkipped,
+			Codescene: &codescene.Digest{
+				SkipReason:   "not configured",
+				SkipEvidence: evidence,
+			},
+		})
+	}
+
+	atCap := strings.Repeat("é", reportCellEvidenceRunes)
+	require.Equal(t, reportCellEvidenceRunes, utf8.RuneCountInString(atCap))
+	assert.Contains(t, cell(atCap), atCap,
+		"evidence exactly at the cap is shown whole")
+
+	overCap := strings.Repeat("é", reportCellEvidenceRunes+1)
+	got := cell(overCap)
+	assert.NotContains(t, got, overCap, "evidence over the cap must be cut")
+	shown := strings.TrimPrefix(strings.TrimSuffix(got, ")"),
+		"skipped (not configured: ")
+	// The ellipsis is one of the retained runes, not an addition to them.
+	assert.Equal(t, reportCellEvidenceRunes, utf8.RuneCountInString(shown))
+	assert.True(t, strings.HasSuffix(shown, "…"),
+		"a cut cell must end in the ellipsis that marks it as cut")
+	assert.True(t, utf8.ValidString(shown), "the cut must fall on a rune boundary")
+}

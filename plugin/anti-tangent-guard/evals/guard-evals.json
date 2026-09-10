@@ -1808,6 +1808,46 @@
       "expected_exit": 2,
       "expected_stderr_contains": ["COMMENTS CARRYING CHANGE HISTORY"],
       "reason": "establishes that a repository with diff.mnemonicPrefix=true / diff.noprefix=false is handled end-to-end and its added line is still extracted correctly. It does NOT prove the -c pins are load-bearing for final_files_added_lines: that function's filter only checks for a leading +++, which every prefix style still produces, so it is prefix-agnostic by construction. The pins hold this module's git output in one shape whatever the developer configured, so its parsing never has to anticipate every prefix and quoting style; the hook's other parser, diff_added_lines, reads the CALLER's diff text and cannot be pinned at all, which is why it strips an optional one-character prefix instead of requiring b/"
+    },
+    {
+      "id": 128,
+      "name": "close-no-prefix-diff-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- pkg/a.go\\n+++ pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": ["COMMENTS CARRYING CHANGE HISTORY"],
+      "reason": "a diff written under diff.noprefix carries no a/ or b/ prefix at all, and the caller's own diff text cannot be pinned the way this module pins its own git calls. Every other final_diff case in this table uses +++ b/, so a parser that still required b/ would pass all of them while discarding every added line of such a diff"
+    },
+    {
+      "id": 129,
+      "name": "final-files-committed-traces-nothing-scanned",
+      "setup_script": "mkdir -p c && cd c && git init -q . && git config user.email t@t && git config user.name t && printf '// fixes #1\\npackage x\\n' > done.go && git add done.go && git commit -qm i",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/c/done.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": ["scan | src=final_files submitted=1 scanned=0 lines=0"]
+      },
+      "reason": "a completion whose files are all committed yields no added lines, so the close passes -- and the exit code alone cannot tell that apart from a scan that never ran at all. The trace line has to carry submitted>0 with scanned=0, and no budget marker, or the two stay indistinguishable in the log"
     }
   ]
 }

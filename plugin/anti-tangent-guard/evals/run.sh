@@ -148,11 +148,19 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # shapes of an unreadable target are pinned here; the FIFO and oversized-file
 # shapes share the same code path but have no case of their own.
 #
+# Two cases pin what the close-time scan looked at, which no exit code can
+# state. One submits a diff carrying NO path prefix at all — the shape
+# diff.noprefix produces, and the one every other final_diff case here is
+# blind to, since they all use "+++ b/" — and must still block. The other
+# closes on final_files whose paths are all committed: it passes, and the
+# trace line must show submitted>0 with scanned=0, which is what separates
+# "there was nothing to scan" from "the scan never ran".
+#
 # Both checks below must hold or the count assertion is vacuous: the JSON
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=127
+EXPECTED_CASE_COUNT=129
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
