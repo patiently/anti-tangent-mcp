@@ -8,6 +8,12 @@
 
 **Tech Stack:** Go 1.x (server, `-race` tests, RE2 regexp), Python 3 (guard hooks, stdlib only), Bash (hook wrappers), Go `text/template` (reviewer prompts, golden-file tested).
 
+**Python tests use `unittest` from the standard library, run as
+`python3 -m unittest discover -s plugin/anti-tangent-guard/hooks -p '*_test.py'`.** Not pytest:
+the hooks are stdlib-only by design and CI installs no Python packages (`ci.yml` installs `jq` and
+nothing else). Bare `assert` functions are NOT discovered by `unittest`, so every Python test in
+this plan is a `unittest.TestCase` method.
+
 **Spec:** `docs/superpowers/specs/2026-09-10-anti-tangent-v0.20.0-design.md`
 
 ## Global Constraints
@@ -19,7 +25,9 @@
 - **`EXPECTED_CASE_COUNT` in `evals/run.sh:155` must equal the case count in `guard-evals.json`.** Every task adding eval cases updates it in the same commit.
 - **Protocol parts are capped at strictly under 16,000 bytes** (`.github/workflows/ci.yml:61-74`), with a warning at 15,500. `core.md` has 109 bytes of headroom and `implementer.md` has 407 — rewrites in those two files must come in at or under the length they replace.
 - **`plugin/anti-tangent-protocol/protocol/` must be byte-identical to `docs/protocol/`.** Resync in the same commit as any protocol edit: `rm -f plugin/anti-tangent-protocol/protocol/*.md && cp docs/protocol/*.md plugin/anti-tangent-protocol/protocol/`
-- **Comments: `anti-tangent-protocol` `implementer.md` §4.4.** In full, because this plan is enforcing it: comments explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next editor, and must read correctly to someone who never saw the change that introduced it. They carry no issue, pull-request, task or version references and no "previously" / "no longer" / "this replaced" — git holds that. Where you touch code whose comments break these rules, rewrite them as part of the task. Test fixtures containing `// fixes #58` are data, not comments, and are exempt.
+- **Comments: `anti-tangent-protocol` `implementer.md` §4.4.** In full, because this plan is enforcing it: comments explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next editor, and must read correctly to someone who never saw the change that introduced it. They carry no issue, pull-request, task or version references and no "previously" / "no longer" / "this replaced" — git holds that.
+- **Scope of that rule in THIS release: comments you add or edit, and nothing else.** `evals/run.sh` and `check-task-complete` already contain comments the policy would flag ("Task 16", "Task 8's pinned re-validation semantics", "final review Important #1"), and Tasks 2–5 all edit those files. Rewriting every such comment is a file-wide cleanup with a large diff and no test behind it, which is not what any of these tasks is for. Leave pre-existing comments alone unless the lines you are changing carry them; a cleanup pass is its own release.
+- **Test fixtures containing `// fixes #58` are data, not comments, and are exempt** — this release's own eval table is full of them by necessity.
 - **`VERSION` is not edited on this branch.** The release workflow bumps it.
 
 **User decisions (already made):**
@@ -143,6 +151,7 @@ git commit -m "fix(planparser): accept multi-element line anchors on Files bulle
 - [ ] `/* note */ y = task-42;` is NOT flagged — block text stops at the first `*/`
 - [ ] `x = 1; /* note */ y = task-42;` is NOT flagged — the same truncation applies to a block comment that starts mid-line, not only to one at the start
 - [ ] `x = 1 /* fixes #1 */ // ok` IS flagged — spans are walked left to right, so a benign trailing comment cannot hide a violating one before it
+- [ ] `var y = 1 /* fixes */ z /* #1 */` is NOT flagged — tells run against each span separately; joining spans would synthesise a reference present in neither
 - [ ] An unstarred block interior (`/*` / `fixes task-42` / `*/` across three lines) is a DOCUMENTED miss with an eval asserting exit 0, not a silent gap
 - [ ] `x = "a" + "b//c"` is NOT flagged even with a tell inside the string
 - [ ] `echo "a #b"` in a `.sh` file is NOT flagged
@@ -258,15 +267,20 @@ def _line_comment_spans(opens, raw):
             continue
         out.append(raw[m.end():])
         break
-    return " ".join(t for t in out if t)
+    return [t for t in out if t.strip()]
 
 
-def comment_text(path, raw):
-    """The comment text on one line, or "" when the line carries none.
+def comment_spans(path, raw):
+    """Every comment span on one line, as a list; empty when there are none.
+
+    A LIST, not one joined string. Tells are matched per span, because joining
+    them can synthesise a reference that exists in neither: "/* fixes */ x
+    /* #1 */" concatenates to "fixes   #1", which the issue tell matches while
+    each span alone is clean.
 
     Two shapes. A line whose first non-space characters open a comment yields
-    everything after the opener. A line that starts with code yields its
-    trailing comment, subject to the parity test above.
+    everything after the opener. A line that starts with code yields the spans
+    found by the left-to-right walk above.
     """
     opens = openers(path)
     line = raw.strip()
@@ -285,7 +299,7 @@ def comment_text(path, raw):
             end = rest.find("*/")
             if end >= 0:
                 rest = rest[:end]
-        return rest
+        return [rest] if rest.strip() else []
     return _line_comment_spans(opens, raw)
 ```
 
@@ -300,12 +314,10 @@ def violations(path, added_lines):
         return []
     out = []
     for raw in added_lines:
-        text = comment_text(path, raw)
-        if not text:
-            continue
-        for pat, why in TELLS:
-            if pat.search(text):
-                out.append((raw.strip(), why))
+        for span in comment_spans(path, raw):
+            hit = next((why for pat, why in TELLS if pat.search(span)), None)
+            if hit is not None:
+                out.append((raw.strip(), hit))
                 break
     return out
 ```
@@ -419,6 +431,14 @@ Append these to the `evals` array in `plugin/anti-tangent-guard/evals/guard-eval
   "expected_exit": 2,
   "expected_stderr_contains": ["an issue or pull-request reference"],
   "reason": "spans are walked left to right, so a benign trailing comment cannot hide a violating one earlier on the line"
+},
+{
+  "id": 106,
+  "name": "comment-write-fragments-across-spans-do-not-join",
+  "hook": "check-comment-write",
+  "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\nvar y = 1 /* fixes */ z /* #1 */\\n\"}}",
+  "expected_exit": 0,
+  "reason": "tells run per span; joining them would synthesise `fixes #1` from two harmless fragments"
 }
 ```
 
@@ -427,15 +447,15 @@ Append these to the `evals` array in `plugin/anti-tangent-guard/evals/guard-eval
 In `plugin/anti-tangent-guard/evals/run.sh`, line 155:
 
 ```bash
-EXPECTED_CASE_COUNT=105
+EXPECTED_CASE_COUNT=106
 ```
 
-Also update the `description` field at the top of `guard-evals.json` to read `(105 cases)`.
+Also update the `description` field at the top of `guard-evals.json` to read `(106 cases)`.
 
 - [ ] **Step 7: Run the eval suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: all 105 cases pass, including every pre-existing one.
+Expected: all 106 cases pass, including every pre-existing one.
 
 - [ ] **Step 8: Measure the new false-positive surface**
 
@@ -557,6 +577,12 @@ Below the ticket tell:
 # Both cases run the scan UNBOUNDED rather than failing it -- a missing
 # deadline must not become a missing scan, which is what letting the error
 # reach violations()'s fail-open handler would do.
+#
+# The handler is saved and restored, but a previously ARMED ITIMER_REAL is
+# not: the timer is simply disarmed on the way out. That is sound only
+# because this runs in a hook process that owns its own lifetime and arms no
+# other real-time timer. A caller that did would need its remaining time
+# read and re-armed here.
 SCAN_TIMEOUT_SECONDS = 2.0
 
 
@@ -606,12 +632,10 @@ def violations(path, added_lines):
     try:
         with scan_deadline():
             for raw in added_lines:
-                text = comment_text(path, raw)
-                if not text:
-                    continue
-                for pat, why in TELLS:
-                    if pat.search(text):
-                        out.append((raw.strip(), why))
+                for span in comment_spans(path, raw):
+                    hit = next((why for pat, why in TELLS if pat.search(span)), None)
+                    if hit is not None:
+                        out.append((raw.strip(), hit))
                         break
     except Exception:
         return []
@@ -672,7 +696,7 @@ Append to `guard-evals.json`, continuing the ids:
 
 ```json
 {
-  "id": 106,
+  "id": 107,
   "name": "comment-write-ticket-pattern-set-blocks",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+"},
@@ -682,7 +706,7 @@ Append to `guard-evals.json`, continuing the ids:
   "reason": "a configured project ticket pattern is a tell"
 },
 {
-  "id": 107,
+  "id": 108,
   "name": "comment-write-ticket-pattern-unset-allows",
   "hook": "check-comment-write",
   "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * ABC-1234: the inbound keyword.\\n */\\nobject X\\n\"}}",
@@ -690,7 +714,7 @@ Append to `guard-evals.json`, continuing the ids:
   "reason": "there is no default ticket tell; unconfigured projects are unchanged"
 },
 {
-  "id": 108,
+  "id": 109,
   "name": "comment-write-ticket-pattern-uncompilable-ignored",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_TICKET_PATTERN": "ABC-(\\d+"},
@@ -700,7 +724,7 @@ Append to `guard-evals.json`, continuing the ids:
   "reason": "an uncompilable pattern is dropped without disabling the other tells"
 },
 {
-  "id": 109,
+  "id": 110,
   "name": "comment-write-ticket-pattern-over-long-ignored",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+(?:xxxxxxxxxx){25}"},
@@ -710,7 +734,7 @@ Append to `guard-evals.json`, continuing the ids:
   "reason": "a pattern past the 200-character cap is ignored without disabling the other tells"
 },
 {
-  "id": 110,
+  "id": 111,
   "name": "comment-write-ticket-pattern-catastrophic-fails-open",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_TICKET_PATTERN": "(a+)+$"},
@@ -725,7 +749,7 @@ Append to `guard-evals.json`, continuing the ids:
 
 - [ ] **Step 9: Update the case count**
 
-`EXPECTED_CASE_COUNT=110` in `run.sh:155`, and `(110 cases)` in the JSON `description`.
+`EXPECTED_CASE_COUNT=111` in `run.sh:155`, and `(111 cases)` in the JSON `description`.
 
 - [ ] **Step 10: Make the FP gate environment-independent**
 
@@ -745,72 +769,97 @@ unset ANTI_TANGENT_TICKET_PATTERN
 
 - [ ] **Step 10a: Test the two safety ACs that no eval can reach**
 
-The 200/201 boundary and the non-main-thread path are properties of the module, not of the hook,
-so they belong in a Python test beside it rather than in the eval table. Create
-`plugin/anti-tangent-guard/hooks/comment_scan_test.py`:
+The 200/201 boundary and the non-main-thread path are properties of the module, not of the hook, so
+they belong beside it rather than in the eval table. `unittest` from the standard library, run as
+`python3 -m unittest discover -s plugin/anti-tangent-guard/hooks -p '*_test.py'` — the hooks are
+stdlib-only and CI installs no Python packages. Bare `assert` functions would not be discovered, so
+these are `TestCase` methods.
+
+Create `plugin/anti-tangent-guard/hooks/comment_scan_test.py`:
 
 ```python
+import os
 import subprocess
 import sys
-import os
+import unittest
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
 
 
-def _violations(pattern, line):
-    code = (
-        "import sys; sys.path.insert(0, %r);"
-        "from comment_scan import violations;"
-        "print(bool(violations('X.kt', [%r])))" % (HOOKS, line)
-    )
+def _scan(line, pattern=None, path="X.kt"):
+    """Run violations() in a fresh interpreter with a controlled environment."""
+    code = ("import sys; sys.path.insert(0, %r);"
+            "from comment_scan import violations;"
+            "print(bool(violations(%r, [%r])))" % (HOOKS, path, line))
     env = dict(os.environ)
     env.pop("ANTI_TANGENT_TICKET_PATTERN", None)
     if pattern is not None:
         env["ANTI_TANGENT_TICKET_PATTERN"] = pattern
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                         text=True, env=env, timeout=30)
-    return out.stdout.strip() == "True"
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       text=True, env=env, timeout=30)
+    if r.returncode != 0:
+        raise AssertionError(r.stderr)
+    return r.stdout.strip() == "True"
 
 
-def test_pattern_length_boundary():
-    # A compilable pattern of exactly the cap length is accepted; one
-    # character more is refused. Both are built to match the same line, so
-    # the only variable is length.
-    body = "ABC-" + "|".join(["Z"] * 39)          # padding that still compiles
-    at_cap = (body + "|ABC")[:200]
-    assert len(at_cap) == 200
-    over_cap = at_cap + "|"
-    assert len(over_cap) == 201
-    assert _violations(at_cap, "// ABC-1234: x") is True
-    assert _violations(over_cap, "// ABC-1234: x") is False
+class TicketPatternLength(unittest.TestCase):
+    # Exactly at the cap is accepted, one character more is refused. Both
+    # patterns match the same line, so length is the only variable. The
+    # alternation keeps the padded form compilable and still matching.
+    AT_CAP = "ABC-\\d+|" + "Z" * 192
+
+    def test_at_cap_is_accepted(self):
+        self.assertEqual(len(self.AT_CAP), 200)
+        self.assertTrue(_scan("// ABC-1234: x", self.AT_CAP))
+
+    def test_one_over_cap_is_refused(self):
+        over = self.AT_CAP + "Z"
+        self.assertEqual(len(over), 201)
+        self.assertFalse(_scan("// ABC-1234: x", over))
 
 
-def test_scans_from_a_non_main_thread():
-    # signal.SIGALRM exists on Unix in every thread, but signal.signal raises
-    # outside the main one. The deadline must degrade to running unbounded --
-    # if the error escapes into violations()'s fail-open handler instead, the
-    # scanner silently stops finding anything.
-    code = (
-        "import sys, threading; sys.path.insert(0, %r);"
-        "from comment_scan import violations;"
-        "r = [];"
-        "t = threading.Thread(target=lambda: r.append(violations('X.go', ['// fixes task-42'])));"
-        "t.start(); t.join();"
-        "print(bool(r and r[0]))" % HOOKS
-    )
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                         text=True, timeout=30)
-    assert out.stdout.strip() == "True", out.stderr
+class NonMainThread(unittest.TestCase):
+    # SIGALRM exists on Unix in every thread, but signal.signal raises outside
+    # the main one. The deadline must degrade to an unbounded scan; were that
+    # error to reach violations()'s fail-open handler the scanner would go
+    # silently blind in any threaded caller.
+    def test_scans_from_a_worker_thread(self):
+        code = ("import sys, threading; sys.path.insert(0, %r);"
+                "from comment_scan import violations;"
+                "r = [];"
+                "t = threading.Thread(target=lambda: r.append("
+                "violations('X.go', ['// fixes task-42'])));"
+                "t.start(); t.join(); print(bool(r and r[0]))" % HOOKS)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(r.stdout.strip(), "True", r.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
 ```
 
-Run it: `python3 -m pytest plugin/anti-tangent-guard/hooks/comment_scan_test.py -q`, or with
-`unittest` discovery if pytest is not available in this environment — the assertions are plain
-`assert`, so either runner works. Wire whichever command works into `evals/run.sh` so CI runs it.
+- [ ] **Step 10b: Make CI run it**
+
+`evals/run.sh` is the only Python-aware entry point CI already calls, so wire the suite in near the
+top, before the eval table runs, and let a failure fail the script:
+
+```bash
+echo "== module tests =="
+python3 -m unittest discover -s "$HOOK_DIR" -p '*_test.py' -v || exit 1
+```
+
+Confirm it actually runs and passes:
+
+```bash
+python3 -m unittest discover -s plugin/anti-tangent-guard/hooks -p '*_test.py' -v
+```
+Expected: 3 tests, OK.
 
 - [ ] **Step 11: Run both suites**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh && bash plugin/anti-tangent-guard/evals/fp-report.sh`
-Expected: 110 cases pass; FP report unchanged from `main`.
+Expected: 111 cases pass; FP report unchanged from `main`.
 
 - [ ] **Step 12: Commit**
 
@@ -836,7 +885,7 @@ git commit -m "feat(guard): optional project ticket pattern with a scan deadline
 - [ ] `COMPLETION_GUARD=0`, `COMMENT_GUARD=1`, a close carrying a bad comment → exit 2 on comment hygiene
 - [ ] `COMPLETION_GUARD=0`, `COMMENT_GUARD=1`, a close with no validate_completion at all → exit 0
 - [ ] `COMPLETION_GUARD=1`, `COMMENT_GUARD=0`, a close with no validate_completion → exit 2
-- [ ] Both `0` → exit 0 with a `skip` trace
+- [ ] Both `0` → exit 0, and the trace file records a `skip` line — asserted on the trace, not inferred from the exit code
 - [ ] The comment-block message no longer claims "the completion gate passed"
 
 **Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all cases pass
@@ -909,7 +958,7 @@ fi
 - [ ] **Step 3: Run the existing suite to catch a broken restructure**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: all 110 cases pass — the count this task inherits, before its own four are added. A failure here means the hoist changed an exit path, not that a case is wrong.
+Expected: all 111 cases pass — the count this task inherits, before its own four are added. A failure here means the hoist changed an exit path, not that a case is wrong.
 
 - [ ] **Step 4: Add the four-combination eval cases**
 
@@ -917,7 +966,7 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
 
 ```json
 {
-  "id": 111,
+  "id": 112,
   "name": "switch-completion-off-comment-on-still-blocks",
   "env": {"ANTI_TANGENT_COMPLETION_GUARD": "0", "ANTI_TANGENT_COMMENT_GUARD": "1"},
   "input": {
@@ -935,7 +984,7 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
   "reason": "COMPLETION_GUARD names the completion gate only; comment scanning survives it"
 },
 {
-  "id": 112,
+  "id": 113,
   "name": "switch-completion-off-no-validation-allows",
   "env": {"ANTI_TANGENT_COMPLETION_GUARD": "0", "ANTI_TANGENT_COMMENT_GUARD": "1"},
   "input": {
@@ -951,7 +1000,7 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
   "reason": "with the completion gate off, a close that never validated is allowed"
 },
 {
-  "id": 113,
+  "id": 114,
   "name": "switch-comment-off-no-validation-blocks",
   "env": {"ANTI_TANGENT_COMPLETION_GUARD": "1", "ANTI_TANGENT_COMMENT_GUARD": "0"},
   "input": {
@@ -968,7 +1017,7 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
   "reason": "COMMENT_GUARD names comment scanning only; the completion gate survives it"
 },
 {
-  "id": 114,
+  "id": 115,
   "name": "switch-both-off-allows",
   "env": {"ANTI_TANGENT_COMPLETION_GUARD": "0", "ANTI_TANGENT_COMMENT_GUARD": "0"},
   "input": {
@@ -986,16 +1035,16 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
 }
 ```
 
-Case 112 deliberately carries the bad-comment transcript: with both switches off it must still exit 0, which is what proves the early exit is reached rather than the comment block being skipped by accident.
+Case 115 deliberately carries the bad-comment transcript: with both switches off it must still exit 0, which is what proves the early exit is reached rather than the comment block being skipped by accident.
 
 - [ ] **Step 5: Update the case count**
 
-`EXPECTED_CASE_COUNT=114` in `run.sh:155`, and `(114 cases)` in the JSON `description`.
+`EXPECTED_CASE_COUNT=115` in `run.sh:155`, and `(115 cases)` in the JSON `description`.
 
 - [ ] **Step 6: Run the suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: 114 cases pass.
+Expected: 115 cases pass.
 
 - [ ] **Step 7: Commit**
 
@@ -1029,6 +1078,9 @@ git commit -m "fix(guard): give each close-time kill switch its own concern"
 - [ ] A `check-ignore` status other than a definite "not ignored" skips the path rather than scanning it, asserted by a unit test with a stubbed git rather than by a fixture repository
 - [ ] The nested-worktree eval expects exit **0** on a fixture that only correct rooting can pass — an untracked fixture expecting exit 2 passes under the buggy rooting too and is not a test
 - [ ] Every `run.sh` hook invocation runs from `case_cwd`; `grep -c 'cd \"$HOOK_CWD\"'` returns 0
+- [ ] `hook_cwd` is resolved AFTER `setup_script` runs — the directory a case names is one its own setup creates
+- [ ] `_git` and `final_files_added_lines` live ONLY in `hooks/git_added_lines.py`; the hook imports them and carries no second copy
+- [ ] The commit stages `git_added_lines.py` and `comment_scan_test.py`, not just the hook and the evals
 - [ ] The nested-worktree, gitignored, both-fields-present and overridden-diff-prefix cases are each exercised by a HOOK-LEVEL eval, not only by a manual shell check
 
 **Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all cases pass
@@ -1043,11 +1095,29 @@ In `check-task-complete`, line 196:
 import json, os, re, subprocess, sys
 ```
 
-- [ ] **Step 2: Add the git helpers**
+- [ ] **Step 2: Create the git helper as an importable module**
 
-Insert immediately after the existing `diff_added_lines` function (which ends with `return out`):
+The helpers go in `plugin/anti-tangent-guard/hooks/git_added_lines.py`, NOT inline in the `PY=`
+heredoc. Two reasons, and the second is why it is not optional: `check-task-complete` already
+imports `comment_scan` this way so the pattern exists, and the `check-ignore` branch below has no
+reachable test unless the function can be imported and its `_git` stubbed.
+
+Create the file with:
 
 ```python
+"""git-derived added lines for a completion that submitted final_files.
+
+Imported by check-task-complete's embedded Python. It lives in a module
+rather than in that heredoc so its git calls can be stubbed by a test: the
+check-ignore branch below has no other way to be exercised, because a
+fixture repository cannot reliably produce an unanswerable status.
+"""
+import os
+import subprocess
+
+from comment_scan import read_text_capped
+
+
 def _git(cwd, *args):
     """Run git rooted at cwd with output formatting pinned. -> (rc, stdout).
 
@@ -1124,6 +1194,23 @@ def final_files_added_lines(inp):
     return out
 ```
 
+- [ ] **Step 2a: Import it from the hook**
+
+In the `PY=` heredoc in `check-task-complete`, alongside the existing `comment_scan` import inside
+the same `try:` block that sets `comment_scan_unavailable`:
+
+```python
+        from git_added_lines import final_files_added_lines
+```
+
+The heredoc already puts `$ATG_ROOT/hooks` on `sys.path` for `comment_scan`, so no new path setup
+is needed. An import failure here is the same class of event as a missing `comment_scan` and must
+set `comment_scan_unavailable` the same way — a scan that cannot load must never look like a scan
+that found nothing.
+
+Remove `import subprocess` from the heredoc's import line if you added it in Step 1: the subprocess
+work now lives in the module.
+
 - [ ] **Step 3: Use it when no diff was submitted**
 
 Replace the line `added_by_path = diff_added_lines(in_window_completions[-1])` with:
@@ -1176,16 +1263,6 @@ These cases need a real git repository, which `tmpdir_fixture` cannot build — 
     # HOOK_CWD. The worktree case turns on the hook's cwd differing from the
     # file's own directory, which is the whole point of rooting git at the
     # file; a case that cannot move the cwd cannot express it.
-    local hook_cwd_override case_cwd
-    hook_cwd_override=$(jq -r ".evals[$idx].hook_cwd // empty" "$EVALS_FILE")
-    hook_cwd_override="${hook_cwd_override//\{\{TMPDIR\}\}/$case_tmp}"
-    case_cwd="$HOOK_CWD"
-    if [[ -n "$hook_cwd_override" ]]; then
-        # A case naming a cwd that does not exist would otherwise fall back to
-        # HOOK_CWD and quietly assert the opposite of what it was written for.
-        [[ -d "$hook_cwd_override" ]] || { echo "  BAD hook_cwd: $hook_cwd_override" >&2; return 1; }
-        case_cwd="$hook_cwd_override"
-    fi
 
     local setup_script
     setup_script=$(jq -r ".evals[$idx].setup_script // empty" "$EVALS_FILE")
@@ -1195,6 +1272,24 @@ These cases need a real git repository, which `tmpdir_fixture` cannot build — 
             echo "  SETUP FAILED for case $idx" >&2
             return 1
         fi
+    fi
+
+    # Optional "hook_cwd": run the hook from here instead of HOOK_CWD. The
+    # worktree case turns on the hook's cwd differing from the file's own
+    # directory, which is the whole point of rooting git at the file.
+    #
+    # Resolved AFTER setup_script, never before: the directory a case names
+    # here is usually one its own setup just created, so validating first
+    # would reject every such case before it could exist.
+    local hook_cwd_override case_cwd
+    hook_cwd_override=$(jq -r ".evals[$idx].hook_cwd // empty" "$EVALS_FILE")
+    hook_cwd_override="${hook_cwd_override//\{\{TMPDIR\}\}/$case_tmp}"
+    case_cwd="$HOOK_CWD"
+    if [[ -n "$hook_cwd_override" ]]; then
+        # A named cwd that does not exist must fail loudly. Falling back to
+        # HOOK_CWD would silently assert the opposite of the case's intent.
+        [[ -d "$hook_cwd_override" ]] || { echo "  BAD hook_cwd: $hook_cwd_override" >&2; return 1; }
+        case_cwd="$hook_cwd_override"
     fi
 ```
 
@@ -1222,7 +1317,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
 
 ```json
 {
-  "id": 115,
+  "id": 116,
   "name": "final-files-untracked-blocks",
   "setup_script": "mkdir -p r && cd r && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
   "input": {
@@ -1240,7 +1335,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "an untracked file submitted as final_files has every line added"
 },
 {
-  "id": 116,
+  "id": 117,
   "name": "final-files-tracked-unmodified-allows",
   "setup_script": "mkdir -p r2 && cd r2 && git init -q . && git config user.email t@t && git config user.name t && printf '// fixes #1\\npackage x\\n' > old.go && git add old.go && git commit -qm i",
   "input": {
@@ -1257,7 +1352,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "a pre-existing comment in an unmodified tracked file is not an added line"
 },
 {
-  "id": 117,
+  "id": 118,
   "name": "final-files-outside-repo-skipped",
   "setup_script": "mkdir -p nr && printf '// fixes #1\\npackage x\\n' > nr/loose.go",
   "input": {
@@ -1274,7 +1369,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "a path outside any repository cannot be classified and is skipped"
 },
 {
-  "id": 118,
+  "id": 119,
   "name": "final-files-nested-worktree-resolves-against-the-worktree",
   "setup_script": "mkdir -p w && cd w && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && printf '.wt/\\n' > .gitignore && git add seed .gitignore && git commit -qm i && git worktree add -q .wt/feat -b feat && printf '// fixes #1\\npackage x\\n' > .wt/feat/tracked.go && git -C .wt/feat add tracked.go && git -C .wt/feat commit -qm base && printf '// fixes #1\\npackage x\\n\\nfunc F() {}\\n' > .wt/feat/tracked.go",
   "hook_cwd": "{{TMPDIR}}/w",
@@ -1292,7 +1387,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "THIS FIXTURE DISCRIMINATES, which the obvious one does not. The worktree file is TRACKED and already carries `// fixes #1`; the only line this task adds is clean. Rooted correctly at the file's own directory, git diffs it, sees one harmless added line, and the close is allowed. Rooted at the hook cwd -- the main checkout -- ls-files reports the path unmatched, the hook treats every line as new, and the pre-existing comment blocks. Expecting exit 0 is therefore a test only the correct rooting passes. An untracked fixture expecting exit 2 would pass under BOTH implementations and could never fail."
 },
 {
-  "id": 119,
+  "id": 120,
   "name": "final-files-gitignored-path-skipped",
   "setup_script": "mkdir -p g && cd g && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && printf 'build/\\n' > .gitignore && git add seed .gitignore && git commit -qm i && mkdir -p build && printf '// fixes #1\\npackage x\\n' > build/gen.go",
   "input": {
@@ -1309,7 +1404,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "a gitignored path exits 1 from ls-files like an untracked one; check-ignore is what separates them"
 },
 {
-  "id": 120,
+  "id": 121,
   "name": "final-files-diff-wins-even-when-it-adds-nothing",
   "setup_script": "mkdir -p d && cd d && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
   "input": {
@@ -1326,7 +1421,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "a submitted diff with zero added lines still wins; falling back to final_files here would block on a comment the diff's author never claimed"
 },
 {
-  "id": 121,
+  "id": 122,
   "name": "final-files-honours-overridden-diff-prefixes",
   "setup_script": "mkdir -p m && cd m && git init -q . && git config user.email t@t && git config user.name t && git config diff.mnemonicPrefix true && git config diff.noprefix false && printf 'package x\\n' > mod.go && git add mod.go && git commit -qm i && printf '// fixes #1\\npackage x\\n' > mod.go",
   "input": {
@@ -1350,61 +1445,67 @@ Case 110's `{{TMPDIR}}` is itself inside the harness `WORKDIR`, which is not a g
 - [ ] **Step 6a: Test the check-ignore status the eval table cannot force**
 
 Forcing `git check-ignore` to return neither 0 nor 1 from a fixture repository is not reliably
-reproducible, so this AC is covered where the branch actually lives. Add to
-`plugin/anti-tangent-guard/hooks/comment_scan_test.py` (created in Task 3):
+reproducible, so this acceptance criterion is covered where the branch lives. That requires the
+helper to be importable, which is why Step 2 puts it in a module rather than inline — there is one
+implementation location and no conditional path.
+
+Append to `plugin/anti-tangent-guard/hooks/comment_scan_test.py` (created in Task 3):
 
 ```python
-def test_indeterminate_check_ignore_skips_the_path(tmp_path, monkeypatch):
+class IndeterminateCheckIgnore(unittest.TestCase):
     # ls-files says "unmatched" and check-ignore then fails to answer. The
     # path must be SKIPPED: reading an unanswerable status as "not ignored"
     # would scan every line of a file the hook never classified.
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "ctc", os.path.join(os.path.dirname(HOOKS), "hooks", "check_task_complete_body.py"))
-    # If the close-time body is still inline in the bash hook rather than an
-    # importable module, extract final_files_added_lines into one as part of
-    # this task -- an untestable branch is what produced this finding.
+    def test_unanswerable_check_ignore_skips_the_path(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+
+        calls = []
+        real_git = g._git
+
+        def fake_git(cwd, *args):
+            calls.append(args[0])
+            if args[0] == "ls-files":
+                return 1, ""       # unmatched
+            if args[0] == "check-ignore":
+                return 128, ""     # could not answer
+            raise AssertionError("unexpected git call: %r" % (args,))
+
+        # The helper skips a path whose PARENT does not exist before it ever
+        # reaches git, so the fixture needs a real directory or this test
+        # passes without exercising the branch at all.
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "y.go")
+        with open(path, "w") as fh:
+            fh.write("// fixes #1\n")
+        g._git = fake_git
+        try:
+            out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        finally:
+            g._git = real_git
+        self.assertEqual(out, {}, "an unanswerable check-ignore must skip, not scan")
+        self.assertEqual(calls, ["ls-files", "check-ignore"],
+                         "no diff or content read may follow an unanswerable status")
 ```
 
-If `final_files_added_lines` is still embedded in the `PY=` heredoc inside `check-task-complete`,
-extract it (and `_git`) into `plugin/anti-tangent-guard/hooks/git_added_lines.py`, import that
-module from the heredoc exactly as `comment_scan` is imported today, and write the test against it:
-
-```python
-def test_indeterminate_check_ignore_skips_the_path(monkeypatch):
-    import git_added_lines as g
-    calls = []
-
-    def fake_git(cwd, *args):
-        calls.append(args[0])
-        if args[0] == "ls-files":
-            return 1, ""          # unmatched
-        if args[0] == "check-ignore":
-            return 128, ""        # could not answer
-        raise AssertionError("no other git call should be reached: %r" % (args,))
-
-    monkeypatch.setattr(g, "_git", fake_git)
-    out = g.final_files_added_lines(
-        {"final_files": [{"path": "/tmp/x/y.go", "content": "// fixes #1\n"}]})
-    assert out == {}, "an unanswerable check-ignore must skip, not scan"
-```
-
-Add `Create: plugin/anti-tangent-guard/hooks/git_added_lines.py` to this task's Files list if the
-extraction is needed, and keep `check-task-complete` importing it rather than duplicating it.
+Add `import tempfile` to the file's imports.
 
 - [ ] **Step 7: Update the case count**
 
-`EXPECTED_CASE_COUNT=121` in `run.sh:155`, and `(121 cases)` in the JSON `description`.
+`EXPECTED_CASE_COUNT=122` in `run.sh:155`, and `(122 cases)` in the JSON `description`.
 
 - [ ] **Step 8: Run the suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: 121 cases pass. A `SETUP FAILED` line means the Step 5 harness hook is wrong, not the case.
+Expected: 122 cases pass. A `SETUP FAILED` line means the Step 5 harness hook is wrong, not the case.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add plugin/anti-tangent-guard/hooks/check-task-complete plugin/anti-tangent-guard/evals/
+git add plugin/anti-tangent-guard/hooks/check-task-complete \
+        plugin/anti-tangent-guard/hooks/git_added_lines.py \
+        plugin/anti-tangent-guard/hooks/comment_scan_test.py \
+        plugin/anti-tangent-guard/evals/
 git commit -m "feat(guard): scan final_files completions using git for added lines"
 ```
 
@@ -1422,7 +1523,7 @@ git commit -m "feat(guard): scan final_files completions using git for added lin
 - [ ] `Digest.SkipEvidence` marshals as `skip_evidence` and is omitted when empty
 - [ ] `Normalize()` trims it and truncates it to 2,000 runes with a single ellipsis
 - [ ] A multi-byte string is not split mid-codepoint
-- [ ] `SkipReason`'s existing 300-rune cap is unchanged
+- [ ] `SkipReason`'s existing 300-rune cap is unchanged, asserted by a regression test on both the constant and the truncation, not by inspection
 
 **Verify:** `go test -race ./internal/codescene/...` → PASS
 
@@ -1486,7 +1587,22 @@ Immediately after the existing `d.SkipReason = truncateRunes(...)` line:
 	d.SkipEvidence = truncateRunes(strings.TrimSpace(d.SkipEvidence), codesceneSkipEvidenceMaxRunes)
 ```
 
-- [ ] **Step 5a: Test the JSON contract the first AC actually states**
+- [ ] **Step 5a: Pin the cap the AC says is unchanged**
+
+The AC promises `SkipReason`'s 300-rune cap survives, and nothing asserts it. Add:
+
+```go
+func TestSkipReasonCapUnchanged(t *testing.T) {
+	assert.Equal(t, 300, codesceneSkipReasonMaxRunes)
+
+	d := &Digest{SkipReason: strings.Repeat("r", 400)}
+	d.Normalize()
+	assert.Equal(t, codesceneSkipReasonMaxRunes+1, len([]rune(d.SkipReason)),
+		"SkipReason must still truncate at its own cap, not at SkipEvidence's")
+}
+```
+
+- [ ] **Step 5b: Test the JSON contract the first AC actually states**
 
 The truncation test does not exercise marshalling at all. Add:
 
@@ -2026,6 +2142,7 @@ git commit -m "feat(mcpsrv): reject test evidence stating no test executed"
 - [ ] The policy finding uses `category: other` — **not** `convention_deviation`, which `applySeverityFloor` would silently downgrade to `minor`
 - [ ] A plan carrying only the one-line pointer draws no policy finding, asserted by an `e2e`-tagged test that issues a real `validate_plan` call — the template test proves only that the instruction renders
 - [ ] That same test asserts the emitted finding arrives as `major`/`other`, which is what would catch a floored category
+- [ ] The e2e test pins the provider and model its neighbours pin, asserts presence on the no-policy plan and only absence on the pointer plan, and asserts no total finding count
 - [ ] All twelve `plan_*.golden` files regenerate and the diff contains only the new section
 
 **Verify:** `go test -race ./internal/prompts/...` → PASS, and `go test -tags=e2e ./internal/mcpsrv/... -run TestCommentPolicyFindingE2E` → PASS (needs provider keys; e2e is not run on every PR)
@@ -2137,6 +2254,18 @@ func TestCommentPolicyFindingE2E(t *testing.T) {
 ```
 
 Match `runValidatePlanE2E` to whatever helper `plan_caching_e2e_test.go` already uses to issue a `validate_plan` call; do not add a second harness if one exists. If no such helper exists, build the request the same way that file does and extract the plan findings from the returned envelope.
+
+**Reproducibility, because this asserts on a live model's output.** Pin the same provider and model
+the neighbouring e2e tests pin — read it from their setup rather than choosing one here, so the
+whole e2e tier moves together. Two assertions are deliberately asymmetric: the *presence* of one
+`major`/`other` `comment_policy_absent` finding on a plan carrying no policy is the contract, while
+the pointer-carrying plan asserts only the ABSENCE of that criterion and says nothing about what
+else the reviewer emits. Do not assert a total finding count on either — that is reviewer-dependent
+and would make the test flake on unrelated prose.
+
+If the finding proves genuinely non-deterministic across runs, that is a signal the `plan_rules`
+wording is too weak to gate on, not a reason to loosen the test: tighten the template text in
+Step 1 until it is stable, and record what changed.
 
 - [ ] **Step 4: Regenerate the goldens**
 
