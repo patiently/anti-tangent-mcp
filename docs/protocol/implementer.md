@@ -195,8 +195,8 @@ someone who never saw the change that introduced it.
 
 Comments do NOT carry change history — no tracker keys (`ABC-1234:`), issue,
 pull-request or task references, no version references, no "previously" / "no
-longer" / "this replaced". Git holds that, and a comment repeating it goes stale on the next
-change.
+longer" / "this replaced". Git holds that, and a comment repeating it goes
+stale on the next change.
 
 When you touch code whose comments break these rules, remove or rewrite them as
 part of your task. There is no separate cleanup pass.
