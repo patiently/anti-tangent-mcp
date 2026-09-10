@@ -44,6 +44,13 @@ var executionMarkers = []*regexp.Regexp{
 	// suppress the very finding that evidence calls for.
 	regexp.MustCompile(`(?i)\b[1-9]\d* (?:tests?|examples?) (?:passed|ran|completed)\b`),
 	regexp.MustCompile(`(?i)\b[1-9]\d* passed\b`),
+	// gotestsum's non-standard formats print no per-package "ok" line and no
+	// per-test counts; their summary is "DONE 42 tests in 1.234s". Without
+	// this, output from a runner configured that way carries no recognised
+	// execution marker at all, so one package with no test files in it would
+	// draw the finding on its own. The count must be positive for the same
+	// reason as above.
+	regexp.MustCompile(`(?m)^DONE [1-9]\d* tests?\b`),
 	// A Gradle test-task line carrying no status at all is an EXECUTED task:
 	// Gradle annotates skipped work (UP-TO-DATE, FROM-CACHE, NO-SOURCE,
 	// SKIPPED) and leaves a task it actually ran unannotated. Without this, a

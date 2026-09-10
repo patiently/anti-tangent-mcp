@@ -97,14 +97,30 @@ func codesceneCell(row TaskRow) string {
 		}
 		// The evidence is what distinguishes a skip a reader can check from
 		// one they cannot. Omitting it here would leave the ledger showing
-		// only the caller's own sentence.
+		// only the caller's own sentence — but it arrives capped at 2,000
+		// runes, several screens of one cell in a table whose other columns
+		// are 40 wide, so the cell carries the head of it and the ledger
+		// keeps the whole.
 		if row.Codescene != nil && strings.TrimSpace(row.Codescene.SkipEvidence) != "" {
-			return "skipped (" + reason + ": " + strings.TrimSpace(row.Codescene.SkipEvidence) + ")"
+			ev := truncateRunes(strings.TrimSpace(row.Codescene.SkipEvidence), reportCellEvidenceRunes)
+			return "skipped (" + reason + ": " + ev + ")"
 		}
 		return "skipped (" + reason + ")"
 	default:
 		return "not run"
 	}
+}
+
+// reportCellEvidenceRunes is how much of a skip evidence a table cell shows.
+const reportCellEvidenceRunes = 200
+
+// truncateRunes shortens s to at most n runes, spending the last one on an
+// ellipsis so a reader can tell the cell from a complete short value.
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n-1]) + "…"
 }
 
 // topCategories renders the highest-count CodeScene categories for the report

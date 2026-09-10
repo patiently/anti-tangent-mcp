@@ -27,6 +27,8 @@ Closes the ten comment-hygiene and completion-gate gaps reported in
 
 ### Fixed
 - `validate_plan` no longer reports an existing file as missing when a `Files:` bullet anchors more than two line numbers (`docs/x.md:60,166,174,419`). The anchor pattern permitted only one separator per group, so it matched the first pair and then failed the whole anchor, leaving the digits attached to the path. `a.kt:27-30,40-50` was broken the same way.
+- The no-execution `test_evidence` check recognises gotestsum's `DONE 42 tests in 1.2s` summary as evidence a suite ran. `gotestsum --format testdox` — what this project's own CI runs — prints no `ok pkg` line and no per-test counts, so pasting its output for a build containing one package with no test files had nothing to suppress the finding.
+- `plan_run_report` shows the first 200 runes of a CodeScene skip evidence in its table cell, with an ellipsis. The field is capped at 2,000 runes on the way in, which is several screens of one cell in a table whose other columns are capped at 40; the ledger still records the whole of it.
 - The close-time comment scan reads a submitted diff **whatever path prefix it carries**. It required `+++ b/`, so a diff produced under `diff.noprefix` or `diff.mnemonicPrefix` — the developer's own git configuration, not anything the caller chose — had every added line discarded, and the close passed exactly as though the scan had run and found nothing.
 - The close-time trace line now records what the scan looked at: `scan | src=final_files submitted=3 scanned=0 lines=0`. A submission with nothing scannable in it was previously indistinguishable from a clean scan, on both the exit code and the log.
 - The close-time scan is bounded across a whole completion, not only per file: twenty seconds over the git questions and twenty over the scans, with anything a budget cuts short recorded on the trace instead of passing as clean. A completion naming many files against a stalled git could hold the session for minutes.
@@ -36,6 +38,9 @@ Closes the ten comment-hygiene and completion-gate gaps reported in
 - `evals/run.sh` passes `-B` to its unit-test step, so running the evals no longer writes `__pycache__` into the plugin tree.
 - **`anti-tangent-shunt` 0.1.2** — its `code-writer` skill described the close-time comment scan as diff-only. It now states the real coverage: a `final_files` completion is read through git, and a generated file's comments are seen only while they are uncommitted or the file is untracked.
 - The `anti-tangent-guard` eval harness (`plugin/anti-tangent-guard/evals/run.sh`) no longer inherits the invoking shell's `ANTI_TANGENT_COMPLETION_GUARD` and `ANTI_TANGENT_COMMENT_GUARD`. A case with no `env` block of its own used to see whatever the developer's or CI's shell happened to have exported instead of the documented default, so a switch-combination case could produce a false pass as easily as a false failure. Anyone who ran that suite with either variable set in their own environment may have been reading a result about their shell, not the code.
+
+### Security
+- `test_evidence` reaches the reviewer inside the same four-backtick untrusted-data fence as `final_diff` and `final_files` do. It was the one evidence field interpolated at instruction level, so text an implementer composed could read to the reviewer as an instruction rather than as evidence to weigh.
 
 ## [0.19.0] - 2026-09-09
 
