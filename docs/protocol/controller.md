@@ -124,13 +124,13 @@ Do NOT have the controller call `validate_completion` itself after the subagent 
 
 The two analyses overlap intentionally: the plan gate catches plan-wide and per-task issues at handoff; the implementer gate catches anything that changed between handoff and dispatch and produces the session that the rest of the lifecycle uses.
 
-The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`: `plan_verdict` answers "is this dispatchable?" (pass / warn / fail); `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When consecutive `warn` verdicts aren't changing, watch `plan_quality` for convergence — `actionable → rigorous` is meaningful even when the verdict stays `warn`. Ship at `actionable` for ASAP work, `rigorous` for quarterly-rewrite scope.
+The `plan_quality` field is a separate axis from `plan_verdict`: `plan_verdict` answers "is this dispatchable?" (pass / warn / fail); `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When consecutive `warn` verdicts aren't changing, watch `plan_quality` for convergence — `actionable → rigorous` is meaningful even when the verdict stays `warn`. Ship at `actionable` for ASAP work, `rigorous` for quarterly-rewrite scope.
 
 The same reading applies one level down: a `validate_task_spec` `warn` whose
 findings are all `minor` is a proceed signal, not a defect. Do not send an
 implementer back to re-validate a spec whose findings have stopped moving.
 
-### 5.6 Per-call tool args and partial-response handling (v0.3.0+)
+### 5.6 Per-call tool args and partial-response handling
 
 **`max_tokens_override`** (all six reviewer-calling tools — `plan_run_report` makes no reviewer call, so it takes no token budget): optional non-negative int. Replaces `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` finding appended. Negative values rejected with `max_tokens_override must be ≥ 0`.
 

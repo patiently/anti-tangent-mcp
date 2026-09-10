@@ -120,8 +120,8 @@ this block if there is no KB attached.)
 - context:              <from "Context:" if present>
 - pinned_by:            <optional anchors for existing behavior>
 - controller_verified_references: <optional references the controller already verified>
-- plan_run_id:          <optional, v0.15.0+; from the controller's validate_plan>
-- project_knowledge:    <optional, v0.6.0+; markdown excerpts the controller pre-selected from the KB>
+- plan_run_id:          <optional; from the controller's validate_plan>
+- project_knowledge:    <optional; markdown excerpts the controller pre-selected from the KB>
 - harness_shape_attestation: <optional structured input; see §3.8>
 - phase:                <optional; "pre" (default) or "post" for post-hoc/session-recovery>
 ```
