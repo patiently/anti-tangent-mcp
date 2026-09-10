@@ -1579,14 +1579,11 @@
       "name": "comment-write-ticket-pattern-over-long-ignored",
       "hook": "check-comment-write",
       "env": {
-        "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+|ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
       },
-      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes task-42\\npackage x\\n\"}}",
-      "expected_exit": 2,
-      "expected_stderr_contains": [
-        "a task reference"
-      ],
-      "reason": "a pattern past the 200-character cap is ignored without disabling the other tells"
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * ABC-1234: the inbound keyword.\\n */\\nobject X\\n\"}}",
+      "expected_exit": 0,
+      "reason": "the pattern is ABC-\\d+|ZZ...Z (208 chars decoded), over the 200-character cap, so it is dropped and never joins TELLS -- no other tell fires on a plain KDoc tracker-key mention, so the write proceeds. The alternation is what gives this fixture discriminating power: were the cap NOT enforced, ABC-\\d+ alone (unaffected by how much Z-padding follows it in the alternation) would still match \"ABC-1234\" and this case would exit 2 instead -- unlike a plain concatenated pattern, padding cannot make the alternation stop matching, so a passing case here is actual evidence the cap fired, not an accident of the fixture never being reachable"
     },
     {
       "id": 115,

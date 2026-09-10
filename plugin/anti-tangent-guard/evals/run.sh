@@ -162,6 +162,11 @@ WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # file instead; a case that sets ANTI_TANGENT_GUARD_TRACE_LOG in its own "env"
 # block still wins, since `env` applies after this export.
 export ANTI_TANGENT_GUARD_TRACE_LOG="$WORKDIR/trace.log"
+# A case with no "env" block must see the shipped tells only, not whatever
+# ticket pattern the invoking developer happens to have exported for their
+# own project. A case that sets ANTI_TANGENT_TICKET_PATTERN in its own "env"
+# block still wins, since `env` applies after this unset.
+unset ANTI_TANGENT_TICKET_PATTERN
 # Every hook invocation below runs with this as its cwd, run-scoped (inside
 # WORKDIR, so isolated from a concurrent run.sh invocation) rather than
 # per-case, so a "cwd_fixture" case can place a real file at a RELATIVE path
