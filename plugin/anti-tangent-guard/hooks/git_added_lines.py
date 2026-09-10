@@ -18,13 +18,15 @@ from comment_scan import read_text_capped
 
 
 # --no-optional-locks keeps these read-only questions from refreshing the
-# index, but git only learned it in 2.15 and an older git answers the whole
-# command line with a usage error (129) instead. Every call here would fail
-# that way at once, and the caller cannot tell a failed git from a repository
-# with nothing to report -- the scan would silently yield nothing. So the
-# first usage error drops the flag for the rest of the process and retries
-# without it: the flag is a courtesy to the developer's index, never load
-# bearing for what this module returns.
+# index. 129 is git's GENERIC usage error and says only that git rejected the
+# command line: a git that does not know this flag answers that way, and so
+# does a command line malformed for any other reason. Either way every call
+# here would fail at once, and the caller cannot tell a failed git from a
+# repository with nothing to report -- the scan would silently yield nothing.
+# So the first 129 drops the flag for the rest of the process and retries
+# without it, whether or not the flag was what git objected to: the flag is a
+# courtesy to the developer's index, never load bearing for what this module
+# returns.
 _LOCK_FLAG = ["--no-optional-locks"]
 
 
@@ -133,9 +135,11 @@ def final_files_added_lines(inp, deadline=None, stats=None):
     "vendored_skipped" counts the paths the exemption above dropped. Both
     outcomes shrink the result silently, so without them a walk that never
     finished is indistinguishable from one that found nothing.
-    "optional_locks_dropped" says the git in front of this walk was too old for
-    --no-optional-locks and every call ran without it, which leaves the
-    developer index open to a refresh this walk means not to cause.
+    "optional_locks_dropped" says git rejected a command line carrying
+    --no-optional-locks with a 129, so the walk dropped the flag and ran
+    without it, leaving the developer index open to a refresh this walk means
+    not to cause. 129 is git's generic usage error, so this does not establish
+    that the flag itself was what git objected to.
     """
     out = {}
     roots = {}

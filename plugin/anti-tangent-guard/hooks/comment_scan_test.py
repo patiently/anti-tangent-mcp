@@ -217,11 +217,11 @@ class WalkBudgetIsReported(unittest.TestCase):
 
 
 class DroppedOptionalLocksIsReported(unittest.TestCase):
-    # A git older than 2.15 rejects --no-optional-locks and the walk drops the
-    # flag for the rest of the process, so every call after that refreshes the
-    # index this walk promised to leave alone. Nothing in the returned dict
-    # moves, so the degraded run reads exactly like a healthy one unless the
-    # stats argument carries it.
+    # git answering 129 to a command line carrying --no-optional-locks makes
+    # the walk drop the flag for the rest of the process, so every call after
+    # that refreshes the index this walk promised to leave alone. Nothing in
+    # the returned dict moves, so the degraded run reads exactly like a
+    # healthy one unless the stats argument carries it.
     def test_a_usage_error_drops_the_flag_and_says_so(self):
         sys.path.insert(0, HOOKS)
         import git_added_lines as g
