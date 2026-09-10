@@ -106,19 +106,38 @@ fails for the same reason.
 The fix keeps the existing signature — no whole-file content, no lexer, no per-language state — and
 changes only which text on a line counts as comment text.
 
-**G2 — block-comment openers become comment openers.** The C-family opener set gains `/*`, `*/`,
-and `*`:
+**G2 — two block-comment shapes become scannable.** The C-family opener set gains `/*` and `*`:
 
 ```python
-DEFAULT_COMMENT = ("//", "/*", "*/", "*")
+DEFAULT_COMMENT = ("//", "/*", "*")
 ```
 
-`*` is admitted **only when followed by whitespace or end-of-line**. A KDoc or Javadoc continuation
-line is `* text` or a bare `*`; a C dereference statement is `*ptr = …`. Without that restriction,
-`*p = task-42;` — valid C subtracting 42 from `task` — would be read as a comment and blocked.
+Three rules, each of which exists to stop code being read as comment text:
 
-This alone closes the incident's exact shape: ` * ABC-1234: the inbound HELP keyword.` becomes
-scannable, as does ` * Fixes #123`.
+- **`*` is admitted only when followed by whitespace or end-of-line.** A KDoc or Javadoc
+  continuation line is `* text` or a bare `*`; a C dereference is `*ptr = …`. Without this,
+  `*p = task-42;` — valid C subtracting 42 from `task` — reads as a comment and blocks the write.
+- **Block-opener text stops at the first `*/`.** Everything past a block comment closing is code:
+  `/* note */ y = task-42;` must yield `" note "`, not the whole tail.
+- **`*/` is not an opener.** A line beginning with it carries no comment text — `*/` alone is
+  empty, `*/ y = task-42;` is code. It falls through to the trailing-comment test, which still
+  finds a real `//` on that line if one is there.
+
+This closes the incident's exact shape: ` * ABC-1234: the inbound HELP keyword.` becomes scannable,
+as does ` * Fixes #123`.
+
+**What this does NOT reach.** An *unstarred* block interior —
+
+```
+/*
+fixes task-42
+*/
+```
+
+— has no opener on its middle line, and a line-at-a-time scan cannot know that line sits inside a
+comment. It is out of reach without the lexer this release defers, and `post.tmpl`'s semantic rule
+stays the backstop whenever a diff is present. The covered set is exactly three shapes: a starred
+continuation, a one-line `/* … */`, and a trailing comment — not "block comments" in general.
 
 **G3 — trailing comments, via a parity test that can only decline.** For a line that does *not*
 begin with an opener, take the text after the **last** `//` (or, in hash-family files, the last
@@ -126,7 +145,10 @@ whitespace-preceded `#`) — but only when the counts of unescaped `"`, `'` and 
 position are **all even**. Otherwise scan nothing on that line.
 
 The asymmetry is the point: an odd count means the delimiter is inside a string literal, and the
-line is skipped. The test can miss a genuine trailing comment; it cannot promote code to comment.
+line is skipped. Within the shapes this test models — single, double and backtick quoting with
+backslash escapes — it can miss a genuine trailing comment but will not promote code to comment.
+It is a counting test, not a parser, so that is a property of those shapes rather than a proof over
+every construct in all nine languages. The false-positive suite is the measurement.
 
 | line | quotes before | decision |
 |---|---|---|
@@ -138,10 +160,10 @@ line is skipped. The test can miss a genuine trailing comment; it cannot promote
 | `s := '\''` + `// fixes #1` | 2 unescaped | scan ` fixes #1` → **flagged** |
 | `url=${url#https://t/ABC-1}` | `#` not whitespace-preceded | **decline** |
 
-**What this costs versus the rejected lexer.** Block comments whose text shares a line with code
-(`/* fixes #1 */ x = 1`) are caught by the `/*` opener; a tell appearing only inside a multi-line
-block whose lines start with neither `*` nor an opener is missed. That is a narrow miss class, and
-`post.tmpl`'s semantic rule remains the backstop for it when a diff is present.
+**What this costs versus the rejected lexer.** The unstarred multi-line interior described above is
+the whole of the miss class. It is narrow — Javadoc, KDoc, and every formatter this project's
+languages ship with produce starred continuations — and it is covered by `post.tmpl` whenever a
+diff is present.
 
 ### 1b. Which path each caller takes
 
@@ -155,6 +177,11 @@ Because the scan needs only line strings, every caller uses the same entry point
 | `Edit` | `added(old_string, new_string)` |
 | close-time, `final_diff` / `final_diff_path` | `+` lines, per the existing hunk parser |
 | close-time, `final_files` | git — see [Part 2a](#2a-g4--deriving-added-lines-from-git) |
+
+Precedence between the last two rows is decided by which field was **submitted**, not by which one
+parsed to something. A diff can legitimately contain no added lines — a pure deletion — and
+falling back to `final_files` on an empty parse would reconstruct from the working tree for a
+submission whose author already stated which lines were theirs.
 
 This removes an entire class of defect the first draft carried: it proposed applying diff line
 numbers to a file read from disk without checking the two were the same file. No disk read, no
@@ -197,8 +224,8 @@ GIT="git -C <dirname of path> -c diff.noprefix=false -c diff.mnemonicPrefix=fals
 $GIT ls-files --error-unmatch -- <path>
     exit 0    -> tracked:   $GIT diff --no-color --no-ext-diff HEAD -- <path>, take '+' lines
     exit 1    -> unmatched: $GIT check-ignore -q -- <path>
-                                exit 0 -> ignored, skip this path
-                                else   -> untracked, every line is new
+                                exit 1 -> untracked, every line is new
+                                else   -> ignored, or unanswerable: skip
     any other -> skip this path
 ```
 
@@ -211,7 +238,10 @@ Three details, each of which was a defect in the first draft:
   blocked on its pre-existing comments. With `-C` it resolves correctly.
 - **Exit 1 is not "any non-zero".** A path outside any repository exits **128**. Folding the two
   together turns "I cannot look" into "everything is new".
-- **`check-ignore` before concluding "new".** A gitignored path also exits 1 from `ls-files`.
+- **`check-ignore` before concluding "new", and only its definite answer counts.** A gitignored
+  path also exits 1 from `ls-files`. `check-ignore` returns 0 for ignored and 1 for not-ignored;
+  any other status means it could not tell, and reading that as "not ignored" would scan every line
+  of a file the hook never classified.
 
 Diff prefixes are pinned because `diff.mnemonicPrefix=true` emits `+++ w/` and `diff.noprefix=true`
 emits a bare path; the existing hunk parser matches `+++ b/` only and would silently see zero files.
@@ -344,16 +374,28 @@ with the same prepend-and-finalize shape. Deterministic and reviewer-free, for t
   markers therefore attest that the tests pass on the current inputs. They carry no counts, but a
   plain successful Gradle run prints no per-test counts either, so a check firing on them would
   penalise the cached run and accept an equally count-free executed one.
-- `NO-SOURCE` and its cross-ecosystem equivalents genuinely mean **nothing ran and nothing passed**.
+- `NO-SOURCE` and its cross-ecosystem equivalents genuinely mean **nothing ran and nothing passed**
+  — but only when they name a **test** task. Gradle prints `NO-SOURCE` for any task with no inputs,
+  and a healthy build routinely shows it for `processTestResources` beside a test task running a
+  full suite. Matching `NO-SOURCE` anywhere would reject that build, which is the same
+  false-positive class the cached markers above are excluded for.
+
+  This also forces an execution marker Gradle does not otherwise give: a plain successful run
+  prints no per-test counts, so an *unannotated* test-task line (`> Task :app:test`) is what
+  attests execution. Gradle annotates every kind of skipped work and leaves executed tasks bare.
 
 Only the second class fires:
 
 ```
 FIRES  (major)                          DOES NOT FIRE
-  :<module>:<task> NO-SOURCE              :<module>:test UP-TO-DATE
+  :<module>:test NO-SOURCE                :<module>:test UP-TO-DATE
   no tests ran            (pytest)        :<module>:test FROM-CACHE
   No tests found          (jest)          ok   <pkg>   (cached)      (go)
-  ?  <pkg>  [no test files]  (go)         a human-written summary
+  ?  <pkg>  [no test files]  (go)         :<mod>:processTestResources
+                                            NO-SOURCE — not a test task
+                                          > Task :app:test — unannotated,
+                                            so Gradle executed it
+                                          a human-written summary
 ```
 
 `?  <pkg>  [no test files]` is added from review; the report omits it and it is the Go analogue of

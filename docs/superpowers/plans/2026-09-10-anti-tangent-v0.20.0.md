@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close the ten comment-hygiene and completion-gate gaps reported in issue #71, so a comment carrying change history cannot reach disk unseen and a completion cannot be graded a pass on invented or absent evidence.
+**Goal:** Close the ten comment-hygiene and completion-gate gaps reported in issue #71, plus an eleventh (G11) found while preparing this plan's own dispatch, so a comment carrying change history cannot reach disk unseen and a completion cannot be graded a pass on invented or absent evidence.
 
 **Architecture:** Three independent surfaces. The `anti-tangent-guard` plugin's Python scanner learns to see block-comment interiors and trailing comments without a lexer — by extending the opener set and adding a quote-parity test that can only decline to scan, never promote code to comment. Its close-time hook learns to ask git which lines are new when a completion submits `final_files` instead of a diff, and its two kill switches are separated so each controls the concern it names. The MCP server's CodeScene ladder is flattened to one rung so that inventing a skip reason stops being cheaper than staying silent, and a deterministic test-evidence check rejects output showing that nothing ran.
 
@@ -14,7 +14,7 @@
 
 - **The MCP server never blocks and never corrects.** Enforcement lives in plugin hooks only. No task may add a blocking behaviour to `internal/`.
 - **Fail open, always.** Every scanner, git call, and lexical test in the guard plugin must treat "I could not decide" as "allow". A false block costs more than a miss. This is the existing weighting in `comment_scan.py` and no task may reverse it.
-- **`DEFAULT_COMMENT` order is load-bearing.** `*/` must be tested before `*`, or a block terminator is misread as a continuation.
+- **`*/` is not a comment opener.** A line beginning with it carries no comment text, and returning its tail hands ordinary code to the tells. Block-opener text stops at the first `*/` for the same reason.
 - **`ATG_SCAN_EXTS` in `check-comment-write` duplicates `SCAN_EXTS` in `comment_scan.py`.** `evals/run.sh:522-540` asserts they stay identical. No task changes one without the other.
 - **`EXPECTED_CASE_COUNT` in `evals/run.sh:155` must equal the case count in `guard-evals.json`.** Every task adding eval cases updates it in the same commit.
 - **Protocol parts are capped at strictly under 16,000 bytes** (`.github/workflows/ci.yml:61-74`), with a warning at 15,500. `core.md` has 109 bytes of headroom and `implementer.md` has 407 — rewrites in those two files must come in at or under the length they replace.
@@ -24,6 +24,7 @@
 
 **User decisions (already made):**
 - "All ten in one release" — G1–G10 ship together as 0.20.0, not split across releases.
+- G11 was added after that decision, during this plan's own handoff: `validate_plan` gates on a plan that gives implementers no comment policy. It is an eleventh gap, not one of the ten, and it rides in Task 9.
 - G6: two ladders keyed on `ANTI_TANGENT_CODESCENE` mode, not on lightweight-vs-session. "If codescene is required it should run even for lightweight tasks"; unset stays lenient.
 - G7: "Deterministic, server-side" — a Go check beside `codesceneFindings`, not a reviewer prompt rule.
 - G7 scope (after review): fire only on markers meaning nothing ran. `UP-TO-DATE` / `FROM-CACHE` / `(cached)` attest a prior passing run and must NOT fire.
@@ -125,7 +126,7 @@ git commit -m "fix(planparser): accept multi-element line anchors on Files bulle
 
 ### Task 2: Scanner sees block-comment interiors and trailing comments
 
-**Goal:** `comment_scan.py` recognises comment text that is not a line-leading `//`, without a lexer and without any path that can read code as a comment.
+**Goal:** `comment_scan.py` recognises three comment shapes it cannot see today — a starred block continuation (` * text`), a block comment opened and closed on one line (`/* text */`), and a trailing comment after code — without a lexer, and without any of the three admitting code as comment text.
 
 **Files:**
 - Modify: `plugin/anti-tangent-guard/hooks/comment_scan.py`
@@ -138,6 +139,9 @@ git commit -m "fix(planparser): accept multi-element line anchors on Files bulle
 - [ ] `/* fixes task-42 */` is flagged
 - [ ] `val x = 1 // fixes task-42` is flagged
 - [ ] `*p = task-42;` is NOT flagged — `*` opens a comment only when followed by whitespace or end-of-line
+- [ ] `*/ y = task-42;` is NOT flagged — `*/` is not an opener, and code after a terminator is code
+- [ ] `/* note */ y = task-42;` is NOT flagged — block text stops at the first `*/`
+- [ ] An unstarred block interior (`/*` / `fixes task-42` / `*/` across three lines) is a DOCUMENTED miss with an eval asserting exit 0, not a silent gap
 - [ ] `x = "a" + "b//c"` is NOT flagged even with a tell inside the string
 - [ ] `echo "a #b"` in a `.sh` file is NOT flagged
 - [ ] `url=${url#https://t/task-42}` in a `.sh` file is NOT flagged
@@ -177,15 +181,16 @@ In `plugin/anti-tangent-guard/hooks/comment_scan.py`, replace the `LINE_COMMENT`
 
 ```python
 # Comment openers per extension. Hash-family files have no block comment
-# form; C-family files do, and its interior lines are recognised here:
-# `/*`, `*/`, and a continuation `*`.
+# form; C-family files do, and two of its shapes are recognised here: an
+# opener `/*`, and a continuation `*`.
 #
-# ORDER IS LOAD-BEARING. `*/` must be tested before `*`, or a block
-# terminator is read as a continuation and its tail scanned as comment text.
+# `*/` is NOT an opener. A line beginning with it carries no comment text --
+# `*/` alone is empty and `*/ y = task-42;` is code -- so admitting it and
+# returning the tail would hand ordinary code to the tells.
 LINE_COMMENT = {
     ".py": ("#",), ".sh": ("#",), ".bash": ("#",), ".rb": ("#",),
 }
-DEFAULT_COMMENT = ("//", "/*", "*/", "*")
+DEFAULT_COMMENT = ("//", "/*", "*")
 
 
 def _quotes_balanced(prefix):
@@ -212,8 +217,9 @@ def _trailing_comment(opens, raw):
     """Comment text after the LAST delimiter on a code line, else "".
 
     Returned only when every quote count before the delimiter is even. That
-    asymmetry is what makes this safe without a lexer: the test can decline a
-    genuine trailing comment, but it cannot promote code to comment. A line
+    asymmetry is what makes this safe without a lexer: within the quoting
+    shapes counted below, the test can decline a genuine trailing comment but
+    will not promote code to comment. A line
     already opening with a comment is handled by the caller and never reaches
     here.
 
@@ -251,6 +257,12 @@ def comment_text(path, raw):
         # and reading it as comment text would let ordinary C block a write.
         if o == "*" and rest and not rest[0].isspace():
             continue
+        # Everything past the block terminator is code again. Without this,
+        # `/* note */ y = task-42;` hands the subtraction to the tells.
+        if o in ("/*", "*"):
+            end = rest.find("*/")
+            if end >= 0:
+                rest = rest[:end]
         return rest
     return _trailing_comment(opens, raw)
 ```
@@ -344,6 +356,30 @@ Append these to the `evals` array in `plugin/anti-tangent-guard/evals/guard-eval
   "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.sh\",\"content\":\"url=${url#https://t/task-42}\\n\"}}",
   "expected_exit": 0,
   "reason": "a # not preceded by whitespace is parameter expansion, not a comment"
+},
+{
+  "id": 101,
+  "name": "comment-write-block-terminator-not-an-opener",
+  "hook": "check-comment-write",
+  "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.c\",\"content\":\"int f(void){ int task=1; int *p=&task;\\n*/ *p = task-42;\\nreturn 0; }\\n\"}}",
+  "expected_exit": 0,
+  "reason": "`*/` is not an opener; code after a block terminator is code, not comment text"
+},
+{
+  "id": 102,
+  "name": "comment-write-block-text-stops-at-terminator",
+  "hook": "check-comment-write",
+  "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.c\",\"content\":\"int f(void){ int task=1; int *p=&task;\\n/* note */ *p = task-42;\\nreturn 0; }\\n\"}}",
+  "expected_exit": 0,
+  "reason": "block-opener text stops at the first `*/`, so the trailing subtraction is not scanned"
+},
+{
+  "id": 103,
+  "name": "comment-write-unstarred-block-interior-is-a-known-miss",
+  "hook": "check-comment-write",
+  "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"/*\\nfixes task-42\\n*/\\npackage x\\n\"}}",
+  "expected_exit": 0,
+  "reason": "an unstarred block interior has no opener on its middle line; documented miss, backstopped by post.tmpl when a diff is present"
 }
 ```
 
@@ -352,20 +388,20 @@ Append these to the `evals` array in `plugin/anti-tangent-guard/evals/guard-eval
 In `plugin/anti-tangent-guard/evals/run.sh`, line 155:
 
 ```bash
-EXPECTED_CASE_COUNT=100
+EXPECTED_CASE_COUNT=103
 ```
 
-Also update the `description` field at the top of `guard-evals.json` to read `(100 cases)`.
+Also update the `description` field at the top of `guard-evals.json` to read `(103 cases)`.
 
 - [ ] **Step 7: Run the eval suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: all 100 cases pass, including every pre-existing one.
+Expected: all 103 cases pass, including every pre-existing one.
 
 - [ ] **Step 8: Measure the new false-positive surface**
 
 Run: `bash plugin/anti-tangent-guard/evals/fp-report.sh`
-Expected: no new false positives versus the report on `main`. If any appear, they are in scope for this task — the parity test is supposed to make them impossible, so a hit means a defect in `_quotes_balanced` or `comment_text`, not an acceptable cost.
+Expected: no new false positives versus the report on `main`. If any appear they are in scope for this task: within the shapes the parity test models, a hit means a defect in `_quotes_balanced` or `comment_text`, not an acceptable cost. If one comes from a construct the test does not model, record it as a known miss rather than widening the test.
 
 - [ ] **Step 9: Commit**
 
@@ -395,6 +431,8 @@ git commit -m "feat(guard): scan block-comment interiors and trailing comments"
 - [ ] A pattern that fails to compile is ignored, and the scanner still runs its other tells
 - [ ] A pattern longer than 200 characters is ignored
 - [ ] A catastrophic-backtracking pattern causes the scan to return no violations rather than hanging
+- [ ] A 201-character pattern is refused and a 200-character one is accepted, asserted by a test rather than by inspection
+- [ ] `scan_deadline` running where the timer cannot be installed (a non-main thread) still SCANS, rather than failing open and disabling every tell
 - [ ] `fp-scan.py` and `fp-report.sh` unset the variable so the false-positive gate does not depend on the developer's environment
 
 **Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all cases pass
@@ -471,8 +509,14 @@ Below the ticket tell:
 # unbounded time on a hostile line. Structural checks do not close this: a
 # nested-quantifier test misses (a|aa)+ and (a|a)*, and (a+)+$ over a
 # forty-character line still hangs. Only a timer bounds it, and it covers the
-# built-in TELLS too. SIGALRM is Unix-and-main-thread only, so its absence
-# simply means no bound rather than an error.
+# built-in TELLS too.
+#
+# Installing the timer can fail for reasons that are not the scanner's
+# business: SIGALRM does not exist on Windows, and on Unix `signal.signal`
+# raises in any thread but the main one even though the constant is present.
+# Both cases run the scan UNBOUNDED rather than failing it -- a missing
+# deadline must not become a missing scan, which is what letting the error
+# reach violations()'s fail-open handler would do.
 SCAN_TIMEOUT_SECONDS = 2.0
 
 
@@ -482,15 +526,21 @@ class _ScanTimeout(Exception):
 
 @contextlib.contextmanager
 def scan_deadline(seconds=SCAN_TIMEOUT_SECONDS):
-    if not hasattr(signal, "SIGALRM"):
-        yield
-        return
-
     def _fire(signum, frame):
         raise _ScanTimeout()
 
-    previous = signal.signal(signal.SIGALRM, _fire)
-    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        previous = signal.signal(signal.SIGALRM, _fire)
+    except (AttributeError, ValueError, OSError):
+        # No SIGALRM, or not the main thread. Run without a bound.
+        yield
+        return
+    try:
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+    except (AttributeError, ValueError, OSError):
+        signal.signal(signal.SIGALRM, previous)
+        yield
+        return
     try:
         yield
     finally:
@@ -547,7 +597,7 @@ Append to `guard-evals.json`, continuing the ids:
 
 ```json
 {
-  "id": 101,
+  "id": 104,
   "name": "comment-write-ticket-pattern-set-blocks",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+"},
@@ -557,7 +607,7 @@ Append to `guard-evals.json`, continuing the ids:
   "reason": "a configured project ticket pattern is a tell"
 },
 {
-  "id": 102,
+  "id": 105,
   "name": "comment-write-ticket-pattern-unset-allows",
   "hook": "check-comment-write",
   "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * ABC-1234: the inbound keyword.\\n */\\nobject X\\n\"}}",
@@ -565,7 +615,7 @@ Append to `guard-evals.json`, continuing the ids:
   "reason": "there is no default ticket tell; unconfigured projects are unchanged"
 },
 {
-  "id": 103,
+  "id": 106,
   "name": "comment-write-ticket-pattern-uncompilable-ignored",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_TICKET_PATTERN": "ABC-(\\d+"},
@@ -573,6 +623,26 @@ Append to `guard-evals.json`, continuing the ids:
   "expected_exit": 2,
   "expected_stderr_contains": ["a task reference"],
   "reason": "an uncompilable pattern is dropped without disabling the other tells"
+},
+{
+  "id": 107,
+  "name": "comment-write-ticket-pattern-over-long-ignored",
+  "hook": "check-comment-write",
+  "env": {"ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+(?:xxxxxxxxxx){25}"},
+  "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes task-42\\npackage x\\n\"}}",
+  "expected_exit": 2,
+  "expected_stderr_contains": ["a task reference"],
+  "reason": "a pattern past the 200-character cap is ignored without disabling the other tells"
+},
+{
+  "id": 108,
+  "name": "comment-write-ticket-pattern-catastrophic-fails-open",
+  "hook": "check-comment-write",
+  "env": {"ANTI_TANGENT_TICKET_PATTERN": "(a+)+$"},
+  "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!\\npackage x\\n\"}}",
+  "expected_exit": 0,
+  "case_timeout_seconds": 20,
+  "reason": "the scan deadline bounds a backtracking pattern and fails open rather than hanging the hook"
 }
 ```
 
@@ -580,7 +650,7 @@ Append to `guard-evals.json`, continuing the ids:
 
 - [ ] **Step 9: Update the case count**
 
-`EXPECTED_CASE_COUNT=103` in `run.sh:155`, and `(103 cases)` in the JSON `description`.
+`EXPECTED_CASE_COUNT=108` in `run.sh:155`, and `(108 cases)` in the JSON `description`.
 
 - [ ] **Step 10: Make the FP gate environment-independent**
 
@@ -601,7 +671,7 @@ unset ANTI_TANGENT_TICKET_PATTERN
 - [ ] **Step 11: Run both suites**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh && bash plugin/anti-tangent-guard/evals/fp-report.sh`
-Expected: 103 cases pass; FP report unchanged from `main`.
+Expected: 108 cases pass; FP report unchanged from `main`.
 
 - [ ] **Step 12: Commit**
 
@@ -698,7 +768,7 @@ fi
 - [ ] **Step 3: Run the existing suite to catch a broken restructure**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: all 103 cases pass. A failure here means the hoist changed an exit path, not that a case is wrong.
+Expected: all 112 cases pass. A failure here means the hoist changed an exit path, not that a case is wrong.
 
 - [ ] **Step 4: Add the four-combination eval cases**
 
@@ -706,7 +776,7 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
 
 ```json
 {
-  "id": 104,
+  "id": 109,
   "name": "switch-completion-off-comment-on-still-blocks",
   "env": {"ANTI_TANGENT_COMPLETION_GUARD": "0", "ANTI_TANGENT_COMMENT_GUARD": "1"},
   "input": {
@@ -724,7 +794,7 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
   "reason": "COMPLETION_GUARD names the completion gate only; comment scanning survives it"
 },
 {
-  "id": 105,
+  "id": 110,
   "name": "switch-completion-off-no-validation-allows",
   "env": {"ANTI_TANGENT_COMPLETION_GUARD": "0", "ANTI_TANGENT_COMMENT_GUARD": "1"},
   "input": {
@@ -740,7 +810,7 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
   "reason": "with the completion gate off, a close that never validated is allowed"
 },
 {
-  "id": 106,
+  "id": 111,
   "name": "switch-comment-off-no-validation-blocks",
   "env": {"ANTI_TANGENT_COMPLETION_GUARD": "1", "ANTI_TANGENT_COMMENT_GUARD": "0"},
   "input": {
@@ -757,7 +827,7 @@ Append these to `guard-evals.json`, continuing the ids. Two transcript shapes ar
   "reason": "COMMENT_GUARD names comment scanning only; the completion gate survives it"
 },
 {
-  "id": 107,
+  "id": 112,
   "name": "switch-both-off-allows",
   "env": {"ANTI_TANGENT_COMPLETION_GUARD": "0", "ANTI_TANGENT_COMMENT_GUARD": "0"},
   "input": {
@@ -779,12 +849,12 @@ Case 107 deliberately carries the bad-comment transcript: with both switches off
 
 - [ ] **Step 5: Update the case count**
 
-`EXPECTED_CASE_COUNT=107` in `run.sh:155`, and `(107 cases)` in the JSON `description`.
+`EXPECTED_CASE_COUNT=112` in `run.sh:155`, and `(112 cases)` in the JSON `description`.
 
 - [ ] **Step 6: Run the suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: 107 cases pass.
+Expected: 112 cases pass.
 
 - [ ] **Step 7: Commit**
 
@@ -812,6 +882,9 @@ git commit -m "fix(guard): give each close-time kill switch its own concern"
 - [ ] A path outside any repository is skipped
 - [ ] `final_diff` still wins when both fields are present
 - [ ] Git is invoked with diff prefixes pinned, so a user's `diff.mnemonicPrefix` or `diff.noprefix` cannot blind the parser
+- [ ] A submitted `final_diff` that parses to ZERO added lines still wins — the fallback is chosen on what was submitted, not on what parsed
+- [ ] A `check-ignore` status other than a definite "not ignored" skips the path rather than scanning it
+- [ ] The nested-worktree, gitignored, both-fields-present and overridden-diff-prefix cases are each exercised by a HOOK-LEVEL eval, not only by a manual shell check
 
 **Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all cases pass
 
@@ -863,9 +936,11 @@ def final_files_added_lines(inp):
     reports a worktree path as unmatched -- indistinguishable from untracked,
     which would treat every line as added.
 
-    Exit 1 means "unmatched"; anything else (128 for a path outside a
-    repository or a repo with no HEAD) means the question could not be
-    answered, and every such path is skipped rather than guessed at.
+    Exit 1 from ls-files means "unmatched"; anything else (128 for a path
+    outside a repository or a repo with no HEAD) means the question could not
+    be answered, and every such path is skipped rather than guessed at. The
+    same rule governs check-ignore below: only its definite "not ignored"
+    status licenses treating a file as new.
     """
     out = {}
     for entry in (inp.get("final_files") or []):
@@ -888,8 +963,12 @@ def final_files_added_lines(inp):
             continue
         if rc != 1:
             continue
+        # check-ignore: 0 = ignored, 1 = not ignored, anything else = it could
+        # not tell. Only a definite 1 licenses scanning the whole file as new;
+        # reading an error as "not ignored" would scan every line of a file
+        # this hook was never able to classify.
         rc_ign, _ = _git(parent, "check-ignore", "-q", "--", path)
-        if rc_ign == 0:
+        if rc_ign != 1:
             continue
         content = (entry or {}).get("content")
         if not isinstance(content, str):
@@ -906,11 +985,15 @@ Replace the line `added_by_path = diff_added_lines(in_window_completions[-1])` w
 
 ```python
         last_completion = in_window_completions[-1]
-        # final_diff wins when both are present: it states which lines the
-        # implementer considers added, which is a stronger signal than
-        # anything reconstructed from the working tree.
-        added_by_path = diff_added_lines(last_completion)
-        if not added_by_path:
+        # Precedence is decided by what was SUBMITTED, never by what parsed.
+        # A diff can legitimately yield no added lines -- a pure deletion, or
+        # a shape this parser does not recognise -- and falling back on an
+        # empty result would scan the working tree for a submission whose
+        # author already told us which lines were theirs.
+        if (last_completion.get("final_diff") or
+                last_completion.get("final_diff_path")):
+            added_by_path = diff_added_lines(last_completion)
+        else:
             added_by_path = final_files_added_lines(last_completion)
 ```
 
@@ -944,6 +1027,14 @@ These cases need a real git repository, which `tmpdir_fixture` cannot build — 
     # state, which only running git can produce. Failures are fatal to the
     # case rather than silent: a case whose setup did not run would assert
     # against the wrong world and pass for the wrong reason.
+    # Optional "hook_cwd": run the hook from this directory instead of
+    # HOOK_CWD. The worktree case turns on the hook's cwd differing from the
+    # file's own directory, which is the whole point of rooting git at the
+    # file; a case that cannot move the cwd cannot express it.
+    local hook_cwd_override
+    hook_cwd_override=$(jq -r ".evals[$idx].hook_cwd // empty" "$EVALS_FILE")
+    hook_cwd_override="${hook_cwd_override//\{\{TMPDIR\}\}/$case_tmp}"
+
     local setup_script
     setup_script=$(jq -r ".evals[$idx].setup_script // empty" "$EVALS_FILE")
     if [[ -n "$setup_script" ]]; then
@@ -961,7 +1052,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
 
 ```json
 {
-  "id": 108,
+  "id": 113,
   "name": "final-files-untracked-blocks",
   "setup_script": "mkdir -p r && cd r && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
   "input": {
@@ -979,7 +1070,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "an untracked file submitted as final_files has every line added"
 },
 {
-  "id": 109,
+  "id": 114,
   "name": "final-files-tracked-unmodified-allows",
   "setup_script": "mkdir -p r2 && cd r2 && git init -q . && git config user.email t@t && git config user.name t && printf '// fixes #1\\npackage x\\n' > old.go && git add old.go && git commit -qm i",
   "input": {
@@ -996,7 +1087,7 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   "reason": "a pre-existing comment in an unmodified tracked file is not an added line"
 },
 {
-  "id": 110,
+  "id": 115,
   "name": "final-files-outside-repo-skipped",
   "setup_script": "mkdir -p nr && printf '// fixes #1\\npackage x\\n' > nr/loose.go",
   "input": {
@@ -1011,6 +1102,77 @@ Each path below is absolute via `{{TMPDIR}}`, which `run.sh` substitutes into `t
   ],
   "expected_exit": 0,
   "reason": "a path outside any repository cannot be classified and is skipped"
+},
+{
+  "id": 116,
+  "name": "final-files-nested-worktree-resolves-against-the-worktree",
+  "setup_script": "mkdir -p w && cd w && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && printf '.wt/\\n' > .gitignore && git add seed .gitignore && git commit -qm i && git worktree add -q .wt/feat -b feat && printf '// fixes #1\\npackage x\\n' > .wt/feat/new.go",
+  "hook_cwd": "{{TMPDIR}}/w",
+  "input": {
+    "tool_name": "TaskUpdate",
+    "tool_input": {"status": "completed", "taskId": "1"},
+    "transcript_path": "{{TRANSCRIPT}}"
+  },
+  "transcript_raw_lines": [
+    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/w/.wt/feat/new.go\"}]}}]}}",
+    "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+  ],
+  "expected_exit": 2,
+  "expected_stderr_contains": ["COMMENTS CARRYING CHANGE HISTORY"],
+  "reason": "the file is untracked in its OWN worktree; rooting git at the hook cwd would report it unmatched from the main checkout and scan it for the wrong reason, so this case must block via the worktree-rooted path"
+},
+{
+  "id": 117,
+  "name": "final-files-gitignored-path-skipped",
+  "setup_script": "mkdir -p g && cd g && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && printf 'build/\\n' > .gitignore && git add seed .gitignore && git commit -qm i && mkdir -p build && printf '// fixes #1\\npackage x\\n' > build/gen.go",
+  "input": {
+    "tool_name": "TaskUpdate",
+    "tool_input": {"status": "completed", "taskId": "1"},
+    "transcript_path": "{{TRANSCRIPT}}"
+  },
+  "transcript_raw_lines": [
+    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/g/build/gen.go\"}]}}]}}",
+    "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+  ],
+  "expected_exit": 0,
+  "reason": "a gitignored path exits 1 from ls-files like an untracked one; check-ignore is what separates them"
+},
+{
+  "id": 118,
+  "name": "final-files-diff-wins-even-when-it-adds-nothing",
+  "setup_script": "mkdir -p d && cd d && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
+  "input": {
+    "tool_name": "TaskUpdate",
+    "tool_input": {"status": "completed", "taskId": "1"},
+    "transcript_path": "{{TRANSCRIPT}}"
+  },
+  "transcript_raw_lines": [
+    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/seed\\n-gone\\n\", \"final_files\": [{\"path\": \"{{TMPDIR}}/d/new.go\"}]}}]}}",
+    "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+  ],
+  "expected_exit": 0,
+  "reason": "a submitted diff with zero added lines still wins; falling back to final_files here would block on a comment the diff's author never claimed"
+},
+{
+  "id": 119,
+  "name": "final-files-honours-overridden-diff-prefixes",
+  "setup_script": "mkdir -p m && cd m && git init -q . && git config user.email t@t && git config user.name t && git config diff.mnemonicPrefix true && git config diff.noprefix false && printf 'package x\\n' > mod.go && git add mod.go && git commit -qm i && printf '// fixes #1\\npackage x\\n' > mod.go",
+  "input": {
+    "tool_name": "TaskUpdate",
+    "tool_input": {"status": "completed", "taskId": "1"},
+    "transcript_path": "{{TRANSCRIPT}}"
+  },
+  "transcript_raw_lines": [
+    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/m/mod.go\"}]}}]}}",
+    "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+  ],
+  "expected_exit": 2,
+  "expected_stderr_contains": ["COMMENTS CARRYING CHANGE HISTORY"],
+  "reason": "with diff.mnemonicPrefix set the repo emits `+++ w/`; the pinned -c flags are what keep the hunk parser from silently seeing zero files"
 }
 ```
 
@@ -1018,12 +1180,12 @@ Case 110's `{{TMPDIR}}` is itself inside the harness `WORKDIR`, which is not a g
 
 - [ ] **Step 7: Update the case count**
 
-`EXPECTED_CASE_COUNT=110` in `run.sh:155`, and `(110 cases)` in the JSON `description`.
+`EXPECTED_CASE_COUNT=119` in `run.sh:155`, and `(119 cases)` in the JSON `description`.
 
 - [ ] **Step 8: Run the suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: 110 cases pass. A `SETUP FAILED` line means the Step 5 harness hook is wrong, not the case.
+Expected: 119 cases pass. A `SETUP FAILED` line means the Step 5 harness hook is wrong, not the case.
 
 - [ ] **Step 9: Commit**
 
@@ -1110,7 +1272,24 @@ Immediately after the existing `d.SkipReason = truncateRunes(...)` line:
 	d.SkipEvidence = truncateRunes(strings.TrimSpace(d.SkipEvidence), codesceneSkipEvidenceMaxRunes)
 ```
 
-- [ ] **Step 6: Run the test**
+- [ ] **Step 5a: Test the JSON contract the first AC actually states**
+
+The truncation test does not exercise marshalling at all. Add:
+
+```go
+func TestSkipEvidenceJSONContract(t *testing.T) {
+	b, err := json.Marshal(&Digest{SkipEvidence: "MCP error: tool not found"})
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"skip_evidence":"MCP error: tool not found"`)
+
+	b, err = json.Marshal(&Digest{})
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "skip_evidence",
+		"the field must be omitted when empty, not emitted as an empty string")
+}
+```
+
+- [ ] **Step 6: Run the tests**
 
 Run: `go test -race ./internal/codescene/...`
 Expected: PASS
@@ -1237,14 +1416,14 @@ Replace the `case !d.Ran && strings.TrimSpace(d.SkipReason) == "":` and `case !d
 					"and re-submit the result.",
 			})
 		case !d.Ran && strings.TrimSpace(d.SkipEvidence) == "":
-			// A reason with no evidence is graded exactly as silence. The two
-			// used to differ — major for saying nothing, minor for saying
-			// anything at all — which made composing a sentence the cheapest
-			// route to a pass, and the sentence need not have been true. The
-			// server cannot verify any of these fields, so the calibration is
-			// the only lever: with both rungs equal there is nothing left to
-			// buy by inventing one. The task being lightweight is not an
-			// exemption; `required` asserts CodeScene is present on the host.
+			// An unevidenced skip is graded exactly as an omitted result, and
+			// the equality is the point. The server cannot verify any of these
+			// fields, so relative severity is the only lever it has: were a
+			// bare reason to cost less than silence, composing one would be
+			// the cheapest route to a pass and it need not be true. Equal
+			// rungs leave nothing to buy by inventing a reason. A lightweight
+			// task is not exempt — `required` asserts CodeScene is present on
+			// the host.
 			out = append(out, verdict.Finding{
 				Severity:  verdict.SeverityMajor,
 				Category:  verdict.CategoryCodesceneSkipped,
@@ -1349,6 +1528,8 @@ git commit -m "feat(codescene): grade an unevidenced skip as harshly as silence"
 - [ ] pytest's `no tests ran`, jest's `No tests found`, and Go's `?   pkg   [no test files]` each yield the same finding
 - [ ] `:app:test UP-TO-DATE`, `:app:test FROM-CACHE` and `ok  pkg  0.01s (cached)` yield **nothing**
 - [ ] A Gradle log with several `UP-TO-DATE` compile tasks and one executed test task yields nothing
+- [ ] A Gradle log with `:app:processTestResources NO-SOURCE` **and** an executed `> Task :app:test` yields nothing — `NO-SOURCE` is scoped to test tasks, and an unannotated test-task line counts as execution
+- [ ] `:app:testClasses NO-SOURCE` alone does NOT fire — it is not a test-running task
 - [ ] A human-written summary ("all 4 tests pass") yields nothing
 - [ ] Empty `test_evidence` yields nothing
 - [ ] The finding is submission-defect-only, so `next_action` tells the implementer to re-submit
@@ -1380,6 +1561,8 @@ func TestTestEvidenceFindingsStaysQuiet(t *testing.T) {
 		"gradle-cached":    "> Task :app:test FROM-CACHE\nBUILD SUCCESSFUL in 1s",
 		"go-cached":        "ok  \tgithub.com/x/y\t(cached)",
 		"gradle-mixed":     "> Task :app:compileKotlin UP-TO-DATE\n> Task :app:test\nBUILD SUCCESSFUL in 12s",
+		"gradle-nosource-nontest": "> Task :app:processTestResources NO-SOURCE\n> Task :app:test\nBUILD SUCCESSFUL in 12s",
+		"gradle-testclasses":      "> Task :app:testClasses NO-SOURCE\n> Task :app:test\nBUILD SUCCESSFUL in 9s",
 		"human-summary":    "all 4 tests pass",
 		"go-passing":       "ok  \tgithub.com/x/y\t0.412s",
 	} {
@@ -1392,6 +1575,7 @@ func TestTestEvidenceFindingsStaysQuiet(t *testing.T) {
 func TestTestEvidenceFindingsFiresOnNoExecution(t *testing.T) {
 	for name, evidence := range map[string]string{
 		"gradle-no-source": "> Task :app:test NO-SOURCE\nBUILD SUCCESSFUL in 1s",
+		"gradle-variant":   "> Task :app:testDebugUnitTest NO-SOURCE\nBUILD SUCCESSFUL in 1s",
 		"pytest":           "collected 0 items\n\n=== no tests ran in 0.01s ===",
 		"jest":             "No tests found, exiting with code 1",
 		"go-no-test-files": "?   \tgithub.com/x/y\t[no test files]",
@@ -1445,7 +1629,14 @@ import (
 // one. NO-SOURCE and its equivalents below make the opposite statement:
 // there was nothing to run.
 var noExecutionMarkers = []*regexp.Regexp{
-	regexp.MustCompile(`(?m)^.*\bNO-SOURCE\s*$`),
+	// NO-SOURCE is scoped to a TEST task. Gradle reports it for any task with
+	// no inputs, and a healthy build routinely prints it for
+	// processTestResources or a resource task while the test task beside it
+	// runs a full suite; matching NO-SOURCE anywhere would reject that build.
+	// The pattern requires a task segment ending in "test"/"Test", so
+	// :app:test, :shared:jvmTest and :app:testDebugUnitTest match while
+	// :app:processTestResources does not.
+	regexp.MustCompile(`(?m)^.*:[A-Za-z0-9_.-]*[Tt]est\s+NO-SOURCE\s*$`),
 	regexp.MustCompile(`(?i)\bno tests ran\b`),
 	regexp.MustCompile(`(?i)\bno tests found\b`),
 	regexp.MustCompile(`\[no test files\]`),
@@ -1460,6 +1651,13 @@ var executionMarkers = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b\d+ (?:tests?|examples?) (?:passed|ran|completed)\b`),
 	regexp.MustCompile(`(?i)\b\d+ passed\b`),
 	regexp.MustCompile(`(?i)\btests? completed\b`),
+	// A Gradle test-task line carrying no status at all is an EXECUTED task:
+	// Gradle annotates skipped work (UP-TO-DATE, FROM-CACHE, NO-SOURCE,
+	// SKIPPED) and leaves a task it actually ran unannotated. Without this, a
+	// build whose test task ran and whose resource task was NO-SOURCE has no
+	// recognised execution marker at all, because a plain successful Gradle
+	// run prints no per-test counts.
+	regexp.MustCompile(`(?m)^> Task :[A-Za-z0-9_.:-]*[Tt]est\s*$`),
 }
 
 // testEvidenceFindings reports evidence whose own text says no test executed.
@@ -1501,6 +1699,27 @@ func testEvidenceFindings(evidence string) []verdict.Finding {
 
 Run: `go test -race ./internal/mcpsrv/... -run TestTestEvidence -v`
 Expected: PASS
+
+- [ ] **Step 4a: Assert the routing through the handler, not just the helper**
+
+`isSubmissionDefectOnly(f)` on the bare finding does not prove the wired-up envelope reports it. Add a handler-level test beside the existing `validate_completion` tests, following whatever fixture helper they already use to build a request:
+
+```go
+func TestNoExecutionEvidenceRoutesToResubmit(t *testing.T) {
+	// A lightweight completion (empty session_id) whose only defect is the
+	// test evidence: the envelope must tell the implementer to re-submit,
+	// not to rework code.
+	env := callValidateCompletion(t, CompletionArgs{
+		Summary:      "added the parser",
+		FinalFiles:   []CompletionFileArg{{Path: "/tmp/x.go", Content: strPtr("package x\n")}},
+		TestEvidence: "> Task :app:test NO-SOURCE\nBUILD SUCCESSFUL in 1s",
+	})
+	assert.True(t, env.SubmissionDefectOnly)
+	assert.Contains(t, env.NextAction, "Re-submit with the missing evidence")
+}
+```
+
+Match `callValidateCompletion` and `strPtr` to the helpers the neighbouring tests in `handlers_test.go` already define; do not add new ones if equivalents exist.
 
 - [ ] **Step 5: Wire it into the handler**
 
@@ -1553,7 +1772,7 @@ git commit -m "feat(mcpsrv): reject test evidence stating no test executed"
 **Files:**
 - Modify: `internal/prompts/templates/plan_rules.tmpl`
 - Test: `internal/prompts/prompts_test.go`
-- Modify: `internal/prompts/testdata/plan_*.golden` (regenerated)
+- Modify: `internal/prompts/testdata/` — the twelve `plan_*.golden` files, regenerated
 
 **Acceptance Criteria:**
 - [ ] `plan_rules.tmpl` carries a comment-hygiene section naming tracker keys, issue/PR references and change narration
@@ -1562,10 +1781,11 @@ git commit -m "feat(mcpsrv): reject test evidence stating no test executed"
 - [ ] The section asks for ONE consolidated plan-level finding listing the offending fences, not one per fence
 - [ ] The section requires the plan to carry the comment policy OR a pointer to `implementer.md §4.4`, and emits `severity: major`, `category: other`, `criterion: comment_policy_absent` when it carries neither
 - [ ] The policy finding uses `category: other` — **not** `convention_deviation`, which `applySeverityFloor` would silently downgrade to `minor`
-- [ ] A plan carrying only the one-line pointer draws no policy finding
+- [ ] A plan carrying only the one-line pointer draws no policy finding, asserted by an `e2e`-tagged test that issues a real `validate_plan` call — the template test proves only that the instruction renders
+- [ ] That same test asserts the emitted finding arrives as `major`/`other`, which is what would catch a floored category
 - [ ] All twelve `plan_*.golden` files regenerate and the diff contains only the new section
 
-**Verify:** `go test -race ./internal/prompts/...` → PASS
+**Verify:** `go test -race ./internal/prompts/...` → PASS, and `go test -tags=e2e ./internal/mcpsrv/... -run TestCommentPolicyFindingE2E` → PASS (needs provider keys; e2e is not run on every PR)
 
 **Why both rules live in one task:** they are two paragraphs of the same `plan_rules.tmpl` section and share one regeneration of the same twelve golden files. Splitting them would mean regenerating twelve goldens twice and reading the same diff twice.
 
@@ -1622,6 +1842,59 @@ func TestPlanRulesCarriesCommentHygiene(t *testing.T) {
 Run: `go test ./internal/prompts/... -run TestPlanRulesCarriesCommentHygiene -v`
 Expected: FAIL before Step 1 is applied; PASS after.
 
+- [ ] **Step 3a: Cover the finding's BEHAVIOUR, not only the prompt text**
+
+The template test above proves the instruction is rendered. It cannot prove the reviewer acts on it — that needs a real provider call, which is what the `e2e` tag is for in this repo (`internal/mcpsrv/*_e2e_test.go`, `//go:build e2e`). Add to a new `internal/mcpsrv/plan_comment_policy_e2e_test.go`:
+
+```go
+//go:build e2e
+
+package mcpsrv
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// The task heading is assembled rather than written literally. A bare
+// "### Task 1:" at the start of a line is a heading to anything scanning the
+// document this fixture lives in, that document's own plan parser included.
+const planBody = "# P\n\n" + "###" + " Task 1: Add a helper\n\n" +
+	"**Goal:** add one function.\n\n" +
+	"**Acceptance criteria:**\n- [ ] Helper() exists\n\n" +
+	"**Steps:**\n\n- [ ] Write it\n"
+
+const policyPointer = "## Global Constraints\n\n" +
+	"Comments: anti-tangent-protocol implementer.md 4.4.\n\n"
+
+// A plan naming the policy pointer must draw no policy finding; the same plan
+// without it must draw exactly one, at major. The severity is the load-bearing
+// assertion: the obvious category for this finding carries a parser-side floor
+// that would reduce it to minor and the gate would never fire.
+func TestCommentPolicyFindingE2E(t *testing.T) {
+	res := runValidatePlanE2E(t, policyPointer+planBody)
+	for _, f := range res.PlanFindings {
+		assert.NotEqual(t, "comment_policy_absent", f.Criterion,
+			"a plan carrying the pointer must draw no policy finding")
+	}
+
+	res = runValidatePlanE2E(t, planBody)
+	var got []string
+	for _, f := range res.PlanFindings {
+		if f.Criterion == "comment_policy_absent" {
+			got = append(got, string(f.Severity)+"/"+string(f.Category))
+		}
+	}
+	require.Len(t, got, 1, "expected exactly one policy finding, got %v", got)
+	assert.Equal(t, "major/other", got[0],
+		"a floored category would arrive as minor and never gate")
+}
+```
+
+Match `runValidatePlanE2E` to whatever helper `plan_caching_e2e_test.go` already uses to issue a `validate_plan` call; do not add a second harness if one exists. If no such helper exists, build the request the same way that file does and extract the plan findings from the returned envelope.
+
 - [ ] **Step 4: Regenerate the goldens**
 
 Run: `go test ./internal/prompts/... -update`
@@ -1658,7 +1931,7 @@ git commit -m "feat(prompts): flag change-history comments in normative plan fen
 - Modify: `README.md:329`
 - Modify: `CLAUDE.md`
 - Modify: `plugin/anti-tangent-guard/README.md`
-- Modify: `plugin/anti-tangent-protocol/protocol/*.md` (resync, not hand-edited)
+- Modify: `plugin/anti-tangent-protocol/protocol/` — resynced wholesale, never hand-edited
 
 **Acceptance Criteria:**
 - [ ] `core.md` describes the new ladder and is **at or under 15,891 bytes**
@@ -1885,7 +2158,10 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add CHANGELOG.md plugin/*/.claude-plugin/plugin.json .claude-plugin/marketplace.json
+git add CHANGELOG.md \
+        plugin/anti-tangent-guard/.claude-plugin/plugin.json \
+        plugin/anti-tangent-protocol/.claude-plugin/plugin.json \
+        .claude-plugin/marketplace.json
 git commit -m "chore: changelog and plugin versions for v0.20.0"
 ```
 
