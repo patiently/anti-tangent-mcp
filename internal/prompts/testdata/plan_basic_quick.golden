@@ -107,6 +107,10 @@ Accept that line, and accept any wording that unambiguously names the same docum
 
 When the plan carries neither, emit ONE plan-level finding: `category: other`, `criterion: comment_policy_absent`, `severity: major`, with `suggestion` giving the exact line the author can paste. Do not emit it per task, and do not emit it when the plan carries either form.
 
+### Neither rule above is optional
+
+Both findings are required whenever the plan warrants one, and this call is the only place either can be emitted — nothing downstream restores one you leave out. An instruction elsewhere in this prompt to surface only the most-severe findings, to omit minor ones, or to cap how many you emit does not reach these two: `comment_hygiene` carries `severity: minor` because that is the severity it is worth, not because it is discretionary. Emit each one in addition to any such cap.
+
 ## Output
 
 Respond with a JSON object matching the provided schema. Do not include

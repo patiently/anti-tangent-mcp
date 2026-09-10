@@ -1856,3 +1856,40 @@ func TestPlanLevelCommentRulesReachOnlyThePlanLevelPrompts(t *testing.T) {
 		assert.Contains(t, fo.UserSuffix, needle)
 	}
 }
+
+// quickModeSuppression is the instruction the exemption below has to survive.
+const (
+	quickModeSuppression = "Omit minor nits and stylistic suggestions."
+	requiredFindingsRule = "### Neither rule above is optional"
+)
+
+// Quick mode tells the reviewer to omit minor findings, and comment_hygiene
+// is specified as a minor. Nothing downstream re-derives a finding a review
+// call did not return, so without an explicit exemption quick mode drops a
+// required finding silently — and the plan passes as though the rule had
+// been applied. The exemption has to sit AFTER the instruction it overrides:
+// a reader reaching the cap first and the exception never has no reason to
+// revisit the cap.
+func TestQuickModeCannotSuppressTheRequiredCommentFindings(t *testing.T) {
+	planText := "# Plan\n\n### Task 1: T\n\nbody\n"
+
+	single, err := RenderPlan(PlanInput{PlanText: planText, Mode: "quick"})
+	require.NoError(t, err)
+	fo, err := RenderPlanFindingsOnly(PlanInput{PlanText: planText, Mode: "quick"})
+	require.NoError(t, err)
+
+	for name, body := range map[string]string{
+		"plan":          single.User,
+		"plan_findings": fo.User,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cap := strings.Index(body, quickModeSuppression)
+			require.GreaterOrEqual(t, cap, 0, "quick mode must still carry its suppression instruction")
+			exempt := strings.Index(body, requiredFindingsRule)
+			require.GreaterOrEqual(t, exempt, 0,
+				"quick mode suppresses minor findings, so the required minor needs an exemption")
+			assert.Greater(t, exempt, cap,
+				"the exemption must follow the instruction it overrides, not precede it")
+		})
+	}
+}
