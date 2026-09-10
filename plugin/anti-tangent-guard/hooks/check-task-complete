@@ -61,17 +61,14 @@
 # closes that, and only on a server new enough to have it.
 # internal/mcpsrv/summary_forgery_test.go enumerates the server's block
 # renderers by what their output is ASSIGNED TO (a summary_block), not by
-# what header literal they write — the earlier, header-keyed version was
-# blind to plan_run_report, whose header is honestly different and whose
-# fields shipped unescaped for a release. That test states its own blind
-# spots in its header; neither it nor this hook makes the marker path
-# trustworthy, since an agent can compose a block in its own report text
-# (README.md, "How much to trust each pass signal"). Across blocks, the LAST
-# one still wins (Task 8's pinned re-validation semantics) — only the
-# extraction WITHIN a block changed.
+# what header literal they write: plan_run_report's header is legitimately
+# different, so a header-keyed enumeration does not see it at all. That test
+# states its own blind spots in its header; neither it nor this hook makes
+# the marker path trustworthy, since an agent can compose a block in its own
+# report text (README.md, "How much to trust each pass signal"). Across
+# blocks, the LAST one wins.
 #
-# THE DIRECT-CALL RESULT IS ALSO READ FOR ITS VERDICT (final review
-# Important #1): a real MCP tool result arrives JSON-MARSHALLED
+# THE DIRECT-CALL RESULT IS ALSO READ FOR ITS VERDICT: a real MCP tool result arrives JSON-MARSHALLED
 # (envelopeResult, internal/mcpsrv/handlers.go) — summary_block's newlines
 # survive only as "\n" escapes inside one JSON string, on one physical line,
 # so HEADER_RE below can never match a validate_completion tool_result's raw
