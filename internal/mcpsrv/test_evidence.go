@@ -37,8 +37,14 @@ var noExecutionMarkers = []*regexp.Regexp{
 // suppress the finding when they appear alongside a no-execution marker. A
 // multi-module build legitimately reports NO-SOURCE for a module with no
 // tests while another module runs its suite, and that submission is fine.
+//
+// A cached result counts as a run here, for the reason set out on
+// noExecutionMarkers above: both tools cache only a PASS, so the cached line
+// attests the same thing the fresh one does. Cached spellings need their own
+// patterns because the executed spellings match on what the cache replaces —
+// a duration for `go test`, a bare task line for Gradle.
 var executionMarkers = []*regexp.Regexp{
-	regexp.MustCompile(`(?m)^ok\s+\S+\s+\d`),
+	regexp.MustCompile(`(?m)^ok\s+\S+\s+(?:\d|\(cached\))`),
 	// The count must be POSITIVE. `\d+` also matches zero, so evidence
 	// pairing a no-execution marker with "0 tests ran" or "0 passed" would
 	// suppress the very finding that evidence calls for.
@@ -58,6 +64,10 @@ var executionMarkers = []*regexp.Regexp{
 	// recognised execution marker at all, because a plain successful Gradle
 	// run prints no per-test counts.
 	regexp.MustCompile(`(?m)^> Task :[A-Za-z0-9_.:-]*[Tt]est\s*$`),
+	// The same Gradle test task served from the cache. The annotation the
+	// pattern above relies on being ABSENT is present here, so that pattern
+	// cannot reach these two lines.
+	regexp.MustCompile(`(?m)^> Task :[A-Za-z0-9_.:-]*[Tt]est\s+(?:FROM-CACHE|UP-TO-DATE)\s*$`),
 }
 
 // testEvidenceFindings reports evidence whose own text says no test executed.

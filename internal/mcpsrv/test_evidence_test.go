@@ -43,6 +43,17 @@ func TestTestEvidenceFindingsStaysQuiet(t *testing.T) {
 		// Suppressed by the `^ok\s+\S+\s+\d` regex: one package in a
 		// `go test ./...` run has no test files, a sibling package passed.
 		"go-multipackage-suppressed": "?   \tgithub.com/x/a\t[no test files]\nok  \tgithub.com/x/b\t0.412s",
+		// The same shape with the sibling package's result served from the
+		// build cache. `go test` caches only a PASSING result, so "(cached)"
+		// attests a pass on the current inputs exactly as a fresh duration
+		// does — and a cached line carries no duration to match on.
+		"go-multipackage-cached-suppressed": "?   \tgithub.com/x/a\t[no test files]\nok  \tgithub.com/x/b\t(cached)",
+		// Gradle's two cache annotations on the sibling module's test task.
+		// A failing test task re-executes, so a task Gradle marks FROM-CACHE
+		// or UP-TO-DATE passed on these inputs; both are as much an executed
+		// suite as the unannotated line above.
+		"gradle-multimodule-from-cache-suppressed": "> Task :moduleA:test NO-SOURCE\n> Task :moduleB:test FROM-CACHE\nBUILD SUCCESSFUL in 1s",
+		"gradle-multimodule-up-to-date-suppressed": "> Task :moduleA:test NO-SOURCE\n> Task :moduleB:test UP-TO-DATE\nBUILD SUCCESSFUL in 1s",
 		// Suppressed by "N tests|examples passed|ran|completed", not by the
 		// plainer "N passed" regex below it — there is no bare "4 passed"
 		// substring here, only "4 tests passed".
