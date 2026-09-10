@@ -363,10 +363,6 @@ run_case() {
     # state, which only running git can produce. Failures are fatal to the
     # case rather than silent: a case whose setup did not run would assert
     # against the wrong world and pass for the wrong reason.
-    # Optional "hook_cwd": run the hook from this directory instead of
-    # HOOK_CWD. The worktree case turns on the hook's cwd differing from the
-    # file's own directory, which is the whole point of rooting git at the
-    # file; a case that cannot move the cwd cannot express it.
 
     local setup_script
     setup_script=$(jq -r ".evals[$idx].setup_script // empty" "$EVALS_FILE")

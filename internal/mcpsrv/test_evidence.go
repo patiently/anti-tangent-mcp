@@ -44,10 +44,6 @@ var executionMarkers = []*regexp.Regexp{
 	// suppress the very finding that evidence calls for.
 	regexp.MustCompile(`(?i)\b[1-9]\d* (?:tests?|examples?) (?:passed|ran|completed)\b`),
 	regexp.MustCompile(`(?i)\b[1-9]\d* passed\b`),
-	// "tests completed" needs a positive count for the same reason the two
-	// above do: "0 tests completed" beside a no-execution marker would
-	// otherwise suppress the finding that evidence exists to produce.
-	regexp.MustCompile(`(?i)\b[1-9]\d* tests? completed\b`),
 	// A Gradle test-task line carrying no status at all is an EXECUTED task:
 	// Gradle annotates skipped work (UP-TO-DATE, FROM-CACHE, NO-SOURCE,
 	// SKIPPED) and leaves a task it actually ran unannotated. Without this, a
