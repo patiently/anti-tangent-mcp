@@ -65,6 +65,7 @@ still misimplement; minor = nit.
 **Quick mode.** Surface only the most-severe findings — at most 3 per scope (3 plan-level findings, and at most 3 findings per task). Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
 
 {{ end -}}
+{{template "plan_comment_rules" . -}}
 ## Output
 
 Respond with a JSON object matching the provided schema. Do not include

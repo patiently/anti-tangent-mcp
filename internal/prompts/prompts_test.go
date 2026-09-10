@@ -1815,3 +1815,44 @@ func TestRenderWorkerCodeWriteContentWithClosingDelimiter(t *testing.T) {
 	assert.NotContains(t, out.User, "</file nonce=\"\">",
 		"the bare decoy must not accidentally become a nonce-bearing terminator")
 }
+
+// commentHygieneHeading and commentPolicyCriterion identify the two rules
+// that produce plan-level findings and nothing else.
+const (
+	commentHygieneHeading  = "### Comment hygiene in normative code"
+	commentPolicyCriterion = "criterion: comment_policy_absent"
+)
+
+// Both rules ask for exactly one finding for the WHOLE plan, so they belong
+// only in the prompts that can emit one. Two things fix where they sit.
+//
+// The task-chunk prompt asks for per-task results and tells the reviewer not
+// to emit plan_findings at all, so a rule reachable from there asks for
+// output the same prompt forbids.
+//
+// And they sit in the per-call suffix, not the shared prefix: the chunked
+// path's cache read depends on the findings-only prompt and every chunk
+// prompt sharing a byte-identical prefix, which cannot hold while one of
+// them carries a section the other does not.
+func TestPlanLevelCommentRulesReachOnlyThePlanLevelPrompts(t *testing.T) {
+	planText := "# Plan\n\n### Task 1: T\n\nbody\n"
+	tasks := []planparser.RawTask{{Title: "Task 1: T", Body: "### Task 1: T\n\nbody\n"}}
+
+	single, err := RenderPlan(PlanInput{PlanText: planText, Mode: "thorough"})
+	require.NoError(t, err)
+	fo, err := RenderPlanFindingsOnly(PlanInput{PlanText: planText, Mode: "thorough"})
+	require.NoError(t, err)
+	ch, err := RenderPlanTasksChunk(PlanChunkInput{PlanText: planText, Mode: "thorough", ChunkTasks: tasks})
+	require.NoError(t, err)
+
+	for _, needle := range []string{commentHygieneHeading, commentPolicyCriterion} {
+		assert.Contains(t, single.User, needle, "the single-call plan prompt emits plan findings")
+		assert.Contains(t, fo.User, needle, "the findings-only prompt is where plan findings come from")
+		assert.NotContains(t, ch.User, needle,
+			"the task-chunk prompt forbids plan_findings, so a plan-level rule there asks for output it also refuses")
+
+		assert.NotContains(t, fo.UserPrefix, needle,
+			"a section in the shared prefix of one prompt but not the other costs every cache read")
+		assert.Contains(t, fo.UserSuffix, needle)
+	}
+}

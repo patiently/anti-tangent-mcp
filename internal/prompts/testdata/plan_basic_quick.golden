@@ -12,28 +12,6 @@ When you cite a code symbol's signature, an example sibling key, or an adjacent 
 
 When the plan asserts something about the codebase that you cannot verify from the plan text alone — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim from the plan. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase.
 
-### Comment hygiene in normative code
-
-Code inside a fence in this plan is transcribed into the repository as written, so a comment in a fence becomes a comment in the codebase. Flag a comment that carries a tracker key (`ABC-1234:`), an issue or pull-request reference, or change narration — "added in v0.5.0", "previously", "no longer", "this replaced". A comment must read correctly to someone who never saw the change that introduced it; a version reference stating a live compatibility contract ("reads the v0.10.0 output") is not a defect.
-
-Three exemptions, and they matter more than the rule: a fence showing a DIFF exempts its `-` lines, because removing such a comment is the fix; a fence showing EXPECTED OUTPUT or a TEST FIXTURE is data, not code that lands in the repository, and a plan whose subject is comment scanning will legitimately contain strings like `// fixes #1` as fixtures. When in doubt about whether a fence is transcribed, do not flag it.
-
-Emit at most ONE finding for the whole plan: `category: quality`, `criterion: comment_hygiene`, `severity: minor`, with `evidence` listing each offending task and comment, and `suggestion` giving the rewrites. One finding per fence would push a plan with three of them to `warn` on finding count alone.
-
-### Comment policy for implementers
-
-A plan is the one artifact every implementing subagent reads. If it says nothing about how comments are to be written, an implementer working without the `anti-tangent-protocol` plugin loaded has no policy at all, writes a comment carrying change history, and spends a review round discovering it.
-
-Check whether the plan gives implementers the comment policy in EITHER form: a statement of it in a constraints or conventions section, or a one-line pointer to the protocol. Either satisfies this; the pointer is preferable because it cannot drift out of sync with the policy it names.
-
-The canonical pointer line is exactly:
-
-    Comments: anti-tangent-protocol implementer.md §4.4
-
-Accept that line, and accept any wording that unambiguously names the same document and section — backticks around the filename, a trailing full stop, or "see" in front are all the same pointer. Do not require the canonical spelling byte-for-byte; do require that a reader could follow it to the section.
-
-When the plan carries neither, emit ONE plan-level finding: `category: other`, `criterion: comment_policy_absent`, `severity: major`, with `suggestion` giving the exact line the author can paste. Do not emit it per task, and do not emit it when the plan carries either form.
-
 ## Plan under review
 
 # Sample Plan
@@ -106,6 +84,28 @@ still misimplement; minor = nit.
 - `rigorous`: spec is ready to hand to a fresh implementer with high confidence; remaining findings are stylistic or expected-of-the-process.
 
 **Quick mode.** Surface only the most-severe findings — at most 3 per scope (3 plan-level findings, and at most 3 findings per task). Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
+
+### Comment hygiene in normative code
+
+Code inside a fence in this plan is transcribed into the repository as written, so a comment in a fence becomes a comment in the codebase. Flag a comment that carries a tracker key (`ABC-1234:`), an issue or pull-request reference, or change narration — "added in v0.5.0", "previously", "no longer", "this replaced". A comment must read correctly to someone who never saw the change that introduced it; a version reference stating a live compatibility contract ("reads the v0.10.0 output") is not a defect.
+
+Three exemptions, and they matter more than the rule: a fence showing a DIFF exempts its `-` lines, because removing such a comment is the fix; a fence showing EXPECTED OUTPUT or a TEST FIXTURE is data, not code that lands in the repository, and a plan whose subject is comment scanning will legitimately contain strings like `// fixes #1` as fixtures. When in doubt about whether a fence is transcribed, do not flag it.
+
+Emit at most ONE finding for the whole plan: `category: quality`, `criterion: comment_hygiene`, `severity: minor`, with `evidence` listing each offending task and comment, and `suggestion` giving the rewrites. One finding per fence would push a plan with three of them to `warn` on finding count alone.
+
+### Comment policy for implementers
+
+A plan is the one artifact every implementing subagent reads. If it says nothing about how comments are to be written, an implementer working without the `anti-tangent-protocol` plugin loaded has no policy at all, writes a comment carrying change history, and spends a review round discovering it.
+
+Check whether the plan gives implementers the comment policy in EITHER form: a statement of it in a constraints or conventions section, or a one-line pointer to the protocol. Either satisfies this; the pointer is preferable because it cannot drift out of sync with the policy it names.
+
+The canonical pointer line is exactly:
+
+    Comments: anti-tangent-protocol implementer.md §4.4
+
+Accept that line, and accept any wording that unambiguously names the same document and section — backticks around the filename, a trailing full stop, or "see" in front are all the same pointer. Do not require the canonical spelling byte-for-byte; do require that a reader could follow it to the section.
+
+When the plan carries neither, emit ONE plan-level finding: `category: other`, `criterion: comment_policy_absent`, `severity: major`, with `suggestion` giving the exact line the author can paste. Do not emit it per task, and do not emit it when the plan carries either form.
 
 ## Output
 
