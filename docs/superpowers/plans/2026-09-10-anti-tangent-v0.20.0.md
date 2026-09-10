@@ -1105,6 +1105,7 @@ git commit -m "fix(guard): give each close-time kill switch its own concern"
 - [ ] `final_diff` still wins when both fields are present
 - [ ] Git is invoked with diff prefixes pinned, so a user's `diff.mnemonicPrefix` or `diff.noprefix` cannot blind the parser
 - [ ] A submitted `final_diff` that parses to ZERO added lines still wins — the fallback is chosen on what was submitted, not on what parsed
+- [ ] An explicitly submitted EMPTY `final_diff` (`""`) also wins — precedence keys on the field being present, not on it being truthy, and an eval covers this separately from the non-empty deletion diff
 - [ ] A `check-ignore` status other than a definite "not ignored" skips the path rather than scanning it, asserted by a unit test with a stubbed git rather than by a fixture repository
 - [ ] The nested-worktree eval expects exit **0** on a fixture that only correct rooting can pass — an untracked fixture expecting exit 2 passes under the buggy rooting too and is not a test
 - [ ] Every `run.sh` hook invocation runs from `case_cwd`; `grep -c 'cd \"$HOOK_CWD\"'` returns 0
@@ -1252,8 +1253,11 @@ Replace the line `added_by_path = diff_added_lines(in_window_completions[-1])` w
         # a shape this parser does not recognise -- and falling back on an
         # empty result would scan the working tree for a submission whose
         # author already told us which lines were theirs.
-        if (last_completion.get("final_diff") or
-                last_completion.get("final_diff_path")):
+        # Presence, not truthiness. An explicitly submitted empty final_diff
+        # is still a statement about which lines are the author's -- reading
+        # it as absent would reconstruct from the working tree instead.
+        if ("final_diff" in last_completion or
+                "final_diff_path" in last_completion):
             added_by_path = diff_added_lines(last_completion)
         else:
             added_by_path = final_files_added_lines(last_completion)
@@ -1963,6 +1967,7 @@ func TestTestEvidenceFindingsFiresOnNoExecution(t *testing.T) {
 		"pytest":           "collected 0 items\n\n=== no tests ran in 0.01s ===",
 		"jest":             "No tests found, exiting with code 1",
 		"zero-count":       "collected 0 items\n\n=== no tests ran in 0.01s ===\n0 passed",
+		"zero-completed":   "> Task :app:test NO-SOURCE\n0 tests completed",
 		"go-no-test-files": "?   \tgithub.com/x/y\t[no test files]",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -2038,7 +2043,10 @@ var executionMarkers = []*regexp.Regexp{
 	// suppress the very finding that evidence calls for.
 	regexp.MustCompile(`(?i)\b[1-9]\d* (?:tests?|examples?) (?:passed|ran|completed)\b`),
 	regexp.MustCompile(`(?i)\b[1-9]\d* passed\b`),
-	regexp.MustCompile(`(?i)\btests? completed\b`),
+	// "tests completed" needs a positive count for the same reason the two
+	// above do: "0 tests completed" beside a no-execution marker would
+	// otherwise suppress the finding that evidence exists to produce.
+	regexp.MustCompile(`(?i)\b[1-9]\d* tests? completed\b`),
 	// A Gradle test-task line carrying no status at all is an EXECUTED task:
 	// Gradle annotates skipped work (UP-TO-DATE, FROM-CACHE, NO-SOURCE,
 	// SKIPPED) and leaves a task it actually ran unannotated. Without this, a
@@ -2174,11 +2182,12 @@ git commit -m "feat(mcpsrv): reject test evidence stating no test executed"
 - [ ] That same test asserts the emitted finding arrives as `major`/`other`, which is what would catch a floored category
 - [ ] The e2e test pins the provider and model its neighbours pin, asserts presence on the no-policy plan and only absence on the pointer plan, and asserts no total finding count
 - [ ] A second e2e test covers the FENCE half: three violating fences consolidate into exactly one `minor` `comment_hygiene` finding, and a plan whose only fences are a diff, an expected-output block and a test fixture draws none
-- [ ] The e2e fixture writes the pointer exactly as `plan_rules.tmpl` prescribes it, section sign included
-- [ ] Stability is measured, not assumed: five consecutive passes before the test is considered reliable
+- [ ] One canonical pointer line is defined in `plan_rules.tmpl` and reproduced byte-for-byte in both `authoring.md` (Task 10) and the e2e fixture — the three must not drift
+- [ ] Stability is measured, not assumed: **both** e2e tests pass five consecutive times before either is considered reliable
 - [ ] All twelve `plan_*.golden` files regenerate and the diff contains only the new section
+- [ ] Every locally checkable part of the rule — the canonical pointer line, the severities, the consolidation instruction, all three exemptions — is asserted in the template test, which needs no credentials. Only "does a live reviewer act on it" is left to the e2e tier that can be skipped
 
-**Verify:** `go test -race ./internal/prompts/...` → PASS, and `go test -tags=e2e ./internal/mcpsrv/... -run TestCommentPolicyFindingE2E` → PASS (needs provider keys; e2e is not run on every PR)
+**Verify:** `go test -race ./internal/prompts/...` → PASS, and `go test -tags=e2e ./internal/mcpsrv/... -run 'TestCommentPolicyFindingE2E|TestCommentHygieneFenceFindingE2E'` → PASS, five consecutive times (needs provider keys; e2e is not run on every PR)
 
 **Why both rules live in one task:** they are two paragraphs of the same `plan_rules.tmpl` section and share one regeneration of the same twelve golden files. Splitting them would mean regenerating twelve goldens twice and reading the same diff twice.
 
@@ -2201,7 +2210,13 @@ Emit at most ONE finding for the whole plan: `category: quality`, `criterion: co
 
 A plan is the one artifact every implementing subagent reads. If it says nothing about how comments are to be written, an implementer working without the `anti-tangent-protocol` plugin loaded has no policy at all, writes a comment carrying change history, and spends a review round discovering it.
 
-Check whether the plan gives implementers the comment policy in EITHER form: a statement of it in a constraints or conventions section, or a one-line pointer to `anti-tangent-protocol`'s `implementer.md` §4.4. Either satisfies this; the pointer is preferable because it cannot drift out of sync with the policy it names.
+Check whether the plan gives implementers the comment policy in EITHER form: a statement of it in a constraints or conventions section, or a one-line pointer to the protocol. Either satisfies this; the pointer is preferable because it cannot drift out of sync with the policy it names.
+
+The canonical pointer line is exactly:
+
+    Comments: anti-tangent-protocol implementer.md §4.4
+
+Accept that line, and accept any wording that unambiguously names the same document and section — backticks around the filename, a trailing full stop, or "see" in front are all the same pointer. Do not require the canonical spelling byte-for-byte; do require that a reader could follow it to the section.
 
 When the plan carries neither, emit ONE plan-level finding: `category: other`, `criterion: comment_policy_absent`, `severity: major`, with `suggestion` giving the exact line the author can paste. Do not emit it per task, and do not emit it when the plan carries either form.
 ```
@@ -2225,6 +2240,22 @@ func TestPlanRulesCarriesCommentHygiene(t *testing.T) {
 	assert.Contains(t, body, "criterion: comment_policy_absent")
 	assert.Contains(t, body, "`category: other`")
 	assert.NotContains(t, body, "convention_deviation")
+
+	// Everything about this rule that can be checked without a live reviewer
+	// IS checked here. The e2e tests below assert that a reviewer acts on
+	// these instructions; these assert that the instructions are present and
+	// say what they are supposed to say. Only the former needs credentials,
+	// so only the former can be skipped -- which is why the wording contract
+	// lives at this tier.
+	assert.Contains(t, body, "Comments: anti-tangent-protocol implementer.md \u00a74.4",
+		"the canonical pointer line must appear verbatim; authoring.md and the e2e fixture copy it")
+	assert.Contains(t, body, "Emit at most ONE finding for the whole plan",
+		"consolidation is what keeps a three-fence plan off warn")
+	assert.Contains(t, body, "severity: minor")
+	for _, exemption := range []string{"DIFF", "EXPECTED OUTPUT", "TEST FIXTURE"} {
+		assert.Contains(t, body, exemption,
+			"each fence exemption must be named in the rule, not implied")
+	}
 }
 ```
 
@@ -2259,11 +2290,12 @@ const planBody = "# P\n\n" + "###" + " Task 1: Add a helper\n\n" +
 	"**Acceptance criteria:**\n- [ ] Helper() exists\n\n" +
 	"**Steps:**\n\n- [ ] Write it\n"
 
-// The pointer is written EXACTLY as plan_rules.tmpl prescribes it, section
-// sign included. A fixture that paraphrases the accepted form would test a
-// looser rule than the template states.
+// The canonical pointer line from plan_rules.tmpl, byte for byte. The
+// template also accepts equivalent wordings, but a fixture asserting the
+// canonical form is what pins the form the documentation tells authors to
+// paste.
 const policyPointer = "## Global Constraints\n\n" +
-	"Comments: anti-tangent-protocol `implementer.md` \u00a74.4.\n\n"
+	"Comments: anti-tangent-protocol implementer.md \u00a74.4\n\n"
 
 // A plan naming the policy pointer must draw no policy finding; the same plan
 // without it must draw exactly one, at major. The severity is the load-bearing
@@ -2351,7 +2383,8 @@ instead of argued about.
 
 ```bash
 for i in 1 2 3 4 5; do
-  go test -tags=e2e ./internal/mcpsrv/... -run TestCommentPolicyFindingE2E -count=1 \
+  go test -tags=e2e ./internal/mcpsrv/... -count=1 \
+    -run 'TestCommentPolicyFindingE2E|TestCommentHygieneFenceFindingE2E' \
     || echo "RUN $i FAILED"
 done
 ```
@@ -2397,6 +2430,7 @@ git commit -m "feat(prompts): flag change-history comments in normative plan fen
 **Acceptance Criteria:**
 - [ ] `core.md` describes the new ladder and is **at or under 15,891 bytes**
 - [ ] `implementer.md` no longer instructs `{"ran": false, "skip_reason": "lightweight task"}` and is **at or under 15,593 bytes**
+- [ ] `implementer.md` tells lightweight tasks to **run** `analyze_change_set` under `required` mode — skipping the companion calls is guidance for the unset mode only. Anything else walks implementers straight into a major, since an unevidenced skip is now graded exactly as silence
 - [ ] `controller.md` carries the round-N caveat and stays under 16,000 bytes
 - [ ] `README.md:329` describes the new ladder including `skip_evidence`
 - [ ] `CLAUDE.md`'s "silences the whole close-time hook" sentence matches the new switch behaviour
@@ -2432,7 +2466,11 @@ Delete the phrase "recorded in the plan-run ledger; does not block" — a lightw
 Replace the whole `**Lightweight mode and ANTI_TANGENT_CODESCENE=required.**` paragraph with:
 
 ```markdown
-**Lightweight mode and `ANTI_TANGENT_CODESCENE=required`.** Lightweight tasks skip the CodeScene MCP companion calls (`pre_commit_code_health_safeguard` / `analyze_change_set`) — there is nothing meaningful for static analysis on a trivial doc edit. That is independent of the `codescene` argument, which `required` mode demands on every call, lightweight included: the mode is an operator assertion that CodeScene is present on this host. Being a lightweight task is not a skip reason. Pass a real `analyze_change_set` result, or `{"ran": false, "skip_reason": "…", "skip_evidence": "<the failing tool's own error text>"}`. A skip with no `skip_evidence` draws a major, exactly as omitting the argument does.
+**Lightweight mode and `ANTI_TANGENT_CODESCENE=required`.** What lightweight mode changes depends on the CodeScene mode.
+
+With `ANTI_TANGENT_CODESCENE` unset, lightweight tasks skip the CodeScene MCP companion calls (`pre_commit_code_health_safeguard` / `analyze_change_set`) — there is nothing meaningful for static analysis on a trivial doc edit — and the `codescene` argument is optional.
+
+Under `ANTI_TANGENT_CODESCENE=required` they do not. The mode is an operator assertion that CodeScene is present on this host, so **run `analyze_change_set` and submit its result, on a lightweight task exactly as on any other**. Being lightweight is not a reason to skip it. `{"ran": false, "skip_reason": "…", "skip_evidence": "<the failing tool's own error text>"}` is for a run that was attempted and failed, not for one that was never attempted; a skip carrying no `skip_evidence` draws a major, exactly as omitting the argument does.
 ```
 
 - [ ] **Step 3a: Check the two ceilings immediately**
@@ -2506,9 +2544,15 @@ In `docs/protocol/authoring.md`, in the section on what a plan must contain, add
 ```markdown
 **State the comment policy, or point at it.** A plan is the one artifact every implementing
 subagent reads, and an implementer working without this plugin loaded has no comment policy
-otherwise. Either restate the policy in the plan's constraints section, or carry one line:
-`Comments: anti-tangent-protocol implementer.md §4.4`. `validate_plan` emits a plan-level
-`major` (`criterion: comment_policy_absent`) when a plan carries neither.
+otherwise. Either restate the policy in the plan's constraints section, or carry the canonical pointer line,
+byte for byte:
+
+```
+Comments: anti-tangent-protocol implementer.md §4.4
+```
+
+`validate_plan` emits a plan-level `major` (`criterion: comment_policy_absent`) when a plan carries
+neither. Equivalent wordings are accepted, but this is the line to paste.
 ```
 
 `authoring.md` is 8,459 bytes with 7,541 of headroom, so this is unconstrained — but it is still a protocol part and resyncs with the rest in the next step.
@@ -2557,7 +2601,9 @@ git commit -m "docs: correct the ladder, the kill switches, and the plan-round c
 - [ ] `anti-tangent-guard` is `0.3.0` in both its `plugin.json` and `marketplace.json`
 - [ ] `anti-tangent-protocol` is `0.2.2` in both
 - [ ] `VERSION` is untouched
-- [ ] The `e2e`-tagged reviewer tests are run when provider keys are present, and an explicit SKIPPED line is recorded when they are not — `go test -race ./...` does not build them
+- [ ] Both `e2e`-tagged reviewer tests run five times when provider keys are present, and the pass count is written to a committed result file — `go test -race ./...` does not build them
+- [ ] When keys are absent the same file records SKIPPED with the reason, so the gap is durable rather than a line that scrolled past
+- [ ] The branch check distinguishes three outcomes — entry present, entry missing, not a version branch — because CI skips it in the third case
 - [ ] The branch-name-to-changelog check the goal names is actually executed, not assumed
 
 **Verify:** `git diff --stat VERSION` → empty; `jq -r '.plugins[] | "\(.name) \(.version)"' .claude-plugin/marketplace.json` matches each `plugin.json`; and the branch-name-to-changelog check in Step 4a reports the entry present for 0.20.0
@@ -2623,16 +2669,30 @@ behavioural coverage G11 and G8's fence rule have — are excluded from that lin
 separately when provider credentials are present, and record the outcome either way:
 
 ```bash
+NOTE=docs/superpowers/plans/2026-09-10-anti-tangent-v0.20.0.e2e-result.md
 if [ -n "${ANTHROPIC_API_KEY:-}${OPENAI_API_KEY:-}${GOOGLE_API_KEY:-}" ]; then
-  go test -tags=e2e ./internal/mcpsrv/... \
-    -run 'TestCommentPolicyFindingE2E|TestCommentHygieneFenceFindingE2E' -count=1
+  PASSES=0
+  for i in 1 2 3 4 5; do
+    if go test -tags=e2e ./internal/mcpsrv/... -count=1 \
+         -run 'TestCommentPolicyFindingE2E|TestCommentHygieneFenceFindingE2E'; then
+      PASSES=$((PASSES + 1))
+    fi
+  done
+  printf '# v0.20.0 reviewer e2e result\n\nRan: %s\nModel: %s\nPasses: %d/5\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${ANTI_TANGENT_MODEL:-<default>}" "$PASSES" > "$NOTE"
+  [ "$PASSES" -eq 5 ] || echo "NOT STABLE: $PASSES/5 — tighten plan_rules.tmpl before merging"
 else
-  echo "SKIPPED: e2e reviewer tests — no provider key set. G11 and the fence rule ship unverified."
+  printf '# v0.20.0 reviewer e2e result\n\nRan: %s\nSKIPPED: no provider key set.\nG11 and the fence rule ship without behavioural verification.\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$NOTE"
+  cat "$NOTE"
 fi
+git add "$NOTE"
 ```
 
-A skip here is a legitimate outcome, but it must be stated in the release notes for this branch
-rather than passing silently — "all tests pass" is false if the only test of a new gate never ran.
+Five runs, not one, because Task 9 sets five consecutive passes as the reliability bar and this is
+the only place both tests are run together. The result file is committed with the release: a skip
+is a legitimate outcome, but "all tests pass" is a false claim if the only behavioural test of a
+new gate never ran, and a durable record is what stops that claim being made by accident later.
 
 - [ ] **Step 4a: Confirm the CI check the goal names**
 
@@ -2642,12 +2702,24 @@ is reproducible locally:
 
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-[[ "$BRANCH" =~ ^version/([0-9]+\.[0-9]+\.[0-9]+)$ ]] \
-  && grep -q "^## \[${BASH_REMATCH[1]}\]" CHANGELOG.md \
-  && echo "changelog entry present for ${BASH_REMATCH[1]}" \
-  || echo "MISSING changelog entry"
+if [[ ! "$BRANCH" =~ ^version/([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+  echo "NOT A VERSION BRANCH ($BRANCH) — CI skips this check, and so does this release"
+  exit 1
+fi
+VERSION="${BASH_REMATCH[1]}"
+if grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+  echo "changelog entry present for $VERSION"
+else
+  echo "MISSING changelog entry for $VERSION"
+  exit 1
+fi
 ```
 Expected: `changelog entry present for 0.20.0`.
+
+The three outcomes are kept distinct on purpose. CI *skips* this check on a non-version branch, so
+a bare `|| echo "MISSING"` would report a missing entry for a branch the check never applied to —
+and this release must be cut from `version/0.20.0` regardless, so a non-version branch is a
+precondition failure rather than a pass.
 
 - [ ] **Step 5: Commit**
 
