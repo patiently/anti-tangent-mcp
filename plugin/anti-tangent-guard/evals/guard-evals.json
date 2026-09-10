@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (119 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (127 cases)",
   "evals": [
     {
       "id": 1,
@@ -1669,6 +1669,145 @@
       ],
       "expected_exit": 0,
       "reason": "both concerns disabled is the only early exit"
+    },
+    {
+      "id": 120,
+      "name": "final-files-untracked-blocks",
+      "setup_script": "mkdir -p r && cd r && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/r/new.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": ["COMMENTS CARRYING CHANGE HISTORY"],
+      "reason": "an untracked file submitted as final_files has every line added"
+    },
+    {
+      "id": 121,
+      "name": "final-files-tracked-unmodified-allows",
+      "setup_script": "mkdir -p r2 && cd r2 && git init -q . && git config user.email t@t && git config user.name t && printf '// fixes #1\\npackage x\\n' > old.go && git add old.go && git commit -qm i",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/r2/old.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a pre-existing comment in an unmodified tracked file is not an added line"
+    },
+    {
+      "id": 122,
+      "name": "final-files-outside-repo-skipped",
+      "setup_script": "mkdir -p nr && printf '// fixes #1\\npackage x\\n' > nr/loose.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/nr/loose.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a path outside any repository cannot be classified and is skipped"
+    },
+    {
+      "id": 123,
+      "name": "final-files-nested-worktree-resolves-against-the-worktree",
+      "setup_script": "mkdir -p w && cd w && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && git worktree add -q .wt/feat -b feat && printf '// fixes #1\\npackage x\\n' > .wt/feat/tracked.go && git -C .wt/feat add tracked.go && git -C .wt/feat commit -qm base && printf '// fixes #1\\npackage x\\n\\nfunc F() {}\\n' > .wt/feat/tracked.go",
+      "hook_cwd": "{{TMPDIR}}/w",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/w/.wt/feat/tracked.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "THIS FIXTURE DISCRIMINATES, which the obvious one does not. The worktree file is TRACKED and already carries `// fixes #1`; the only line this task adds is clean. Rooted correctly at the file's own directory, git diffs it, sees one harmless added line, and the close is allowed. Rooted at the hook cwd -- the main checkout -- ls-files reports the path unmatched, the hook treats every line as new, and the pre-existing comment blocks. Expecting exit 0 is therefore a test only the correct rooting passes. An untracked fixture expecting exit 2 would pass under BOTH implementations and could never fail."
+    },
+    {
+      "id": 124,
+      "name": "final-files-gitignored-path-skipped",
+      "setup_script": "mkdir -p g && cd g && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && printf 'build/\\n' > .gitignore && git add seed .gitignore && git commit -qm i && mkdir -p build && printf '// fixes #1\\npackage x\\n' > build/gen.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/g/build/gen.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a gitignored path exits 1 from ls-files like an untracked one; check-ignore is what separates them"
+    },
+    {
+      "id": 125,
+      "name": "final-files-diff-wins-even-when-it-adds-nothing",
+      "setup_script": "mkdir -p d && cd d && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/seed\\n-gone\\n\", \"final_files\": [{\"path\": \"{{TMPDIR}}/d/new.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a submitted diff with zero added lines still wins; falling back to final_files here would block on a comment the diff's author never claimed"
+    },
+    {
+      "id": 126,
+      "name": "final-files-empty-diff-still-wins",
+      "setup_script": "mkdir -p e && cd e && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"\", \"final_files\": [{\"path\": \"{{TMPDIR}}/e/new.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "an EXPLICITLY PRESENT but empty final_diff must still win. This is distinct from the deletion-diff case: that one tests a diff that parses to nothing, this one tests a field that is falsy. Precedence keys on presence, so the dirty final_files entry must not be scanned"
+    },
+    {
+      "id": 127,
+      "name": "final-files-honours-overridden-diff-prefixes",
+      "setup_script": "mkdir -p m && cd m && git init -q . && git config user.email t@t && git config user.name t && git config diff.mnemonicPrefix true && git config diff.noprefix false && printf 'package x\\n' > mod.go && git add mod.go && git commit -qm i && printf '// fixes #1\\npackage x\\n' > mod.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {"status": "completed", "taskId": "1"},
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/m/mod.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": ["COMMENTS CARRYING CHANGE HISTORY"],
+      "reason": "with diff.mnemonicPrefix set the repo emits `+++ w/`; the pinned -c flags are what keep the hunk parser from silently seeing zero files"
     }
   ]
 }

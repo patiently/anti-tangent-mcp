@@ -152,7 +152,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=119
+EXPECTED_CASE_COUNT=127
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
@@ -356,6 +356,46 @@ run_case() {
         done < <(jq -r ".evals[$idx].tmpdir_symlink | keys[]" "$EVALS_FILE")
     fi
 
+    # Optional "setup_script": a bash snippet run in this case's {{TMPDIR}}
+    # before the hook. The fixture hooks above can only place file CONTENT;
+    # a case asserting behaviour that depends on git's own view of a path
+    # (tracked, untracked, ignored, in a worktree) needs real repository
+    # state, which only running git can produce. Failures are fatal to the
+    # case rather than silent: a case whose setup did not run would assert
+    # against the wrong world and pass for the wrong reason.
+    # Optional "hook_cwd": run the hook from this directory instead of
+    # HOOK_CWD. The worktree case turns on the hook's cwd differing from the
+    # file's own directory, which is the whole point of rooting git at the
+    # file; a case that cannot move the cwd cannot express it.
+
+    local setup_script
+    setup_script=$(jq -r ".evals[$idx].setup_script // empty" "$EVALS_FILE")
+    if [[ -n "$setup_script" ]]; then
+        setup_script="${setup_script//\{\{TMPDIR\}\}/$case_tmp}"
+        if ! ( cd "$case_tmp" && bash -c "$setup_script" ) >/dev/null 2>&1; then
+            echo "  SETUP FAILED for case $idx" >&2
+            return 1
+        fi
+    fi
+
+    # Optional "hook_cwd": run the hook from here instead of HOOK_CWD. The
+    # worktree case turns on the hook's cwd differing from the file's own
+    # directory, which is the whole point of rooting git at the file.
+    #
+    # Resolved AFTER setup_script, never before: the directory a case names
+    # here is usually one its own setup just created, so validating first
+    # would reject every such case before it could exist.
+    local hook_cwd_override case_cwd
+    hook_cwd_override=$(jq -r ".evals[$idx].hook_cwd // empty" "$EVALS_FILE")
+    hook_cwd_override="${hook_cwd_override//\{\{TMPDIR\}\}/$case_tmp}"
+    case_cwd="$HOOK_CWD"
+    if [[ -n "$hook_cwd_override" ]]; then
+        # A named cwd that does not exist must fail loudly. Falling back to
+        # HOOK_CWD would silently assert the opposite of the case's intent.
+        [[ -d "$hook_cwd_override" ]] || { echo "  BAD hook_cwd: $hook_cwd_override" >&2; return 1; }
+        case_cwd="$hook_cwd_override"
+    fi
+
     local stdin_raw
     stdin_raw=$(jq -r ".evals[$idx].stdin_raw // empty" "$EVALS_FILE")
 
@@ -434,11 +474,11 @@ run_case() {
     if [[ -n "$path_exclude" ]]; then
         local stub
         stub=$(build_stub_dir "$path_exclude")
-        ( cd "$HOOK_CWD" && PATH="$stub" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        ( cd "$case_cwd" && PATH="$stub" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     elif [[ ${#env_assignments[@]} -gt 0 ]]; then
-        ( cd "$HOOK_CWD" && env "${env_assignments[@]}" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        ( cd "$case_cwd" && env "${env_assignments[@]}" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     else
-        ( cd "$HOOK_CWD" && "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        ( cd "$case_cwd" && "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     fi
 
     if [[ "$exit_code" == "124" ]]; then

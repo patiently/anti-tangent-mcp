@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
@@ -78,6 +79,42 @@ class NonMainThread(unittest.TestCase):
         r = subprocess.run([sys.executable, "-c", code], capture_output=True,
                            text=True, timeout=30)
         self.assertEqual(r.stdout.strip(), "True", r.stderr)
+
+
+class IndeterminateCheckIgnore(unittest.TestCase):
+    # ls-files says "unmatched" and check-ignore then fails to answer. The
+    # path must be SKIPPED: reading an unanswerable status as "not ignored"
+    # would scan every line of a file the hook never classified.
+    def test_unanswerable_check_ignore_skips_the_path(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+
+        calls = []
+        real_git = g._git
+
+        def fake_git(cwd, *args):
+            calls.append(args[0])
+            if args[0] == "ls-files":
+                return 1, ""       # unmatched
+            if args[0] == "check-ignore":
+                return 128, ""     # could not answer
+            raise AssertionError("unexpected git call: %r" % (args,))
+
+        # The helper skips a path whose PARENT does not exist before it ever
+        # reaches git, so the fixture needs a real directory or this test
+        # passes without exercising the branch at all.
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "y.go")
+        with open(path, "w") as fh:
+            fh.write("// fixes #1\n")
+        g._git = fake_git
+        try:
+            out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        finally:
+            g._git = real_git
+        self.assertEqual(out, {}, "an unanswerable check-ignore must skip, not scan")
+        self.assertEqual(calls, ["ls-files", "check-ignore"],
+                         "no diff or content read may follow an unanswerable status")
 
 
 if __name__ == "__main__":

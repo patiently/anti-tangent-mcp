@@ -352,11 +352,25 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
         sys.path.insert(0, os.path.join(os.environ.get("ATG_ROOT", ""), "hooks"))
         from comment_scan import violations as scan_violations
         from comment_scan import read_text_capped
+        from git_added_lines import final_files_added_lines
     except Exception:
         scan_violations = None
         comment_scan_unavailable = True
     if scan_violations is not None:
-        added_by_path = diff_added_lines(in_window_completions[-1])
+        last_completion = in_window_completions[-1]
+        # Precedence is decided by what was SUBMITTED, never by what parsed.
+        # A diff can legitimately yield no added lines -- a pure deletion, or
+        # a shape this parser does not recognise -- and falling back on an
+        # empty result would scan the working tree for a submission whose
+        # author already told us which lines were theirs.
+        # Presence, not truthiness. An explicitly submitted empty final_diff
+        # is still a statement about which lines the author added -- reading
+        # it as absent would reconstruct from the working tree instead.
+        if ("final_diff" in last_completion or
+                "final_diff_path" in last_completion):
+            added_by_path = diff_added_lines(last_completion)
+        else:
+            added_by_path = final_files_added_lines(last_completion)
         for fpath, added in added_by_path.items():
             for line, why in scan_violations(fpath, added):
                 comment_violations.append({"path": fpath, "line": line, "why": why})
