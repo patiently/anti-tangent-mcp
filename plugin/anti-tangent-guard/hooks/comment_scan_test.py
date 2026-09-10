@@ -216,5 +216,68 @@ class WalkBudgetIsReported(unittest.TestCase):
                          "a walk that finished must not claim it was cut short")
 
 
+class DroppedOptionalLocksIsReported(unittest.TestCase):
+    # A git older than 2.15 rejects --no-optional-locks and the walk drops the
+    # flag for the rest of the process, so every call after that refreshes the
+    # index this walk promised to leave alone. Nothing in the returned dict
+    # moves, so the degraded run reads exactly like a healthy one unless the
+    # stats argument carries it.
+    def test_a_usage_error_drops_the_flag_and_says_so(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "a.go")
+        with open(path, "w") as fh:
+            fh.write("// fixes #1\npackage x\n")
+        inp = {"final_files": [{"path": path}]}
+
+        class Completed(object):
+            def __init__(self, returncode, stdout):
+                self.returncode, self.stdout = returncode, stdout
+
+        class Shim(object):
+            def __init__(self, run):
+                self.run = run
+
+        def answer(argv):
+            if "ls-files" in argv:
+                return Completed(1, "")            # unmatched -> untracked
+            if "check-ignore" in argv:
+                return Completed(1, "")            # definitely not ignored
+            if "rev-parse" in argv:
+                return Completed(0, tmp + "\n")
+            return Completed(128, "")
+
+        def modern_git(argv, **kwargs):
+            return answer(argv)
+
+        def ancient_git(argv, **kwargs):
+            if "--no-optional-locks" in argv:
+                return Completed(129, "")          # rejects the whole command line
+            return answer(argv)
+
+        real_subprocess = g.subprocess
+        held = list(g._LOCK_FLAG)
+        try:
+            g.subprocess = Shim(modern_git)
+            g._LOCK_FLAG[:] = held
+            healthy = {}
+            g.final_files_added_lines(inp, stats=healthy)
+
+            g.subprocess = Shim(ancient_git)
+            g._LOCK_FLAG[:] = held
+            degraded = {}
+            g.final_files_added_lines(inp, stats=degraded)
+        finally:
+            g.subprocess = real_subprocess
+            g._LOCK_FLAG[:] = held
+
+        self.assertFalse(healthy.get("optional_locks_dropped"),
+                         "a git that accepted the flag must not be reported degraded")
+        self.assertTrue(degraded.get("optional_locks_dropped"),
+                        "a walk that gave up the flag must say so")
+
+
 if __name__ == "__main__":
     unittest.main()

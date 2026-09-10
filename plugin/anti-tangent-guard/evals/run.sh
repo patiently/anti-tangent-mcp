@@ -156,11 +156,21 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # trace line must show submitted>0 with scanned=0, which is what separates
 # "there was nothing to scan" from "the scan never ran".
 #
+# Four more pin how that scan divides a diff into files, which turns on one
+# irreducible ambiguity: an added line whose content starts with "++ " reaches
+# the parser as the bytes "+++ ", byte-identical to a file header, and only
+# the line count the enclosing hunk declared for itself tells them apart.
+# The four are a bare multi-file diff with no "diff --git" or "--- " line to
+# close the first hunk, an added line that really does start with "++ ", a
+# "+++ /dev/null" deletion header that must not enter the scan as a path, and
+# a hunk that delivers fewer lines than it declared, after which the next file
+# header must still be read as one.
+#
 # Both checks below must hold or the count assertion is vacuous: the JSON
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=129
+EXPECTED_CASE_COUNT=133
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and

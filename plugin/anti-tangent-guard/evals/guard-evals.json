@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (127 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (133 cases)",
   "evals": [
     {
       "id": 1,
@@ -1847,7 +1847,127 @@
       "expected_file_contains": {
         "{{TMPDIR}}/trace.log": ["scan | src=final_files submitted=1 scanned=0 lines=0"]
       },
-      "reason": "a completion whose files are all committed yields no added lines, so the close passes -- and the exit code alone cannot tell that apart from a scan that never ran at all. The trace line has to carry submitted>0 with scanned=0, and no budget marker, or the two stay indistinguishable in the log"
+      "reason": "a completion whose files are all committed yields no added lines, so the close passes -- and the exit code alone cannot tell that apart from a scan that never ran at all. The trace line has to carry submitted>0 with scanned=0, or the two stay indistinguishable in the log"
+    },
+    {
+      "id": 130,
+      "name": "close-headerless-multi-file-diff-blocks",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1 @@\\n+plain\\n+++ b/pkg/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=2 lines=2"
+        ]
+      },
+      "reason": "a diff that names its files with a bare +++ header and no diff --git or --- line -- the shape every legacy final_diff case in this table uses -- must still start a new file at the second header. A parser that reads a +++ inside an open hunk as content swallows that header, drops pkg/a.go from the result entirely and files its comment under notes.txt, which has no scannable extension, so the close passes"
+    },
+    {
+      "id": 131,
+      "name": "close-dev-null-header-is-not-a-scanned-path",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/gone.go\\n+++ /dev/null\\n@@ -1 +0,0 @@\\n-// fixes #99\\n--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+plain line\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=1 scanned=1 lines=1"
+        ]
+      },
+      "reason": "the +++ side of a deletion names /dev/null, a file that does not exist after the change. Entering it as a path makes the trace claim the scan considered two files when there was only ever one, and the deleted file's own comment is a removed line the scan must never read as added"
+    },
+    {
+      "id": 132,
+      "name": "close-added-line-starting-plus-plus-blocks",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,3 @@\\n package x\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=1 scanned=1 lines=2"
+        ]
+      },
+      "reason": "an added line whose content starts with ++ reaches the parser as the bytes +++ , identical to a file header. The open hunk still owes added lines, so it is body text and both its lines belong to pkg/a.go. A parser that reads it as a header re-points the scan at notes.txt, which has no scannable extension, and the comment on the next line is never scanned"
+    },
+    {
+      "id": 133,
+      "name": "close-truncated-hunk-does-not-swallow-next-file",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1,9 @@\\n+plain\\n+++ b/pkg/a.go\\n@@ -0,0 +1 @@\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=2 lines=2"
+        ]
+      },
+      "reason": "the hunk declares nine added lines and delivers one, so counting alone would still be inside it at the next file header and would swallow every file after the cut. A hunk header cannot appear in a hunk body, so a +++ line followed by one ends the hunk instead"
     }
   ]
 }

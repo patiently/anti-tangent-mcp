@@ -61,10 +61,12 @@ def _git(cwd, *args):
     return rc, out
 
 
-# A wall-clock bound on the whole per-path walk. Each path can cost two git
-# calls of up to ten seconds each and nothing caps how many paths a
-# completion names, so a stalled git -- index.lock contention, a network
-# filesystem -- would otherwise hold the developer's session for minutes.
+# A wall-clock bound on the whole per-path walk. An untracked path in a parent
+# directory not seen yet costs three git calls -- ls-files, check-ignore,
+# rev-parse -- of up to ten seconds each, so the walk can overrun this bound by
+# thirty seconds before it notices; nothing caps how many paths a completion
+# names, so without the bound a stalled git -- index.lock contention, a network
+# filesystem -- would hold the developer's session for minutes.
 # Running out stops the walk and returns what was gathered: this scan is
 # defence in depth, and a partial answer must never become a blocked close.
 GIT_BUDGET_SECONDS = 20.0
@@ -131,6 +133,9 @@ def final_files_added_lines(inp, deadline=None, stats=None):
     "vendored_skipped" counts the paths the exemption above dropped. Both
     outcomes shrink the result silently, so without them a walk that never
     finished is indistinguishable from one that found nothing.
+    "optional_locks_dropped" says the git in front of this walk was too old for
+    --no-optional-locks and every call ran without it, which leaves the
+    developer index open to a refresh this walk means not to cause.
     """
     out = {}
     roots = {}
@@ -180,4 +185,5 @@ def final_files_added_lines(inp, deadline=None, stats=None):
     if stats is not None:
         stats["truncated"] = truncated
         stats["vendored_skipped"] = vendored_skipped
+        stats["optional_locks_dropped"] = not _LOCK_FLAG
     return out
