@@ -38,6 +38,8 @@
 # from the scan.
 set -uo pipefail
 
+unset ANTI_TANGENT_TICKET_PATTERN
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLASS_FILE="$SCRIPT_DIR/fp-class.tsv"
 # The template ends in its run of X's, and so carries no extension: BSD/macOS

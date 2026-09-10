@@ -37,6 +37,10 @@ import os
 import subprocess
 import sys
 
+# The false-positive gate must measure the shipped tells, not whatever the
+# developer happens to have configured for their own project.
+os.environ.pop("ANTI_TANGENT_TICKET_PATTERN", None)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "hooks"))
 from comment_scan import scannable, violations  # noqa: E402

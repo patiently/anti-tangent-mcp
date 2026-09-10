@@ -3,8 +3,10 @@
 Scans ADDED comment lines in source files for change-history references.
 Behaviour and invariants belong in comments; change history belongs in git.
 """
+import contextlib
 import os
 import re
+import signal
 import stat
 from collections import Counter
 
@@ -283,6 +285,79 @@ TELLS = (
     ), "a version reference"),
 )
 
+# ANTI_TANGENT_TICKET_PATTERN is an optional project-supplied tell for the
+# local tracker-key shape. There is deliberately NO default: measured over
+# real comment lines, a generic `[A-Z]+-\d+` matches hardware identifiers
+# (HDMI-0, DP-0) and prose labels (ROUND-1, ROUND-8) far more often than a
+# tracker key, and an allowlist cannot anticipate those. An unconfigured
+# project therefore gets no ticket tell at all, and a reported tracker-key
+# shape goes unflagged here.
+_TICKET_PATTERN_MAX_LEN = 200
+
+
+def _ticket_tell():
+    pat = os.environ.get("ANTI_TANGENT_TICKET_PATTERN", "")
+    if not pat or len(pat) > _TICKET_PATTERN_MAX_LEN:
+        return None
+    try:
+        return (re.compile(pat), "a tracker reference")
+    except re.error:
+        return None
+
+
+_ticket = _ticket_tell()
+if _ticket is not None:
+    TELLS = TELLS + (_ticket,)
+
+# A wall-clock bound on one call to violations(). ANTI_TANGENT_TICKET_PATTERN
+# is operator-supplied and Python's re backtracks, so a pattern can take
+# unbounded time on a hostile line. Structural checks do not close this: a
+# nested-quantifier test misses (a|aa)+ and (a|a)*, and (a+)+$ over a
+# forty-character line still hangs. Only a timer bounds it, and it covers the
+# built-in TELLS too.
+#
+# Installing the timer can fail for reasons that are not the scanner's
+# business: SIGALRM does not exist on Windows, and on Unix `signal.signal`
+# raises in any thread but the main one even though the constant is present.
+# Both cases run the scan UNBOUNDED rather than failing it -- a missing
+# deadline must not become a missing scan, which is what letting the error
+# reach violations()'s fail-open handler would do.
+#
+# The handler is saved and restored, but a previously ARMED ITIMER_REAL is
+# not: the timer is simply disarmed on the way out. That is sound only
+# because this runs in a hook process that owns its own lifetime and arms no
+# other real-time timer. A caller that did would need its remaining time
+# read and re-armed here.
+SCAN_TIMEOUT_SECONDS = 2.0
+
+
+class _ScanTimeout(Exception):
+    pass
+
+
+@contextlib.contextmanager
+def scan_deadline(seconds=SCAN_TIMEOUT_SECONDS):
+    def _fire(signum, frame):
+        raise _ScanTimeout()
+
+    try:
+        previous = signal.signal(signal.SIGALRM, _fire)
+    except (AttributeError, ValueError, OSError):
+        # No SIGALRM, or not the main thread. Run without a bound.
+        yield
+        return
+    try:
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+    except (AttributeError, ValueError, OSError):
+        signal.signal(signal.SIGALRM, previous)
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
 
 def openers(path):
     return LINE_COMMENT.get(os.path.splitext(path)[1].lower(), DEFAULT_COMMENT)
@@ -293,16 +368,25 @@ def scannable(path):
 
 
 def violations(path, added_lines):
-    """Return [(line, why)] for added comment lines carrying change history."""
+    """Return [(line, why)] for added comment lines carrying change history.
+
+    Anything that stops the scan completing — the deadline above, or any
+    exception from a caller-supplied pattern — yields no violations. This
+    module's standing rule is that an undecidable scan allows the write.
+    """
     if not scannable(path):
         return []
     out = []
-    for raw in added_lines:
-        for span in comment_spans(path, raw):
-            hit = next((why for pat, why in TELLS if pat.search(span)), None)
-            if hit is not None:
-                out.append((raw.strip(), hit))
-                break
+    try:
+        with scan_deadline():
+            for raw in added_lines:
+                for span in comment_spans(path, raw):
+                    hit = next((why for pat, why in TELLS if pat.search(span)), None)
+                    if hit is not None:
+                        out.append((raw.strip(), hit))
+                        break
+    except Exception:
+        return []
     return out
 
 

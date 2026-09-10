@@ -152,7 +152,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=110
+EXPECTED_CASE_COUNT=115
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
@@ -408,19 +408,34 @@ run_case() {
         done < <(jq -r ".evals[$idx].env | to_entries[] | \"\(.key)=\(.value)\"" "$EVALS_FILE")
     fi
 
-    local path_exclude bash_path
+    local path_exclude bash_path timeout_prefix=()
     path_exclude=$(jq -r ".evals[$idx].path_stub_exclude // empty" "$EVALS_FILE")
     bash_path=$(command -v bash)
+
+    # Optional "case_timeout_seconds": wrap the hook in `timeout` so a case
+    # whose failure mode is a hang fails as a case instead of stalling the
+    # suite. `timeout` returns 124 on expiry, which no hook uses, so a
+    # timeout is distinguishable from every real exit status below.
+    local case_timeout
+    case_timeout=$(jq -r ".evals[$idx].case_timeout_seconds // empty" "$EVALS_FILE")
+    if [[ -n "$case_timeout" && "$case_timeout" =~ ^[0-9]+$ ]] && command -v timeout >/dev/null 2>&1; then
+        timeout_prefix=(timeout "$case_timeout")
+    fi
 
     local exit_code=0
     if [[ -n "$path_exclude" ]]; then
         local stub
         stub=$(build_stub_dir "$path_exclude")
-        ( cd "$HOOK_CWD" && PATH="$stub" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        ( cd "$HOOK_CWD" && PATH="$stub" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     elif [[ ${#env_assignments[@]} -gt 0 ]]; then
-        ( cd "$HOOK_CWD" && env "${env_assignments[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        ( cd "$HOOK_CWD" && env "${env_assignments[@]}" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     else
-        ( cd "$HOOK_CWD" && "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        ( cd "$HOOK_CWD" && "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+    fi
+
+    if [[ "$exit_code" == "124" ]]; then
+        echo "  TIMED OUT after ${case_timeout}s — the case hung rather than returning" >&2
+        return 1
     fi
 
     TOTAL=$((TOTAL + 1))
@@ -518,6 +533,9 @@ run_case() {
 }
 
 # ── Main ──
+
+echo "== module tests =="
+python3 -m unittest discover -s "$HOOK_DIR" -p '*_test.py' -v || exit 1
 
 # check-comment-write carries a copy of comment_scan.py's SCAN_EXTS so it can
 # decide "this file is never scanned" without paying for a python3 start. That

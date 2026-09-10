@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (110 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (115 cases)",
   "evals": [
     {
       "id": 1,
@@ -1537,6 +1537,68 @@
         "a task reference"
       ],
       "reason": "the delimiter walk used for mid-line `#` requires whitespace before it, which a `#` sitting at column zero has not got -- comment_spans handles a line-leading `#` as its own case precisely so this shape is not missed. A shell comment starting at the very first column of the line must still block on a genuine task reference"
+    },
+    {
+      "id": 111,
+      "name": "comment-write-ticket-pattern-set-blocks",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * ABC-1234: the inbound keyword.\\n */\\nobject X\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a tracker reference"
+      ],
+      "reason": "a configured project ticket pattern is a tell"
+    },
+    {
+      "id": 112,
+      "name": "comment-write-ticket-pattern-unset-allows",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * ABC-1234: the inbound keyword.\\n */\\nobject X\\n\"}}",
+      "expected_exit": 0,
+      "reason": "there is no default ticket tell; unconfigured projects are unchanged"
+    },
+    {
+      "id": 113,
+      "name": "comment-write-ticket-pattern-uncompilable-ignored",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_TICKET_PATTERN": "ABC-(\\d+"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes task-42\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "an uncompilable pattern is dropped without disabling the other tells"
+    },
+    {
+      "id": 114,
+      "name": "comment-write-ticket-pattern-over-long-ignored",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes task-42\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "a pattern past the 200-character cap is ignored without disabling the other tells"
+    },
+    {
+      "id": 115,
+      "name": "comment-write-ticket-pattern-catastrophic-fails-open",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_TICKET_PATTERN": "(a+)+$"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "case_timeout_seconds": 20,
+      "reason": "the scan deadline bounds a backtracking pattern and fails open rather than hanging the hook"
     }
   ]
 }
