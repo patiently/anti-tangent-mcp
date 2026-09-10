@@ -601,6 +601,36 @@ func TestRenderPlanFindingsOnly_PlanQuality_InstructionPresent(t *testing.T) {
 	}
 }
 
+func TestPlanRulesCarriesCommentHygiene(t *testing.T) {
+	out, err := RenderPlan(PlanInput{PlanText: "# Plan\n\n### Task 1: do thing\n"})
+	require.NoError(t, err)
+	body := out.System + "\n" + out.User
+	assert.Contains(t, body, "Comment hygiene in normative code")
+	assert.Contains(t, body, "criterion: comment_hygiene")
+	assert.Contains(t, body, "Emit at most ONE finding")
+	// The policy gate is a major, and the category it is emitted under is the
+	// only one of the plausible choices that survives applySeverityFloor.
+	assert.Contains(t, body, "criterion: comment_policy_absent")
+	assert.Contains(t, body, "`category: other`")
+	assert.NotContains(t, body, "convention_deviation")
+
+	// Everything about this rule that can be checked without a live reviewer
+	// IS checked here. The e2e tests below assert that a reviewer acts on
+	// these instructions; these assert that the instructions are present and
+	// say what they are supposed to say. Only the former needs credentials,
+	// so only the former can be skipped -- which is why the wording contract
+	// lives at this tier.
+	assert.Contains(t, body, "Comments: anti-tangent-protocol implementer.md §4.4",
+		"the canonical pointer line must appear verbatim; authoring.md and the e2e fixture copy it")
+	assert.Contains(t, body, "Emit at most ONE finding for the whole plan",
+		"consolidation is what keeps a three-fence plan off warn")
+	assert.Contains(t, body, "severity: minor")
+	for _, exemption := range []string{"DIFF", "EXPECTED OUTPUT", "TEST FIXTURE"} {
+		assert.Contains(t, body, exemption,
+			"each fence exemption must be named in the rule, not implied")
+	}
+}
+
 func TestRenderPlanTasksChunk_DoesNotMentionPlanQuality(t *testing.T) {
 	out, err := RenderPlanTasksChunk(PlanChunkInput{
 		PlanText:   "# Sample plan\n\n### Task 1: A\n\n**Goal:** Test\n",
