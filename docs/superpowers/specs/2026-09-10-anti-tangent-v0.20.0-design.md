@@ -140,9 +140,16 @@ stays the backstop whenever a diff is present. The covered set is exactly three 
 continuation, a one-line `/* … */`, and a trailing comment — not "block comments" in general.
 
 **G3 — trailing comments, via a parity test that can only decline.** For a line that does *not*
-begin with an opener, take the text after the **last** `//` (or, in hash-family files, the last
-whitespace-preceded `#`) — but only when the counts of unescaped `"`, `'` and backtick before that
-position are **all even**. Otherwise scan nothing on that line.
+begin with an opener, walk its comment delimiters **left to right** and take the first whose
+preceding counts of unescaped `"`, `'` and backtick are **all even**. An odd count means that
+delimiter sits inside a string literal, so it is skipped and the walk continues.
+
+Left-to-right, not the last delimiter: taking the last would let a benign trailing comment hide a
+violating one earlier on the same line (`x = 1 /* fixes #1 */ // ok`). A `/* … */` span ends at its
+terminator and the walk **resumes after it**, so code between two comments is never scanned and a
+second comment on the line is not lost. A `//` or `#` span runs to end of line and ends the walk.
+In hash-family files the delimiter must be whitespace-preceded, so `${url#https://…}` is not a
+comment.
 
 The asymmetry is the point: an odd count means the delimiter is inside a string literal, and the
 line is skipped. Within the shapes this test models — single, double and backtick quoting with
