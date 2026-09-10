@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
@@ -124,9 +125,26 @@ class VendoredUntrackedPath(unittest.TestCase):
     # exemption is by directory name and applies only to the untracked
     # branch: a tracked file under vendor/ diffs to the lines someone here
     # actually changed, and those are fair game.
+    #
+    # The checkout itself lives under a directory named in the exemption
+    # list, which is the point: a repository cloned inside third_party/ (or a
+    # CI workspace under node_modules/) must still have its own files
+    # scanned. Matching the absolute path would exempt every untracked file
+    # in the repository, silently, since a skipped path never reaches the
+    # caller to be counted.
     def test_untracked_vendored_path_is_not_scanned(self):
         sys.path.insert(0, HOOKS)
         import git_added_lines as g
+
+        tmp = tempfile.mkdtemp()
+        root = os.path.join(tmp, "third_party", "checkout")
+        vendored_dir = os.path.join(root, "vendor", "lib")
+        os.makedirs(vendored_dir)
+        vendored = os.path.join(vendored_dir, "u.go")
+        own = os.path.join(root, "own.go")
+        for p in (vendored, own):
+            with open(p, "w") as fh:
+                fh.write("// fixes #1\npackage x\n")
 
         real_git = g._git
 
@@ -135,16 +153,10 @@ class VendoredUntrackedPath(unittest.TestCase):
                 return 1, ""       # unmatched -> untracked
             if args[0] == "check-ignore":
                 return 1, ""       # definitely not ignored
+            if args[0] == "rev-parse":
+                return 0, root + "\n"
             raise AssertionError("unexpected git call: %r" % (args,))
 
-        tmp = tempfile.mkdtemp()
-        vendored_dir = os.path.join(tmp, "vendor", "lib")
-        os.makedirs(vendored_dir)
-        vendored = os.path.join(vendored_dir, "u.go")
-        own = os.path.join(tmp, "own.go")
-        for p in (vendored, own):
-            with open(p, "w") as fh:
-                fh.write("// fixes #1\npackage x\n")
         g._git = fake_git
         try:
             out = g.final_files_added_lines(
@@ -154,6 +166,54 @@ class VendoredUntrackedPath(unittest.TestCase):
         self.assertEqual(sorted(out), [own],
                          "an untracked path under vendor/ must be skipped, and one "
                          "outside it must still be scanned")
+
+
+class WalkBudgetIsReported(unittest.TestCase):
+    # The walk returns a plain dict either way, so a budget that stopped it
+    # early looks exactly like a completion whose files were all committed.
+    # The caller traces one and blocks on neither, so the difference has to
+    # come out of the stats argument or it is lost.
+    def test_exhausted_budget_is_reported_and_a_finished_walk_is_not(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+
+        tmp = tempfile.mkdtemp()
+        paths = []
+        for name in ("a.go", "b.go"):
+            p = os.path.join(tmp, name)
+            with open(p, "w") as fh:
+                fh.write("// fixes #1\npackage x\n")
+            paths.append(p)
+        inp = {"final_files": [{"path": p} for p in paths]}
+
+        real_git = g._git
+
+        def fake_git(cwd, *args):
+            if args[0] == "ls-files":
+                return 1, ""
+            if args[0] == "check-ignore":
+                return 1, ""
+            if args[0] == "rev-parse":
+                return 0, tmp + "\n"
+            raise AssertionError("unexpected git call: %r" % (args,))
+
+        g._git = fake_git
+        try:
+            spent = {}
+            spent_out = g.final_files_added_lines(
+                inp, deadline=time.monotonic() - 1.0, stats=spent)
+            fresh = {}
+            fresh_out = g.final_files_added_lines(
+                inp, deadline=time.monotonic() + 60.0, stats=fresh)
+        finally:
+            g._git = real_git
+
+        self.assertEqual(spent_out, {}, "an exhausted budget scans nothing")
+        self.assertTrue(spent.get("truncated"),
+                        "a walk stopped by its budget must say so")
+        self.assertEqual(sorted(fresh_out), sorted(paths))
+        self.assertFalse(fresh.get("truncated"),
+                         "a walk that finished must not claim it was cut short")
 
 
 if __name__ == "__main__":

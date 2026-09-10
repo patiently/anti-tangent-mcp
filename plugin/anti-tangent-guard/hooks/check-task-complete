@@ -68,11 +68,12 @@
 # report text (README.md, "How much to trust each pass signal"). Across
 # blocks, the LAST one wins.
 #
-# THE DIRECT-CALL RESULT IS ALSO READ FOR ITS VERDICT: a real MCP tool result arrives JSON-MARSHALLED
-# (envelopeResult, internal/mcpsrv/handlers.go) — summary_block's newlines
-# survive only as "\n" escapes inside one JSON string, on one physical line,
-# so HEADER_RE below can never match a validate_completion tool_result's raw
-# text. Without more, that left the direct-call path — the one signal that
+# THE DIRECT-CALL RESULT IS ALSO READ FOR ITS VERDICT: a real MCP tool
+# result arrives JSON-MARSHALLED (envelopeResult,
+# internal/mcpsrv/handlers.go) — summary_block's newlines survive only as
+# "\n" escapes inside one JSON string, on one physical line, so HEADER_RE
+# below can never match a validate_completion tool_result's raw text.
+# Without more, that left the direct-call path — the one signal that
 # cannot be fabricated — blind to `verdict: fail`: `called` would be true
 # and the close would pass regardless of what the gate actually returned.
 # The script below matches each validate_completion tool_use to its
@@ -325,14 +326,37 @@ def diff_added_lines(inp):
         text = read_text_capped(p)
         if not isinstance(text, str):
             return {}
-    out, cur = {}, None
+    out, cur, in_hunk = {}, None, False
     for line in text.splitlines():
-        if line.startswith("+++ "):
+        # A "+++ " line is a file header only outside a hunk body. Inside
+        # one it is an ORDINARY ADDED LINE whose content happens to start
+        # with "++ " -- and reading that as a header would attribute every
+        # following added line to a path nobody wrote, which violations()
+        # then drops entirely when that path has no scannable extension.
+        # "@@" opens a hunk body; the next "--- " or "diff --git" line
+        # closes it.
+        if line.startswith("@@"):
+            in_hunk = True
+        elif line.startswith("--- ") or line.startswith("diff --git "):
+            in_hunk = False
+        elif line.startswith("+++ ") and not in_hunk:
             cur = diff_path(line[4:].strip())
-            out.setdefault(cur, [])
-        elif cur and line.startswith("+") and not line.startswith("+++"):
+            # The "+++" side of a deletion. It names no file that exists
+            # after the change, and setdefault would otherwise enter it as a
+            # path the scan considered.
+            if cur == "/dev/null":
+                cur = None
+            else:
+                out.setdefault(cur, [])
+        elif cur and line.startswith("+"):
             out[cur].append(line[1:])
     return out
+
+
+# The first segments git uses for a diff path: "a"/"b" by default, and
+# "c" (commit), "i" (index), "w" (working tree), "o" (object) under
+# diff.mnemonicPrefix.
+GIT_PATH_PREFIXES = frozenset("abciwo")
 
 
 def diff_path(raw):
@@ -342,10 +366,13 @@ def diff_path(raw):
     "w/" or "i/" under diff.mnemonicPrefix, and nothing at all under
     diff.noprefix. Requiring "b/" discards every added line of a diff
     written under the other two, which is indistinguishable from a scan
-    that ran and found nothing. Only a single-character first segment is
-    read as a prefix, the shape of every prefix git emits.
+    that ran and found nothing. Stripping ANY one-character first segment
+    would eat a real top-level directory of one character, so only the
+    prefix letters git itself emits are stripped -- at the cost of
+    mis-reading an unprefixed path whose top-level directory is exactly
+    one of them.
     """
-    if len(raw) > 1 and raw[1] == "/":
+    if len(raw) > 2 and raw[1] == "/" and raw[0] in GIT_PATH_PREFIXES:
         return raw[2:]
     return raw
 
@@ -387,11 +414,17 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
         # Presence, not truthiness. An explicitly submitted empty final_diff
         # is still a statement about which lines the author added -- reading
         # it as absent would reconstruct from the working tree instead.
+
+        # What the git walk alone knows: whether its own budget stopped it,
+        # and how many paths the vendored exemption dropped. Both shrink the
+        # result without leaving a trace in it.
+        git_stats = {}
         if ("final_diff" in last_completion or
                 "final_diff_path" in last_completion):
             added_by_path = diff_added_lines(last_completion)
         else:
-            added_by_path = final_files_added_lines(last_completion)
+            added_by_path = final_files_added_lines(last_completion,
+                                                    stats=git_stats)
         scan_source = ("final_diff" if ("final_diff" in last_completion or
                                         "final_diff_path" in last_completion)
                        else "final_files")
@@ -407,7 +440,13 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
                           if scan_source == "final_files" else len(added_by_path)),
             "scanned": sum(1 for v in added_by_path.values() if v),
             "lines": sum(len(v) for v in added_by_path.values()),
-            "truncated": False,
+            # EITHER budget cutting the work short means the same thing to a
+            # reader of the trace: some of what the completion named was
+            # never looked at. The budget of the git walk is already spent by
+            # the time this dict is built, so it seeds the flag and the scan
+            # loop below can only add to it.
+            "truncated": bool(git_stats.get("truncated")),
+            "vendored_skipped": int(git_stats.get("vendored_skipped") or 0),
         }
         # The deadline inside violations() bounds one file, not the walk over
         # every file a completion named. Running out stops the walk, leaving
@@ -460,8 +499,10 @@ trace "$TASK_ID" "parsed" "called=$CALLED block=$BLOCK verdict=$VERDICT"
 
 # Recorded whenever a scan ran, so an empty result stays legible: a
 # submission whose paths were all committed traces submitted>0 scanned=0,
-# which a scan of a real diff never does.
-SCAN=$(echo "$RESULT" | jq -r '.scan | select(. != null) | "src=\(.source) submitted=\(.submitted) scanned=\(.scanned) lines=\(.lines)" + (if .truncated then " budget-exhausted" else "" end)' 2>/dev/null)
+# which a scan of a real diff never does. The two suffixes say why a result
+# is smaller than what was submitted -- a budget stopped the work, or the
+# vendored exemption dropped paths -- neither of which the counts show.
+SCAN=$(echo "$RESULT" | jq -r '.scan | select(. != null) | "src=\(.source) submitted=\(.submitted) scanned=\(.scanned) lines=\(.lines)" + (if (.vendored_skipped // 0) > 0 then " vendored-skipped=\(.vendored_skipped)" else "" end) + (if .truncated then " budget-exhausted" else "" end)' 2>/dev/null)
 [[ -n "$SCAN" ]] && trace "$TASK_ID" "scan" "$SCAN"
 
 # Comment hygiene runs on its own switch, ahead of the completion gate and

@@ -17,30 +17,48 @@ import time
 from comment_scan import read_text_capped
 
 
+# --no-optional-locks keeps these read-only questions from refreshing the
+# index, but git only learned it in 2.15 and an older git answers the whole
+# command line with a usage error (129) instead. Every call here would fail
+# that way at once, and the caller cannot tell a failed git from a repository
+# with nothing to report -- the scan would silently yield nothing. So the
+# first usage error drops the flag for the rest of the process and retries
+# without it: the flag is a courtesy to the developer's index, never load
+# bearing for what this module returns.
+_LOCK_FLAG = ["--no-optional-locks"]
+
+
 def _git(cwd, *args):
     """Run git rooted at cwd with output formatting pinned. -> (rc, stdout).
 
-    final_files_added_lines below only checks a diff line for a leading
-    "+++", which every prefix style still produces, so the diff pins are not
-    load-bearing for it. They are pinned anyway so this module's own parsing
-    never has to anticipate the prefix and quoting styles a developer's git
+    The diff pins are not load-bearing for what this module parses: the
+    filters below only ever test a diff line for a leading "+++", which every
+    prefix style produces. They are pinned so this module's own parsing never
+    has to anticipate the prefix and quoting styles a developer's git
     configuration can produce. core.fsmonitor is pinned for a different
     reason: a repository config can point it at an arbitrary command, which
-    git would otherwise run from inside this hook. --no-optional-locks keeps
-    these read-only questions from writing an index.
+    git would otherwise run from inside this hook.
     """
-    cmd = ["git", "-C", cwd,
-           "-c", "diff.noprefix=false",
-           "-c", "diff.mnemonicPrefix=false",
-           "-c", "core.quotePath=false",
-           "-c", "core.fsmonitor=false",
-           "--no-optional-locks",
-           "--no-pager"] + list(args)
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-    except Exception:
-        return 127, ""
-    return p.returncode, p.stdout
+    pins = ["-C", cwd,
+            "-c", "diff.noprefix=false",
+            "-c", "diff.mnemonicPrefix=false",
+            "-c", "core.quotePath=false",
+            "-c", "core.fsmonitor=false",
+            "--no-pager"]
+
+    def run(prefix):
+        try:
+            p = subprocess.run(["git"] + prefix + pins + list(args),
+                               capture_output=True, text=True, timeout=10)
+        except Exception:
+            return 127, ""
+        return p.returncode, p.stdout
+
+    rc, out = run(_LOCK_FLAG)
+    if rc == 129 and _LOCK_FLAG:
+        del _LOCK_FLAG[:]
+        rc, out = run([])
+    return rc, out
 
 
 # A wall-clock bound on the whole per-path walk. Each path can cost two git
@@ -58,11 +76,38 @@ GIT_BUDGET_SECONDS = 20.0
 VENDORED_DIRS = frozenset(("vendor", "third_party", "node_modules"))
 
 
-def _is_vendored(path):
-    return any(seg in VENDORED_DIRS for seg in path.replace("\\", "/").split("/"))
+def _repo_root(cwd, cache):
+    """Absolute worktree root containing cwd, or "" if git cannot name one."""
+    if cwd not in cache:
+        rc, out = _git(cwd, "rev-parse", "--show-toplevel")
+        cache[cwd] = out.strip() if rc == 0 else ""
+    return cache[cwd]
 
 
-def final_files_added_lines(inp, deadline=None):
+def _is_vendored(path, root=""):
+    """True when a path segment BELOW root names a vendored directory.
+
+    Matched against the repository-relative path, never the absolute one. A
+    checkout that itself lives under a directory named here -- a clone inside
+    third_party/, a CI workspace under node_modules/ -- would otherwise exempt
+    every untracked file in the whole repository from the scan, and silently,
+    since a skipped path never reaches the caller at all. Only a segment is
+    matched, so src/vendored_config.go and myvendor/ are untouched.
+
+    Without a root the absolute path is matched instead: that is the
+    over-skipping shape, and it is preferred to the alternative of scanning
+    vendored code, because this walk must never turn into a blocked close.
+    """
+    rel = path
+    if root:
+        try:
+            rel = os.path.relpath(path, root)
+        except ValueError:
+            rel = path
+    return any(seg in VENDORED_DIRS for seg in rel.replace("\\", "/").split("/"))
+
+
+def final_files_added_lines(inp, deadline=None, stats=None):
     """{path: [added lines]} for a completion that submitted final_files.
 
     final_files carries whole file contents and no signal for which lines are
@@ -80,12 +125,22 @@ def final_files_added_lines(inp, deadline=None):
     be answered, and every such path is skipped rather than guessed at. The
     same rule governs check-ignore below: only its definite "not ignored"
     status licenses treating a file as new.
+
+    A `stats` dict, if given, is filled with what the caller cannot see from
+    the return value: "truncated" says the budget stopped the walk early, and
+    "vendored_skipped" counts the paths the exemption above dropped. Both
+    outcomes shrink the result silently, so without them a walk that never
+    finished is indistinguishable from one that found nothing.
     """
     out = {}
+    roots = {}
+    vendored_skipped = 0
+    truncated = False
     if deadline is None:
         deadline = time.monotonic() + GIT_BUDGET_SECONDS
     for entry in (inp.get("final_files") or []):
         if time.monotonic() > deadline:
+            truncated = True
             break
         path = (entry or {}).get("path") or ""
         if not path or not os.path.isabs(path):
@@ -113,7 +168,8 @@ def final_files_added_lines(inp, deadline=None):
         rc_ign, _ = _git(parent, "check-ignore", "-q", "--", path)
         if rc_ign != 1:
             continue
-        if _is_vendored(path):
+        if _is_vendored(path, _repo_root(parent, roots)):
+            vendored_skipped += 1
             continue
         content = (entry or {}).get("content")
         if not isinstance(content, str):
@@ -121,4 +177,7 @@ def final_files_added_lines(inp, deadline=None):
             if not isinstance(content, str):
                 continue
         out[path] = content.splitlines()
+    if stats is not None:
+        stats["truncated"] = truncated
+        stats["vendored_skipped"] = vendored_skipped
     return out

@@ -296,7 +296,10 @@ rather than treating the reflow as separate from the touch.
   not scanned at close time. Every line of an untracked file counts as
   added, so a vendored file whose header narrates its own upstream history
   would otherwise block the close and demand a rewrite of code this
-  repository did not write.
+  repository did not write. Those names are matched against the path
+  relative to the repository root, so a checkout that itself lives under
+  one of them — a clone inside `third_party/`, a CI workspace under
+  `node_modules/` — keeps its own files scanned.
 - The extension allowlist (`comment_scan.py`'s `SCAN_EXTS`) is keyed on
   `os.path.splitext`, so a file with no extension — including this plugin's
   own extensionless `check-task-complete` and `check-comment-write` hook
@@ -308,9 +311,10 @@ PostToolUse scan), while leaving the completion-gate check active.
 
 ## Comment-hygiene scan at close
 
-Beyond the first two block conditions above, a close that is otherwise going to
-pass gets one more check: the LAST `validate_completion` call in the task
-window is scanned for added comment lines carrying change history — the
+Beyond the first two block conditions above, every close gets one more check,
+on its own switch and independent of the completion gate's verdict: the LAST
+`validate_completion` call in the task window is scanned for added comment
+lines carrying change history — the
 same rule the write-time `PreToolUse` hook applies to an `Edit`/`Write`, run
 again here as defence in depth for a comment that reached disk without going
 through either, most commonly a `Bash` heredoc.
@@ -447,10 +451,13 @@ evidence the scan read and how much of it there was to read. `submitted`
 counts the paths the evidence named, `scanned` the ones that yielded added
 lines, and `lines` those added lines. A completion whose files were all
 committed traces `submitted=3 scanned=0`, which is what distinguishes it
-from a scan of a real diff that legitimately found nothing; a walk that ran
-out of its budget appends `budget-exhausted`. No `scan` line at all means no
-scan ran — the guard was off, no `validate_completion` fell inside the
-window, or the scanner could not be loaded (`skip | comment-scan-unavailable`).
+from a scan of a real diff that legitimately found nothing. Either budget
+running out — the git walk's or the scan's — appends `budget-exhausted`, and
+paths dropped by the vendored-directory exemption append
+`vendored-skipped=N`; both shrink the result silently otherwise. No `scan`
+line at all means no scan ran — the guard was off, no `validate_completion`
+fell inside the window, or the scanner could not be loaded
+(`skip | comment-scan-unavailable`).
 
 The log is capped so it cannot grow without bound: past
 `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES` (default 1,048,576 — 1 MiB), the next
