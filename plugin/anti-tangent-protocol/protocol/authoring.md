@@ -117,6 +117,18 @@ guards plans that opt into the structure, it does not demand that they do. The `
 fence's `files` array is a flat list with no verb, so it cannot drive this check; the bullets are
 the only source.
 
+**State the comment policy, or point at it.** A plan is the one artifact every implementing
+subagent reads, and an implementer working without this plugin loaded has no comment policy
+otherwise. Either restate the policy in the plan's constraints section, or carry the canonical pointer line,
+byte for byte:
+
+```
+Comments: anti-tangent-protocol implementer.md §4.4
+```
+
+`validate_plan` emits a plan-level `major` (`criterion: comment_policy_absent`) when a plan carries
+neither. Equivalent wordings are accepted, but this is the line to paste.
+
 ### Write-time comment guard (if `anti-tangent-guard` is installed)
 
 The comment policy (`implementer.md` §4.4) can be enforced, not just stated. If the

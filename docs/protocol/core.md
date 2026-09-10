@@ -133,7 +133,7 @@ If you're unsure, look for the structured task block. No block → no protocol. 
 **A `validate_completion` call returned `category: codescene_not_run` or `category: codescene_skipped`.** Only fires when `ANTI_TANGENT_CODESCENE=required`. Four cases:
 
 - No `codescene` argument on the call → `codescene_not_run`, `severity: major` — a submission defect (see `submission_defect_only` below).
-- `codescene: {"ran": false, "skip_reason": "…"}` → `codescene_skipped`, `severity: minor` — recorded in the plan-run ledger; does not block.
+- `codescene: {"ran": false, "skip_reason": "…"}` → `codescene_skipped`, `severity: major`; add `skip_evidence` to lower it to `minor`.
 - `codescene: {"ran": false}` with no `skip_reason` → `codescene_not_run`, `severity: major`, same as no argument at all. **An undeclared skip is treated exactly like a non-run** — the server can't tell "forgot to run it" from "ran it and didn't say" without a stated reason, so state one.
 - `codescene: {"ran": true, …}` → no adoption finding.
 

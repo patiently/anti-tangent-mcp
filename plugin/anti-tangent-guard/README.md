@@ -330,14 +330,28 @@ payload) and `python3` (to walk the transcript, since the signals it looks
 for are nested inside `tool_result` content that `jq` alone parses more
 awkwardly than a few lines of Python). Both must be on `PATH`.
 
+## Configuration
+
+### `ANTI_TANGENT_TICKET_PATTERN`
+
+A regex for your tracker's key shape, e.g. `ABC-\d+`. Set it per project in `.claude/settings.json`:
+
+```json
+{ "env": { "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+" } }
+```
+
+**There is no default, and without it a comment like `// ABC-1234: the keyword` is not detected.** A generic pattern cannot be made safe: measured over real comment lines, `[A-Z]+-\d+` matches hardware identifiers (`HDMI-0`, `DP-0`) and prose labels (`ROUND-1`) far more often than tracker keys, and this hook blocks writes. An uncompilable or over-long pattern is ignored, and the whole scan runs under a two-second deadline that fails open.
+
 ## Kill switches
 
-- `ANTI_TANGENT_COMPLETION_GUARD=0` short-circuits the `PostToolUse` hook to
-  `exit 0` unconditionally, before it reads stdin or does any work. This
-  disables both the completion-gate check and the close-time comment-hygiene
-  scan.
-- `ANTI_TANGENT_COMMENT_GUARD=0` disables the comment-hygiene scan (both
-  write-time and close-time) while leaving the completion-gate check active.
+- `ANTI_TANGENT_COMPLETION_GUARD=0` disables the completion-gate check in the
+  `PostToolUse` hook — whether a close ran `validate_completion` at all. The
+  close-time comment-hygiene scan is a separate concern and keeps running.
+- `ANTI_TANGENT_COMMENT_GUARD=0` disables the comment-hygiene scan, both
+  write-time and close-time, while leaving the completion-gate check active.
+- Setting both to `0` is what short-circuits the `PostToolUse` hook to
+  `exit 0` before it reads stdin. With only one set, the hook reads stdin and
+  runs the half that is still enabled.
 
 ## Fail-open policy
 

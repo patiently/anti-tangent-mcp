@@ -31,6 +31,8 @@ not on disk; it is deprecated and will be removed in 1.0.0.
    deterministic and free (no reviewer call). If you re-validate the plan after the 3-minute
    cache window expires, use the id from your **final** passing call.
 
+A `pass` on round N is not an audit of rounds 1..N-1. The reviewer re-reads the whole plan each round, but a defect present since round 1 can first surface in round 4 — earlier rounds finding other things is not evidence they inspected everything. Treat each round's findings as additive, and do not read a late-arriving finding as a regression you introduced.
+
 The implementing subagent still calls `validate_task_spec` at task start in its own session — see §4. The plan-level gate and the per-task implementer gate are two different responsibilities at two different moments.
 
 **Why this matters:** catching a vague AC at handoff costs one `validate_plan` call — cents without `context_paths`, up to roughly $1.31 per round with a large attached set (see §5.8) — versus a wasted dispatch after a subagent spent 10 minutes against a misread spec.

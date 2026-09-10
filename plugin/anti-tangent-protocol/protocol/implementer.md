@@ -154,7 +154,7 @@ Use lightweight mode when ALL of: (a) ≤ 2 files or docs/config/data-only; (b) 
 
 Use the full protocol for: new production logic, test-design choices, or ACs requiring observable invariants. Reference lightweight dispatch clause: `examples/lightweight-dispatch.md`.
 
-**Lightweight mode and `ANTI_TANGENT_CODESCENE=required`.** Lightweight tasks skip the CodeScene MCP companion calls (`pre_commit_code_health_safeguard` / `analyze_change_set`) — there's nothing meaningful for static analysis on a trivial doc edit. That is independent of whether the `codescene` argument itself is required: under `required` mode the check is on the `validate_completion` call, not on whether the companion tools ran, so a lightweight task must still pass `{"ran": false, "skip_reason": "lightweight task"}` as the `codescene` argument. Omitting the argument entirely draws a major `codescene_not_run` finding just like it would on a full-protocol task.
+**Lightweight mode and `ANTI_TANGENT_CODESCENE=required`.** Unset: lightweight tasks skip the companion calls (`pre_commit_code_health_safeguard` / `analyze_change_set`) — nothing meaningful on a trivial edit — and `codescene` is optional. `required` is an operator assertion CodeScene is present, so lightweight tasks must **run `analyze_change_set` and submit its result, exactly as any other task** — being lightweight is not a skip reason. `{"ran": false, "skip_reason": "…", "skip_evidence": "<the tool's own error text>"}` is for an attempted run that failed, never one not attempted; no `skip_evidence` draws a major, like omitting the argument.
 
 ### CodeScene MCP companion
 
@@ -166,7 +166,7 @@ CodeScene covers anti-tangent's text-only blind spot (see `## Scope and limits`)
 - Before DONE: `analyze_change_set` for the full branch-vs-base view — see §4.2 step 3b for what to do with the result.
 - Drill-down on a flagged issue: `code_health_review`.
 
-Enforcement is prompt-level: the requirement to call these tools lives here and in §4.2, not in the server. Once you do call `validate_completion`, `ANTI_TANGENT_CODESCENE=required` can deterministically add a `codescene_not_run` / `codescene_skipped` finding server-side (see `core.md`) — but anti-tangent never *fails a verdict* on a CodeScene finding itself. If CodeScene MCP isn't configured, the companion calls above are skipped, as they are on lightweight tasks — but the `codescene` argument to `validate_completion` is a separate requirement under `required` mode; see [Lightweight protocol mode](#lightweight-protocol-mode-v031) above.
+Enforcement is prompt-level: the requirement to call these tools lives here and in §4.2, not in the server. Once you do call `validate_completion`, `ANTI_TANGENT_CODESCENE=required` can deterministically add a `codescene_not_run` / `codescene_skipped` finding server-side (see `core.md`) — but anti-tangent never *fails a verdict* on a CodeScene finding itself. If CodeScene MCP isn't configured, the companion calls above are skipped, as they are on unset-mode lightweight tasks — but the `codescene` argument to `validate_completion` is a separate requirement under `required` mode; see [Lightweight protocol mode](#lightweight-protocol-mode-v031) above.
 
 **CodeScene stats:** CodeScene keeps no history — see [docs/team-setup/codescene-stats.md](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/codescene-stats.md) to log Code Health to `codescene-events.jsonl`.
 
