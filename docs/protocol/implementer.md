@@ -6,7 +6,7 @@ format it should have had is in [`authoring.md`](authoring.md).
 
 ## 4. For implementers — the lifecycle protocol
 
-> **Lightweight eligibility first.** Many tasks qualify for lightweight mode (skip `validate_task_spec` and `check_progress`; keep `validate_completion` as the sanity gate). See [Lightweight protocol mode](#lightweight-protocol-mode-v031) below for criteria and clause.
+> **Lightweight eligibility first.** Many tasks qualify for lightweight mode (skip `validate_task_spec` and `check_progress`; keep `validate_completion` as the sanity gate). See [Lightweight protocol mode](#lightweight-protocol-mode) below for criteria and clause.
 
 | Phase | Tool | Required? | When to call |
 |---|---|---|---|
@@ -144,7 +144,7 @@ Use anti-tangent per the standard dispatch protocol. For this task:
 
 **Language-scoping prose caveat.** Reviewers can surface `ambiguous_spec` findings around closure/scoping semantics (Kotlin `var` captured by a lambda, Python `nonlocal`, JS `let`/`const` in arrow bodies) when the prose AC reads ambiguously though the plan's verbatim code block does not. Trust the verbatim plan code; deviate only if the *tests* disagree with the prose, and ask the controller if you can't reconcile the two.
 
-### Lightweight protocol mode (v0.3.1+)
+### Lightweight protocol mode
 
 For trivial tasks — doc-only edits, single-file mechanical relocations, dependency bumps — the full clause is overhead. Controllers may dispatch a **lightweight clause**: skip `validate_task_spec`, skip `check_progress`, keep `validate_completion` as the sanity gate (its handler accepts an empty `session_id` when any of `final_files` / `final_diff` / `test_evidence` is non-empty).
 
@@ -164,9 +164,9 @@ CodeScene covers anti-tangent's text-only blind spot (see `## Scope and limits`)
 - Before DONE: `analyze_change_set` for the full branch-vs-base view — see §4.2 step 3b for what to do with the result.
 - Drill-down on a flagged issue: `code_health_review`.
 
-Enforcement is prompt-level: the requirement to call these tools lives here and in §4.2, not the server. Once you do call `validate_completion`, `ANTI_TANGENT_CODESCENE=required` can deterministically add a `codescene_not_run` / `codescene_skipped` finding server-side (see `core.md`) — but no CodeScene finding alone reaches `fail`: a lone adoption `major` yields `warn`, though it can be the second `major` (alongside a reviewer major or the `test_evidence` major) that tips a verdict to `fail`. If CodeScene MCP isn't configured the companion calls are skipped, as on unset-mode lightweight tasks — but the `codescene` argument is a separate requirement under `required` mode; see [Lightweight protocol mode](#lightweight-protocol-mode-v031) above.
+Enforcement is prompt-level: the requirement to call these tools lives here and in §4.2, not the server. Once you do call `validate_completion`, `ANTI_TANGENT_CODESCENE=required` can deterministically add a `codescene_not_run` / `codescene_skipped` finding server-side (see `core.md`) — but no CodeScene finding alone reaches `fail`: a lone adoption `major` yields `warn`, though it can be the second `major` (alongside a reviewer major or the `test_evidence` major) that tips a verdict to `fail`. If CodeScene MCP isn't configured the companion calls are skipped, as on unset-mode lightweight tasks — but the `codescene` argument is a separate requirement under `required` mode; see [Lightweight protocol mode](#lightweight-protocol-mode) above.
 
-**CodeScene stats:** CodeScene keeps no history — [docs/team-setup/codescene-stats.md](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/codescene-stats.md) logs Code Health to `codescene-events.jsonl`.
+**CodeScene stats:** CodeScene keeps no history — see [docs/team-setup/codescene-stats.md](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/codescene-stats.md) for logging Code Health to `codescene-events.jsonl`.
 
 ### Large reads
 

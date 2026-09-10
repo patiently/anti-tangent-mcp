@@ -21,8 +21,8 @@ saving. Omit it only when you genuinely need to inspect the code first.
 
 The server does the writing, so the file never passes through `Edit`/`Write`
 and `anti-tangent-guard`'s write-time comment hook never sees it. Only the
-close-time scan over your submitted diff, and the reviewer, will catch a
-generated comment that carries change history.
+close-time scan, and the reviewer, will catch a generated comment that
+carries change history — and both have limits, below.
 
 Close the task with `final_diff` or `final_diff_path` on the
 `validate_completion` call. The close-time scan does read a `final_files`
