@@ -96,7 +96,7 @@ configured in your host).** Call `analyze_change_set` for the full
 branch-vs-base Code Health view, then pass the result to
 `validate_completion` as the `codescene` argument:
 `{"ran": true, "quality_gate": …, "verdicts": {…}, "trend": …, "net_pp": …, "category_counts": {…}}`.
-If you deliberately skipped, pass `{"ran": false, "skip_reason": "…"}` instead.
+If the run was attempted and failed, pass `{"ran": false, "skip_reason": "…", "skip_evidence": "<the tool's own error text>"}` instead; omitting `skip_evidence` draws a major, like omitting the argument.
 The structured field supersedes the prose status line: it reaches the reviewer as
 authoritative caller-attested context (no independent verification) and lands in the
 plan-run report. If codescene-mcp
@@ -138,7 +138,7 @@ If a `severity: major` pre-task finding is accepted rather than fixed, include a
 Use anti-tangent per the standard dispatch protocol. For this task:
 - Call `validate_task_spec` before edits unless `lightweight_eligible: true` is set by the controller.
 - Call `validate_completion` before DONE and paste its `summary_block`.
-- If CodeScene MCP is configured, `pre_commit_code_health_safeguard` (mid-task) and `analyze_change_set` (pre-DONE) are required; pass the pre-DONE result to `validate_completion` as the `codescene` argument (or `{"ran": false, "skip_reason": "…"}`).
+- If CodeScene MCP is configured, `pre_commit_code_health_safeguard` (mid-task) and `analyze_change_set` (pre-DONE) are required; pass the pre-DONE result to `validate_completion` as the `codescene` argument (or, for an attempted-and-failed run, `{"ran": false, "skip_reason": "…", "skip_evidence": "…"}`).
 - If the response carries `submission_defect_only: true`, attach the missing evidence and re-submit — that is a submission defect, not a code defect.
 - If any major pre-task finding is accepted rather than fixed, include a one-sentence mitigation in DONE.
 - If a Project knowledge section is auto-attached, read it before validate_task_spec and pass it verbatim as project_knowledge.
@@ -166,7 +166,7 @@ CodeScene covers anti-tangent's text-only blind spot (see `## Scope and limits`)
 - Before DONE: `analyze_change_set` for the full branch-vs-base view — see §4.2 step 3b for what to do with the result.
 - Drill-down on a flagged issue: `code_health_review`.
 
-Enforcement is prompt-level: the requirement to call these tools lives here and in §4.2, not in the server. Once you do call `validate_completion`, `ANTI_TANGENT_CODESCENE=required` can deterministically add a `codescene_not_run` / `codescene_skipped` finding server-side (see `core.md`) — but anti-tangent never *fails a verdict* on a CodeScene finding itself. If CodeScene MCP isn't configured, the companion calls above are skipped, as they are on unset-mode lightweight tasks — but the `codescene` argument to `validate_completion` is a separate requirement under `required` mode; see [Lightweight protocol mode](#lightweight-protocol-mode-v031) above.
+Enforcement is prompt-level: the requirement to call these tools lives here and in §4.2, not in the server. Once you do call `validate_completion`, `ANTI_TANGENT_CODESCENE=required` can deterministically add a `codescene_not_run` / `codescene_skipped` finding server-side (see `core.md`) — but no CodeScene finding alone reaches `fail` — a lone adoption `major` yields `warn`; it can still be the second `major` (alongside a reviewer major or the `test_evidence` major) that tips a verdict to `fail`. If CodeScene MCP isn't configured, the companion calls above are skipped, as they are on unset-mode lightweight tasks — but the `codescene` argument to `validate_completion` is a separate requirement under `required` mode; see [Lightweight protocol mode](#lightweight-protocol-mode-v031) above.
 
 **CodeScene stats:** CodeScene keeps no history — see [docs/team-setup/codescene-stats.md](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/codescene-stats.md) to log Code Health to `codescene-events.jsonl`.
 

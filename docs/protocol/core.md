@@ -164,9 +164,9 @@ implied, and the reviewer has not yet been able to review your code.
 
 Defaults shown; see [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md) for the full dotenv block.
 
-- `ANTI_TANGENT_CODESCENE` — `""` (off). Set to `required` to make a `validate_completion` call
-  with no `codescene` argument emit a `codescene_not_run` finding. Prompt-level enforcement
-  only; anti-tangent never fails a verdict on CodeScene findings.
+- `ANTI_TANGENT_CODESCENE` — `""` (off). Set to `required` to add a `major` finding on a missing
+  `codescene` argument or an unevidenced skip — see the ladder above. A lone CodeScene major
+  yields `warn`; combined with another major it can tip a verdict to `fail`.
 - `ANTI_TANGENT_PLAN_LEDGER` — `0` (off). With `ANTI_TANGENT_STATS_DIR` set, `1` persists each
   completed task row to `plan-runs.jsonl` so `plan_run_report` survives a restart. Unlike every
   other stats artifact this file carries task titles, which is why it has its own opt-in.
