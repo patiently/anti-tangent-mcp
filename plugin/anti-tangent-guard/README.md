@@ -332,7 +332,16 @@ above, and is recorded to the trace log the same way. Set
 `ANTI_TANGENT_COMMENT_GUARD=0` to skip this scan while the completion gate
 above still runs in full.
 
-**What this scan cannot see.** A completion that submits `final_files` is
+**What this scan cannot see.** A close whose task window holds no
+`validate_completion` call at all is scanned no further than that: the scan
+reads a call's submitted evidence, and a window whose pass signal is a pasted
+marker block carries none. The marker path satisfies the completion gate on
+its own (see "How much to trust each pass signal" above), so such a close
+passes with `called=false` on the trace and no `scan` line beside it. That is
+the shape of every close reported up from a subagent's own session, and the
+evidence it validated against is in that session, not this transcript.
+
+A completion that submits `final_files` is
 read through git rather than through a diff, and git reports a line as added
 only while it is uncommitted or its file is untracked. **Work already
 committed before the close therefore yields no added lines and is not
@@ -481,7 +490,7 @@ bash evals/run.sh
 ```
 
 Runs the hooks' own unit tests (`hooks/*_test.py`) first, then the full eval
-suite (141 cases) against both hooks, and exits non-zero on either — the
+suite (142 cases) against both hooks, and exits non-zero on either — the
 cases cover check-task-complete's three block conditions (the third being its
 own close-time comment-hygiene scan), plus check-comment-write's write-time
 comment-hygiene guard. See `evals/run.sh`'s header comment for the

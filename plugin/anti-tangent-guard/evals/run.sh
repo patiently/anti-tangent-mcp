@@ -148,13 +148,20 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # shapes of an unreadable target are pinned here; the FIFO and oversized-file
 # shapes share the same code path but have no case of their own.
 #
-# Two cases pin what the close-time scan looked at, which no exit code can
+# Three cases pin what the close-time scan looked at, which no exit code can
 # state. One submits a diff carrying NO path prefix at all — the shape
 # diff.noprefix produces, and the one every other final_diff case here is
-# blind to, since they all use "+++ b/" — and must still block. The other
+# blind to, since they all use "+++ b/" — and must still block. The second
 # closes on final_files whose paths are all committed: it passes, and the
 # trace line must show submitted>0 with scanned=0, which is what separates
-# "there was nothing to scan" from "the scan never ran".
+# "there was nothing to scan" from "the scan never ran". The third is a
+# window holding no validate_completion call at all, whose pass signal is a
+# block in the agent's own report text: the gate reads that block, the close
+# passes with called=false on the trace, and the scan has nothing to run on,
+# because what it reads is a call's submitted evidence. No scan line is
+# traced, which no assertion here can state directly — what the case pins is
+# that the close still passes, so refusing a marker-only close fails loudly
+# here instead of quietly ending the reporting path the marker exists for.
 #
 # Thirty-five cases cover the write-time scanner's span boundaries, the
 # optional ticket pattern at both hooks, the two kill switches, and the close
@@ -260,7 +267,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=141
+EXPECTED_CASE_COUNT=142
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and

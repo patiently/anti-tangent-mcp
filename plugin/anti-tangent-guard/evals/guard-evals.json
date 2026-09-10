@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (141 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (142 cases)",
   "evals": [
     {
       "id": 1,
@@ -2267,6 +2267,33 @@
         ]
       },
       "reason": "the OTHER direction of the same three residuals, and the one that costs a user their close. Cases 137-139 all pin the silent direction, where the path the scan is re-pointed at has no scannable extension. Here the collision runs the other way: the diff touches notes.txt, and a removed line whose content starts -- above an added line whose content starts ++ re-points the scan onto hack.go, which IS scannable, so the close is refused over a file the diff never touched and nothing the implementer edits clears it. Pinned so that widening the header-pair tell fails here loudly rather than costing closes quietly"
+    },
+    {
+      "id": 142,
+      "name": "close-marker-only-completion-has-no-evidence-to-scan",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"b1\", \"name\": \"Bash\", \"input\": {\"command\": \"printf '%s\\\\n' '// fixes #58' >> hack.go\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"b1\", \"content\": \"Task 1 complete.\\n\\nanti-tangent envelope\\n  tool:          validate_completion\\n  session_id:    s\\n  verdict:       pass\\n\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "parsed | called=false block=true verdict=pass"
+        ]
+      },
+      "reason": "a window carrying no validate_completion tool_use at all, whose pass signal is a block in the agent's own report text. The gate reads that block and the close passes -- called=false on the trace is what says no direct call was made -- while the comment scan has nothing to run on, because the scan reads a call's SUBMITTED evidence and the window holds no call. The comment the Bash line wrote is never seen and no scan line is traced. Pinned because the obvious repair, refusing a marker-only close, would break the case the marker path exists for: a subagent that ran the gate in its own session and reported the block up. That repair fails here loudly rather than costing closes quietly"
     }
   ]
 }
