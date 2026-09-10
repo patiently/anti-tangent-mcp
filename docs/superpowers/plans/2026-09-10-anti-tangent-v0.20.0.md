@@ -23,6 +23,7 @@ this plan is a `unittest.TestCase` method.
 - **`*/` is not a comment opener.** A line beginning with it carries no comment text, and returning its tail hands ordinary code to the tells. Block-opener text stops at the first `*/` for the same reason.
 - **`ATG_SCAN_EXTS` in `check-comment-write` duplicates `SCAN_EXTS` in `comment_scan.py`.** `evals/run.sh:522-540` asserts they stay identical. No task changes one without the other.
 - **`EXPECTED_CASE_COUNT` in `evals/run.sh:155` must equal the case count in `guard-evals.json`.** Every task adding eval cases updates it in the same commit.
+- **The guard eval suite does not exit clean, and that predates this branch.** 18 `close-*` cases fail identically at the v0.19.0 release commit on `main` and at every commit on this branch. `run.sh` therefore exits 1 even on a correct change. Green for a guard task means: every case the task adds passes, every `comment-write-*` case passes, the failure count is still exactly 18, and `fp-report.sh` reports no new false positives. Tasks 4 and 5 own `check-task-complete` and must re-measure those 18 either side of their change rather than assuming.
 - **Protocol parts are capped at strictly under 16,000 bytes** (`.github/workflows/ci.yml:61-74`), with a warning at 15,500. `core.md` has 109 bytes of headroom and `implementer.md` has 407 — rewrites in those two files must come in at or under the length they replace.
 - **`plugin/anti-tangent-protocol/protocol/` must be byte-identical to `docs/protocol/`.** Resync in the same commit as any protocol edit: `rm -f plugin/anti-tangent-protocol/protocol/*.md && cp docs/protocol/*.md plugin/anti-tangent-protocol/protocol/`
 - **Comments: `anti-tangent-protocol` `implementer.md` §4.4**, with ONE clause superseded for this release (the next bullet). Restated here because this plan is enforcing it: comments explain non-trivial behaviour, or a non-obvious invariant or hazard that would bite the next editor, and must read correctly to someone who never saw the change that introduced it. They carry no issue, pull-request, task or version references and no "previously" / "no longer" / "this replaced" — git holds that.
@@ -458,15 +459,15 @@ Append these to the `evals` array in `plugin/anti-tangent-guard/evals/guard-eval
 In `plugin/anti-tangent-guard/evals/run.sh`, line 155:
 
 ```bash
-EXPECTED_CASE_COUNT=106
+EXPECTED_CASE_COUNT=110
 ```
 
-Also update the `description` field at the top of `guard-evals.json` to read `(106 cases)`.
+Also update the `description` field at the top of `guard-evals.json` to read `(110 cases)`.
 
 - [ ] **Step 7: Run the eval suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: all 106 cases pass, including every pre-existing one.
+Expected: all 110 cases pass, including every pre-existing one.
 
 - [ ] **Step 8: Measure the new false-positive surface**
 
@@ -761,7 +762,7 @@ Append to `guard-evals.json`, continuing the ids:
 
 - [ ] **Step 9: Update the case count**
 
-`EXPECTED_CASE_COUNT=111` in `run.sh:155`, and `(111 cases)` in the JSON `description`.
+`EXPECTED_CASE_COUNT=115` in `run.sh:155`, and `(115 cases)` in the JSON `description`.
 
 - [ ] **Step 10: Make the FP gate environment-independent**
 
@@ -896,7 +897,7 @@ Expected: 5 tests, OK.
 - [ ] **Step 11: Run both suites**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh && bash plugin/anti-tangent-guard/evals/fp-report.sh`
-Expected: 111 cases pass; FP report unchanged from `main`.
+Expected: 115 cases pass; FP report unchanged from `main`.
 
 - [ ] **Step 12: Commit**
 
@@ -995,7 +996,7 @@ fi
 - [ ] **Step 3: Run the existing suite to catch a broken restructure**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: all 111 cases pass — the count this task inherits, before its own four are added. A failure here means the hoist changed an exit path, not that a case is wrong.
+Expected: all 115 cases pass — the count this task inherits, before its own four are added. A failure here means the hoist changed an exit path, not that a case is wrong.
 
 - [ ] **Step 4: Add the four-combination eval cases**
 
@@ -1081,12 +1082,12 @@ Case 115 deliberately carries the bad-comment transcript: with both switches off
 
 - [ ] **Step 5: Update the case count**
 
-`EXPECTED_CASE_COUNT=115` in `run.sh:155`, and `(115 cases)` in the JSON `description`.
+`EXPECTED_CASE_COUNT=119` in `run.sh:155`, and `(119 cases)` in the JSON `description`.
 
 - [ ] **Step 6: Run the suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: 115 cases pass.
+Expected: 119 cases pass.
 
 - [ ] **Step 7: Commit**
 
@@ -1555,12 +1556,12 @@ Add `import tempfile` to the file's imports.
 
 - [ ] **Step 7: Update the case count**
 
-`EXPECTED_CASE_COUNT=123` in `run.sh:155`, and `(123 cases)` in the JSON `description`.
+`EXPECTED_CASE_COUNT=127` in `run.sh:155`, and `(127 cases)` in the JSON `description`.
 
 - [ ] **Step 8: Run the suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: 123 cases pass. A `SETUP FAILED` line means the Step 5 harness hook is wrong, not the case.
+Expected: 127 cases pass. A `SETUP FAILED` line means the Step 5 harness hook is wrong, not the case.
 
 - [ ] **Step 9: Commit**
 
