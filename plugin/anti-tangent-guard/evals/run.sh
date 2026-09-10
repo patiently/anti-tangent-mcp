@@ -477,7 +477,7 @@ run_case() {
     if [[ -n "$setup_script" ]]; then
         setup_script="${setup_script//\{\{TMPDIR\}\}/$case_tmp}"
         if ! ( cd "$case_tmp" && bash -c "$setup_script" ) >/dev/null 2>&1; then
-            echo "  SETUP FAILED for case $idx" >&2
+            echo "  SETUP FAILED for case $id" >&2
             return 1
         fi
     fi
@@ -496,7 +496,7 @@ run_case() {
     if [[ -n "$hook_cwd_override" ]]; then
         # A named cwd that does not exist must fail loudly. Falling back to
         # HOOK_CWD would silently assert the opposite of the case's intent.
-        [[ -d "$hook_cwd_override" ]] || { echo "  BAD hook_cwd: $hook_cwd_override" >&2; return 1; }
+        [[ -d "$hook_cwd_override" ]] || { echo "  [$id] BAD hook_cwd: $hook_cwd_override" >&2; return 1; }
         case_cwd="$hook_cwd_override"
     fi
 
