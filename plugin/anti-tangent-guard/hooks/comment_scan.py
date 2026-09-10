@@ -107,7 +107,7 @@ _SLASH_DELIM = re.compile(r"//|/\*")
 
 
 def _line_comment_spans(opens, raw):
-    """Every comment span on a code line, concatenated, else "".
+    """Every comment span on a code line, as a list; empty when there are none.
 
     Walks delimiters LEFT TO RIGHT and takes the first whose preceding quote
     counts are all even; an odd count means that delimiter sits inside a

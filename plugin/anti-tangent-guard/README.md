@@ -278,6 +278,12 @@ rather than treating the reflow as separate from the touch.
   through `Bash` blocks further progress only at close time, not at write time.
 - The scanner reads full-line comments only. Multi-line comments, including
   those that span across lines, are not detected.
+- The starred block-continuation shape (a KDoc/Javadoc body line) has no
+  quote-parity check behind it — the prefix before a line-leading `*` is
+  always whitespace, so parity cannot tell it apart from a markdown bullet
+  inside a Go raw string or a Kotlin `"""` block. A write containing one can
+  block on a false positive; `ANTI_TANGENT_COMMENT_GUARD=0` is the escape
+  hatch if you hit this.
 - The scanner implements a small pattern set capturing common change-history
   markers. The reviewer layer at completion time covers prose narration the
   patterns cannot catch — an engineer writing a sentence like "I rewrote this
