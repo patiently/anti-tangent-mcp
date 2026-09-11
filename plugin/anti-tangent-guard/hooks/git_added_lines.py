@@ -51,12 +51,11 @@ def _git_bytes(cwd, *args):
 def _git_call(cwd, args, text):
     """Shared body of _git and _git_bytes.
 
-    The pins are best-effort hardening and must not be read as a completeness
-    claim -- the list has been found short twice. What this module actually
-    relies on is a property of the calls it makes: none of them converts
-    worktree content, and none of them fetches a missing object. The pins
-    cover two command-valued keys that an ordinary read-only question would
-    otherwise reach:
+    The pins are best-effort hardening, not a completeness claim. What this
+    module actually relies on is a property of the calls it makes: none of
+    them converts worktree content, and none of them fetches a missing
+    object. The pins cover two command-valued keys that an ordinary
+    read-only question would otherwise reach:
 
     core.fsmonitor is a command git runs while answering, and a repository
     config can point it anywhere. protocol.allow governs the transport a
