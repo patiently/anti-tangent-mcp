@@ -60,7 +60,7 @@
     {
       "id": 8,
       "subject": "Task 8: Release bookkeeping for v0.21.0",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The branch satisfies CI's branch-name/CHANGELOG check and the plugin advertises its new version.\n\n**Files:**\n- Modify: `CHANGELOG.md` (new block above `## [0.20.1] - 2026-09-11`)\n- Modify: `plugin/anti-tangent-guard/.claude-plugin/plugin.json:4`\n\n**Acceptance Criteria:**\n- [ ] `CHANGELOG.md` has `## [0.21.0] - 2026-09-11` with `### Security`, `### Fixed`, `### Added`\n- [ ] `VERSION` is untouched at `0.20.1`\n- [ ] `anti-tangent-guard`'s `plugin.json` version is `0.4.0`\n- [ ] All repo gates pass\n\n**Verify:** `go test -race ./... && bash scripts/check-protocol-docs.sh && python3 scripts/check_md_links.py`\n\nThe full changelog prose is in the plan under \"Task 8\", Step 1 - use it verbatim; it is what users see on the GitHub Release.\n\nDO NOT BUMP `VERSION`. It stays at `0.20.1`. The release workflow bumps it, and pre-bumping on a version branch breaks that workflow's CHANGELOG validation. Confirm with `git diff --name-only origin/main...HEAD | grep -x VERSION` returning nothing.\n\n```json:metadata\n{\"files\": [\"CHANGELOG.md\", \"plugin/anti-tangent-guard/.claude-plugin/plugin.json\"], \"verifyCommand\": \"go test -race ./... && bash scripts/check-protocol-docs.sh && python3 scripts/check_md_links.py\", \"acceptanceCriteria\": [\"CHANGELOG has a 0.21.0 block with Security/Fixed/Added\", \"VERSION untouched at 0.20.1\", \"guard plugin.json at 0.4.0\", \"all repo gates pass\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         1,
@@ -73,5 +73,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-11T13:24:02.953435+00:00"
+  "lastUpdated": "2026-09-11T13:32:49.026619+00:00"
 }
