@@ -368,16 +368,17 @@ diff from the commit the task started at
 `final_files`.
 
 **Paths the repository's own `.gitattributes` takes out of scope.** A
-`final_files` path carrying a **`filter`** attribute — git-lfs, git-crypt, or
-any other clean/smudge driver — is **not scanned at close time**. `HEAD` holds
-a pointer or ciphertext for such a path while the worktree holds content, and
-the only thing that could make the two comparable is the filter command the
-repository itself names, which this hook will not run. Skipping is the
-fail-open answer: comparing them directly would report every line of the file
-as added. A path carrying a **`working-tree-encoding`** is *not* skipped — the
-attribute's value is the codec name, so the worktree side is decoded with it
-and the scan runs normally. A codec Python cannot resolve falls back to
-skipping the path.
+**tracked** `final_files` path carrying a **`filter`** attribute — git-lfs,
+git-crypt, or any other clean/smudge driver — is **not scanned at close
+time**. `HEAD` holds a pointer or ciphertext for such a path while the
+worktree holds content, and the only thing that could make the two comparable
+is the filter command the repository itself names, which this hook will not
+run. Skipping is the fail-open answer: comparing them directly would report
+every line of the file as added. This skip lives on the tracked branch only —
+an untracked path carrying the same attribute is still scanned whole. A path
+carrying a **`working-tree-encoding`** is *not* skipped — the attribute's
+value is the codec name, so the worktree side is decoded with it and the scan
+runs normally. A codec Python cannot resolve falls back to skipping the path.
 
 ## Dependencies
 

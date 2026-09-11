@@ -54,7 +54,7 @@ before being accepted here; three of them invalidated claims the draft made.
    `subprocess.run(text=True)` raise, `_git` returns `(127, "")` through its `except Exception`,
    and a pre-existing `// café fixes #1` on an untouched line would then block the close. Today
    that file yields exactly one added line. Fixed by demanding a positive not-in-`HEAD` signal
-   (§1d) and by reading the blob as bytes (§1e).
+   (§1c) and by reading the blob as bytes (§1e).
 3. **Filter-tracked files become whole-file scans.** The clean filter this design stops running is
    the very thing that made a git-lfs pointer comparable to its worktree content. Without it,
    every line of an LFS or git-crypt file reads as added. The converse is worse:
@@ -153,17 +153,19 @@ The tracked-path branch of `final_files_added_lines()` currently runs one `git d
 `+` lines out of it. It becomes, in order:
 
 ```python
-new_text = read_text_capped(path)              # cheapest, and skips junk before spending git calls
 rc, rel  = _git(parent, "ls-files", "-z", "--full-name", "--error-unmatch", "--", path)
                                                # tracked? and the repo-relative name, in one call
 skip if check_attr(basename) sets filter or working-tree-encoding     # §1f
+new_text = read_text_capped(path, encoding)   # encoding comes from the probe just above
 rc, rec  = _git(parent, "ls-tree", "-z", "HEAD", "--", ":(top)" + rel)       # §1c
 rc, blob = _git_bytes(parent, "cat-file", "blob", "HEAD:" + rel)             # §1e
 lines    = added(blob_text, new_text)
 ```
 
-`added()` lives in `comment_scan.py` and is already the write-time hook's definition of an added
-line. Both hooks converge on one definition, which they do not share today.
+The read cannot run first: its `encoding` argument is the attribute probe's output, so `ls-files`
+(which supplies `rel`) and `check_attr` (which supplies `encoding`) both have to run before
+`read_text_capped` can. `added()` lives in `comment_scan.py` and is already the write-time hook's
+definition of an added line. Both hooks converge on one definition, which they do not share today.
 
 ### 1b. Resolving `rel` without `os.path.relpath`
 
@@ -233,9 +235,12 @@ both answer correctly; the anchored form is used because it names the same path 
 read addresses.
 
 `HEAD` itself is still verified once per repository root with `rev-parse --verify --quiet HEAD`,
-cached alongside `roots`, because in a repository with no commits the membership probe cannot
-distinguish "no commits" from "not in HEAD" either, and reading that as a new file would scan
-whole files in a fresh checkout.
+cached alongside `roots`. An unborn `HEAD` does not need this check to be classified correctly:
+`ls-tree HEAD` on a repository with no commits fails outright (rc 128, row five of the table
+above), which the membership probe already reads as unanswerable and skips. What this check buys
+is cost, not correctness -- one cheap, cached call per root instead of spending the `ls-tree` and
+`cat-file` calls on every tracked path in a fresh checkout, when a single `rev-parse` already knows
+both can only fail.
 
 ### 1d. The state matrix
 

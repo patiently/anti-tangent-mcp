@@ -167,7 +167,19 @@ def _line_comment_spans(opens, raw):
 _MULTILINE_QUOTES = ('"""', "'''", "`")
 
 
-def block_comment_lines(text):
+# A backtick literal's `${...}` hole returns to CODE only in a language that
+# actually interpolates it: a JavaScript/TypeScript template literal evaluates
+# an expression there, and that expression can contain a genuine block
+# comment. A Go backquoted raw string is a different construct -- it is
+# uninterpreted between the backticks, so `${`, `/*`, and every other byte
+# inside it is literal text, never code. Applying the JS/TS hole rule to Go
+# would read a raw string's literal `${` as an escape into code and
+# misclassify string content as a comment. No other extension in SCAN_EXTS
+# has a backtick literal that interpolates, so the safe default is off.
+_INTERPOLATING_EXTS = {".js", ".jsx", ".ts", ".tsx"}
+
+
+def block_comment_lines(text, interpolates):
     """Line texts sitting inside an open /* */ block, as a set.
 
     The question cannot be answered from a line on its own: ` * text` is a
@@ -183,9 +195,12 @@ def block_comment_lines(text):
 
     Line comments, string literals and template-literal interpolation are all
     tracked in the same pass. Backticks are scanned character by character
-    rather than jumped over, because a `${ ... }` hole returns to CODE: a
-    genuine block comment can live inside one, and today's scanner finds it.
-    Skipping to the closing backtick would silently lose that detection.
+    rather than jumped over, because when `interpolates` is true a `${ ... }`
+    hole returns to CODE: a genuine block comment can live inside one, and
+    the scanner finds it. Skipping to the closing backtick would silently
+    lose that detection. `interpolates` is false for a language whose
+    backtick literal never opens such a hole, so `${` there stays literal
+    text like every other character between the backticks.
 
     Matched by TEXT rather than line number because the caller may hold a
     sparse subset of the file with no indices to offer. A line whose text
@@ -206,7 +221,7 @@ def block_comment_lines(text):
                     break
                 stack.pop(); i = end + 2; continue
             if top == "`":
-                if line.startswith("${", i):
+                if interpolates and line.startswith("${", i):
                     stack.append("interp"); i += 2; continue
                 if line[i] == "\\":
                     i += 2; continue
@@ -469,11 +484,15 @@ def openers(path):
     return LINE_COMMENT.get(os.path.splitext(path)[1].lower(), DEFAULT_COMMENT)
 
 
+def _interpolates(path):
+    return os.path.splitext(path)[1].lower() in _INTERPOLATING_EXTS
+
+
 def scannable(path):
     return os.path.splitext(path)[1].lower() in SCAN_EXTS
 
 
-def violations(path, added_lines, context=None):
+def violations(path, added_lines, context=None, strict=False):
     """Return [(line, why)] for added comment lines carrying change history.
 
     `context` is the full post-change text of the file, when the caller has
@@ -495,8 +514,13 @@ def violations(path, added_lines, context=None):
     that bounds the whole call, so it ends the call wherever it fires.
 
     Anything that stops the scan completing — the deadline above, or any
-    exception from a caller-supplied pattern — yields no violations. This
-    module's standing rule is that an undecidable scan allows the write.
+    exception from a caller-supplied pattern — yields no violations, unless
+    `strict` is true, in which case the exception propagates instead. The
+    default is what every hook needs: an undecidable scan must allow the
+    write, never block one. `strict` exists for a caller that is not a hook
+    and cannot let an incomplete scan pass as a completed one with nothing
+    found -- a measurement tool reporting a false "zero hits" is worse than
+    the tool crashing where a human can see why.
     """
     if not scannable(path):
         return []
@@ -510,7 +534,8 @@ def violations(path, added_lines, context=None):
                 if context is not None and starred_candidate(path, raw):
                     if block_lines is None:
                         try:
-                            block_lines = block_comment_lines(context)
+                            block_lines = block_comment_lines(
+                                context, _interpolates(path))
                             context_lines = set(context.splitlines())
                         except _ScanTimeout:
                             # ITIMER_REAL is one-shot: absorbing the deadline
@@ -540,6 +565,8 @@ def violations(path, added_lines, context=None):
                         out.append((raw.strip(), hit))
                         break
     except Exception:
+        if strict:
+            raise
         return []
     return out
 

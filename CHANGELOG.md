@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   triple-quoted string — is no longer scanned as a block-comment continuation, so a
   changelog or help text embedded in source stops refusing its own write. The scanner
   now decides from the surrounding file whether a block comment is actually open.
+- `${...}` reopens code only in the languages whose backtick literals interpolate —
+  `.js`, `.jsx`, `.ts`, `.tsx`. A Go raw string is uninterpreted, so a comment written
+  between its backticks is string content and is left alone.
 - A path carrying a `filter` attribute (git-lfs, git-crypt) is skipped rather than
   reported as wholly new, and a `working-tree-encoding` path is decoded with its
   declared codec instead of being misread as UTF-8.

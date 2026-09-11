@@ -217,8 +217,13 @@ def _head_exists(cwd, root, cache):
     root that could not be named falls back to the directory, which is a
     cache miss every time rather than a wrong answer.
 
-    Without this check, `HEAD:<rel>` answering "absent" in a repository that
-    has no commits would be read as a new file and scan every line of it.
+    An unborn HEAD is already handled further down: `ls-tree HEAD` on a
+    repository with no commits fails outright (rc 128), which
+    `_tracked_added_lines` reads as unanswerable and skips, same as any other
+    tree it cannot read. This check does not close a gap that call leaves
+    open; it is one cheap, cached probe per root that avoids spending the
+    `ls-tree` and `cat-file` calls on every tracked path in a fresh checkout,
+    when a single `rev-parse` already knows they can only fail.
     """
     key = root or cwd
     if key not in cache:

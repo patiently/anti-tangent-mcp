@@ -834,6 +834,43 @@ class TokenizerFailureFallsBack(unittest.TestCase):
         self.assertNotEqual(out, [], "a failed walk must fall back, not drop the scan")
 
 
+class StrictModeReraisesInsteadOfFailingOpen(unittest.TestCase):
+    # fp-scan.py is a measurement tool, not a hook: a scan that did not
+    # actually complete must not report the same "[]" a hook fails open to,
+    # because an operator reads that as "zero hits" and adopts a pattern that
+    # is not actually safe. strict=True exists only for that caller; every
+    # hook keeps calling violations() with the default, which must fail open.
+    # comment_spans is broken here, rather than
+    # block_comment_lines, because a block_comment_lines failure is caught
+    # locally and turned into a deliberate fallback answer (see
+    # TokenizerFailureFallsBack) -- it never reaches the outer boundary this
+    # test targets.
+    def _break_comment_spans(self):
+        return lambda path, raw, allow_star=True: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    def test_strict_caller_sees_the_exception(self):
+        sys.path.insert(0, HOOKS)
+        import comment_scan as cs
+        real = cs.comment_spans
+        cs.comment_spans = self._break_comment_spans()
+        try:
+            with self.assertRaises(RuntimeError):
+                cs.violations("x.go", ["// fixes #1"], strict=True)
+        finally:
+            cs.comment_spans = real
+
+    def test_default_caller_still_fails_open(self):
+        sys.path.insert(0, HOOKS)
+        import comment_scan as cs
+        real = cs.comment_spans
+        cs.comment_spans = self._break_comment_spans()
+        try:
+            out = cs.violations("x.go", ["// fixes #1"])
+        finally:
+            cs.comment_spans = real
+        self.assertEqual(out, [], "a hook's default call must still fail open")
+
+
 class TemplateInterpolationStaysCode(unittest.TestCase):
     # A ${...} hole inside a backtick span returns to CODE, so a block
     # comment written inside one is a real comment. Only the second test
@@ -866,6 +903,29 @@ class TemplateInterpolationStaysCode(unittest.TestCase):
         from comment_scan import violations
         ctx = 'const t = `\n * added in v1.2.3\n`;\n'
         self.assertEqual(violations("x.ts", [" * added in v1.2.3"], ctx), [])
+
+
+class InterpolationIsLanguageScoped(unittest.TestCase):
+    # ${...} opens a code hole inside a JS/TS template literal, but a Go
+    # backquoted raw string is uninterpreted -- ${, /* and everything else
+    # between its backticks is literal text. Both fixtures share the exact
+    # same shape; only the extension differs, so the language is the only
+    # variable each test can be attributed to.
+    def test_go_raw_string_interpolation_is_literal_text(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = 'package x\n\nconst tmpl = `${ a /*\n * added in v1.2.3\n */ b }`\n'
+        self.assertEqual(
+            violations("x.go", [" * added in v1.2.3"], ctx), [],
+            "a Go raw string has no interpolation; ${ does not open a hole")
+
+    def test_ts_template_literal_interpolation_still_fires(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = 'const t = `${ a /*\n * added in v1.2.3\n */ b }`;\n'
+        self.assertNotEqual(
+            violations("x.ts", [" * added in v1.2.3"], ctx), [],
+            "a TS template literal's ${ opens a hole; the comment inside it is real")
 
 
 class ContextsAreHandedBack(unittest.TestCase):

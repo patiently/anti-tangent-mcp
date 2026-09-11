@@ -115,7 +115,22 @@ def main():
             continue
         text = blob.stdout.decode("utf-8", errors="replace")
         for n, raw in enumerate(text.splitlines(), 1):
-            for line, why in violations(path, [raw]):
+            # strict=True: a scan that cannot complete (the deadline fires,
+            # or a caller-supplied pattern raises) must not read as "this
+            # line has zero hits". The hooks fail open on exactly the same
+            # exception because an unanswerable question must allow the
+            # write, but this is a measurement tool -- a silent zero here
+            # would tell an operator a hostile --ticket-pattern is safe to
+            # adopt, right before it starts blocking every write.
+            try:
+                found = violations(path, [raw], strict=True)
+            except Exception as exc:
+                sys.stderr.write(
+                    "fp-scan: the scan did not complete at %s:%d -- %r\n"
+                    "Nothing from this line onward was measured; no report "
+                    "can be trusted from a partial scan.\n" % (path, n, exc))
+                return 1
+            for line, why in found:
                 sys.stdout.write("%s\t%d\t%s\t%s\n" % (path, n, why, escape(line)))
                 hits += 1
                 if why == TICKET_WHY:
