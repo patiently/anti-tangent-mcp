@@ -1351,17 +1351,24 @@ class EditReconstruction(unittest.TestCase):
         self.assertEqual(rc, 2, "a real block continuation must still block")
 
     def test_replace_all_reconstructs_every_site(self):
-        # Two raw strings; replace_all edits both. Reconstructing with a count
-        # of 1 would leave the second literal unbalanced in the context text.
-        disk = 'package x\n\nconst a = `\nusage\n`\nconst b = `\nusage\n`\n'
-        rc = self._run({"old_string": "usage",
-                        "new_string": "usage\n * added in v1.2.3 the flag",
+        # The marker appears twice: once inside a raw string, once inside a
+        # real block comment. Honouring replace_all puts the added line at
+        # BOTH sites, so the block-comment copy is a genuine comment carrying
+        # a version reference and must block. Reconstructing with a count of
+        # 1 reaches only the raw-string site, where the line is string
+        # content and nothing fires -- which is why the ORDER here matters
+        # and why this fixture discriminates where a two-raw-string one
+        # does not.
+        disk = 'const t = `\nP\n`;\n/**\nP\n*/\n'
+        rc = self._run({"old_string": "P",
+                        "new_string": "P\n * added in v1.2.3",
                         "replace_all": True}, disk)
-        self.assertEqual(rc, 0, "string content is not a comment at either site")
+        self.assertEqual(rc, 2, "the block-comment site must still be scanned")
 
     def test_an_unreadable_target_still_scans_by_line(self):
-        # context is None here, so the starred branch keeps its old behaviour
-        # rather than the scan being dropped: an ordinary // tell must block.
+        # With no context the starred branch treats a candidate line as a
+        # comment on shape alone, and the scan still runs: an ordinary //
+        # tell must block.
         tmp = tempfile.mkdtemp()
         path = os.path.join(tmp, "x.go")
         os.symlink(os.path.join(tmp, "nowhere"), path)
@@ -1377,10 +1384,15 @@ class EditReconstruction(unittest.TestCase):
 
     def test_an_empty_old_string_passes_no_context(self):
         # str.replace("", x) inserts between every character. Reconstructing
-        # from it would hand the scanner a file that never existed.
-        disk = 'package x\n'
-        rc = self._run({"old_string": "", "new_string": "// fixes #1"}, disk)
-        self.assertEqual(rc, 2, "the line-based scan must still see the tell")
+        # from it would hand the scanner a file that never existed. The added
+        # line is STARRED, not a `//` tell: only a starred line consults the
+        # context, so only a starred line can tell a None context apart from
+        # a fabricated one. With the guard the line fires on shape; without
+        # it the fabricated context says the line sits in no block and
+        # nothing fires at all.
+        disk = 'package x\nfunc F() {}\n'
+        rc = self._run({"old_string": "", "new_string": " * fixes #1"}, disk)
+        self.assertEqual(rc, 2, "an empty old_string must not fabricate a context")
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1410,7 +1422,11 @@ Add to its docstring, after the `stats` paragraph:
 In the tracked branch, after `out[path] = lines`, add:
 
 ```python
-            if contexts is not None:
+            if lines and contexts is not None:
+                # Only paths that reach `out` are ever looked up again, and a
+                # context is a whole file: holding one for every unchanged
+                # path a completion names would grow with the submission
+                # rather than with the work.
                 contexts[path] = new_text
 ```
 
