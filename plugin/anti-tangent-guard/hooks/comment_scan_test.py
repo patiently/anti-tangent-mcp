@@ -326,5 +326,201 @@ class LazyFetchCannotExec(unittest.TestCase):
             "a missing blob must not be allowed to exec the configured transport")
 
 
+def _repo(tmp, name="r", attrs=None, configs=(), tracked=("f.go", "package x\n"),
+          worktree=None):
+    """Build a scratch repo; return (repo_path, sentinel_path). Filters armed."""
+    sentinel = os.path.join(tmp, "SENTINEL")
+    evil = os.path.join(tmp, "evil.sh")
+    if not os.path.exists(evil):
+        with open(evil, "w") as fh:
+            fh.write("#!/bin/sh\necho fired >> %s\n" % sentinel)
+        os.chmod(evil, 0o755)
+    repo = os.path.join(tmp, name)
+    os.makedirs(repo)
+
+    def git(*args):
+        subprocess.run(["git", "-C", repo] + list(args),
+                       capture_output=True, timeout=30)
+
+    git("init", "-q", ".")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    if attrs:
+        with open(os.path.join(repo, ".gitattributes"), "w") as fh:
+            fh.write(attrs)
+        git("add", ".gitattributes")
+        git("commit", "-qm", "attrs")
+    name_, body = tracked
+    with open(os.path.join(repo, name_), "wb") as fh:
+        fh.write(body if isinstance(body, bytes) else body.encode("utf-8"))
+    git("add", name_)
+    git("commit", "-qm", "init")
+    for key in configs:
+        git("config", key, evil + " " + key)
+    if worktree is not None:
+        with open(os.path.join(repo, name_), "wb") as fh:
+            fh.write(worktree if isinstance(worktree, bytes)
+                     else worktree.encode("utf-8"))
+    return repo, sentinel
+
+
+class ContentFiltersAreNeverRun(unittest.TestCase):
+    # git diff had to convert the worktree side before comparing, and that
+    # conversion runs whatever command the repository's own config names. Both
+    # keys are live; with both set only process fires, so each needs its own
+    # fixture or one of them is never exercised.
+    def _case(self, key):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, sentinel = _repo(
+            tmp, attrs="*.go filter=x\n", configs=(key,),
+            tracked=("f.go", "package x\n"),
+            worktree="package x\nfunc F() {}\n")
+        path = os.path.join(repo, "f.go")
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        self.assertEqual(out.get(path), ["func F() {}"])
+        self.assertFalse(os.path.exists(sentinel),
+                         "%s must never be executed from inside this hook" % key)
+
+    def test_filter_process_is_not_run(self):
+        self._case("filter.x.process")
+
+    def test_filter_clean_is_not_run(self):
+        self._case("filter.x.clean")
+
+
+class UndecodableHeadBlob(unittest.TestCase):
+    # One byte that is not UTF-8, anywhere in the file, makes subprocess's
+    # text mode raise inside _git, which reports it as (127, "") -- the same
+    # shape as git refusing the command. The diff is then unanswerable and the
+    # path is dropped, so a file like this is currently unscannable and
+    # nothing says so. Reading the blob as bytes and decoding both sides with
+    # errors="replace" makes it comparable without widening what counts as
+    # added.
+    def test_a_latin1_byte_does_not_widen_the_scan(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, _ = _repo(
+            tmp,
+            tracked=("f.go", b"package x\n// caf\xe9 fixes #1 old\n"),
+            worktree=b"package x\n// caf\xe9 fixes #1 old\nfunc F() {}\n")
+        path = os.path.join(repo, "f.go")
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        self.assertEqual(out.get(path), ["func F() {}"],
+                         "only the added line may be reported")
+
+
+class StagedNewFile(unittest.TestCase):
+    def test_a_tracked_file_absent_from_head_is_whole_file(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, _ = _repo(tmp)
+        new = os.path.join(repo, "new.go")
+        with open(new, "w") as fh:
+            fh.write("// fixes #1\npackage y\n")
+        subprocess.run(["git", "-C", repo, "add", "new.go"],
+                       capture_output=True, timeout=30)
+        out = g.final_files_added_lines({"final_files": [{"path": new}]})
+        self.assertEqual(out.get(new), ["// fixes #1", "package y"])
+
+    def test_a_staged_new_vendored_file_is_skipped(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, _ = _repo(tmp)
+        vend = os.path.join(repo, "vendor", "lib")
+        os.makedirs(vend)
+        new = os.path.join(vend, "u.go")
+        with open(new, "w") as fh:
+            fh.write("// added in v1.2.3 upstream\npackage lib\n")
+        subprocess.run(["git", "-C", repo, "add", "-A"],
+                       capture_output=True, timeout=30)
+        stats = {}
+        out = g.final_files_added_lines({"final_files": [{"path": new}]},
+                                        stats=stats)
+        self.assertEqual(out, {})
+        self.assertEqual(stats["vendored_skipped"], 1)
+
+
+class NoCommitsYet(unittest.TestCase):
+    def test_a_repository_with_no_head_skips_the_path(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo = os.path.join(tmp, "fresh")
+        os.makedirs(repo)
+        subprocess.run(["git", "-C", repo, "init", "-q", "."],
+                       capture_output=True, timeout=30)
+        path = os.path.join(repo, "f.go")
+        with open(path, "w") as fh:
+            fh.write("// fixes #1\n")
+        subprocess.run(["git", "-C", repo, "add", "f.go"],
+                       capture_output=True, timeout=30)
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        self.assertEqual(out, {}, "no HEAD means the question is unanswerable")
+
+
+class HeadProbedOncePerRoot(unittest.TestCase):
+    # Two files in different subdirectories of ONE worktree. Keying the cache
+    # on the directory asked from would probe HEAD twice for the same
+    # repository.
+    def test_one_worktree_is_probed_once(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, _ = _repo(tmp, tracked=("a.go", "package x\n"))
+        sub = os.path.join(repo, "sub")
+        os.makedirs(sub)
+        second = os.path.join(sub, "b.go")
+        with open(second, "w") as fh:
+            fh.write("package y\n")
+        subprocess.run(["git", "-C", repo, "add", "-A"], capture_output=True, timeout=30)
+        subprocess.run(["git", "-C", repo, "commit", "-qm", "two"], capture_output=True, timeout=30)
+        with open(os.path.join(repo, "a.go"), "a") as fh:
+            fh.write("// fixes #1\n")
+        with open(second, "a") as fh:
+            fh.write("// fixes #2\n")
+
+        head_probes = []
+        real = g._git
+
+        def counting_git(cwd, *args):
+            if args[:3] == ("rev-parse", "--verify", "--quiet") and args[3] == "HEAD":
+                head_probes.append(cwd)
+            return real(cwd, *args)
+
+        g._git = counting_git
+        try:
+            out = g.final_files_added_lines(
+                {"final_files": [{"path": os.path.join(repo, "a.go")},
+                                 {"path": second}]})
+        finally:
+            g._git = real
+        self.assertEqual(len(out), 2, "both files should be scanned")
+        self.assertEqual(len(head_probes), 1,
+                         "one worktree must be probed once, not once per directory")
+
+
+class SymlinkedWorktreeRoot(unittest.TestCase):
+    # --show-toplevel prints the realpath while the submitted path does not,
+    # so a relative path computed from the two is wrong the moment any parent
+    # is a symlink. ls-files --full-name answers it correctly.
+    def test_a_symlinked_root_still_resolves(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, _ = _repo(tmp, name="real",
+                        tracked=("f.go", "package x\n"),
+                        worktree="package x\n// fixes #1\n")
+        link = os.path.join(tmp, "link")
+        os.symlink(repo, link)
+        path = os.path.join(link, "f.go")
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        self.assertEqual(out.get(path), ["// fixes #1"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,7 @@ import os
 import subprocess
 import time
 
-from comment_scan import read_text_capped
+from comment_scan import READ_CAP_BYTES, added, read_text_capped
 
 
 # --no-optional-locks keeps these read-only questions from refreshing the
@@ -141,6 +141,45 @@ def _is_vendored(path, root=""):
     return any(seg in VENDORED_DIRS for seg in rel.replace("\\", "/").split("/"))
 
 
+def _head_exists(cwd, root, cache):
+    """True when this worktree has a HEAD commit at all.
+
+    Keyed on the worktree ROOT, not on the directory the question was asked
+    from: one repository reached through several of its subdirectories is one
+    answer, and keying on the directory would re-probe for each of them. A
+    root that could not be named falls back to the directory, which is a
+    cache miss every time rather than a wrong answer.
+
+    Without this check, `HEAD:<rel>` answering "absent" in a repository that
+    has no commits would be read as a new file and scan every line of it.
+    """
+    key = root or cwd
+    if key not in cache:
+        rc, _ = _git(cwd, "rev-parse", "--verify", "--quiet", "HEAD")
+        cache[key] = rc == 0
+    return cache[key]
+
+
+def _tracked_added_lines(parent, rel, new_text):
+    """(lines, whole_file) for a tracked path, or None when unanswerable.
+
+    Absence from HEAD is established POSITIVELY, by a call that never reads
+    the object. Inferring it from a failing cat-file would fold a decode
+    error, a timeout and an unfetchable blob into "every line is new", which
+    blocks a close on comments the implementer never wrote. This module's
+    standing rule is that a question it could not answer means skip.
+    """
+    rc, _ = _git(parent, "rev-parse", "--verify", "--quiet", "HEAD:" + rel)
+    if rc == 1:
+        return new_text.splitlines(), True
+    if rc != 0:
+        return None
+    rc_blob, blob = _git_bytes(parent, "cat-file", "blob", "HEAD:" + rel)
+    if rc_blob != 0 or len(blob) > READ_CAP_BYTES:
+        return None
+    return added(blob.decode("utf-8", errors="replace"), new_text), False
+
+
 def final_files_added_lines(inp, deadline=None, stats=None):
     """{path: [added lines]} for a completion that submitted final_files.
 
@@ -155,10 +194,12 @@ def final_files_added_lines(inp, deadline=None, stats=None):
     which would treat every line as added.
 
     Exit 1 from ls-files means "unmatched"; anything else (128 for a path
-    outside a repository or a repo with no HEAD) means the question could not
-    be answered, and every such path is skipped rather than guessed at. The
-    same rule governs check-ignore below: only its definite "not ignored"
-    status licenses treating a file as new.
+    outside a repository) means the question could not be answered, and every
+    such path is skipped rather than guessed at. A staged file still matches
+    even when the repository has no HEAD yet; that case is caught downstream,
+    by the head-existence check the tracked branch runs before reading any
+    blob. The same rule governs check-ignore below: only its definite "not
+    ignored" status licenses treating a file as new.
 
     A `stats` dict, if given, is filled with what the caller cannot see from
     the return value: "truncated" says the budget stopped the walk early, and
@@ -173,6 +214,7 @@ def final_files_added_lines(inp, deadline=None, stats=None):
     """
     out = {}
     roots = {}
+    heads = {}
     vendored_skipped = 0
     truncated = False
     if deadline is None:
@@ -187,14 +229,25 @@ def final_files_added_lines(inp, deadline=None, stats=None):
         parent = os.path.dirname(path)
         if not os.path.isdir(parent):
             continue
-        rc, _ = _git(parent, "ls-files", "--error-unmatch", "--", path)
+        rc, listed = _git(parent, "ls-files", "-z", "--full-name",
+                          "--error-unmatch", "--", path)
         if rc == 0:
-            rc_diff, diff = _git(parent, "diff", "--no-color", "--no-ext-diff",
-                                 "--no-textconv", "HEAD", "--", path)
-            if rc_diff != 0:
+            rel = listed.split("\0")[0]
+            if not rel:
                 continue
-            lines = [ln[1:] for ln in diff.splitlines()
-                     if ln.startswith("+") and not ln.startswith("+++")]
+            new_text = read_text_capped(path)
+            if not isinstance(new_text, str):
+                continue
+            root = _repo_root(parent, roots)
+            if not _head_exists(parent, root, heads):
+                continue
+            result = _tracked_added_lines(parent, rel, new_text)
+            if result is None:
+                continue
+            lines, whole_file = result
+            if whole_file and _is_vendored(path, root):
+                vendored_skipped += 1
+                continue
             if lines:
                 out[path] = lines
             continue
