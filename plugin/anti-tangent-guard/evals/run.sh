@@ -264,10 +264,16 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # tracked path governed by a gitattributes filter, in both its clean and
 # process forms, must be compared without ever running the configured
 # filter command; and a blob missing from a partial clone must not send git
-# down a lazy fetch that execs the configured transport. Each arms the
-# command to write a sentinel file and asserts the sentinel's continued
+# down a lazy fetch that execs the configured transport, even when the
+# repository grants its own scheme with protocol.<scheme>.allow. Each arms
+# the command to write a sentinel file and asserts the sentinel's continued
 # absence, since an exit code alone cannot tell a skipped exec from one that
 # ran and still let the close through.
+#
+# The transport case pins the three mechanisms TOGETHER. Separating them
+# means running git with one of them removed from the environment, which a
+# case here cannot express, because the walk builds that environment itself
+# rather than inheriting it; comment_scan_test.py takes them apart.
 #
 # The per-group counts above PARTITION this table: every case belongs to
 # exactly one group, and they sum to EXPECTED_CASE_COUNT. Adding a case means

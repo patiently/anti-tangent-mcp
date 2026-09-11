@@ -229,12 +229,27 @@ exists to close. Measured on git 2.43.0 from a subdirectory, with the path genui
 Blobless clones (`--filter=blob:none`) are unaffected either way: the trees are present, so the
 membership probe succeeds and it is `cat-file` that fails, which already means skip.
 
-The `:(top)` prefix is load-bearing. `ls-tree` takes a *pathspec* and matches it relative to the
+The `top` magic is load-bearing. `ls-tree` takes a *pathspec* and matches it relative to the
 current directory, which here is the file's own directory rather than the repository root, so a
 bare `<rel>` matches nothing from a subdirectory and returns rc 0 with no records — a present file
-reported as new. `--full-tree` does not fix this. `":(top)" + rel` and `os.path.basename(path)`
-both answer correctly; the anchored form is used because it names the same path the `cat-file`
-read addresses.
+reported as new. `--full-tree` does not fix this. `":(top,literal)" + rel` and
+`os.path.basename(path)` both answer correctly; the anchored form is used because it names the
+same path the `cat-file` read addresses.
+
+`literal` is the other half of that pathspec, and the `ls-files` call carries `:(literal)` on the
+submitted absolute path for the same reason. A pathspec is a glob: `?`, `*` and `[...]` are
+metacharacters, so a file actually *named* with one matches its siblings. Measured on 2.43.0, a
+tracked `a?.go` beside a tracked `a1.go` makes `ls-files` emit `a1.go\0a?.go\0`; the code reads the
+first record, so `<rel>` names the wrong file and its blob becomes the "before" side of the
+comparison — reporting as added every line the two files do not share. That is a **false block**,
+the direction this module weights worst: an unchanged file's pre-existing comments attributed to
+the close. `ls-tree` was measured not to glob these on 2.43.0, so its `literal` is defence in depth
+rather than a fix; it costs nothing and pathspec semantics are not a contract across versions.
+
+`--literal-pathspecs` is deliberately *not* used. It is a main option, not a subcommand one — in
+subcommand position git answers 129, which `_git_call` reads as its `--no-optional-locks` retry
+signal — and it disables *all* pathspec magic, taking `top` with it and reintroducing the
+present-file-read-as-absent bug above. Saying `literal` in each pathspec scopes it correctly.
 
 `HEAD` itself is still verified once per repository root with `rev-parse --verify --quiet HEAD`,
 cached alongside `roots`. An unborn `HEAD` does not need this check to be classified correctly:
@@ -370,15 +385,44 @@ The same shape is reachable through `remote.origin.uploadpack` with a local-path
 identically, so this is pre-existing rather than introduced by the change — but it is exactly the
 hole this design claims to close, and a fix that left it open would be shipping a false claim.
 
-Two mitigations, both measured clean against the same sentinel:
+Three mitigations, all measured against the same sentinel:
 
 - `-c protocol.allow=never` in the pin list. It is filter-name-free and dies in
-  `transport_check_allowed` before ssh, upload-pack or a remote helper is spawned.
+  `transport_check_allowed` before ssh, upload-pack or a remote helper is spawned. It sets only
+  the **default** policy: git documents `protocol.allow` as governing the schemes that carry no
+  `protocol.<name>.allow` of their own. Re-measured on 2.43.0 with the fixture above plus
+  `protocol.ssh.allow=always`, it is bypassed — the sentinel fires. A repository that can point
+  `core.sshCommand` at a command can set the per-scheme key in the same `.git/config`, so this pin
+  is the weakest of the three against a hostile repository and the strongest against an accidental
+  one.
+- `GIT_ALLOW_PROTOCOL=none` in the subprocess environment. Documented as overriding any existing
+  configuration, which is the property the per-scheme case needs, and measured clean under
+  `protocol.ssh.allow=always`. The value is a colon-separated allowlist of scheme names; `none`
+  names no scheme. The empty string allowlists nothing either and also measured clean, but an
+  empty value is indistinguishable from an unset one wherever environment handling drops empty
+  entries, and an unset variable hands the decision back to config. The variable is load-bearing
+  in both directions: `GIT_ALLOW_PROTOCOL=ssh` makes the sentinel fire *through*
+  `protocol.allow=never`.
 - `GIT_NO_LAZY_FETCH=1` in the subprocess environment, honoured on 2.43.0
-  (`warning: lazy fetching disabled`).
+  (`warning: lazy fetching disabled`). It stops the fetch being attempted rather than constraining
+  what it may speak, so it holds without git's transport policy being consulted at all. It is read
+  in `promisor-remote.c` only from 2.39.4; 2.39.3 and earlier ignore it silently, and Apple Git-146
+  (Xcode 15 CLT) is 2.39.3.
 
-Both are applied. They are independent mechanisms and neither is known to subsume the other across
-git versions.
+All three are applied. None subsumes the others: the first is the only one that survives an
+environment being stripped, the second is the only one that beats a per-scheme grant on an older
+git, and the third is the only one that does not depend on transport policy being reached.
+
+Measured on git 2.43.0, partial clone with a missing blob, `core.sshCommand` pointed at a sentinel,
+plus `protocol.ssh.allow=always`:
+
+```
+-c protocol.allow=never ONLY      SSH FIRED — pin bypassed
+  + GIT_NO_LAZY_FETCH=1           clean
+  + GIT_ALLOW_PROTOCOL=none       clean
+  + GIT_ALLOW_PROTOCOL= (empty)   clean
+  + GIT_ALLOW_PROTOCOL=ssh        SSH FIRED — the variable decides, both ways
+```
 
 The rest of the pin list:
 
@@ -472,6 +516,22 @@ regression. Four rules close it:
    Raw-string forms that the languages in `SCAN_EXTS` actually use are named explicitly rather than
    left to the implementer — Rust `r#"…"#`, C++ `R"(…)"`, and the `${…}` interpolation holes inside
    a backtick span.
+
+   The backtick span is scoped to the extensions that **have** the literal: `.go` plus the
+   interpolating `.js`/`.jsx`/`.ts`/`.tsx`. Rust, C, C++, Java and Kotlin have no backtick string,
+   so a backtick there is prose — markdown inside a doc comment, or a byte of an `r#"…"#` /
+   `R"(…)"` body — and an odd one opens a span that runs to end of file. Measured: a lone backtick
+   inside a multi-line Rust or C++ raw string hides a genuine `/** * fixes #1 */` below it. There
+   is no literal for the span to model in those languages, so opening one can only lose findings.
+
+   Inside the span, the backslash escape is scoped to the **interpolating** extensions, the same
+   set as the `${…}` hole, because the two properties travel together: a JS/TS template literal
+   processes escapes, a Go raw string is uninterpreted and a backslash in it is data. Measured
+   end-to-end through `check-comment-write`: with the escape applied unconditionally, a Go raw
+   string ending in `\` (`` `C:\tmp\` ``, or a UNC path) consumes its own closing backtick, and an
+   Edit adding ` * Does the thing, fixes #12` inside a real `/** */` further down the file exits 0
+   instead of 2. Windows paths are the idiomatic reason to reach for Go backticks, so this is a
+   common shape, not an exotic one.
 3. **The walk is lazy.** It runs only when an added line is a starred candidate. A file with no
    starred added line pays nothing, and — more importantly — a tokenizer exception or its share of
    the 2-second scan deadline cannot take down a `//` finding elsewhere in the same file.

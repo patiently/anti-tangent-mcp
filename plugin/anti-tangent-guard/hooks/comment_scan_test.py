@@ -279,51 +279,126 @@ class DroppedOptionalLocksIsReported(unittest.TestCase):
                         "a walk that gave up the flag must say so")
 
 
+def _promisor_repo(tmp, name="r", configs=()):
+    """A partial clone whose only blob is missing. -> (repo, sentinel).
+
+    core.sshCommand is armed to write the sentinel, so anything that reaches
+    the transport leaves a trace an exit code could not show.
+    """
+    sentinel = os.path.join(tmp, "SENTINEL")
+    ssh = os.path.join(tmp, "ssh.sh")
+    if not os.path.exists(ssh):
+        with open(ssh, "w") as fh:
+            fh.write("#!/bin/sh\necho fired >> %s\nexit 1\n" % sentinel)
+        os.chmod(ssh, 0o755)
+
+    repo = os.path.join(tmp, name)
+    os.makedirs(repo)
+
+    def git(*args):
+        subprocess.run(["git", "-C", repo] + list(args),
+                       capture_output=True, timeout=30)
+
+    git("init", "-q", ".")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    with open(os.path.join(repo, "f.go"), "w") as fh:
+        fh.write("package x\n")
+    git("add", "f.go")
+    git("commit", "-qm", "i")
+    blob = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD:f.go"],
+                          capture_output=True, text=True,
+                          timeout=30).stdout.strip()
+    git("config", "core.repositoryFormatVersion", "1")
+    git("config", "extensions.partialClone", "origin")
+    git("config", "remote.origin.promisor", "true")
+    git("config", "remote.origin.url", "ssh://evil.example/x.git")
+    git("config", "core.sshCommand", ssh)
+    for key, value in configs:
+        git("config", key, value)
+    os.remove(os.path.join(repo, ".git", "objects", blob[:2], blob[2:]))
+    return repo, sentinel
+
+
 class LazyFetchCannotExec(unittest.TestCase):
     # A blob missing from the object store sends read-only git commands down a
     # partial-clone lazy fetch, and the fetch execs the configured transport.
     # That is a second, independent way for a repository's own config to run a
     # command inside this hook, and no amount of filter pinning closes it.
+    #
+    # Nothing here sets protocol.<scheme>.allow, so the repository leaves the
+    # default policy standing and every one of the three transport mechanisms
+    # is in force. What this case pins is the composite; the case below takes
+    # them apart.
     def test_a_missing_blob_in_a_partial_clone_runs_no_command(self):
         sys.path.insert(0, HOOKS)
         import git_added_lines as g
 
         tmp = tempfile.mkdtemp()
-        sentinel = os.path.join(tmp, "SENTINEL")
-        ssh = os.path.join(tmp, "ssh.sh")
-        with open(ssh, "w") as fh:
-            fh.write("#!/bin/sh\necho fired >> %s\nexit 1\n" % sentinel)
-        os.chmod(ssh, 0o755)
-
-        repo = os.path.join(tmp, "r")
-        os.makedirs(repo)
-
-        def git(*args):
-            subprocess.run(["git", "-C", repo] + list(args),
-                           capture_output=True, timeout=30)
-
-        git("init", "-q", ".")
-        git("config", "user.email", "t@t")
-        git("config", "user.name", "t")
-        with open(os.path.join(repo, "f.go"), "w") as fh:
-            fh.write("package x\n")
-        git("add", "f.go")
-        git("commit", "-qm", "i")
-        blob = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD:f.go"],
-                              capture_output=True, text=True,
-                              timeout=30).stdout.strip()
-        git("config", "core.repositoryFormatVersion", "1")
-        git("config", "extensions.partialClone", "origin")
-        git("config", "remote.origin.promisor", "true")
-        git("config", "remote.origin.url", "ssh://evil.example/x.git")
-        git("config", "core.sshCommand", ssh)
-        os.remove(os.path.join(repo, ".git", "objects", blob[:2], blob[2:]))
+        repo, sentinel = _promisor_repo(tmp)
 
         rc, out = g._git_bytes(repo, "cat-file", "blob", "HEAD:f.go")
         self.assertNotEqual(rc, 0, "the blob is gone, so this must not succeed")
         self.assertFalse(
             os.path.exists(sentinel),
             "a missing blob must not be allowed to exec the configured transport")
+
+
+class _DropsFromEnv(object):
+    """subprocess stand-in that removes named variables before running."""
+
+    def __init__(self, *names):
+        self.names = names
+
+    def run(self, argv, **kwargs):
+        env = dict(kwargs.pop("env", None) or os.environ)
+        for name in self.names:
+            env.pop(name, None)
+        return subprocess.run(argv, env=env, **kwargs)
+
+
+class TransportPinSurvivesAPerSchemeOverride(unittest.TestCase):
+    # protocol.allow sets the DEFAULT transport policy, and a default is all
+    # it sets: a repository carrying protocol.<scheme>.allow decides that
+    # scheme for itself, and the config that points core.sshCommand at a
+    # command can set that key in the same breath. Two other mechanisms
+    # answer it, and only one of them is in every git -- GIT_NO_LAZY_FETCH is
+    # young enough that a supported toolchain can predate it and ignore it in
+    # silence. So the pin is put on trial with GIT_NO_LAZY_FETCH stripped,
+    # which is the only arrangement where anything else is being tested.
+    def test_the_transport_stays_shut_without_the_lazy_fetch_variable(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+
+        tmp = tempfile.mkdtemp()
+        repo, sentinel = _promisor_repo(
+            tmp, configs=(("protocol.ssh.allow", "always"),))
+
+        real = g.subprocess
+        try:
+            # With both environment mechanisms gone the repository's own
+            # per-scheme allow must reopen the transport. Without this the
+            # assertion below would also pass against a fixture that never
+            # reached a transport at all.
+            g.subprocess = _DropsFromEnv("GIT_NO_LAZY_FETCH",
+                                         "GIT_ALLOW_PROTOCOL")
+            rc, _ = g._git_bytes(repo, "cat-file", "blob", "HEAD:f.go")
+            self.assertNotEqual(rc, 0, "the blob is gone, so this must not succeed")
+            self.assertTrue(
+                os.path.exists(sentinel),
+                "protocol.allow=never alone does not stop a per-scheme allow, "
+                "so this fixture must fire here or it proves nothing below")
+            os.remove(sentinel)
+
+            g.subprocess = _DropsFromEnv("GIT_NO_LAZY_FETCH")
+            rc, _ = g._git_bytes(repo, "cat-file", "blob", "HEAD:f.go")
+            self.assertNotEqual(rc, 0, "the blob is gone, so this must not succeed")
+            self.assertFalse(
+                os.path.exists(sentinel),
+                "a repository that allows its own scheme must still not be "
+                "able to exec the transport on a git with no GIT_NO_LAZY_FETCH")
+        finally:
+            g.subprocess = real
 
 
 def _repo(tmp, name="r", attrs=None, configs=(), tracked=("f.go", "package x\n"),
@@ -928,6 +1003,82 @@ class InterpolationIsLanguageScoped(unittest.TestCase):
             "a TS template literal's ${ opens a hole; the comment inside it is real")
 
 
+class BackslashEscapingIsLanguageScoped(unittest.TestCase):
+    # A backslash escapes the byte after it in a JS/TS template literal and is
+    # plain text in a Go raw string. Reading it as an escape in Go means a raw
+    # string whose last byte is a backslash never closes -- and a Windows path
+    # is the idiomatic reason to reach for a Go raw string at all -- so every
+    # block comment from there to the end of the file becomes invisible.
+    #
+    # The two fixtures are the same shape in opposite directions: in Go the
+    # literal ends at the backtick and the comment below it is real; in TS the
+    # escaped backtick keeps the literal open past the one that follows, so a
+    # later `/**` is string content and the comment that IS real is the one
+    # after the literal finally closes.
+    def test_a_backslash_terminated_go_raw_string_still_closes(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = ('package x\n\nvar p = `C:\\tmp\\`\n\n'
+               '/**\n * added in v1.2.3\n */\nfunc F() {}\n')
+        self.assertNotEqual(
+            violations("x.go", [" * added in v1.2.3"], ctx), [],
+            "a Go raw string's trailing backslash is text; the literal ends "
+            "at the backtick and the block comment below it is a comment")
+
+    def test_a_go_unc_path_raw_string_still_closes(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = ('package x\n\nvar p = `\\\\host\\share\\`\n\n'
+               '/**\n * added in v1.2.3\n */\nfunc F() {}\n')
+        self.assertNotEqual(
+            violations("x.go", [" * added in v1.2.3"], ctx), [],
+            "consecutive backslashes are text in a Go raw string too")
+
+    def test_a_ts_escaped_backtick_does_not_close_the_literal(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = 'const t = `a\\`b`;\n/**\n * added in v1.2.3\n */\n'
+        self.assertNotEqual(
+            violations("x.ts", [" * added in v1.2.3"], ctx), [],
+            "`a\\`b` is one template literal, so the block comment after it "
+            "is code; dropping the escape would leave a literal open here")
+
+
+class BacktickIsNotAStringEverywhere(unittest.TestCase):
+    # Rust, C, C++, Java and Kotlin have no backtick string literal. A
+    # backtick in one of their files is text -- markdown inside a doc comment,
+    # or a byte of a multi-line raw string -- and an odd one would open a span
+    # that runs to the end of the file, hiding every block comment after it.
+    # There is no literal there for the span to model, so opening one can only
+    # lose findings.
+    def test_a_rust_raw_string_backtick_does_not_blind_the_file(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = ('fn a() {\n    let s = r#"\npass the ` flag\n"#;\n}\n'
+               '/**\n * added in v1.2.3\n */\nfn f() {}\n')
+        self.assertNotEqual(
+            violations("x.rs", [" * added in v1.2.3"], ctx), [],
+            "Rust has no backtick literal, so the one in the raw string must "
+            "not swallow the comment below it")
+
+    def test_a_cpp_raw_string_backtick_does_not_blind_the_file(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = ('const char* s = R"(\na ` b\n)";\n'
+               '/**\n * added in v1.2.3\n */\nint f() { return 0; }\n')
+        self.assertNotEqual(
+            violations("x.cpp", [" * added in v1.2.3"], ctx), [],
+            "C++ has no backtick literal either")
+
+    def test_go_backticks_are_still_a_literal(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = 'package x\n\nconst tmpl = `\n * added in v1.2.3\n`\n'
+        self.assertEqual(
+            violations("x.go", [" * added in v1.2.3"], ctx), [],
+            "Go DOES have a backtick literal; narrowing must not take it away")
+
+
 class ContextsAreHandedBack(unittest.TestCase):
     def test_the_walk_reports_the_text_it_compared(self):
         sys.path.insert(0, HOOKS)
@@ -942,6 +1093,69 @@ class ContextsAreHandedBack(unittest.TestCase):
         self.assertEqual(out.get(path), ["func F() {}"])
         self.assertEqual(contexts.get(path), "package x\nfunc F() {}\n",
                          "the scan needs the whole file, not just the added lines")
+
+
+class WildcardInAFilename(unittest.TestCase):
+    # ls-files takes a PATHSPEC, so `?`, `*` and `[...]` in a submitted path
+    # are wildcards rather than characters. A file actually NAMED with one
+    # matches its own siblings, and only the first record of the answer is
+    # read -- so the comparison runs against a different file's blob, and
+    # every line the two do not share is reported as added. That is a close
+    # blocked on a comment the implementer never wrote.
+    #
+    # `a1.go` sorts before `a?.go`, so the wrong record is the first one. The
+    # violating comment sits in the file that WAS submitted and is already in
+    # HEAD, so a correct comparison finds nothing added at all.
+    def _repo_with_a_wildcard_name(self, tmp):
+        repo = os.path.join(tmp, "r")
+        os.makedirs(repo)
+
+        def git(*args):
+            subprocess.run(["git", "-C", repo] + list(args),
+                           capture_output=True, timeout=30)
+
+        git("init", "-q", ".")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        with open(os.path.join(repo, "a1.go"), "w") as fh:
+            fh.write("package x\n")
+        with open(os.path.join(repo, "a?.go"), "w") as fh:
+            fh.write("package x\n\n// reworked the helper, fixes #99\nfunc F() {}\n")
+        git("add", "--", "a1.go", "a?.go")
+        git("commit", "-qm", "i")
+        return repo
+
+    def test_an_unchanged_wildcard_named_file_reports_nothing_added(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        from comment_scan import violations
+
+        tmp = tempfile.mkdtemp()
+        repo = self._repo_with_a_wildcard_name(tmp)
+        path = os.path.join(repo, "a?.go")
+        contexts = {}
+        out = g.final_files_added_lines({"final_files": [{"path": path}]},
+                                        contexts=contexts)
+        self.assertEqual(
+            out, {},
+            "the file is byte-identical to HEAD, so nothing was added to it")
+        self.assertEqual(
+            [violations(p, lines, contexts.get(p)) for p, lines in out.items()],
+            [], "a pre-existing comment must never be attributed to this close")
+
+    def test_a_real_change_to_a_wildcard_named_file_is_still_seen(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+
+        tmp = tempfile.mkdtemp()
+        repo = self._repo_with_a_wildcard_name(tmp)
+        path = os.path.join(repo, "a?.go")
+        with open(path, "a") as fh:
+            fh.write("\n// and again, closes #7\nfunc G() {}\n")
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        self.assertEqual(
+            out.get(path), ["", "// and again, closes #7", "func G() {}"],
+            "matching the name literally must not turn into skipping the file")
 
 
 class EditReconstruction(unittest.TestCase):

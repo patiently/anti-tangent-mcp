@@ -18,7 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The same hook no longer reaches a second, unrelated exec path: a blob missing from a
   partial clone sent git down a lazy fetch that spawned `core.sshCommand`,
   `remote.*.uploadpack`, or a `git-remote-*` helper. Git is now invoked with
-  `protocol.allow=never` and `GIT_NO_LAZY_FETCH=1`.
+  `protocol.allow=never`, `GIT_ALLOW_PROTOCOL=none` and `GIT_NO_LAZY_FETCH=1`.
+  `protocol.allow` alone was not enough: git documents it as the default for schemes
+  that carry no `protocol.<name>.allow` of their own, so a scanned repository could
+  grant its own scheme and spawn the transport anyway — measured firing on git 2.43.0
+  against a partial-clone fixture setting `protocol.ssh.allow=always`. That left
+  `GIT_NO_LAZY_FETCH` holding the line alone, and it is read only from git 2.39.4, so
+  older toolchains (Apple Git-146 ships 2.39.3) had no working defence.
+  `GIT_ALLOW_PROTOCOL` overrides configuration outright, per-scheme keys included.
 
 ### Fixed
 
@@ -29,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `${...}` reopens code only in the languages whose backtick literals interpolate —
   `.js`, `.jsx`, `.ts`, `.tsx`. A Go raw string is uninterpreted, so a comment written
   between its backticks is string content and is left alone.
+- A backslash escapes the next character only in those same interpolating languages. In
+  a Go raw string a backslash is literal text, and treating it as an escape meant a raw
+  string ending in one — a Windows path, the idiomatic reason to use Go backticks — ate
+  its own closing backtick and hid every `/* */` block after it in the file.
+- A backtick opens a string span only in `.go` and the interpolating extensions, the
+  ones that actually have the literal. Rust, C, C++, Java and Kotlin do not, so an odd
+  backtick in their prose — markdown in a doc comment, a byte of an `r#"…"#` or `R"(…)"`
+  raw string — no longer swallows the rest of the file.
+- A submitted path is matched literally. `git ls-files` takes a pathspec, so a file
+  actually named with `?`, `*` or `[...]` matched its own siblings, and the first record
+  of the answer was read — comparing the submitted file against a different file's blob
+  and reporting its pre-existing comments as newly added. Both pathspecs now carry
+  `literal`.
 - A path carrying a `filter` attribute (git-lfs, git-crypt) is skipped rather than
   reported as wholly new, and a `working-tree-encoding` path is decoded with its
   declared codec instead of being misread as UTF-8.

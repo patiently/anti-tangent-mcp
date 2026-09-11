@@ -55,27 +55,55 @@ def _git_call(cwd, args, text):
     The pins are best-effort hardening, not a completeness claim. What this
     module actually relies on is a property of the calls it makes: none of
     them converts worktree content, and none of them fetches a missing
-    object. The pins cover two command-valued keys that an ordinary
-    read-only question would otherwise reach:
+    object. The pins cover the command-valued settings that an ordinary
+    read-only question would otherwise reach.
 
     core.fsmonitor is a command git runs while answering, and a repository
-    config can point it anywhere. protocol.allow governs the transport a
-    partial clone spawns to lazily fetch an object it does not have, which
-    reaches core.sshCommand, remote.*.uploadpack and a git-remote-* helper on
-    PATH. GIT_NO_LAZY_FETCH stops that fetch being attempted at all; the two
-    are independent mechanisms and neither is known to subsume the other
-    across git versions, so both are applied.
+    config can point it anywhere.
+
+    The other command path is the transport a partial clone spawns to lazily
+    fetch an object it does not have, which reaches core.sshCommand,
+    remote.*.uploadpack and a git-remote-* helper on PATH. Three mechanisms
+    are applied to it. They overlap, and the overlap is the point: each one
+    is sufficient alone against SOME repository on SOME git, and none is
+    sufficient against all of them.
+
+    protocol.allow=never sets the default policy, and a default is all it
+    sets -- it governs only those schemes carrying no protocol.<name>.allow
+    of their own, so a repository that names its scheme explicitly takes
+    precedence over it. A config able to point core.sshCommand at a command
+    can set that key in the same breath, which is what the next mechanism is
+    for.
+
+    GIT_ALLOW_PROTOCOL overrides configuration outright, per-scheme keys
+    included, which is the property that case needs. Its value is a
+    colon-separated allowlist of scheme names; "none" names no scheme, so
+    nothing is permitted. The empty string allowlists nothing either, but an
+    empty value is indistinguishable from an unset one wherever environment
+    handling drops empty entries, and an unset GIT_ALLOW_PROTOCOL hands the
+    decision back to config.
+
+    GIT_NO_LAZY_FETCH stops the fetch being attempted at all rather than
+    constraining what it may speak, so it holds even where git's transport
+    policy is never consulted. It is the youngest of the three, and a git
+    that does not know it ignores it in silence, which is why the other two
+    are kept rather than retired in its favour.
 
     core.quotePath is not a command. It is pinned because ls-files output is
     parsed for a repository-relative path, and quoting would corrupt any name
     outside ASCII.
+
+    Pathspec interpretation is NOT pinned here, even though every pathspec
+    this module passes must be literal. --literal-pathspecs would say that
+    globally, but it also strips the `top` magic one of the callers depends
+    on, so each pathspec carries `literal` itself instead.
     """
     pins = ["-C", cwd,
             "-c", "core.quotePath=false",
             "-c", "core.fsmonitor=false",
             "-c", "protocol.allow=never",
             "--no-pager"]
-    env = dict(os.environ, GIT_NO_LAZY_FETCH="1")
+    env = dict(os.environ, GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="none")
     empty = "" if text else b""
 
     def run(prefix):
@@ -246,14 +274,20 @@ def _tracked_added_lines(parent, rel, new_text):
     wrote. This module's standing rule is that a question it could not answer
     means skip.
 
-    The pathspec carries `:(top)` because ls-tree matches relative to the
+    The pathspec carries `top` because ls-tree matches relative to the
     CURRENT DIRECTORY, and this call runs in the file's own directory rather
     than at the repository root. A bare repository-relative path matches
     nothing from a subdirectory, and ls-tree reports that as rc 0 with no
     record -- a present file read as absent, the same whole-file scan this
     three-way split exists to prevent.
+
+    It carries `literal` so that a `?`, `*` or `[...]` in the name is the
+    character it looks like rather than a wildcard matching some sibling.
+    That has to be said in the pathspec rather than with --literal-pathspecs,
+    which would take `top` away with it.
     """
-    rc, listed = _git(parent, "ls-tree", "-z", "HEAD", "--", ":(top)" + rel)
+    rc, listed = _git(parent, "ls-tree", "-z", "HEAD", "--",
+                      ":(top,literal)" + rel)
     if rc != 0:
         return None
     if not [record for record in listed.split("\0") if record]:
@@ -276,6 +310,16 @@ def final_files_added_lines(inp, deadline=None, stats=None, contexts=None):
     hook runs at the main checkout, and from there `ls-files --error-unmatch`
     reports a worktree path as unmatched -- indistinguishable from untracked,
     which would treat every line as added.
+
+    The submitted path is a caller-supplied name, and ls-files takes a
+    PATHSPEC, in which `?`, `*` and `[...]` are wildcards. A file actually
+    named with one of them matches its own siblings, and since only the first
+    record of the answer is read, that hands back a DIFFERENT file's
+    repository-relative path -- whose blob then supplies the "before" text of
+    the comparison, reporting as added every line the two files do not share.
+    `:(literal)` makes the name mean itself. It also covers a path that opens
+    with a colon, which would otherwise be read as magic rather than as a
+    name.
 
     Exit 1 from ls-files means "unmatched"; anything else (128 for a path
     outside a repository) means the question could not be answered, and every
@@ -321,7 +365,7 @@ def final_files_added_lines(inp, deadline=None, stats=None, contexts=None):
         if not os.path.isdir(parent):
             continue
         rc, listed = _git(parent, "ls-files", "-z", "--full-name",
-                          "--error-unmatch", "--", path)
+                          "--error-unmatch", "--", ":(literal)" + path)
         if rc == 0:
             rel = listed.split("\0")[0]
             if not rel:

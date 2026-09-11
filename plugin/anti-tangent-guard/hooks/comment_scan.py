@@ -164,22 +164,41 @@ def _line_comment_spans(opens, raw):
 # not: no language in SCAN_EXTS carries one over unescaped, so an unclosed one
 # is a typo. Treating it as an open span is what lets a Rust lifetime or an
 # apostrophe in JSX text swallow every comment after it in the file.
-_MULTILINE_QUOTES = ('"""', "'''", "`")
+_TRIPLE_QUOTES = ('"""', "'''")
+_MULTILINE_QUOTES = _TRIPLE_QUOTES + ("`",)
 
 
-# A backtick literal's `${...}` hole returns to CODE only in a language that
-# actually interpolates it: a JavaScript/TypeScript template literal evaluates
-# an expression there, and that expression can contain a genuine block
-# comment. A Go backquoted raw string is a different construct -- it is
-# uninterpreted between the backticks, so `${`, `/*`, and every other byte
-# inside it is literal text, never code. Applying the JS/TS hole rule to Go
-# would read a raw string's literal `${` as an escape into code and
-# misclassify string content as a comment. No other extension in SCAN_EXTS
-# has a backtick literal that interpolates, so the safe default is off.
+# Extensions whose backtick literal is INTERPOLATED and ESCAPED. Two rules
+# hang off this. A `${...}` hole returns to CODE -- a template literal
+# evaluates an expression there, and that expression can contain a genuine
+# block comment. And a backslash escapes the byte after it, so `\`` does not
+# close the literal.
+#
+# A Go backquoted raw string is the opposite construct on both counts: it is
+# uninterpreted between the backticks, so `${`, `/*` and every other byte
+# inside it is literal text and never code, and a backslash is one of those
+# literal bytes rather than an escape. Applying the JS/TS rules to Go would
+# read a raw string's `${` as an escape into code, and would let a raw string
+# whose last byte is a backslash -- a Windows path, the idiomatic reason to
+# reach for Go backticks -- consume its own closing backtick and run to the
+# end of the file.
 _INTERPOLATING_EXTS = {".js", ".jsx", ".ts", ".tsx"}
 
+# Extensions in which a backtick DELIMITS A STRING at all. Every interpolating
+# one does, and Go's raw string is the only non-interpolating addition --
+# derived rather than restated so an extension cannot be given the escape
+# rules without a literal to apply them to.
+#
+# Everywhere else in SCAN_EXTS -- Rust, C, C++, Java, Kotlin -- a backtick is
+# ordinary text, and it turns up in prose: the markdown of a doc comment, and
+# the body of a multi-line raw string (Rust r#"..."#, C++ R"(...)"). Opening a
+# span on one of those can only lose findings, because an odd backtick
+# swallows every block comment after it in the file, and it can gain nothing,
+# since there is no literal there for a span to model.
+_BACKTICK_EXTS = _INTERPOLATING_EXTS | {".go"}
 
-def block_comment_lines(text, interpolates):
+
+def block_comment_lines(text, interpolates, backticks=False):
     """Line texts sitting inside an open /* */ block, as a set.
 
     The question cannot be answered from a line on its own: ` * text` is a
@@ -194,13 +213,24 @@ def block_comment_lines(text, interpolates):
     ordinary left-to-right walk.
 
     Line comments, string literals and template-literal interpolation are all
-    tracked in the same pass. Backticks are scanned character by character
-    rather than jumped over, because when `interpolates` is true a `${ ... }`
-    hole returns to CODE: a genuine block comment can live inside one, and
-    the scanner finds it. Skipping to the closing backtick would silently
-    lose that detection. `interpolates` is false for a language whose
-    backtick literal never opens such a hole, so `${` there stays literal
-    text like every other character between the backticks.
+    tracked in the same pass.
+
+    Two flags say what a backtick means in the language being walked. False
+    is the conservative value of each, because a span this walk declines to
+    open costs at most a missed finding, while one it opens wrongly hides
+    every block comment after it in the file.
+
+    `backticks` says a backtick delimits a string here at all. Where it is
+    false a backtick is ordinary text and the walk steps over it.
+
+    `interpolates` says that literal is interpolated and escaped. It is why
+    backticks are scanned character by character rather than jumped over:
+    a `${ ... }` hole returns to CODE, a genuine block comment can live
+    inside one, and skipping to the closing backtick would silently lose that
+    detection. It also gates the backslash escape, which belongs to the
+    interpolated form only -- in an uninterpreted raw string a backslash is
+    literal text, and consuming the byte after it would eat a closing
+    backtick that is really there.
 
     Matched by TEXT rather than line number because the caller may hold a
     sparse subset of the file with no indices to offer. A line whose text
@@ -223,7 +253,7 @@ def block_comment_lines(text, interpolates):
             if top == "`":
                 if interpolates and line.startswith("${", i):
                     stack.append("interp"); i += 2; continue
-                if line[i] == "\\":
+                if interpolates and line[i] == "\\":
                     i += 2; continue
                 if line[i] == "`":
                     stack.pop(); i += 1; continue
@@ -245,7 +275,7 @@ def block_comment_lines(text, interpolates):
             if line.startswith("/*", i):
                 stack.append("block"); i += 2; continue
             opened = None
-            for q in _MULTILINE_QUOTES:
+            for q in (_MULTILINE_QUOTES if backticks else _TRIPLE_QUOTES):
                 if line.startswith(q, i):
                     opened = q; break
             if opened is not None:
@@ -488,6 +518,10 @@ def _interpolates(path):
     return os.path.splitext(path)[1].lower() in _INTERPOLATING_EXTS
 
 
+def _backticks(path):
+    return os.path.splitext(path)[1].lower() in _BACKTICK_EXTS
+
+
 def scannable(path):
     return os.path.splitext(path)[1].lower() in SCAN_EXTS
 
@@ -535,7 +569,8 @@ def violations(path, added_lines, context=None, strict=False):
                     if block_lines is None:
                         try:
                             block_lines = block_comment_lines(
-                                context, _interpolates(path))
+                                context, _interpolates(path),
+                                _backticks(path))
                             context_lines = set(context.splitlines())
                         except _ScanTimeout:
                             # ITIMER_REAL is one-shot: absorbing the deadline
