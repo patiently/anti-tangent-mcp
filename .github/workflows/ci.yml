@@ -90,7 +90,7 @@ jobs:
           fi
           echo "✓ bundled plugin copy matches docs/protocol"
 
-      - name: Protocol cross-reference and section guards
+      - name: Markdown link, anchor and protocol section guards
         run: bash scripts/check-protocol-docs.sh
 
   hook-evals:

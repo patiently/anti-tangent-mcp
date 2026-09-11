@@ -1,64 +1,26 @@
 #!/usr/bin/env bash
-# Guards the role-scoped protocol docs. Two failure modes matter here and
-# neither is caught by a byte cap: a cross-reference that points nowhere, and
-# a section identifier that got duplicated or dropped during a move. Section
-# numbers are cited externally (README, ~/.claude mirrors, "§5.1" in prose),
-# so losing one is a silent break.
+# Guards the repository's markdown. Two failure modes matter here and neither
+# is caught by a byte cap: a cross-reference that points nowhere, and a
+# protocol section identifier that got duplicated or dropped during a move.
+# Section numbers are cited externally (README, ~/.claude mirrors, "§5.1" in
+# prose), so losing one is a silent break.
 set -uo pipefail
 cd "$(dirname "$0")/.." || { echo "::error::failed to cd to repo root"; exit 1; }
 
 fail=0
 
-# --- relative link check -------------------------------------------------
-# Every markdown link target in the scanned files, resolved relative to the
-# file that contains it (the only way GitHub, VS Code, and every other
-# renderer resolve them). External URLs, mailto:, and pure same-document
-# anchors (#foo) are skipped — this guard is for relative paths only.
-#
-# LIMITATION (deliberate): only inline links — [text](target) — are checked.
-# Reference-style links ([text][ref] plus a separate `[ref]: target`
-# definition line) are NOT matched, and never have been on purpose. None
-# exist anywhere in the scanned files today, so this is not a live gap.
-#
-# A prior round did try to close it with a bash/awk extractor plus a fence
-# tracker to skip documented examples of the syntax. Review found it
-# introduced more risk than it removed and it was reverted before merge.
-# Recorded here so nobody repeats the same four traps:
-#   - A single shared boolean toggled by both ``` and ~~~ desyncs on an
-#     unclosed fence, or on an odd number of ~~~ lines appearing inside a
-#     ``` block (plausible in docs that discuss markdown syntax itself) —
-#     and everything after that point in the file is silently skipped, with
-#     the guard still reporting clean. A silent-miss bug in a guard is worse
-#     than the gap it was meant to close.
-#   - CommonMark allows 1-3 spaces of leading indentation on a definition
-#     line; an anchored `^\[` pattern misses those.
-#   - Angle-bracketed targets, `[ref]: <path with spaces>`, mis-extract:
-#     the literal `<`/`>` end up in the path, or extraction truncates at the
-#     first space inside the brackets.
-#   - Labels containing `]` (`[a][b]]: target`, however rare) break a naive
-#     `[^]]+` label pattern.
-# If reference-style links are ever introduced into these files, extend this
-# guard carefully and re-prove all four cases before trusting it — a linked
-# markdown-parsing library beats hand-rolled bash/awk for this.
-while IFS=$'\t' read -r src target; do
-  case "$target" in
-    '#'*|http://*|https://*|mailto:*) continue ;;
-  esac
-  path="${target%% *}"  # drop an optional trailing "title"
-  path="${path%%#*}"    # drop an optional #anchor
-  resolved="$(dirname "$src")/$path"
-  if [ ! -e "$resolved" ]; then
-    echo "::error file=$src::broken relative link -> $target (resolved: $resolved)"
-    fail=1
-  fi
-done < <(
-  for f in INTEGRATION.md README.md docs/protocol/*.md; do
-    [ -f "$f" ] || continue
-    grep -oE '\]\([^)]+\)' "$f" | sed -E 's/^\]\(//; s/\)$//' | while IFS= read -r t; do
-      printf '%s\t%s\n' "$f" "$t"
-    done
-  done
-)
+# --- relative link and anchor check --------------------------------------
+# Every tracked markdown file outside the exclusions in check_md_links.py,
+# with each #anchor matched against the headings of the file it points at.
+# That needs GitHub's heading-id rules and a code-fence tracker, so it lives
+# in Python rather than here. The checker's own tests run first: a checker
+# that has stopped detecting anything would otherwise report clean.
+if ! python3 -B scripts/check_md_links_test.py; then
+  echo "::error file=scripts/check_md_links_test.py::link checker tests fail; its verdict on the docs cannot be trusted"
+  fail=1
+elif ! python3 -B scripts/check_md_links.py; then
+  fail=1
+fi
 
 # --- section identifier uniqueness ---------------------------------------
 # §3.4 and §2 are deliberately absent from the source document — this list
