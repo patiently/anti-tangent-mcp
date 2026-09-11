@@ -86,11 +86,11 @@ setup_fixtures() {
         generate_fixture "$input_path" "$lines"
         # An "unreadable" fixture proves the fail-open path when `wc -l`
         # itself cannot read the file (permission denied), not merely when
-        # the file is small or absent — see finding 1 / C1 in
-        # final-review.md. chmod 000 does nothing to a process running as
-        # root (root bypasses the permission check `wc` would otherwise
-        # hit), so the corresponding eval case is marked skip_if_root and
-        # skipped loudly rather than silently passing for the wrong reason.
+        # the file is small or absent. chmod 000 does nothing to a process
+        # running as root (root bypasses the permission check `wc` would
+        # otherwise hit), so the corresponding eval case is marked
+        # skip_if_root and skipped loudly rather than silently passing for
+        # the wrong reason.
         [ "$unreadable" = "true" ] && chmod 000 "$input_path"
         ;;
     esac
@@ -227,6 +227,12 @@ check_no_operational_references() {
 }
 
 # ── Main ──
+
+# Both hooks read ANTI_TANGENT_SHUNT_MIN_LINES, and every fixture is sized
+# against its default. Inherited from the invoking shell, it would decide each
+# case that sets no "env" block of its own, so the result would depend on who
+# ran the suite. A case that does set it still wins: `env` applies after this.
+unset ANTI_TANGENT_SHUNT_MIN_LINES
 
 run_suite "$SCRIPT_DIR/../hooks/check-file-size" "$SCRIPT_DIR/hook-evals.json" "Read hook (check-file-size)"
 run_suite "$SCRIPT_DIR/../hooks/check-bash-read" "$SCRIPT_DIR/bash-hook-evals.json" "Bash hook (check-bash-read)"
