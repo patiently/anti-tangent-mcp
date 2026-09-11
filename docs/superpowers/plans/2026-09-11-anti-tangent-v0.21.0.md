@@ -276,10 +276,10 @@ def _repo(tmp, name="r", attrs=None, configs=(), tracked=("f.go", "package x\n")
 
 
 class ContentFiltersAreNeverRun(unittest.TestCase):
-    # git diff had to convert the worktree side before comparing, and that
-    # conversion runs whatever command the repository's own config names. Both
-    # keys are live; with both set only process fires, so each needs its own
-    # fixture or one of them is never exercised.
+    # A repository's own config can name the command git runs to convert a
+    # worktree file, and this hook must never be the thing that runs it. One
+    # fixture per key: with process and clean both set only process fires, so
+    # a single fixture arming both would leave clean unexercised.
     def _case(self, key):
         sys.path.insert(0, HOOKS)
         import git_added_lines as g
@@ -590,6 +590,8 @@ git commit -m "fix(guard): derive added lines from the raw HEAD blob, never a wo
 - [ ] No call added here runs a filter
 - [ ] `ContentFiltersAreNeverRun` from Task 2 is UPDATED here, not left to fail: those fixtures route `*.go` to `filter=x`, which is exactly the skip condition this task introduces
 - [ ] A new test pins the blob read's own no-conversion property with the attribute probe bypassed, since the skip now shadows it
+- [ ] A bare `filter` attribute (reported `set`) is pinned by a test as NOT skipped — `_ATTR_UNSET` containing `"set"` is the one line that decides it
+- [ ] All three rc-0 malformed shapes (empty, truncated, wrong path) are pinned by tests as skips
 
 **Verify:** `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v` → OK
 
@@ -857,6 +859,71 @@ class UnanswerableCheckAttr(unittest.TestCase):
             g._git = real
         self.assertEqual(out, {})
         self.assertEqual(calls, ["ls-files", "check-attr"])
+```
+
+Also add the two tests the acceptance criteria require but the steps above omit — `_ATTR_UNSET` containing `"set"` and the three rc-0 malformed shapes are the branches that decide whether this task fails open or closed, and nothing currently pins either:
+
+```python
+class BareAttributeNamesNothing(unittest.TestCase):
+    # git prints "set" for an attribute written with no value. It names
+    # neither a filter driver nor a codec, so git resolves nothing and runs
+    # nothing, and the file stays comparable. Treating "set" as a driver
+    # would skip a path that is perfectly scannable.
+    def test_a_bare_filter_attribute_does_not_skip(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, sentinel = _repo(
+            tmp, attrs="*.go filter\n", configs=("filter.x.clean",),
+            tracked=("f.go", "package x\n"),
+            worktree="package x\nfunc F() {}\n")
+        path = os.path.join(repo, "f.go")
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        self.assertEqual(out.get(path), ["func F() {}"],
+                         "a bare attribute names no driver, so the path is scannable")
+        self.assertFalse(os.path.exists(sentinel))
+
+
+class MalformedCheckAttr(unittest.TestCase):
+    # rc 0 is not by itself an answer. An empty, truncated, or wrong-path
+    # response leaves the attributes unknown, and reading that silence as
+    # "nothing is converted here" would compare a converted file against its
+    # own pointer and report every line of it as added.
+    def _skips(self, response):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        calls = []
+        real = g._git
+
+        def fake_git(cwd, *args):
+            calls.append(args[0])
+            if args[0] == "ls-files":
+                return 0, "f.go\0"
+            if args[0] == "check-attr":
+                return 0, response
+            raise AssertionError("nothing may follow an unanswered check-attr: %r" % (args,))
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "f.go")
+        with open(path, "w") as fh:
+            fh.write("// fixes #1\n")
+        g._git = fake_git
+        try:
+            out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        finally:
+            g._git = real
+        self.assertEqual(out, {})
+        self.assertEqual(calls, ["ls-files", "check-attr"])
+
+    def test_an_empty_response_skips(self):
+        self._skips("")
+
+    def test_a_truncated_record_skips(self):
+        self._skips("f.go\0filter\0")
+
+    def test_a_record_for_another_path_skips(self):
+        self._skips("other.go\0filter\0unspecified\0"
+                    "other.go\0working-tree-encoding\0unspecified\0")
 ```
 
 - [ ] **Step 8: Run to verify passing**
