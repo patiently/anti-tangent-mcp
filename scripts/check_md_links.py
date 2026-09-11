@@ -146,8 +146,9 @@ def parse(text):
 
     links are (line number, raw target) pairs; errors are (line number,
     message) pairs. Nothing inside a fenced code block or an HTML comment is a
-    heading, an anchor or a link: a `# comment` in a shell example must not
-    become an id, and neither may a heading GitHub never renders.
+    heading, an anchor or a link, and nothing inside an inline code span is an
+    anchor or a link: a `# comment` in a shell example must not become an id,
+    and neither may a heading GitHub never renders.
 
     A fence closes only on its opening character, at least as long as the
     opener, indented less than four columns past it, with nothing after it. An
@@ -183,11 +184,17 @@ def parse(text):
         line, still_open = strip_html_comments(line)
         if still_open:
             comment = n
-        anchors.update(HTML_ANCHOR_RE.findall(line))
+        # An anchor or link written inside a code span is an example of the
+        # syntax, not markup GitHub renders. Only a match's start is tested, so
+        # a link whose text is itself a code span is still read as a link.
+        code = [m.span() for m in CODE_SPAN_RE.finditer(line)]
+        anchors.update(m.group(1) for m in HTML_ANCHOR_RE.finditer(line)
+                       if not any(a <= m.start() < b for a, b in code))
         raw = heading_text(line)
         if raw is not None:
             anchors.add(slugger.slug(rendered_text(raw)))
-        links.extend((n, t) for t in LINK_RE.findall(line))
+        links.extend((n, m.group(1)) for m in LINK_RE.finditer(line)
+                     if not any(a <= m.start() < b for a, b in code))
     if fence is not None:
         errors.append((fence[3], "code fence is never closed; everything after it renders as code"))
     if comment is not None:

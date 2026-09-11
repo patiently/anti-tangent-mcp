@@ -157,6 +157,20 @@ class CheckTest(unittest.TestCase):
     def test_comment_opener_inside_a_code_span_is_text(self):
         self.assertEqual(self.errors({"a.md": "Use `<!--` to open one.\n## After\n[a](#after)\n"}), [])
 
+    def test_link_inside_a_code_span_is_not_checked(self):
+        self.assertEqual(self.errors({"a.md": "Write `[text](docs/example.md)` to link.\n"}), [])
+
+    def test_links_beside_or_around_a_code_span_are_checked(self):
+        errs = self.errors({"a.md": "`code` then [x](missing.md)\n[`foo`](gone.md)\n"})
+        self.assertEqual(len(errs), 2)
+        self.assertTrue(any("missing.md" in e for e in errs))
+        self.assertTrue(any("gone.md" in e for e in errs))
+
+    def test_html_anchor_inside_a_code_span_is_not_an_anchor(self):
+        errs = self.errors({"a.md": 'Use `<a id="x"></a>` for one.\n[a](#x)\n'})
+        self.assertEqual(len(errs), 1)
+        self.assertIn("'x'", errs[0])
+
     def test_explicit_html_anchor(self):
         self.assertEqual(self.errors({"a.md": '<a id="custom"></a>\n[a](#custom)\n'}), [])
 
