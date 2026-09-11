@@ -374,6 +374,46 @@ class NoCommitsYet(unittest.TestCase):
         self.assertEqual(out, {}, "no HEAD means the question is unanswerable")
 
 
+class HeadProbedOncePerRoot(unittest.TestCase):
+    # Two files in different subdirectories of ONE worktree. Keying the cache
+    # on the directory asked from would probe HEAD twice for the same
+    # repository.
+    def test_one_worktree_is_probed_once(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, _ = _repo(tmp, tracked=("a.go", "package x\n"),
+                        worktree="package x\n// fixes #1\n")
+        sub = os.path.join(repo, "sub")
+        os.makedirs(sub)
+        second = os.path.join(sub, "b.go")
+        with open(second, "w") as fh:
+            fh.write("package y\n")
+        subprocess.run(["git", "-C", repo, "add", "-A"], capture_output=True, timeout=30)
+        subprocess.run(["git", "-C", repo, "commit", "-qm", "two"], capture_output=True, timeout=30)
+        with open(second, "a") as fh:
+            fh.write("// fixes #2\n")
+
+        head_probes = []
+        real = g._git
+
+        def counting_git(cwd, *args):
+            if args[:3] == ("rev-parse", "--verify", "--quiet") and args[3] == "HEAD":
+                head_probes.append(cwd)
+            return real(cwd, *args)
+
+        g._git = counting_git
+        try:
+            out = g.final_files_added_lines(
+                {"final_files": [{"path": os.path.join(repo, "a.go")},
+                                 {"path": second}]})
+        finally:
+            g._git = real
+        self.assertEqual(len(out), 2, "both files should be scanned")
+        self.assertEqual(len(head_probes), 1,
+                         "one worktree must be probed once, not once per directory")
+
+
 class SymlinkedWorktreeRoot(unittest.TestCase):
     # --show-toplevel prints the realpath while the submitted path does not,
     # so a relative path computed from the two is wrong the moment any parent
@@ -538,9 +578,9 @@ git commit -m "fix(guard): derive added lines from the raw HEAD blob, never a wo
 - [ ] `read_text_capped(path, encoding=None)` decodes with `encoding` when given, `utf-8` otherwise
 - [ ] An unknown codec name makes `read_text_capped` return `None` (its existing `except Exception` already covers `LookupError`; assert it)
 - [ ] `git check-attr -z filter working-tree-encoding -- <rel>` is consulted once per tracked path
-- [ ] A path whose `filter` attribute is set is skipped
+- [ ] A path whose `filter` attribute names a filter driver is skipped. A **bare** `filter` attribute, which `check-attr` reports as `set`, is NOT skipped: it names no driver, so git has no `filter.<name>.*` to resolve and runs nothing. Verified — `*.go filter` reports `f.go|filter|set|` and `git diff` fires no configured command. The same reasoning covers a bare `working-tree-encoding`, which names no codec
 - [ ] A path with `working-tree-encoding=UTF-16` still yields its genuine `// fixes #1`
-- [ ] A `check-attr` that fails to answer skips the path
+- [ ] A `check-attr` that fails to answer skips the path — including an rc-0 response that is empty, truncated, or names a different path, since rc 0 alone is not an answer
 - [ ] No call added here runs a filter
 - [ ] `ContentFiltersAreNeverRun` from Task 2 is UPDATED here, not left to fail: those fixtures route `*.go` to `filter=x`, which is exactly the skip condition this task introduces
 - [ ] A new test pins the blob read's own no-conversion property with the attribute probe bypassed, since the skip now shadows it
@@ -712,8 +752,12 @@ Add this paragraph to its docstring, after the `errors="replace"` paragraph:
 Add `import codecs` to the imports at the top, then add above `_head_exists`:
 
 ```python
-# Attribute values that mean "this attribute says nothing here". git prints
-# "set" for a bare attribute with no value, which names no codec.
+# Attribute values that name nothing. "unspecified" and "unset" are the plain
+# negatives; "set" is what git prints for a bare attribute written without a
+# value, and it names neither a filter driver nor a codec -- there is no
+# filter.<name>.* for git to resolve and no encoding to decode with, so
+# nothing is converted and the path is safe to compare. Measured: `*.go
+# filter` reports "set" and runs no configured command.
 _ATTR_UNSET = ("unspecified", "unset", "set")
 
 
@@ -738,10 +782,21 @@ def _converted(parent, rel):
     fields = out.split("\0")
     attrs = {}
     for i in range(0, len(fields) - 2, 3):
+        if fields[i] != rel:
+            # A record for some other path means this response is not an
+            # answer about this file, and reading it as one would apply the
+            # wrong attributes.
+            return True, None
         attrs[fields[i + 1]] = fields[i + 2]
-    if attrs.get("filter", "unspecified") not in _ATTR_UNSET:
+    # rc 0 is not by itself an answer. A truncated or empty response leaves
+    # both keys missing, and defaulting those to "unspecified" would read
+    # silence as "nothing is converted here" -- the fail-CLOSED direction this
+    # module is not allowed to take. Both records must be present.
+    if "filter" not in attrs or "working-tree-encoding" not in attrs:
         return True, None
-    enc = attrs.get("working-tree-encoding", "unspecified")
+    if attrs["filter"] not in _ATTR_UNSET:
+        return True, None
+    enc = attrs["working-tree-encoding"]
     if enc in _ATTR_UNSET:
         return False, None
     try:
@@ -825,7 +880,8 @@ git commit -m "fix(guard): skip filtered paths and decode working-tree-encoding 
 - Modify: `plugin/anti-tangent-guard/hooks/comment_scan_test.py` (append test class)
 
 **Acceptance Criteria:**
-- [ ] `block_comment_lines(text)` returns the set of line texts sitting inside an open `/* */`
+- [ ] `block_comment_lines(text)` returns line texts for which a block was ALREADY open at the start of the line (continuations). A line that opens a block partway through itself is deliberately excluded — the starred branch only asks about continuations
+- [ ] A `${…}` hole inside a backtick span returns to code state, so a genuine `/* */` inside one is still found; nested braces do not end the hole early
 - [ ] Single- and double-quoted spans end at end of line; a lone `'` opens nothing
 - [ ] Backtick and triple-quoted spans do cross newlines
 - [ ] `comment_spans(path, raw, allow_star=True)` falls through to the normal walk when `allow_star` is False
@@ -834,6 +890,7 @@ git commit -m "fix(guard): skip filtered paths and decode working-tree-encoding 
 - [ ] `context=None` behaves exactly as before
 - [ ] Go raw string and Kotlin triple-quoted fixtures yield `[]`; a KDoc `/** * fixes #1 */` still yields a violation (a bare tracker key is NOT usable here — there is no default tracker tell)
 - [ ] A Rust lifetime, a JSX apostrophe, a C `#error` apostrophe and a JS regex literal each followed by a genuine `/** * fixes #1 */` all still fire
+- [ ] A template literal followed by a genuine block comment still fires, and a starred line inside a block comment opened within `${…}` is still treated as inside
 
 **Verify:** `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v` → OK
 
@@ -935,9 +992,17 @@ def block_comment_lines(text):
     literal, and the two are byte-identical. Only the surrounding file
     separates them.
 
-    Line comments and string literals are tracked in the same pass, so a
-    backtick inside a // comment opens nothing -- without that the walk would
-    trade one false positive for another.
+    A line is in the set when a block was ALREADY open as the line began --
+    which is what a continuation is. A line that opens a block partway through
+    itself is not in the set, and does not need to be: the starred branch only
+    ever asks about continuation lines, and the opener goes through the
+    ordinary left-to-right walk.
+
+    Line comments, string literals and template-literal interpolation are all
+    tracked in the same pass. Backticks are scanned character by character
+    rather than jumped over, because a `${ ... }` hole returns to CODE: a
+    genuine block comment can live inside one, and today's scanner finds it.
+    Skipping to the closing backtick would silently lose that detection.
 
     Matched by TEXT rather than line number because the caller may hold a
     sparse subset of the file with no indices to offer. A line whose text
@@ -945,55 +1010,58 @@ def block_comment_lines(text):
     answer the shape-only heuristic already gives.
     """
     inside = set()
-    state = None
+    stack = []
     for line in text.splitlines():
-        if state == "block":
+        if stack and stack[-1] == "block":
             inside.add(line)
         i, n = 0, len(line)
         while i < n:
-            if state == "block":
+            top = stack[-1] if stack else None
+            if top == "block":
                 end = line.find("*/", i)
                 if end < 0:
                     break
-                state, i = None, end + 2
-                continue
-            if state is not None:
-                end = line.find(state, i)
+                stack.pop(); i = end + 2; continue
+            if top == "`":
+                if line.startswith("${", i):
+                    stack.append("interp"); i += 2; continue
+                if line[i] == "\\":
+                    i += 2; continue
+                if line[i] == "`":
+                    stack.pop(); i += 1; continue
+                i += 1; continue
+            if top in _MULTILINE_QUOTES:
+                end = line.find(top, i)
                 if end < 0:
                     break
-                i, state = end + len(state), None
-                continue
+                i = end + len(top); stack.pop(); continue
             ch = line[i]
             if ch == "\\":
-                i += 2
-                continue
+                i += 2; continue
+            if top == "interp" and ch == "{":
+                stack.append("interp"); i += 1; continue
+            if top == "interp" and ch == "}":
+                stack.pop(); i += 1; continue
             if line.startswith("//", i):
                 break
             if line.startswith("/*", i):
-                state, i = "block", i + 2
-                continue
+                stack.append("block"); i += 2; continue
             opened = None
             for q in _MULTILINE_QUOTES:
                 if line.startswith(q, i):
-                    opened = q
-                    break
+                    opened = q; break
             if opened is not None:
-                state, i = opened, i + len(opened)
-                continue
+                stack.append(opened); i += len(opened); continue
             if ch in ('"', "'"):
                 j = i + 1
                 while j < n:
                     if line[j] == "\\":
-                        j += 2
-                        continue
+                        j += 2; continue
                     if line[j] == ch:
                         break
                     j += 1
-                i = j + 1
-                continue
+                i = j + 1; continue
             i += 1
-        if state is not None and state not in _MULTILINE_QUOTES and state != "block":
-            state = None
     return inside
 
 
