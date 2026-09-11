@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (142 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (145 cases)",
   "evals": [
     {
       "id": 1,
@@ -2316,7 +2316,7 @@
       "expected_file_absent": [
         "{{TMPDIR}}/SENTINEL"
       ],
-      "reason": "a tracked final_files path in a repository whose own config names a clean filter must not run it. git diff had to convert the worktree side before comparing, which is what executed it; the sentinel proves the conversion is gone."
+      "reason": "a tracked final_files path in a repository whose own config names a clean filter must not run it. Comparing a worktree file against its HEAD blob is the operation that would run the configured filter, so the sentinel's absence is what proves no comparison converts anything."
     },
     {
       "id": 144,
