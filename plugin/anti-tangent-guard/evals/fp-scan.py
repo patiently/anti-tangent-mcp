@@ -37,13 +37,44 @@ import os
 import subprocess
 import sys
 
-# The false-positive gate must measure the shipped tells, not whatever the
-# developer happens to have configured for their own project.
-os.environ.pop("ANTI_TANGENT_TICKET_PATTERN", None)
+# The environment is settled BEFORE the import below, because comment_scan
+# binds the ticket tell at import time. Setting it afterwards would have no
+# effect and the run would silently measure the shipped tells instead.
+#
+# Default: the gate measures the shipped tells, not whatever the developer
+# happens to have configured for their own project, so a local pattern cannot
+# move a verdict recorded in fp-class.tsv.
+_pattern = None
+_argv = sys.argv[1:]
+if _argv:
+    if _argv[0] != "--ticket-pattern" or len(_argv) != 2:
+        sys.stderr.write("usage: fp-scan.py [--ticket-pattern <regex>]\n")
+        sys.exit(2)
+    _pattern = _argv[1]
+
+if _pattern is None:
+    os.environ.pop("ANTI_TANGENT_TICKET_PATTERN", None)
+else:
+    os.environ["ANTI_TANGENT_TICKET_PATTERN"] = _pattern
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "hooks"))
+import comment_scan  # noqa: E402
 from comment_scan import scannable, violations  # noqa: E402
+
+# _ticket_tell drops a pattern that will not compile or runs past the length
+# cap, and says nothing when it does. Under the flag that silence is a trap:
+# the operator would read "0 tracker hits" as proof the pattern is safe, when
+# the pattern was never installed. Asking the module what it actually bound
+# cannot drift from its own rules the way a re-implemented check would.
+if _pattern is not None and comment_scan._ticket is None:
+    sys.stderr.write(
+        "fp-scan: the pattern was not installed — it failed to compile, or "
+        "exceeded the %d-character cap. Nothing was measured.\n"
+        % comment_scan._TICKET_PATTERN_MAX_LEN)
+    sys.exit(2)
+
+TICKET_WHY = "a tracker reference"
 
 VENDORED_DIRS = ("gnome-topbar/daemon/internal/server/assets/",)
 
@@ -67,6 +98,7 @@ def main():
     listing = subprocess.check_output(["git", "ls-files", "-z"], cwd=root)
     unreadable = []
     hits = 0
+    ticket_hits = 0
     for path in listing.decode("utf-8", errors="replace").split("\0"):
         if not path or not scannable(path) or vendored(path):
             continue
@@ -80,6 +112,8 @@ def main():
             for line, why in violations(path, [raw]):
                 sys.stdout.write("%s\t%d\t%s\t%s\n" % (path, n, why, escape(line)))
                 hits += 1
+                if why == TICKET_WHY:
+                    ticket_hits += 1
     if unreadable:
         sys.stderr.write(
             "fp-scan: %d tracked file(s) could not be read out of HEAD.\n"
@@ -89,7 +123,16 @@ def main():
         for path in unreadable:
             sys.stderr.write("  %s\n" % path)
         return 1
-    sys.stderr.write("fp-scan: %d hit(s)\n" % hits)
+    # violations() stops at the FIRST matching tell, in TELLS order, so a line
+    # a built-in tell already catches is not counted here. That is the number
+    # an operator wants: what this pattern would newly block, not how often it
+    # matches text something else already flags.
+    if _pattern is None:
+        sys.stderr.write("fp-scan: %d hit(s)\n" % hits)
+    else:
+        sys.stderr.write(
+            "fp-scan: %d hit(s), %d of them newly attributable to the pattern\n"
+            % (hits, ticket_hits))
     return 0
 
 
