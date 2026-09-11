@@ -34,7 +34,7 @@
     {
       "id": 5,
       "subject": "Task 5: Thread file context through both hooks",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Both callers supply the post-change file text, so the fix from Task 4 is actually reached in production rather than only in unit tests.\n\n**Files:**\n- Modify: `plugin/anti-tangent-guard/hooks/git_added_lines.py` (`contexts` out-param)\n- Modify: `plugin/anti-tangent-guard/hooks/check_comment_write.py:31-49`\n- Modify: `plugin/anti-tangent-guard/hooks/check-task-complete:532-580` (embedded Python)\n- Modify: `plugin/anti-tangent-guard/hooks/comment_scan_test.py` (append test class)\n\n**Acceptance Criteria:**\n- [ ] `final_files_added_lines(inp, deadline=None, stats=None, contexts=None)` fills `contexts[path]` with the text its answer was derived from\n- [ ] The return shape stays `{path: [lines]}`\n- [ ] `check-task-complete` passes `contexts.get(fpath)` as the third argument to `violations`\n- [ ] The `final_diff` branch passes `None`\n- [ ] `check_comment_write.py` passes `content` for `Write`\n- [ ] For `Edit` it passes the reconstructed post-edit text, honouring `replace_all`\n- [ ] An `Edit` whose file cannot be read passes `None` rather than failing the scan\n- [ ] An `Edit` with an empty `old_string` passes `None`\n\n**Verify:** `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v && bash plugin/anti-tangent-guard/evals/run.sh`\n\nFull code is in the plan under \"Task 5\".\n\nWHY AN OUT-PARAM, NOT A RETURN-SHAPE CHANGE: `final_files_added_lines()` returns `{path: [lines]}` and `check-task-complete` derives its stats from exactly that shape. Widening the return would break that reader. Follow the precedent `stats` already sets.\n\nNOTE: `check-task-complete` is a bash file wrapping Python in a `python3 -I -c` heredoc - edit the embedded Python and keep the quoting intact.\n\n```json:metadata\n{\"files\": [\"plugin/anti-tangent-guard/hooks/git_added_lines.py\", \"plugin/anti-tangent-guard/hooks/check_comment_write.py\", \"plugin/anti-tangent-guard/hooks/check-task-complete\", \"plugin/anti-tangent-guard/hooks/comment_scan_test.py\"], \"verifyCommand\": \"python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v && bash plugin/anti-tangent-guard/evals/run.sh\", \"acceptanceCriteria\": [\"contexts out-param filled for tracked and untracked\", \"return shape unchanged\", \"check-task-complete passes contexts.get(fpath)\", \"final_diff path passes None\", \"Write passes content\", \"Edit passes reconstructed post-edit text honouring replace_all\", \"unreadable Edit target passes None\", \"empty old_string passes None\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         2,
@@ -73,5 +73,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-11T12:36:46.049841+00:00"
+  "lastUpdated": "2026-09-11T12:55:46.892391+00:00"
 }
