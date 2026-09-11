@@ -1695,9 +1695,11 @@ A green suite alone does not close this task. An eval that passes whether or not
 
 **Files:**
 - Modify: `plugin/anti-tangent-guard/evals/guard-evals.json` (append to `.evals`)
+- Modify: `plugin/anti-tangent-guard/evals/run.sh` — `EXPECTED_CASE_COUNT` must move with the table, and a doc paragraph describes the new group. `run.sh` hard-exits before running any case when the declared count disagrees with the JSON.
 
 **Acceptance Criteria:**
 - [ ] Three new cases: `filter.x.clean`, `filter.x.process`, and the partial-clone lazy fetch
+- [ ] `EXPECTED_CASE_COUNT` in `run.sh` matches the new table size
 - [ ] Each points the repository-configured command at a sentinel file and asserts it via `expected_file_absent`
 - [ ] Each expects exit 0 — the added line carries no tell, so only an executed command can change the outcome
 - [ ] Every new case has a `reason` saying what it would catch if it regressed
