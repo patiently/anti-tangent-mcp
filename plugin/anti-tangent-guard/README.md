@@ -277,16 +277,25 @@ rather than treating the reflow as separate from the touch.
 - `PostToolUse` detects rather than prevents: the close-time scan fires
   **after** the state change to `completed`, so a comment reaching disk
   through `Bash` blocks further progress only at close time, not at write time.
-- The scanner reads one line at a time: a full-line comment, a comment
+- The scanner recognizes four comment shapes: a full-line comment, a comment
   trailing code on the same line, a `/* … */` opened and closed on one line,
-  and a starred block-continuation line. An *unstarred* block interior is a
-  known miss — nothing on such a line marks it as sitting inside a comment.
-- The starred block-continuation shape (a KDoc/Javadoc body line) has no
-  quote-parity check behind it — the prefix before a line-leading `*` is
-  always whitespace, so parity cannot tell it apart from a markdown bullet
-  inside a Go raw string or a Kotlin `"""` block. A write containing one can
-  block on a false positive; `ANTI_TANGENT_COMMENT_GUARD=0` is the escape
-  hatch if you hit this.
+  and a starred block-continuation line (a KDoc/Javadoc body line). An
+  *unstarred* block interior is a known miss — nothing on such a line marks
+  it as sitting inside a comment.
+- The starred block-continuation shape is the one that cannot be decided from
+  the line: ` * text` is byte-identical inside a `/* … */` block and inside a
+  Go raw string or a Kotlin `"""` block. It is therefore checked against the
+  whole post-change file, which is what keeps a markdown bullet in a string
+  literal from refusing its own write.
+- Where that whole-file check has nothing to say, the shape alone decides and
+  the line is treated as a comment. That covers an `Edit` whose target cannot
+  be read, an `Edit` with an empty `old_string`, an `Edit` whose `old_string`
+  starts part-way through a line (the added text is then a fragment of no line
+  in the file), and the close-time scan of a submitted `final_diff`, which
+  carries added lines without the files they came from. A write containing a
+  starred markdown bullet in one of those positions can block on a false
+  positive; `ANTI_TANGENT_COMMENT_GUARD=0` is the escape hatch if you hit
+  this.
 - The scanner implements a small pattern set capturing common change-history
   markers. The reviewer layer at completion time covers prose narration the
   patterns cannot catch — an engineer writing a sentence like "I rewrote this
@@ -357,6 +366,19 @@ reached disk through `Bash`. To have committed work scanned, submit it as a
 diff from the commit the task started at
 (`git diff <task-base-commit> -- <task paths>`) rather than as
 `final_files`.
+
+**Paths the repository's own `.gitattributes` takes out of scope.** A
+**tracked** `final_files` path carrying a **`filter`** attribute — git-lfs,
+git-crypt, or any other clean/smudge driver — is **not scanned at close
+time**. `HEAD` holds a pointer or ciphertext for such a path while the
+worktree holds content, and the only thing that could make the two comparable
+is the filter command the repository itself names, which this hook will not
+run. Skipping is the fail-open answer: comparing them directly would report
+every line of the file as added. This skip lives on the tracked branch only —
+an untracked path carrying the same attribute is still scanned whole. A path
+carrying a **`working-tree-encoding`** is *not* skipped — the attribute's
+value is the codec name, so the worktree side is decoded with it and the scan
+runs normally. A codec Python cannot resolve falls back to skipping the path.
 
 ## Dependencies
 
@@ -490,7 +512,7 @@ bash evals/run.sh
 ```
 
 Runs the hooks' own unit tests (`hooks/*_test.py`) first, then the full eval
-suite (142 cases) against both hooks, and exits non-zero on either — the
+suite (145 cases) against both hooks, and exits non-zero on either — the
 cases cover check-task-complete's three block conditions (the third being its
 own close-time comment-hygiene scan), plus check-comment-write's write-time
 comment-hygiene guard. See `evals/run.sh`'s header comment for the
@@ -521,3 +543,20 @@ duplicate key, or a key whose comment text has drifted, so a stale table cannot
 report a clean zero. Widening a tell is the change this gate exists to catch:
 regenerate with `python3 -B evals/fp-scan.py`, then reconcile `fp-class.tsv` by
 hand — every new key needs a human judgement.
+
+The gate itself always measures the shipped tells with
+`ANTI_TANGENT_TICKET_PATTERN` unset, so a pattern a developer happens to have
+configured locally cannot move a verdict recorded in `fp-class.tsv`. To measure
+a candidate tracker pattern before setting it project-wide, pass it to the
+scanner directly:
+
+```bash
+python3 -B evals/fp-scan.py --ticket-pattern '[A-Z]{2,}-[0-9]+'
+```
+
+That reports the total hits and, separately, how many are **newly
+attributable** to the pattern — hits no built-in tell already catches, which is
+what the pattern would newly block. A pattern that fails to compile or exceeds
+the 200-character cap exits 2 and measures nothing, rather than reporting a
+reassuring zero. This run is a one-off measurement: its output is not joinable
+against `fp-class.tsv`, which classifies the shipped tells only.

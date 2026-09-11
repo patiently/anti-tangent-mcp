@@ -21,7 +21,7 @@ READ_CAP_BYTES = 2_000_000
 MISSING = object()
 
 
-def read_text_capped(path):
+def read_text_capped(path, encoding=None):
     """Read path as decoded text. Returns MISSING, or None if unusable.
 
     The path is caller-supplied and both hooks run unsandboxed, so it gets the
@@ -36,6 +36,12 @@ def read_text_capped(path):
     slip past a byte cap. errors="replace" keeps a file that is not valid UTF-8
     (one stray Latin-1 byte is enough) from raising and taking the whole scan
     down with it.
+
+    An encoding may be named by the caller when something authoritative says
+    the bytes on disk are not UTF-8 -- a working-tree-encoding attribute is
+    the case that matters. A codec name Python cannot resolve raises, which
+    the handler below turns into None, so an unusable name fails open like
+    every other unreadable path.
 
     None means "no usable content", and every caller must fail OPEN on it: a
     file that cannot be read must never turn into a blocked write or a blocked
@@ -54,7 +60,7 @@ def read_text_capped(path):
             raw = fh.read(READ_CAP_BYTES + 1)
         if len(raw) > READ_CAP_BYTES:
             return None
-        return raw.decode("utf-8", errors="replace")
+        return raw.decode(encoding or "utf-8", errors="replace")
     except Exception:
         return None
     finally:
@@ -154,7 +160,147 @@ def _line_comment_spans(opens, raw):
     return [t for t in out if t.strip()]
 
 
-def comment_spans(path, raw):
+# Quote forms that genuinely cross a newline. A single or double quote does
+# not: no language in SCAN_EXTS carries one over unescaped, so an unclosed one
+# is a typo. Treating it as an open span is what lets a Rust lifetime or an
+# apostrophe in JSX text swallow every comment after it in the file.
+_TRIPLE_QUOTES = ('"""', "'''")
+_MULTILINE_QUOTES = _TRIPLE_QUOTES + ("`",)
+
+
+# Extensions whose backtick literal is INTERPOLATED and ESCAPED. Two rules
+# hang off this. A `${...}` hole returns to CODE -- a template literal
+# evaluates an expression there, and that expression can contain a genuine
+# block comment. And a backslash escapes the byte after it, so `\`` does not
+# close the literal.
+#
+# A Go backquoted raw string is the opposite construct on both counts: it is
+# uninterpreted between the backticks, so `${`, `/*` and every other byte
+# inside it is literal text and never code, and a backslash is one of those
+# literal bytes rather than an escape. Applying the JS/TS rules to Go would
+# read a raw string's `${` as an escape into code, and would let a raw string
+# whose last byte is a backslash -- a Windows path, the idiomatic reason to
+# reach for Go backticks -- consume its own closing backtick and run to the
+# end of the file.
+_INTERPOLATING_EXTS = {".js", ".jsx", ".ts", ".tsx"}
+
+# Extensions in which a backtick DELIMITS A STRING at all. Every interpolating
+# one does, and Go's raw string is the only non-interpolating addition --
+# derived rather than restated so an extension cannot be given the escape
+# rules without a literal to apply them to.
+#
+# Everywhere else in SCAN_EXTS -- Rust, C, C++, Java, Kotlin -- a backtick is
+# ordinary text, and it turns up in prose: the markdown of a doc comment, and
+# the body of a multi-line raw string (Rust r#"..."#, C++ R"(...)"). Opening a
+# span on one of those can only lose findings, because an odd backtick
+# swallows every block comment after it in the file, and it can gain nothing,
+# since there is no literal there for a span to model.
+_BACKTICK_EXTS = _INTERPOLATING_EXTS | {".go"}
+
+
+def block_comment_lines(text, interpolates, backticks=False):
+    """Line texts sitting inside an open /* */ block, as a set.
+
+    The question cannot be answered from a line on its own: ` * text` is a
+    block continuation inside /* */ and ordinary string content inside a raw
+    literal, and the two are byte-identical. Only the surrounding file
+    separates them.
+
+    A line is in the set when a block was ALREADY open as the line began --
+    which is what a continuation is. A line that opens a block partway through
+    itself is not in the set, and does not need to be: the starred branch only
+    ever asks about continuation lines, and the opener goes through the
+    ordinary left-to-right walk.
+
+    Line comments, string literals and template-literal interpolation are all
+    tracked in the same pass.
+
+    Two flags say what a backtick means in the language being walked. False
+    is the conservative value of each, because a span this walk declines to
+    open costs at most a missed finding, while one it opens wrongly hides
+    every block comment after it in the file.
+
+    `backticks` says a backtick delimits a string here at all. Where it is
+    false a backtick is ordinary text and the walk steps over it.
+
+    `interpolates` says that literal is interpolated and escaped. It is why
+    backticks are scanned character by character rather than jumped over:
+    a `${ ... }` hole returns to CODE, a genuine block comment can live
+    inside one, and skipping to the closing backtick would silently lose that
+    detection. It also gates the backslash escape, which belongs to the
+    interpolated form only -- in an uninterpreted raw string a backslash is
+    literal text, and consuming the byte after it would eat a closing
+    backtick that is really there.
+
+    Matched by TEXT rather than line number because the caller may hold a
+    sparse subset of the file with no indices to offer. A line whose text
+    appears both inside and outside a block resolves as inside, which is the
+    answer the shape-only heuristic already gives.
+    """
+    inside = set()
+    stack = []
+    for line in text.splitlines():
+        if stack and stack[-1] == "block":
+            inside.add(line)
+        i, n = 0, len(line)
+        while i < n:
+            top = stack[-1] if stack else None
+            if top == "block":
+                end = line.find("*/", i)
+                if end < 0:
+                    break
+                stack.pop(); i = end + 2; continue
+            if top == "`":
+                if interpolates and line.startswith("${", i):
+                    stack.append("interp"); i += 2; continue
+                if interpolates and line[i] == "\\":
+                    i += 2; continue
+                if line[i] == "`":
+                    stack.pop(); i += 1; continue
+                i += 1; continue
+            if top in _MULTILINE_QUOTES:
+                end = line.find(top, i)
+                if end < 0:
+                    break
+                i = end + len(top); stack.pop(); continue
+            ch = line[i]
+            if ch == "\\":
+                i += 2; continue
+            if top == "interp" and ch == "{":
+                stack.append("interp"); i += 1; continue
+            if top == "interp" and ch == "}":
+                stack.pop(); i += 1; continue
+            if line.startswith("//", i):
+                break
+            if line.startswith("/*", i):
+                stack.append("block"); i += 2; continue
+            opened = None
+            for q in (_MULTILINE_QUOTES if backticks else _TRIPLE_QUOTES):
+                if line.startswith(q, i):
+                    opened = q; break
+            if opened is not None:
+                stack.append(opened); i += len(opened); continue
+            if ch in ('"', "'"):
+                j = i + 1
+                while j < n:
+                    if line[j] == "\\":
+                        j += 2; continue
+                    if line[j] == ch:
+                        break
+                    j += 1
+                i = j + 1; continue
+            i += 1
+    return inside
+
+
+def starred_candidate(path, raw):
+    """True when raw is the shape the block-continuation branch would claim."""
+    line = raw.strip()
+    return ("*" in openers(path) and line.startswith("*")
+            and not line.startswith("*/"))
+
+
+def comment_spans(path, raw, allow_star=True):
     """Every comment span on one line, as a list; empty when there are none.
 
     A LIST, not one joined string. Tells are matched per span, because joining
@@ -165,6 +311,11 @@ def comment_spans(path, raw):
     Almost everything goes through the left-to-right walk above; only a block
     continuation `*` and a column-zero `#` are handled directly, because
     neither is a delimiter that walk recognises.
+
+    allow_star=False makes the continuation branch decline, so the line goes
+    through the ordinary left-to-right walk instead. The caller uses it when
+    it can see the whole file and the file says this line is not inside an
+    open block.
     """
     opens = openers(path)
     line = raw.strip()
@@ -175,7 +326,7 @@ def comment_spans(path, raw):
     # what lets a line carrying both a block opener and a trailing `//`
     # yield BOTH spans, instead of stopping at the first and missing
     # whatever the second one says.
-    if "*" in opens and line.startswith("*") and not line.startswith("*/"):
+    if allow_star and "*" in opens and line.startswith("*") and not line.startswith("*/"):
         rest = line[1:]
         # `*p = x - 1;` is a dereference and a subtraction, not a comment.
         if rest and not rest[0].isspace():
@@ -363,29 +514,94 @@ def openers(path):
     return LINE_COMMENT.get(os.path.splitext(path)[1].lower(), DEFAULT_COMMENT)
 
 
+def _interpolates(path):
+    return os.path.splitext(path)[1].lower() in _INTERPOLATING_EXTS
+
+
+def _backticks(path):
+    return os.path.splitext(path)[1].lower() in _BACKTICK_EXTS
+
+
 def scannable(path):
     return os.path.splitext(path)[1].lower() in SCAN_EXTS
 
 
-def violations(path, added_lines):
+def violations(path, added_lines, context=None, strict=False):
     """Return [(line, why)] for added comment lines carrying change history.
 
+    `context` is the full post-change text of the file, when the caller has
+    it. It decides one question only: whether a `*`-led line really sits
+    inside an open block comment, which is the premise the continuation
+    heuristic asserts and cannot check from the line alone.
+
+    It decides that question only for lines the context actually contains. A
+    caller that reconstructs the context from an edit's operands can hand over
+    an added line that is a FRAGMENT of a file line and appears in no line of
+    it; such a line is left to the shape-only heuristic rather than being read
+    as settled.
+
+    The walk over that context is LAZY -- it runs only once a starred
+    candidate actually appears, and at most once per call. A file with no
+    starred added line pays nothing, and a tokenizer that raises falls back to
+    the shape-only answer instead of taking a `//` finding elsewhere in the
+    same file down with it. The deadline is the one thing it may not absorb:
+    that bounds the whole call, so it ends the call wherever it fires.
+
     Anything that stops the scan completing — the deadline above, or any
-    exception from a caller-supplied pattern — yields no violations. This
-    module's standing rule is that an undecidable scan allows the write.
+    exception from a caller-supplied pattern — yields no violations, unless
+    `strict` is true, in which case the exception propagates instead. The
+    default is what every hook needs: an undecidable scan must allow the
+    write, never block one. `strict` exists for a caller that is not a hook
+    and cannot let an incomplete scan pass as a completed one with nothing
+    found -- a measurement tool reporting a false "zero hits" is worse than
+    the tool crashing where a human can see why.
     """
     if not scannable(path):
         return []
     out = []
+    block_lines = None
+    context_lines = None
     try:
         with scan_deadline():
             for raw in added_lines:
-                for span in comment_spans(path, raw):
+                allow_star = True
+                if context is not None and starred_candidate(path, raw):
+                    if block_lines is None:
+                        try:
+                            block_lines = block_comment_lines(
+                                context, _interpolates(path),
+                                _backticks(path))
+                            context_lines = set(context.splitlines())
+                        except _ScanTimeout:
+                            # ITIMER_REAL is one-shot: absorbing the deadline
+                            # here would leave every remaining line scanned
+                            # with no bound at all, which is the only thing
+                            # standing between a backtracking operator pattern
+                            # and a hung session.
+                            raise
+                        except Exception:
+                            block_lines = True
+                    if block_lines is not True:
+                        # An added line the context does not contain is one
+                        # the context cannot speak for. An Edit's added lines
+                        # come from old_string/new_string, which may start
+                        # part-way through a file line, so the fragment
+                        # appears in no line of the reconstructed text.
+                        # Reading that absence as "outside a block" would
+                        # decline a genuine block continuation; leaving the
+                        # shape-only answer standing is the fallback the rest
+                        # of this module takes whenever the premise cannot be
+                        # checked.
+                        allow_star = (raw in block_lines
+                                      or raw not in context_lines)
+                for span in comment_spans(path, raw, allow_star):
                     hit = next((why for pat, why in TELLS if pat.search(span)), None)
                     if hit is not None:
                         out.append((raw.strip(), hit))
                         break
     except Exception:
+        if strict:
+            raise
         return []
     return out
 

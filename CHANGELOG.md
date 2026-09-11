@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-09-11
+
+### Security
+
+- `anti-tangent-guard`'s close-time hook no longer executes commands named by the
+  repository it is pointed at. Deriving added lines for a `final_files` completion used
+  `git diff HEAD -- <path>`, which must convert the worktree side and so runs a
+  `filter.<name>.clean` or `filter.<name>.process` command from that repository's
+  `.git/config`. The comparison now reads the raw `HEAD` blob with `git cat-file blob`
+  and diffs in-process, converting nothing.
+- The same hook no longer reaches a second, unrelated exec path: a blob missing from a
+  partial clone sent git down a lazy fetch that spawned `core.sshCommand`,
+  `remote.*.uploadpack`, or a `git-remote-*` helper. Git is now invoked with
+  `protocol.allow=never`, `GIT_ALLOW_PROTOCOL=none` and `GIT_NO_LAZY_FETCH=1`.
+  `protocol.allow` alone was not enough: git documents it as the default for schemes
+  that carry no `protocol.<name>.allow` of their own, so a scanned repository could
+  grant its own scheme and spawn the transport anyway — measured firing on git 2.43.0
+  against a partial-clone fixture setting `protocol.ssh.allow=always`. That left
+  `GIT_NO_LAZY_FETCH` holding the line alone, and it is read only from git 2.39.4, so
+  older toolchains (Apple Git-146 ships 2.39.3) had no working defence.
+  `GIT_ALLOW_PROTOCOL` overrides configuration outright, per-scheme keys included.
+
+### Fixed
+
+- A `*`-led line inside a raw string literal — a Go backtick string, a Kotlin
+  triple-quoted string — is no longer scanned as a block-comment continuation, so a
+  changelog or help text embedded in source stops refusing its own write. The scanner
+  now decides from the surrounding file whether a block comment is actually open.
+- `${...}` reopens code only in the languages whose backtick literals interpolate —
+  `.js`, `.jsx`, `.ts`, `.tsx`. A Go raw string is uninterpreted, so a comment written
+  between its backticks is string content and is left alone.
+- A backslash escapes the next character only in those same interpolating languages. In
+  a Go raw string a backslash is literal text, and treating it as an escape meant a raw
+  string ending in one — a Windows path, the idiomatic reason to use Go backticks — ate
+  its own closing backtick and hid every `/* */` block after it in the file.
+- A backtick opens a string span only in `.go` and the interpolating extensions, the
+  ones that actually have the literal. Rust, C, C++, Java and Kotlin do not, so an odd
+  backtick in their prose — markdown in a doc comment, a byte of an `r#"…"#` or `R"(…)"`
+  raw string — no longer swallows the rest of the file.
+- A submitted path is matched literally. `git ls-files` takes a pathspec, so a file
+  actually named with `?`, `*` or `[...]` matched its own siblings, and the first record
+  of the answer was read — comparing the submitted file against a different file's blob
+  and reporting its pre-existing comments as newly added. Both pathspecs now carry
+  `literal`.
+- A path carrying a `filter` attribute (git-lfs, git-crypt) is skipped rather than
+  reported as wholly new, and a `working-tree-encoding` path is decoded with its
+  declared codec instead of being misread as UTF-8.
+- A `HEAD` blob carrying bytes that are not valid UTF-8 is now decoded with replacement and
+  scanned. Previously the decode failure made the whole comparison unanswerable and the file was
+  silently skipped, so a file with one stray byte was never checked. A blob that cannot be
+  retrieved, exceeds the read cap, or declares a codec Python cannot resolve is still skipped —
+  deliberately, rather than guessed at.
+
+### Added
+
+- `fp-scan.py --ticket-pattern <regex>` measures what a candidate
+  `ANTI_TANGENT_TICKET_PATTERN` would newly flag in this repository, and refuses to run
+  silently when the pattern would be dropped for being invalid or over the length cap.
+
 ## [0.20.1] - 2026-09-11
 
 Two CI checks reported green without having tested what they claim to test

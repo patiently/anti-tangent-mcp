@@ -10,11 +10,12 @@ falling back to the file on disk only when the entry carried none. That is
 the hook's contract -- it scans the evidence the last validate_completion
 submitted -- and it is also the text the reviewer saw.
 """
+import codecs
 import os
 import subprocess
 import time
 
-from comment_scan import read_text_capped
+from comment_scan import READ_CAP_BYTES, added, read_text_capped
 
 
 # --no-optional-locks keeps these read-only questions from refreshing the
@@ -31,29 +32,87 @@ _LOCK_FLAG = ["--no-optional-locks"]
 
 
 def _git(cwd, *args):
-    """Run git rooted at cwd with output formatting pinned. -> (rc, stdout).
+    """Run git rooted at cwd with config pinned. -> (rc, stdout as text)."""
+    return _git_call(cwd, args, True)
 
-    The diff pins are not load-bearing for what this module parses: the
-    filters below only ever test a diff line for a leading "+++", which every
-    prefix style produces. They are pinned so this module's own parsing never
-    has to anticipate the prefix and quoting styles a developer's git
-    configuration can produce. core.fsmonitor is pinned for a different
-    reason: a repository config can point it at an arbitrary command, which
-    git would otherwise run from inside this hook.
+
+def _git_bytes(cwd, *args):
+    """Run git rooted at cwd with config pinned. -> (rc, stdout as bytes).
+
+    A blob is under no obligation to be valid UTF-8, and subprocess's text
+    mode raises on the first byte that is not -- inside subprocess.run, where
+    the caller sees a failure and cannot tell it apart from git refusing the
+    command. Reading bytes lets the caller decode with the same
+    errors="replace" the worktree side uses, so both sides of a comparison
+    degrade identically on the same bytes instead of one of them vanishing.
+    """
+    return _git_call(cwd, args, False)
+
+
+def _git_call(cwd, args, text):
+    """Shared body of _git and _git_bytes.
+
+    The pins are best-effort hardening, not a completeness claim. What this
+    module actually relies on is a property of the calls it makes: none of
+    them converts worktree content, and none of them fetches a missing
+    object. The pins cover the command-valued settings that an ordinary
+    read-only question would otherwise reach.
+
+    core.fsmonitor is a command git runs while answering, and a repository
+    config can point it anywhere.
+
+    The other command path is the transport a partial clone spawns to lazily
+    fetch an object it does not have, which reaches core.sshCommand,
+    remote.*.uploadpack and a git-remote-* helper on PATH. Three mechanisms
+    are applied to it. They overlap, and the overlap is the point: each one
+    is sufficient alone against SOME repository on SOME git, and none is
+    sufficient against all of them.
+
+    protocol.allow=never sets the default policy, and a default is all it
+    sets -- it governs only those schemes carrying no protocol.<name>.allow
+    of their own, so a repository that names its scheme explicitly takes
+    precedence over it. A config able to point core.sshCommand at a command
+    can set that key in the same breath, which is what the next mechanism is
+    for.
+
+    GIT_ALLOW_PROTOCOL overrides configuration outright, per-scheme keys
+    included, which is the property that case needs. Its value is a
+    colon-separated allowlist of scheme names; "none" names no scheme, so
+    nothing is permitted. The empty string allowlists nothing either, but an
+    empty value is indistinguishable from an unset one wherever environment
+    handling drops empty entries, and an unset GIT_ALLOW_PROTOCOL hands the
+    decision back to config.
+
+    GIT_NO_LAZY_FETCH stops the fetch being attempted at all rather than
+    constraining what it may speak, so it holds even where git's transport
+    policy is never consulted. It is the youngest of the three, and a git
+    that does not know it ignores it in silence, which is why the other two
+    are kept rather than retired in its favour.
+
+    core.quotePath is not a command. It is pinned because ls-files output is
+    parsed for a repository-relative path, and quoting would corrupt any name
+    outside ASCII.
+
+    Pathspec interpretation is NOT pinned here, even though every pathspec
+    this module passes must be literal. --literal-pathspecs would say that
+    globally, but it also strips the `top` magic one of the callers depends
+    on, so each pathspec carries `literal` itself instead.
     """
     pins = ["-C", cwd,
-            "-c", "diff.noprefix=false",
-            "-c", "diff.mnemonicPrefix=false",
             "-c", "core.quotePath=false",
             "-c", "core.fsmonitor=false",
+            "-c", "protocol.allow=never",
             "--no-pager"]
+    env = dict(os.environ, GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="none")
+    empty = "" if text else b""
 
     def run(prefix):
         try:
             p = subprocess.run(["git"] + prefix + pins + list(args),
-                               capture_output=True, text=True, timeout=10)
+                               capture_output=True, text=text, timeout=10,
+                               env=env)
         except Exception:
-            return 127, ""
+            return 127, empty
         return p.returncode, p.stdout
 
     rc, out = run(_LOCK_FLAG)
@@ -63,12 +122,15 @@ def _git(cwd, *args):
     return rc, out
 
 
-# A wall-clock bound on the whole per-path walk. An untracked path in a parent
-# directory not seen yet costs three git calls -- ls-files, check-ignore,
-# rev-parse -- of up to ten seconds each, so the walk can overrun this bound by
-# thirty seconds before it notices; nothing caps how many paths a completion
-# names, so without the bound a stalled git -- index.lock contention, a network
-# filesystem -- would hold the developer's session for minutes.
+# A wall-clock bound on the whole per-path walk. A TRACKED path in a repository
+# not seen yet is the expensive one: ls-files, check-attr, rev-parse
+# --show-toplevel, rev-parse --verify HEAD, the HEAD-membership probe and
+# cat-file -- six git calls of up to ten seconds each, so a single path can
+# overrun this bound by a minute before the walk notices. (An untracked one
+# costs three: ls-files, check-ignore, rev-parse.) Nothing caps how many paths
+# a completion names, so without the bound a stalled git -- index.lock
+# contention, a network filesystem -- would hold the developer's session for
+# minutes.
 # Running out stops the walk and returns what was gathered: this scan is
 # defence in depth, and a partial answer must never become a blocked close.
 GIT_BUDGET_SECONDS = 20.0
@@ -111,7 +173,132 @@ def _is_vendored(path, root=""):
     return any(seg in VENDORED_DIRS for seg in rel.replace("\\", "/").split("/"))
 
 
-def final_files_added_lines(inp, deadline=None, stats=None):
+# Attribute values that name nothing. "unspecified" and "unset" are the plain
+# negatives; "set" is what git prints for a bare attribute written without a
+# value, and it names neither a filter driver nor a codec -- there is no
+# filter.<name>.* for git to resolve and no encoding to decode with, so
+# nothing is converted and the path is safe to compare. Measured: `*.go
+# filter` reports "set" and runs no configured command.
+_ATTR_UNSET = ("unspecified", "unset", "set")
+
+
+def _converted(parent, name):
+    """(skip, encoding) from the attributes governing content conversion.
+
+    A `filter` attribute means HEAD holds a pointer or ciphertext while the
+    worktree holds content. Nothing can compare those two without running the
+    filter command, which is the one thing this module will not do, so the
+    path is skipped.
+
+    A working-tree-encoding is recoverable and must not be skipped: its value
+    IS the codec name, so decoding the worktree with it costs a codecs lookup
+    rather than a subprocess. Skipping it instead would give up a detection
+    that works -- and give it up silently, since the scan would still report
+    a clean run.
+
+    `name` is the file's own basename, NOT the repository-relative path the
+    rest of this module addresses blobs by. check-attr resolves a pathname
+    against the CURRENT DIRECTORY, and this call runs in the file's own
+    directory, so a repository-relative name asks about <parent>/<rel> -- a
+    path that does not exist for any file below the root. git answers
+    "unspecified" for every attribute of it, and reading that as an answer
+    would compare a git-crypt or git-lfs file against its own ciphertext and
+    report every line of it as added.
+    """
+    rc, out = _git(parent, "check-attr", "-z", "filter",
+                   "working-tree-encoding", "--", name)
+    if rc != 0:
+        return True, None
+    fields = out.split("\0")
+    attrs = {}
+    for i in range(0, len(fields) - 2, 3):
+        if fields[i] != name:
+            # A record for some other path means this response is not an
+            # answer about this file, and reading it as one would apply the
+            # wrong attributes.
+            return True, None
+        attrs[fields[i + 1]] = fields[i + 2]
+    # rc 0 is not by itself an answer. A truncated or empty response leaves
+    # both keys missing, and defaulting those to "unspecified" would read
+    # silence as "nothing is converted here" -- the fail-CLOSED direction this
+    # module is not allowed to take. Both records must be present.
+    if "filter" not in attrs or "working-tree-encoding" not in attrs:
+        return True, None
+    if attrs["filter"] not in _ATTR_UNSET:
+        return True, None
+    enc = attrs["working-tree-encoding"]
+    if enc in _ATTR_UNSET:
+        return False, None
+    try:
+        codecs.lookup(enc)
+    except Exception:
+        return True, None
+    return False, enc
+
+
+def _head_exists(cwd, root, cache):
+    """True when this worktree has a HEAD commit at all.
+
+    Keyed on the worktree ROOT, not on the directory the question was asked
+    from: one repository reached through several of its subdirectories is one
+    answer, and keying on the directory would re-probe for each of them. A
+    root that could not be named falls back to the directory, which is a
+    cache miss every time rather than a wrong answer.
+
+    An unborn HEAD is already handled further down: `ls-tree HEAD` on a
+    repository with no commits fails outright (rc 128), which
+    `_tracked_added_lines` reads as unanswerable and skips, same as any other
+    tree it cannot read. This check does not close a gap that call leaves
+    open; it is one cheap, cached probe per root that avoids spending the
+    `ls-tree` and `cat-file` calls on every tracked path in a fresh checkout,
+    when a single `rev-parse` already knows they can only fail.
+    """
+    key = root or cwd
+    if key not in cache:
+        rc, _ = _git(cwd, "rev-parse", "--verify", "--quiet", "HEAD")
+        cache[key] = rc == 0
+    return cache[key]
+
+
+def _tracked_added_lines(parent, rel, new_text):
+    """(lines, whole_file) for a tracked path, or None when unanswerable.
+
+    Absence from HEAD is established POSITIVELY, and kept distinct from the
+    failures that merely look like it. ls-tree answers all three states apart
+    without reading the blob: rc 0 with a record means the path is in HEAD,
+    rc 0 with no record means it is genuinely absent, and a non-zero rc means
+    the tree could not be read at all -- a missing or corrupt tree object, or
+    a treeless partial clone whose trees this module refuses to fetch.
+    Collapsing that third state onto "absent" would make every line of the
+    file read as new, which blocks a close on comments the implementer never
+    wrote. This module's standing rule is that a question it could not answer
+    means skip.
+
+    The pathspec carries `top` because ls-tree matches relative to the
+    CURRENT DIRECTORY, and this call runs in the file's own directory rather
+    than at the repository root. A bare repository-relative path matches
+    nothing from a subdirectory, and ls-tree reports that as rc 0 with no
+    record -- a present file read as absent, the same whole-file scan this
+    three-way split exists to prevent.
+
+    It carries `literal` so that a `?`, `*` or `[...]` in the name is the
+    character it looks like rather than a wildcard matching some sibling.
+    That has to be said in the pathspec rather than with --literal-pathspecs,
+    which would take `top` away with it.
+    """
+    rc, listed = _git(parent, "ls-tree", "-z", "HEAD", "--",
+                      ":(top,literal)" + rel)
+    if rc != 0:
+        return None
+    if not [record for record in listed.split("\0") if record]:
+        return new_text.splitlines(), True
+    rc_blob, blob = _git_bytes(parent, "cat-file", "blob", "HEAD:" + rel)
+    if rc_blob != 0 or len(blob) > READ_CAP_BYTES:
+        return None
+    return added(blob.decode("utf-8", errors="replace"), new_text), False
+
+
+def final_files_added_lines(inp, deadline=None, stats=None, contexts=None):
     """{path: [added lines]} for a completion that submitted final_files.
 
     final_files carries whole file contents and no signal for which lines are
@@ -124,11 +311,23 @@ def final_files_added_lines(inp, deadline=None, stats=None):
     reports a worktree path as unmatched -- indistinguishable from untracked,
     which would treat every line as added.
 
+    The submitted path is a caller-supplied name, and ls-files takes a
+    PATHSPEC, in which `?`, `*` and `[...]` are wildcards. A file actually
+    named with one of them matches its own siblings, and since only the first
+    record of the answer is read, that hands back a DIFFERENT file's
+    repository-relative path -- whose blob then supplies the "before" text of
+    the comparison, reporting as added every line the two files do not share.
+    `:(literal)` makes the name mean itself. It also covers a path that opens
+    with a colon, which would otherwise be read as magic rather than as a
+    name.
+
     Exit 1 from ls-files means "unmatched"; anything else (128 for a path
-    outside a repository or a repo with no HEAD) means the question could not
-    be answered, and every such path is skipped rather than guessed at. The
-    same rule governs check-ignore below: only its definite "not ignored"
-    status licenses treating a file as new.
+    outside a repository) means the question could not be answered, and every
+    such path is skipped rather than guessed at. A staged file still matches
+    even when the repository has no HEAD yet; that case is caught downstream,
+    by the head-existence check the tracked branch runs before reading any
+    blob. The same rule governs check-ignore below: only its definite "not
+    ignored" status licenses treating a file as new.
 
     A `stats` dict, if given, is filled with what the caller cannot see from
     the return value: "truncated" says the budget stopped the walk early, and
@@ -140,9 +339,17 @@ def final_files_added_lines(inp, deadline=None, stats=None):
     without it, leaving the developer index open to a refresh this walk means
     not to cause. 129 is git's generic usage error, so this does not establish
     that the flag itself was what git objected to.
+
+    A `contexts` dict, if given, is filled with the full text each answer was
+    derived from. The scanner needs it to tell a block-comment continuation
+    from a line of a raw string literal, which cannot be decided from the
+    added lines alone. It is an out-param for the same reason `stats` is: the
+    return shape is what the close-time hook counts, and widening it would
+    break that reader.
     """
     out = {}
     roots = {}
+    heads = {}
     vendored_skipped = 0
     truncated = False
     if deadline is None:
@@ -157,16 +364,36 @@ def final_files_added_lines(inp, deadline=None, stats=None):
         parent = os.path.dirname(path)
         if not os.path.isdir(parent):
             continue
-        rc, _ = _git(parent, "ls-files", "--error-unmatch", "--", path)
+        rc, listed = _git(parent, "ls-files", "-z", "--full-name",
+                          "--error-unmatch", "--", ":(literal)" + path)
         if rc == 0:
-            rc_diff, diff = _git(parent, "diff", "--no-color", "--no-ext-diff",
-                                 "--no-textconv", "HEAD", "--", path)
-            if rc_diff != 0:
+            rel = listed.split("\0")[0]
+            if not rel:
                 continue
-            lines = [ln[1:] for ln in diff.splitlines()
-                     if ln.startswith("+") and not ln.startswith("+++")]
+            skip, encoding = _converted(parent, os.path.basename(path))
+            if skip:
+                continue
+            new_text = read_text_capped(path, encoding)
+            if not isinstance(new_text, str):
+                continue
+            root = _repo_root(parent, roots)
+            if not _head_exists(parent, root, heads):
+                continue
+            result = _tracked_added_lines(parent, rel, new_text)
+            if result is None:
+                continue
+            lines, whole_file = result
+            if whole_file and _is_vendored(path, root):
+                vendored_skipped += 1
+                continue
             if lines:
                 out[path] = lines
+            if lines and contexts is not None:
+                # Only paths that reach `out` are ever looked up again, and a
+                # context is a whole file: holding one for every unchanged
+                # path a completion names would grow with the submission
+                # rather than with the work.
+                contexts[path] = new_text
             continue
         if rc != 1:
             continue
@@ -186,6 +413,8 @@ def final_files_added_lines(inp, deadline=None, stats=None):
             if not isinstance(content, str):
                 continue
         out[path] = content.splitlines()
+        if contexts is not None:
+            contexts[path] = content
     if stats is not None:
         stats["truncated"] = truncated
         stats["vendored_skipped"] = vendored_skipped
