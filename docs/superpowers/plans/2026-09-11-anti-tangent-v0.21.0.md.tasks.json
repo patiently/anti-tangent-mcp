@@ -4,7 +4,7 @@
     {
       "id": 1,
       "subject": "Task 1: Pin git shut, add bytes-mode call",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** No git call this module makes can be sent down a lazy fetch that execs a repository-configured transport, and a caller can read a blob without `subprocess` raising on non-UTF-8 bytes.\n\n**Files:**\n- Modify: `plugin/anti-tangent-guard/hooks/git_added_lines.py:20-63`\n- Modify: `plugin/anti-tangent-guard/hooks/comment_scan_test.py` (append test class)\n\n**Acceptance Criteria:**\n- [ ] `_git` passes `-c protocol.allow=never` and sets `GIT_NO_LAZY_FETCH=1` in the subprocess environment\n- [ ] `-c diff.noprefix=false` and `-c diff.mnemonicPrefix=false` are gone\n- [ ] `-c core.quotePath=false` and `-c core.fsmonitor=false` remain\n- [ ] `_git_bytes(cwd, *args)` exists and returns `(rc, bytes)`; `_git` still returns `(rc, str)`\n- [ ] Both share one implementation, and both keep the `--no-optional-locks` 129-retry behaviour\n- [ ] A partial-clone fixture with a missing blob and a `core.sshCommand` sentinel runs `cat-file blob` and the sentinel is never created\n- [ ] `_git`'s docstring no longer claims the pins protect a diff parser\n\n**Verify:** `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v` -> OK\n\nFull step-by-step code is in the plan under \"Task 1\". The `LazyFetchCannotExec` test body and the complete replacement `_git`/`_git_bytes`/`_git_call` implementation are given verbatim there.\n\nCRITICAL: the pins are best-effort hardening, NOT a completeness claim. The property actually relied on is that no call converts worktree content or fetches a missing object. `protocol.allow=never` and `GIT_NO_LAZY_FETCH=1` are independent mechanisms; apply BOTH.\n\n```json:metadata\n{\"files\": [\"plugin/anti-tangent-guard/hooks/git_added_lines.py\", \"plugin/anti-tangent-guard/hooks/comment_scan_test.py\"], \"verifyCommand\": \"python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v\", \"acceptanceCriteria\": [\"protocol.allow=never in pins\", \"GIT_NO_LAZY_FETCH=1 in subprocess env\", \"diff.* pins removed\", \"_git_bytes returns (rc, bytes)\", \"129 retry preserved in both modes\", \"partial-clone fixture creates no sentinel\"], \"modelTier\": \"standard\"}\n```"
     },
     {
@@ -73,5 +73,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-11T10:48:10.820395+00:00"
+  "lastUpdated": "2026-09-11T11:38:53.882522+00:00"
 }

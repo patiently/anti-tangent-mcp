@@ -382,8 +382,12 @@ class HeadProbedOncePerRoot(unittest.TestCase):
         sys.path.insert(0, HOOKS)
         import git_added_lines as g
         tmp = tempfile.mkdtemp()
-        repo, _ = _repo(tmp, tracked=("a.go", "package x\n"),
-                        worktree="package x\n// fixes #1\n")
+        # a.go must be left CLEAN through the sweep commit below: passing
+        # worktree= here would dirty it before `add -A`, the commit would
+        # absorb that change, and a.go could then never contribute an added
+        # line -- making the two-file assertion unsatisfiable. Both files are
+        # dirtied after the commit instead.
+        repo, _ = _repo(tmp, tracked=("a.go", "package x\n"))
         sub = os.path.join(repo, "sub")
         os.makedirs(sub)
         second = os.path.join(sub, "b.go")
@@ -391,6 +395,8 @@ class HeadProbedOncePerRoot(unittest.TestCase):
             fh.write("package y\n")
         subprocess.run(["git", "-C", repo, "add", "-A"], capture_output=True, timeout=30)
         subprocess.run(["git", "-C", repo, "commit", "-qm", "two"], capture_output=True, timeout=30)
+        with open(os.path.join(repo, "a.go"), "a") as fh:
+            fh.write("// fixes #1\n")
         with open(second, "a") as fh:
             fh.write("// fixes #2\n")
 
