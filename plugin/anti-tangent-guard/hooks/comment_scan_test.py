@@ -379,7 +379,10 @@ class ContentFiltersAreNeverRun(unittest.TestCase):
             worktree="package x\nfunc F() {}\n")
         path = os.path.join(repo, "f.go")
         out = g.final_files_added_lines({"final_files": [{"path": path}]})
-        self.assertEqual(out.get(path), ["func F() {}"])
+        # The attribute probe skips this path before any comparison, because a
+        # filtered HEAD blob is a pointer or ciphertext and is not comparable
+        # to worktree content without running the filter.
+        self.assertEqual(out, {}, "a filter-attributed path must be skipped")
         self.assertFalse(os.path.exists(sentinel),
                          "%s must never be executed from inside this hook" % key)
 
@@ -388,6 +391,31 @@ class ContentFiltersAreNeverRun(unittest.TestCase):
 
     def test_filter_clean_is_not_run(self):
         self._case("filter.x.clean")
+
+
+class BlobReadConvertsNothingWithoutTheSkip(unittest.TestCase):
+    # The attribute probe skips filter-attributed paths before the comparison
+    # runs, so no fixture can reach the blob read by the ordinary route. This
+    # pins the underlying property directly: with the probe forced open, the
+    # raw blob read still executes nothing.
+    def test_cat_file_runs_no_filter_even_when_the_probe_is_bypassed(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, sentinel = _repo(
+            tmp, attrs="*.go filter=x\n", configs=("filter.x.clean",),
+            tracked=("f.go", "package x\n"),
+            worktree="package x\nfunc F() {}\n")
+        path = os.path.join(repo, "f.go")
+        real = g._converted
+        g._converted = lambda parent, rel: (False, None)
+        try:
+            out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        finally:
+            g._converted = real
+        self.assertEqual(out.get(path), ["func F() {}"])
+        self.assertFalse(os.path.exists(sentinel),
+                         "the raw blob read must convert nothing on its own")
 
 
 class UndecodableHeadBlob(unittest.TestCase):
@@ -520,6 +548,105 @@ class SymlinkedWorktreeRoot(unittest.TestCase):
         path = os.path.join(link, "f.go")
         out = g.final_files_added_lines({"final_files": [{"path": path}]})
         self.assertEqual(out.get(path), ["// fixes #1"])
+
+
+class UnanswerableCheckAttr(unittest.TestCase):
+    def test_a_check_attr_that_cannot_answer_skips_the_path(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        calls = []
+        real = g._git
+
+        def fake_git(cwd, *args):
+            calls.append(args[0])
+            if args[0] == "ls-files":
+                return 0, "f.go\0"
+            if args[0] == "check-attr":
+                return 128, ""
+            raise AssertionError("nothing may follow an unanswerable check-attr: %r" % (args,))
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "f.go")
+        with open(path, "w") as fh:
+            fh.write("// fixes #1\n")
+        g._git = fake_git
+        try:
+            out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        finally:
+            g._git = real
+        self.assertEqual(out, {})
+        self.assertEqual(calls, ["ls-files", "check-attr"])
+
+
+class ConvertedContent(unittest.TestCase):
+    # A filter driver converts between the HEAD blob and the worktree form, so
+    # a filtered file holds a pointer or ciphertext in HEAD against content on
+    # disk: comparing the two directly reads as a wholly new file. An encoding
+    # difference is the worse of the two, because it reads as no findings at
+    # all and the scan still looks like it ran.
+    def test_a_filtered_path_is_skipped_not_scanned_whole(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, sentinel = _repo(
+            tmp, attrs="*.js filter=x\n", configs=("filter.x.clean",),
+            tracked=("f.js", "version https://example/lfs\noid sha256:dead\n"),
+            worktree="// bundle header: fixes #1234 upstream\nconsole.log(1);\n")
+        path = os.path.join(repo, "f.js")
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        self.assertEqual(out, {}, "a filtered path must be skipped")
+        self.assertFalse(os.path.exists(sentinel))
+
+    def test_working_tree_encoding_is_decoded_not_skipped(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo = os.path.join(tmp, "enc")
+        os.makedirs(repo)
+
+        def git(*args):
+            subprocess.run(["git", "-C", repo] + list(args),
+                           capture_output=True, timeout=30)
+
+        git("init", "-q", ".")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        with open(os.path.join(repo, ".gitattributes"), "w") as fh:
+            fh.write("*.go working-tree-encoding=UTF-16\n")
+        git("add", ".gitattributes")
+        git("commit", "-qm", "attrs")
+        path = os.path.join(repo, "f.go")
+        with open(path, "wb") as fh:
+            fh.write("package x\n".encode("utf-16"))
+        git("add", "f.go")
+        git("commit", "-qm", "init")
+        with open(path, "wb") as fh:
+            fh.write("package x\n// fixes #1\n".encode("utf-16"))
+
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        self.assertEqual(out.get(path), ["// fixes #1"],
+                         "the declared codec must be used, not skipped")
+
+
+class ReadTextCappedEncoding(unittest.TestCase):
+    def test_named_codec_is_used(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import read_text_capped
+        tmp = tempfile.mkdtemp()
+        p = os.path.join(tmp, "a.txt")
+        with open(p, "wb") as fh:
+            fh.write("hi\n".encode("utf-16"))
+        self.assertEqual(read_text_capped(p, "UTF-16"), "hi\n")
+
+    def test_unknown_codec_is_unusable(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import read_text_capped
+        tmp = tempfile.mkdtemp()
+        p = os.path.join(tmp, "b.txt")
+        with open(p, "w") as fh:
+            fh.write("hi\n")
+        self.assertIsNone(read_text_capped(p, "not-a-codec"),
+                          "an unusable codec must fail open, not raise")
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ falling back to the file on disk only when the entry carried none. That is
 the hook's contract -- it scans the evidence the last validate_completion
 submitted -- and it is also the text the reviewer saw.
 """
+import codecs
 import os
 import subprocess
 import time
@@ -141,6 +142,60 @@ def _is_vendored(path, root=""):
     return any(seg in VENDORED_DIRS for seg in rel.replace("\\", "/").split("/"))
 
 
+# Attribute values that name nothing. "unspecified" and "unset" are the plain
+# negatives; "set" is what git prints for a bare attribute written without a
+# value, and it names neither a filter driver nor a codec -- there is no
+# filter.<name>.* for git to resolve and no encoding to decode with, so
+# nothing is converted and the path is safe to compare. Measured: `*.go
+# filter` reports "set" and runs no configured command.
+_ATTR_UNSET = ("unspecified", "unset", "set")
+
+
+def _converted(parent, rel):
+    """(skip, encoding) from the attributes governing content conversion.
+
+    A `filter` attribute means HEAD holds a pointer or ciphertext while the
+    worktree holds content. Nothing can compare those two without running the
+    filter command, which is the one thing this module will not do, so the
+    path is skipped.
+
+    A working-tree-encoding is recoverable and must not be skipped: its value
+    IS the codec name, so decoding the worktree with it costs a codecs lookup
+    rather than a subprocess. Skipping it instead would give up a detection
+    that works -- and give it up silently, since the scan would still report
+    a clean run.
+    """
+    rc, out = _git(parent, "check-attr", "-z", "filter",
+                   "working-tree-encoding", "--", rel)
+    if rc != 0:
+        return True, None
+    fields = out.split("\0")
+    attrs = {}
+    for i in range(0, len(fields) - 2, 3):
+        if fields[i] != rel:
+            # A record for some other path means this response is not an
+            # answer about this file, and reading it as one would apply the
+            # wrong attributes.
+            return True, None
+        attrs[fields[i + 1]] = fields[i + 2]
+    # rc 0 is not by itself an answer. A truncated or empty response leaves
+    # both keys missing, and defaulting those to "unspecified" would read
+    # silence as "nothing is converted here" -- the fail-CLOSED direction this
+    # module is not allowed to take. Both records must be present.
+    if "filter" not in attrs or "working-tree-encoding" not in attrs:
+        return True, None
+    if attrs["filter"] not in _ATTR_UNSET:
+        return True, None
+    enc = attrs["working-tree-encoding"]
+    if enc in _ATTR_UNSET:
+        return False, None
+    try:
+        codecs.lookup(enc)
+    except Exception:
+        return True, None
+    return False, enc
+
+
 def _head_exists(cwd, root, cache):
     """True when this worktree has a HEAD commit at all.
 
@@ -235,7 +290,10 @@ def final_files_added_lines(inp, deadline=None, stats=None):
             rel = listed.split("\0")[0]
             if not rel:
                 continue
-            new_text = read_text_capped(path)
+            skip, encoding = _converted(parent, rel)
+            if skip:
+                continue
+            new_text = read_text_capped(path, encoding)
             if not isinstance(new_text, str):
                 continue
             root = _repo_root(parent, roots)

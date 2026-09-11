@@ -21,7 +21,7 @@ READ_CAP_BYTES = 2_000_000
 MISSING = object()
 
 
-def read_text_capped(path):
+def read_text_capped(path, encoding=None):
     """Read path as decoded text. Returns MISSING, or None if unusable.
 
     The path is caller-supplied and both hooks run unsandboxed, so it gets the
@@ -36,6 +36,12 @@ def read_text_capped(path):
     slip past a byte cap. errors="replace" keeps a file that is not valid UTF-8
     (one stray Latin-1 byte is enough) from raising and taking the whole scan
     down with it.
+
+    An encoding may be named by the caller when something authoritative says
+    the bytes on disk are not UTF-8 -- a working-tree-encoding attribute is
+    the case that matters. A codec name Python cannot resolve raises, which
+    the handler below turns into None, so an unusable name fails open like
+    every other unreadable path.
 
     None means "no usable content", and every caller must fail OPEN on it: a
     file that cannot be read must never turn into a blocked write or a blocked
@@ -54,7 +60,7 @@ def read_text_capped(path):
             raw = fh.read(READ_CAP_BYTES + 1)
         if len(raw) > READ_CAP_BYTES:
             return None
-        return raw.decode("utf-8", errors="replace")
+        return raw.decode(encoding or "utf-8", errors="replace")
     except Exception:
         return None
     finally:
