@@ -74,7 +74,13 @@ if _pattern is not None and comment_scan._ticket is None:
         % comment_scan._TICKET_PATTERN_MAX_LEN)
     sys.exit(2)
 
-TICKET_WHY = "a tracker reference"
+# The label the module itself attached to the configured pattern, read back
+# rather than restated. A literal copy drifts silently the moment the module
+# renames its tell: every comparison below fails, the run reports "0 newly
+# attributable", and an operator reads that as proof the pattern is safe to
+# set. The check above has already established that _ticket is bound whenever
+# a pattern was supplied.
+TICKET_WHY = comment_scan._ticket[1] if comment_scan._ticket else None
 
 VENDORED_DIRS = ("gnome-topbar/daemon/internal/server/assets/",)
 

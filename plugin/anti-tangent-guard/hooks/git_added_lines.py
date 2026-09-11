@@ -94,12 +94,15 @@ def _git_call(cwd, args, text):
     return rc, out
 
 
-# A wall-clock bound on the whole per-path walk. An untracked path in a parent
-# directory not seen yet costs three git calls -- ls-files, check-ignore,
-# rev-parse -- of up to ten seconds each, so the walk can overrun this bound by
-# thirty seconds before it notices; nothing caps how many paths a completion
-# names, so without the bound a stalled git -- index.lock contention, a network
-# filesystem -- would hold the developer's session for minutes.
+# A wall-clock bound on the whole per-path walk. A TRACKED path in a repository
+# not seen yet is the expensive one: ls-files, check-attr, rev-parse
+# --show-toplevel, rev-parse --verify HEAD, the HEAD-membership probe and
+# cat-file -- six git calls of up to ten seconds each, so a single path can
+# overrun this bound by a minute before the walk notices. (An untracked one
+# costs three: ls-files, check-ignore, rev-parse.) Nothing caps how many paths
+# a completion names, so without the bound a stalled git -- index.lock
+# contention, a network filesystem -- would hold the developer's session for
+# minutes.
 # Running out stops the walk and returns what was gathered: this scan is
 # defence in depth, and a partial answer must never become a blocked close.
 GIT_BUDGET_SECONDS = 20.0
@@ -151,7 +154,7 @@ def _is_vendored(path, root=""):
 _ATTR_UNSET = ("unspecified", "unset", "set")
 
 
-def _converted(parent, rel):
+def _converted(parent, name):
     """(skip, encoding) from the attributes governing content conversion.
 
     A `filter` attribute means HEAD holds a pointer or ciphertext while the
@@ -164,15 +167,24 @@ def _converted(parent, rel):
     rather than a subprocess. Skipping it instead would give up a detection
     that works -- and give it up silently, since the scan would still report
     a clean run.
+
+    `name` is the file's own basename, NOT the repository-relative path the
+    rest of this module addresses blobs by. check-attr resolves a pathname
+    against the CURRENT DIRECTORY, and this call runs in the file's own
+    directory, so a repository-relative name asks about <parent>/<rel> -- a
+    path that does not exist for any file below the root. git answers
+    "unspecified" for every attribute of it, and reading that as an answer
+    would compare a git-crypt or git-lfs file against its own ciphertext and
+    report every line of it as added.
     """
     rc, out = _git(parent, "check-attr", "-z", "filter",
-                   "working-tree-encoding", "--", rel)
+                   "working-tree-encoding", "--", name)
     if rc != 0:
         return True, None
     fields = out.split("\0")
     attrs = {}
     for i in range(0, len(fields) - 2, 3):
-        if fields[i] != rel:
+        if fields[i] != name:
             # A record for some other path means this response is not an
             # answer about this file, and reading it as one would apply the
             # wrong attributes.
@@ -218,17 +230,29 @@ def _head_exists(cwd, root, cache):
 def _tracked_added_lines(parent, rel, new_text):
     """(lines, whole_file) for a tracked path, or None when unanswerable.
 
-    Absence from HEAD is established POSITIVELY, by a call that never reads
-    the object. Inferring it from a failing cat-file would fold a decode
-    error, a timeout and an unfetchable blob into "every line is new", which
-    blocks a close on comments the implementer never wrote. This module's
-    standing rule is that a question it could not answer means skip.
+    Absence from HEAD is established POSITIVELY, and kept distinct from the
+    failures that merely look like it. ls-tree answers all three states apart
+    without reading the blob: rc 0 with a record means the path is in HEAD,
+    rc 0 with no record means it is genuinely absent, and a non-zero rc means
+    the tree could not be read at all -- a missing or corrupt tree object, or
+    a treeless partial clone whose trees this module refuses to fetch.
+    Collapsing that third state onto "absent" would make every line of the
+    file read as new, which blocks a close on comments the implementer never
+    wrote. This module's standing rule is that a question it could not answer
+    means skip.
+
+    The pathspec carries `:(top)` because ls-tree matches relative to the
+    CURRENT DIRECTORY, and this call runs in the file's own directory rather
+    than at the repository root. A bare repository-relative path matches
+    nothing from a subdirectory, and ls-tree reports that as rc 0 with no
+    record -- a present file read as absent, the same whole-file scan this
+    three-way split exists to prevent.
     """
-    rc, _ = _git(parent, "rev-parse", "--verify", "--quiet", "HEAD:" + rel)
-    if rc == 1:
-        return new_text.splitlines(), True
+    rc, listed = _git(parent, "ls-tree", "-z", "HEAD", "--", ":(top)" + rel)
     if rc != 0:
         return None
+    if not [record for record in listed.split("\0") if record]:
+        return new_text.splitlines(), True
     rc_blob, blob = _git_bytes(parent, "cat-file", "blob", "HEAD:" + rel)
     if rc_blob != 0 or len(blob) > READ_CAP_BYTES:
         return None
@@ -297,7 +321,7 @@ def final_files_added_lines(inp, deadline=None, stats=None, contexts=None):
             rel = listed.split("\0")[0]
             if not rel:
                 continue
-            skip, encoding = _converted(parent, rel)
+            skip, encoding = _converted(parent, os.path.basename(path))
             if skip:
                 continue
             new_text = read_text_capped(path, encoding)

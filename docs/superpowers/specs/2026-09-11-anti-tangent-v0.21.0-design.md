@@ -118,7 +118,7 @@ check-attr -z filter working-tree-encoding clean
 check-ignore -q                            clean
 rev-parse --show-toplevel                  clean
 rev-parse --verify HEAD                    clean
-rev-parse --verify HEAD:<rel>              clean
+ls-tree -z HEAD -- ":(top)<rel>"           clean
 cat-file blob HEAD:<rel>                   clean  (with the §1g caveat)
 ```
 
@@ -156,8 +156,8 @@ The tracked-path branch of `final_files_added_lines()` currently runs one `git d
 new_text = read_text_capped(path)              # cheapest, and skips junk before spending git calls
 rc, rel  = _git(parent, "ls-files", "-z", "--full-name", "--error-unmatch", "--", path)
                                                # tracked? and the repo-relative name, in one call
-skip if check_attr(rel) sets filter or working-tree-encoding          # §1f
-rc, oid  = _git(parent, "rev-parse", "--verify", "--quiet", "HEAD:" + rel)   # §1c
+skip if check_attr(basename) sets filter or working-tree-encoding     # §1f
+rc, rec  = _git(parent, "ls-tree", "-z", "HEAD", "--", ":(top)" + rel)       # §1c
 rc, blob = _git_bytes(parent, "cat-file", "blob", "HEAD:" + rel)             # §1e
 lines    = added(blob_text, new_text)
 ```
@@ -195,21 +195,47 @@ is new", which blocks the close on comments the task never wrote. It also contra
 own standing rule, stated in its docstring for `ls-files` and `check-ignore`: a question that could
 not be answered means skip, never guess.
 
-So the absence of a blob must be established *positively*, by a call that does not read the object:
+So the absence of a blob must be established *positively*, by a call that does not read the object
+and that keeps genuine absence separate from a failure to look:
 
 ```
-git rev-parse --verify --quiet HEAD:<rel>
-  rc 0, prints an oid   -> the blob is in HEAD
-  rc 1, prints nothing  -> it is not
-  anything else         -> unanswerable; skip the path
+git ls-tree -z HEAD -- ":(top)<rel>"
+  rc 0, one NUL-terminated record  -> the path is in HEAD
+  rc 0, no records                 -> it is not
+  rc != 0                          -> unanswerable; skip the path
 ```
 
-Only `rc 1` licenses treating the file as new. A `cat-file` that then fails means skip.
+Only `rc 0` with no record licenses treating the file as new. A `cat-file` that then fails means
+skip.
+
+`rev-parse --verify --quiet HEAD:<rel>` cannot supply this signal, even though it reads no object
+either: `--quiet` collapses *every* failure to rc 1, so a missing or corrupt tree is indistinguishable
+from an absent path and reads as "the whole file is new" — the false-block direction this section
+exists to close. Measured on git 2.43.0 from a subdirectory, with the path genuinely present in
+`HEAD`:
+
+| repository state | `rev-parse --verify --quiet HEAD:<rel>` | `ls-tree -z HEAD -- ":(top)<rel>"` |
+|---|---|---|
+| intact | rc 0 | rc 0, 1 record |
+| path absent | rc 1 | rc 0, 0 records |
+| subtree object deleted | rc 1 | rc 1 |
+| root tree object deleted | rc 1 | rc 128 |
+| treeless clone (`--filter=tree:0`), lazy fetch refused | rc 128 | rc 128 |
+
+Blobless clones (`--filter=blob:none`) are unaffected either way: the trees are present, so the
+membership probe succeeds and it is `cat-file` that fails, which already means skip.
+
+The `:(top)` prefix is load-bearing. `ls-tree` takes a *pathspec* and matches it relative to the
+current directory, which here is the file's own directory rather than the repository root, so a
+bare `<rel>` matches nothing from a subdirectory and returns rc 0 with no records — a present file
+reported as new. `--full-tree` does not fix this. `":(top)" + rel` and `os.path.basename(path)`
+both answer correctly; the anchored form is used because it names the same path the `cat-file`
+read addresses.
 
 `HEAD` itself is still verified once per repository root with `rev-parse --verify --quiet HEAD`,
-cached alongside `roots`, because in a repository with no commits `HEAD:<rel>` also answers rc 1 —
-indistinguishable from a new file, and reading it that way would scan whole files in a fresh
-checkout.
+cached alongside `roots`, because in a repository with no commits the membership probe cannot
+distinguish "no commits" from "not in HEAD" either, and reading that as a new file would scan
+whole files in a fresh checkout.
 
 ### 1d. The state matrix
 
@@ -293,7 +319,7 @@ different answers:
 Both are detected with one call, measured to run no filter itself:
 
 ```
-git check-attr -z filter working-tree-encoding -- <rel>
+git check-attr -z filter working-tree-encoding -- <basename>
 ```
 
 **`filter` is skipped.** Recovering it would mean running the very command this design exists not
@@ -386,7 +412,7 @@ sides go through it, so `core.autocrlf` does not produce a file-wide false diff.
 
 ### 1i. What this costs
 
-A tracked path goes from two git calls to four (`ls-files`, `check-attr`, `rev-parse HEAD:<rel>`,
+A tracked path goes from two git calls to four (`ls-files`, `check-attr`, `ls-tree`,
 `cat-file`), plus one cached `HEAD` verification per repository root. `GIT_BUDGET_SECONDS` is
 unchanged at 20s: the walk already truncates on the budget and reports it through
 `stats["truncated"]`, and truncation is fail-open. Reading the worktree file before spending any

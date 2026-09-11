@@ -481,11 +481,18 @@ def violations(path, added_lines, context=None):
     inside an open block comment, which is the premise the continuation
     heuristic asserts and cannot check from the line alone.
 
+    It decides that question only for lines the context actually contains. A
+    caller that reconstructs the context from an edit's operands can hand over
+    an added line that is a FRAGMENT of a file line and appears in no line of
+    it; such a line is left to the shape-only heuristic rather than being read
+    as settled.
+
     The walk over that context is LAZY -- it runs only once a starred
     candidate actually appears, and at most once per call. A file with no
-    starred added line pays nothing, and a tokenizer that raises or eats the
-    deadline cannot take a `//` finding elsewhere in the same file down with
-    it.
+    starred added line pays nothing, and a tokenizer that raises falls back to
+    the shape-only answer instead of taking a `//` finding elsewhere in the
+    same file down with it. The deadline is the one thing it may not absorb:
+    that bounds the whole call, so it ends the call wherever it fires.
 
     Anything that stops the scan completing — the deadline above, or any
     exception from a caller-supplied pattern — yields no violations. This
@@ -495,6 +502,7 @@ def violations(path, added_lines, context=None):
         return []
     out = []
     block_lines = None
+    context_lines = None
     try:
         with scan_deadline():
             for raw in added_lines:
@@ -503,10 +511,29 @@ def violations(path, added_lines, context=None):
                     if block_lines is None:
                         try:
                             block_lines = block_comment_lines(context)
+                            context_lines = set(context.splitlines())
+                        except _ScanTimeout:
+                            # ITIMER_REAL is one-shot: absorbing the deadline
+                            # here would leave every remaining line scanned
+                            # with no bound at all, which is the only thing
+                            # standing between a backtracking operator pattern
+                            # and a hung session.
+                            raise
                         except Exception:
                             block_lines = True
                     if block_lines is not True:
-                        allow_star = raw in block_lines
+                        # An added line the context does not contain is one
+                        # the context cannot speak for. An Edit's added lines
+                        # come from old_string/new_string, which may start
+                        # part-way through a file line, so the fragment
+                        # appears in no line of the reconstructed text.
+                        # Reading that absence as "outside a block" would
+                        # decline a genuine block continuation; leaving the
+                        # shape-only answer standing is the fallback the rest
+                        # of this module takes whenever the premise cannot be
+                        # checked.
+                        allow_star = (raw in block_lines
+                                      or raw not in context_lines)
                 for span in comment_spans(path, raw, allow_star):
                     hit = next((why for pat, why in TELLS if pat.search(span)), None)
                     if hit is not None:

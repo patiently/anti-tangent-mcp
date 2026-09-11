@@ -351,14 +351,18 @@ def _repo(tmp, name="r", attrs=None, configs=(), tracked=("f.go", "package x\n")
         git("add", ".gitattributes")
         git("commit", "-qm", "attrs")
     name_, body = tracked
-    with open(os.path.join(repo, name_), "wb") as fh:
+    # `tracked` may name a path below the root, which is the shape that
+    # separates a cwd-relative probe from a root-relative one.
+    target = os.path.join(repo, *name_.split("/"))
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "wb") as fh:
         fh.write(body if isinstance(body, bytes) else body.encode("utf-8"))
     git("add", name_)
     git("commit", "-qm", "init")
     for key in configs:
         git("config", key, evil + " " + key)
     if worktree is not None:
-        with open(os.path.join(repo, name_), "wb") as fh:
+        with open(target, "wb") as fh:
             fh.write(worktree if isinstance(worktree, bytes)
                      else worktree.encode("utf-8"))
     return repo, sentinel
@@ -628,6 +632,55 @@ class ConvertedContent(unittest.TestCase):
                          "the declared codec must be used, not skipped")
 
 
+class ConvertedContentBelowTheRoot(unittest.TestCase):
+    # The attribute probe runs in the file's OWN directory, and check-attr
+    # resolves a pathname against the current directory. A repository-relative
+    # name therefore asks about <dir>/<rel>, a path that exists for no file
+    # below the root, and git answers "unspecified" for every attribute of it
+    # -- so the ciphertext in HEAD is compared against plaintext on disk and
+    # every line of the file reads as added.
+    #
+    # Two properties are needed to see it, and either alone hides it: the file
+    # must sit BELOW the root, and the .gitattributes pattern must be ANCHORED
+    # to that path. An unanchored `*.go` matches the misresolved pathname just
+    # as well, and a file at the root has no misresolution to expose.
+    def test_a_filtered_path_below_the_root_is_skipped(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, sentinel = _repo(
+            tmp, attrs="a/b/x.go filter=x\n", configs=("filter.x.clean",),
+            tracked=("a/b/x.go", "ENCRYPTEDGIBBERISH\n"),
+            worktree="package x\n// fixes #123, added in v1.2.3\nfunc F() {}\n")
+        path = os.path.join(repo, "a", "b", "x.go")
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        self.assertEqual(out, {},
+                         "a filtered path below the root must be skipped")
+        self.assertFalse(os.path.exists(sentinel))
+
+
+class UnreadableTree(unittest.TestCase):
+    # The HEAD-membership probe has to tell "not in HEAD" apart from "the tree
+    # could not be read": the first licenses scanning the whole file as new,
+    # the second must skip. A deleted tree object is the cheapest way to
+    # produce the second, and it is indistinguishable from the first to any
+    # probe that reports both as a plain failure.
+    def test_a_missing_tree_object_skips_the_path(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, _ = _repo(tmp, tracked=("a/b/f.go", "package x\n"),
+                        worktree="package x\n// fixes #1\n")
+        oid = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD:a"],
+                             capture_output=True, text=True,
+                             timeout=30).stdout.strip()
+        os.remove(os.path.join(repo, ".git", "objects", oid[:2], oid[2:]))
+        path = os.path.join(repo, "a", "b", "f.go")
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        self.assertEqual(out, {},
+                         "an unreadable tree must skip, not report a new file")
+
+
 class ReadTextCappedEncoding(unittest.TestCase):
     def test_named_codec_is_used(self):
         sys.path.insert(0, HOOKS)
@@ -860,6 +913,19 @@ class EditReconstruction(unittest.TestCase):
         rc = self._run({"old_string": " * docs",
                         "new_string": " * docs\n * fixes #1"}, disk)
         self.assertEqual(rc, 2, "a real block continuation must still block")
+
+    def test_a_mid_line_fragment_inside_a_real_block_is_refused(self):
+        # An old_string that starts part-way through a file line makes every
+        # added line a FRAGMENT, appearing in no line of the reconstructed
+        # text. The context can say nothing about such a line, and reading its
+        # absence as "this sits in no block" would clear a genuine block
+        # continuation. Quoting just the comment text, without its leading
+        # indent, is the ordinary way to write this edit.
+        disk = 'package x\n\n/**\n * Does the thing.\n */\nfunc F() {}\n'
+        rc = self._run({"old_string": "* Does the thing.",
+                        "new_string": "* Does the thing, fixes #1"}, disk)
+        self.assertEqual(rc, 2,
+                         "a fragment the context cannot place must not be cleared")
 
     def test_replace_all_reconstructs_every_site(self):
         # The marker appears twice: once inside a raw string, once inside a
