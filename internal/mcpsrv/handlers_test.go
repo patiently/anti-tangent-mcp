@@ -2997,13 +2997,13 @@ func TestValidateCompletion_CodesceneRequired_MissingBlock(t *testing.T) {
 	assert.True(t, env.SubmissionDefectOnly)
 }
 
-func TestValidateCompletion_CodesceneRequired_DeclaredSkip(t *testing.T) {
+func TestValidateCompletion_CodesceneRequired_DeclaredSkipWithEvidence(t *testing.T) {
 	h := newTestHandlersWithCodescene(t, "required")
 	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
-		Codescene: &codescene.Digest{Ran: false, SkipReason: "docs-only task"},
+		Codescene: &codescene.Digest{Ran: false, SkipReason: "docs-only task", SkipEvidence: "no source files in diff"},
 	})
 	require.NoError(t, err)
 
@@ -3125,6 +3125,64 @@ func TestValidateCompletion_CodesceneRequired_RanTrueNoAdoptionFinding(t *testin
 	require.NoError(t, err)
 	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneNotRun))
 	assert.False(t, hasCategory(env.Findings, verdict.CategoryCodesceneSkipped))
+}
+
+func TestCodesceneFindingsLadder(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mode     string
+		digest   *codescene.Digest
+		severity verdict.Severity
+		category verdict.Category
+	}{
+		{"unset-no-arg", "", nil, "", ""},
+		{"unset-bare-skip", "", &codescene.Digest{SkipReason: "whatever"}, "", ""},
+		{"required-no-arg", "required", nil,
+			verdict.SeverityMajor, verdict.CategoryCodesceneNotRun},
+		{"required-no-reason", "required", &codescene.Digest{},
+			verdict.SeverityMajor, verdict.CategoryCodesceneNotRun},
+		{"required-reason-no-evidence", "required",
+			&codescene.Digest{SkipReason: "lightweight task"},
+			verdict.SeverityMajor, verdict.CategoryCodesceneSkipped},
+		{"required-reason-with-evidence", "required",
+			&codescene.Digest{SkipReason: "not configured", SkipEvidence: "MCP error: tool not found"},
+			verdict.SeverityMinor, verdict.CategoryCodesceneSkipped},
+		{"required-ran", "required", &codescene.Digest{Ran: true},
+			"", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := codesceneFindings(tc.mode, tc.digest)
+			if tc.severity == "" {
+				require.Empty(t, got)
+				return
+			}
+			require.Len(t, got, 1)
+			assert.Equal(t, tc.severity, got[0].Severity)
+			assert.Equal(t, tc.category, got[0].Category)
+		})
+	}
+}
+
+func TestCodesceneSkippedMajorIsSubmissionDefectOnly(t *testing.T) {
+	f := codesceneFindings("required", &codescene.Digest{SkipReason: "lightweight task"})
+	require.Len(t, f, 1)
+	assert.True(t, isSubmissionDefectOnly(f),
+		"a major codescene_skipped must route to re-submit, not to code rework")
+}
+
+func TestUnevidencedCodesceneSkipRoutesToResubmit(t *testing.T) {
+	// required mode, lightweight call, the skip is the ONLY blocking finding.
+	h := newTestHandlersWithCodescene(t, "required")
+	sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: sess.ID, Summary: "done", FinalDiff: "diff --git a/x b/x\n+ok\n",
+		Codescene: &codescene.Digest{SkipReason: "lightweight task"},
+	})
+	require.NoError(t, err)
+
+	assert.True(t, env.SubmissionDefectOnly)
+	assert.Contains(t, env.NextAction, "Re-submit with the missing evidence")
 }
 
 func TestValidateCompletionPathInputs(t *testing.T) {

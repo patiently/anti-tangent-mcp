@@ -538,19 +538,28 @@ func TestSummaryFormattersCannotBeForgedThroughFreeText(t *testing.T) {
 						"%s: a forged marker line smuggled through %s is indistinguishable from the block's own grammar\ngot:\n%s", fc.name, path, got)
 
 					// Positive half: when the field IS rendered, prove the
-					// output changed because it was ESCAPED, not because the
-					// content was dropped. A producer that rendered only the
-					// first line, or re-indented without the sentinel, would
-					// satisfy the two assertions above while losing (or still
-					// leaking) the caller's text.
+					// output changed because it was NEUTRALISED, not because
+					// the content was dropped. A producer that rendered only
+					// the first line would satisfy the two assertions above
+					// while losing the caller's text.
+					//
+					// Two neutralisations are correct, and which one applies
+					// is the producer's choice: folding a continuation line
+					// behind the sentinel, or flattening the value onto the
+					// line it was interpolated into (what a report table cell
+					// does, since a cell must stay one row). So this asserts
+					// only that the forged header TEXT survived — the two
+					// assertions above are what prove it cannot begin a line
+					// in either shape, the indented spelling included, since
+					// the marker pattern is leading-whitespace-tolerant.
 					//
 					// Keyed on forgedPayloadHead, not on "got != baseline": a
 					// field used as a switch discriminator rather than rendered
 					// (TaskRow.CodesceneState) changes the output without its
 					// own text ever appearing in it.
 					if strings.Contains(got, forgedPayloadHead) {
-						assert.Contains(t, got, "| anti-tangent envelope",
-							"%s: %s is rendered, so its forged lines must still be legible behind the sentinel\ngot:\n%s", fc.name, path, got)
+						assert.Contains(t, got, "anti-tangent envelope",
+							"%s: %s is rendered, so its forged lines must still be legible\ngot:\n%s", fc.name, path, got)
 					}
 				})
 			}

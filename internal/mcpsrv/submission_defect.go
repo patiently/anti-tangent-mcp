@@ -13,11 +13,14 @@ import (
 
 // submissionDefectCategories are the findings that describe what the
 // implementer sent rather than what they built. Fixing one means attaching
-// more evidence, not changing code.
+// more evidence, not changing code. A declared CodeScene skip qualifies for
+// the same reason a missing one does: the remedy is to run the tool or to
+// attach the error text proving it could not run, never to touch the code.
 var submissionDefectCategories = map[verdict.Category]bool{
 	verdict.CategoryInsufficientEvidence: true,
 	verdict.CategoryMalformedEvidence:    true,
 	verdict.CategoryCodesceneNotRun:      true,
+	verdict.CategoryCodesceneSkipped:     true,
 }
 
 // resubmitNextAction is prefixed onto next_action when the only blocking
@@ -62,8 +65,9 @@ func codesceneFindings(mode string, d *codescene.Digest) []verdict.Finding {
 				Evidence: "ANTI_TANGENT_CODESCENE=required, but this validate_completion call " +
 					"carried no `codescene` argument.",
 				Suggestion: "Run CodeScene `analyze_change_set` and re-submit with the result as " +
-					"the `codescene` argument, or pass {\"ran\": false, \"skip_reason\": \"…\"} if " +
-					"the skip is deliberate. This is a submission defect — no code rework is implied.",
+					"the `codescene` argument, or pass {\"ran\": false, \"skip_reason\": \"…\", " +
+					"\"skip_evidence\": \"…\"} if the skip is deliberate. This is a submission " +
+					"defect — no code rework is implied.",
 			})
 		case !d.Ran && strings.TrimSpace(d.SkipReason) == "":
 			out = append(out, verdict.Finding{
@@ -71,8 +75,28 @@ func codesceneFindings(mode string, d *codescene.Digest) []verdict.Finding {
 				Category:  verdict.CategoryCodesceneNotRun,
 				Criterion: "codescene_adoption",
 				Evidence:  "`codescene.ran` is false and no `skip_reason` was given.",
-				Suggestion: "State why CodeScene was skipped in `skip_reason`, or run " +
-					"`analyze_change_set` and re-submit the result.",
+				Suggestion: "State why CodeScene was skipped in `skip_reason` and attach the " +
+					"failing tool's error text as `skip_evidence`, or run `analyze_change_set` " +
+					"and re-submit the result.",
+			})
+		case !d.Ran && strings.TrimSpace(d.SkipEvidence) == "":
+			// An unevidenced skip is graded exactly as an omitted result, and
+			// the equality is the point. The server cannot verify any of these
+			// fields, so relative severity is the only lever it has: were a
+			// bare reason to cost less than silence, composing one would be
+			// the cheapest route to a pass and it need not be true. Equal
+			// rungs leave nothing to buy by inventing a reason. A lightweight
+			// task is not exempt — `required` asserts CodeScene is present on
+			// the host.
+			out = append(out, verdict.Finding{
+				Severity:  verdict.SeverityMajor,
+				Category:  verdict.CategoryCodesceneSkipped,
+				Criterion: "codescene_adoption",
+				Evidence: "CodeScene reported as skipped — " + strings.TrimSpace(d.SkipReason) +
+					" — with no `skip_evidence` to substantiate it.",
+				Suggestion: "Run CodeScene `analyze_change_set` and re-submit the result, or " +
+					"attach the failing tool's own error output as `skip_evidence`. This is a " +
+					"submission defect — no code rework is implied.",
 			})
 		case !d.Ran:
 			out = append(out, verdict.Finding{
@@ -80,7 +104,7 @@ func codesceneFindings(mode string, d *codescene.Digest) []verdict.Finding {
 				Category:   verdict.CategoryCodesceneSkipped,
 				Criterion:  "codescene_adoption",
 				Evidence:   "CodeScene deliberately skipped: " + strings.TrimSpace(d.SkipReason),
-				Suggestion: "No action needed if the reason holds; the skip is recorded in the plan-run ledger.",
+				Suggestion: "No action needed if the evidence holds.",
 			})
 		}
 	}

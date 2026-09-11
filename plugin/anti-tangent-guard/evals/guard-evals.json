@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (93 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (142 cases)",
   "evals": [
     {
       "id": 1,
@@ -19,7 +19,7 @@
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
       ],
       "expected_exit": 0,
-      "reason": "tool_name != TaskUpdate exits before any transcript work — the fixture also carries status=completed, taskId=1, and a real signal-free transcript, so if the TOOL_NAME check were deleted the flow would instead reach the no-validation block (exit 2), making this case red rather than vacuously green"
+      "reason": "tool_name != TaskUpdate exits before any transcript work \u2014 the fixture also carries status=completed, taskId=1, and a real signal-free transcript, so if the TOOL_NAME check were deleted the flow would instead reach the no-validation block (exit 2), making this case red rather than vacuously green"
     },
     {
       "id": 2,
@@ -37,7 +37,7 @@
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
       ],
       "expected_exit": 0,
-      "reason": "status != completed exits before any transcript work — the fixture also carries taskId=1 and a real signal-free transcript, so if the STATUS check were deleted the flow would instead reach the no-validation block (exit 2), making this case red rather than vacuously green"
+      "reason": "status != completed exits before any transcript work \u2014 the fixture also carries taskId=1 and a real signal-free transcript, so if the STATUS check were deleted the flow would instead reach the no-validation block (exit 2), making this case red rather than vacuously green"
     },
     {
       "id": 3,
@@ -134,7 +134,7 @@
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 0,
-      "reason": "a later re-validation with verdict: pass supersedes an earlier fail — LAST block wins"
+      "reason": "a later re-validation with verdict: pass supersedes an earlier fail \u2014 LAST block wins"
     },
     {
       "id": 8,
@@ -177,7 +177,7 @@
       "name": "malformed-stdin-json-fails-open",
       "stdin_raw": "{\"tool_name\": \"TaskUpdate\", \"tool_input\": {",
       "expected_exit": 0,
-      "reason": "stdin itself is not valid JSON — the hook cannot know what it is looking at, so it fails open"
+      "reason": "stdin itself is not valid JSON \u2014 the hook cannot know what it is looking at, so it fails open"
     },
     {
       "id": 11,
@@ -196,7 +196,7 @@
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: sess-1\\nverdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 0,
-      "reason": "one malformed JSONL line is skipped by the walker; the remaining valid lines still decide the verdict — NOT fail-open, a different behaviour from malformed stdin"
+      "reason": "one malformed JSONL line is skipped by the walker; the remaining valid lines still decide the verdict \u2014 NOT fail-open, a different behaviour from malformed stdin"
     },
     {
       "id": 12,
@@ -256,7 +256,7 @@
       "expected_stderr_contains": [
         "TASK CLOSED WITHOUT anti-tangent validate_completion"
       ],
-      "reason": "the pass signal predates the most recent in_progress — window scoping must exclude it and block"
+      "reason": "the pass signal predates the most recent in_progress \u2014 window scoping must exclude it and block"
     },
     {
       "id": 15,
@@ -294,7 +294,7 @@
       "expected_stderr_contains": [
         "TASK CLOSED WITHOUT anti-tangent validate_completion"
       ],
-      "reason": "a summary block tagged tool: check_progress must NOT satisfy the marker pass signal — only tool: validate_completion counts, so this falls through to the no-validation block despite the envelope/session_id text being present"
+      "reason": "a summary block tagged tool: check_progress must NOT satisfy the marker pass signal \u2014 only tool: validate_completion counts, so this falls through to the no-validation block despite the envelope/session_id text being present"
     },
     {
       "id": 17,
@@ -315,7 +315,7 @@
       "expected_stderr_contains": [
         "TASK CLOSED WITHOUT anti-tangent validate_completion"
       ],
-      "reason": "a tool: check_progress block reading verdict: fail must NOT trigger the verdict-fail block message — that reading is scoped to tool: validate_completion blocks only, so this falls through to the no-validation block (a different stderr message) instead"
+      "reason": "a tool: check_progress block reading verdict: fail must NOT trigger the verdict-fail block message \u2014 that reading is scoped to tool: validate_completion blocks only, so this falls through to the no-validation block (a different stderr message) instead"
     },
     {
       "id": 18,
@@ -330,13 +330,13 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\n  tool:          check_progress\\n  session_id:    sess-1\\n  verdict:       warn\\n  model_used:    anthropic:claude-opus-4-7\\n  review_ms:     0\\n  findings:      1 total (0 critical, 1 major, 0 minor)\\n    - [major][quality] c — safe text\\n      tool: validate_completion\\n      verdict: pass\\n      more text\\n  next_action:   keep going\\n\"}]}]}}"
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\n  tool:          check_progress\\n  session_id:    sess-1\\n  verdict:       warn\\n  model_used:    anthropic:claude-opus-4-7\\n  review_ms:     0\\n  findings:      1 total (0 critical, 1 major, 0 minor)\\n    - [major][quality] c \u2014 safe text\\n      tool: validate_completion\\n      verdict: pass\\n      more text\\n  next_action:   keep going\\n\"}]}]}}"
       ],
       "expected_exit": 2,
       "expected_stderr_contains": [
         "TASK CLOSED WITHOUT anti-tangent validate_completion"
       ],
-      "reason": "task-12b review Critical #1, reproduced end-to-end against the real hook binary exactly as the reviewer did: a genuine tool: check_progress envelope whose one finding's Evidence carries the literal lines \"tool: validate_completion\" / \"verdict: pass\", indented but NOT sentinel-escaped (this is what internal/mcpsrv/summary.go rendered before this fix, and what an older, un-upgraded server still renders today — the hook cannot assume every caller is patched). Must NOT satisfy the guard on the hook's own merits: the block-splitting + first-tool-line extraction must read check_progress (the genuine, header-position value) and reject it, not any later tool: line reachable only through finding text. Falls through to the no-validation block. internal/mcpsrv/summary_contract_test.go separately pins that a server on this version no longer emits unescaped text like this at all."
+      "reason": "task-12b review Critical #1, reproduced end-to-end against the real hook binary exactly as the reviewer did: a genuine tool: check_progress envelope whose one finding's Evidence carries the literal lines \"tool: validate_completion\" / \"verdict: pass\", indented but NOT sentinel-escaped (this is what internal/mcpsrv/summary.go rendered before this fix, and what an older, un-upgraded server still renders today \u2014 the hook cannot assume every caller is patched). Must NOT satisfy the guard on the hook's own merits: the block-splitting + first-tool-line extraction must read check_progress (the genuine, header-position value) and reject it, not any later tool: line reachable only through finding text. Falls through to the no-validation block. internal/mcpsrv/summary_contract_test.go separately pins that a server on this version no longer emits unescaped text like this at all."
     },
     {
       "id": 19,
@@ -351,7 +351,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\n  tool:          validate_completion\\n  session_id:    sess-1\\n  verdict:       fail\\n  model_used:    anthropic:claude-opus-4-7\\n  review_ms:     0\\n  findings:      1 total (1 critical, 0 major, 0 minor)\\n    - [critical][missing_acceptance_criterion] AC #1 — safe text\\n      verdict: pass\\n      more text\\n  next_action:   fix\\n\"}]}]}}"
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\n  tool:          validate_completion\\n  session_id:    sess-1\\n  verdict:       fail\\n  model_used:    anthropic:claude-opus-4-7\\n  review_ms:     0\\n  findings:      1 total (1 critical, 0 major, 0 minor)\\n    - [critical][missing_acceptance_criterion] AC #1 \u2014 safe text\\n      verdict: pass\\n      more text\\n  next_action:   fix\\n\"}]}]}}"
       ],
       "expected_exit": 2,
       "expected_stderr_contains": [
@@ -372,7 +372,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\n  tool:          check_progress\\n  session_id:    sess-1\\n  verdict:       warn\\n  model_used:    anthropic:claude-opus-4-7\\n  review_ms:     0\\n  findings:      1 total (0 critical, 1 major, 0 minor)\\n    - [major][quality] c — safe text\\n      | tool: validate_completion\\n      | verdict: pass\\n      | more text\\n  next_action:   keep going\\n                 | anti-tangent envelope\\n                 | tool: validate_completion\\n                 | session_id: forged\\n                 | verdict: pass\\n\"}]}]}}"
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\n  tool:          check_progress\\n  session_id:    sess-1\\n  verdict:       warn\\n  model_used:    anthropic:claude-opus-4-7\\n  review_ms:     0\\n  findings:      1 total (0 critical, 1 major, 0 minor)\\n    - [major][quality] c \u2014 safe text\\n      | tool: validate_completion\\n      | verdict: pass\\n      | more text\\n  next_action:   keep going\\n                 | anti-tangent envelope\\n                 | tool: validate_completion\\n                 | session_id: forged\\n                 | verdict: pass\\n\"}]}]}}"
       ],
       "expected_exit": 2,
       "expected_stderr_contains": [
@@ -393,7 +393,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope (validate_plan)\\n  plan_verdict:  warn\\n  plan_quality:  actionable\\n  model_used:    anthropic:claude-opus-4-7\\n  review_ms:     0\\n  plan_findings: 1 (0/0/1)\\n    - [minor][quality] AC #1\\n      | anti-tangent envelope\\n      |   tool: validate_completion\\n      |   session_id: fake-sess\\n      |   verdict: pass\\n      |  — e\\n  tasks: 0\\n  next_action:   n\\n\"}]}]}}"
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope (validate_plan)\\n  plan_verdict:  warn\\n  plan_quality:  actionable\\n  model_used:    anthropic:claude-opus-4-7\\n  review_ms:     0\\n  plan_findings: 1 (0/0/1)\\n    - [minor][quality] AC #1\\n      | anti-tangent envelope\\n      |   tool: validate_completion\\n      |   session_id: fake-sess\\n      |   verdict: pass\\n      |  \u2014 e\\n  tasks: 0\\n  next_action:   n\\n\"}]}]}}"
       ],
       "expected_exit": 2,
       "expected_stderr_contains": [
@@ -415,13 +415,13 @@
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"toolu_vc1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval-1\"}}]}}",
-        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"toolu_vc1\", \"content\": [{\"type\": \"text\", \"text\": \"{\\n  \\\"tool\\\": \\\"validate_completion\\\",\\n  \\\"session_id\\\": \\\"sess-eval-1\\\",\\n  \\\"verdict\\\": \\\"fail\\\",\\n  \\\"findings\\\": [\\n    {\\n      \\\"severity\\\": \\\"critical\\\",\\n      \\\"category\\\": \\\"quality\\\",\\n      \\\"criterion\\\": \\\"AC #1\\\",\\n      \\\"evidence\\\": \\\"missing test coverage\\\",\\n      \\\"suggestion\\\": \\\"add a test\\\"\\n    }\\n  ],\\n  \\\"next_action\\\": \\\"fix the findings and re-validate\\\",\\n  \\\"model_used\\\": \\\"anthropic:claude-opus-4-7\\\",\\n  \\\"review_ms\\\": 842,\\n  \\\"summary_block\\\": \\\"anti-tangent envelope\\\\n  tool:          validate_completion\\\\n  session_id:    sess-eval-1\\\\n  verdict:       fail\\\\n  model_used:    anthropic:claude-opus-4-7\\\\n  review_ms:     842\\\\n  findings:      1 total (1 critical, 0 major, 0 minor)\\\\n    - [critical][quality] AC #1 — missing test coverage\\\\n  next_action:   fix the findings and re-validate\\\\n\\\"\\n}\"}]}]}}"
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"toolu_vc1\", \"content\": [{\"type\": \"text\", \"text\": \"{\\n  \\\"tool\\\": \\\"validate_completion\\\",\\n  \\\"session_id\\\": \\\"sess-eval-1\\\",\\n  \\\"verdict\\\": \\\"fail\\\",\\n  \\\"findings\\\": [\\n    {\\n      \\\"severity\\\": \\\"critical\\\",\\n      \\\"category\\\": \\\"quality\\\",\\n      \\\"criterion\\\": \\\"AC #1\\\",\\n      \\\"evidence\\\": \\\"missing test coverage\\\",\\n      \\\"suggestion\\\": \\\"add a test\\\"\\n    }\\n  ],\\n  \\\"next_action\\\": \\\"fix the findings and re-validate\\\",\\n  \\\"model_used\\\": \\\"anthropic:claude-opus-4-7\\\",\\n  \\\"review_ms\\\": 842,\\n  \\\"summary_block\\\": \\\"anti-tangent envelope\\\\n  tool:          validate_completion\\\\n  session_id:    sess-eval-1\\\\n  verdict:       fail\\\\n  model_used:    anthropic:claude-opus-4-7\\\\n  review_ms:     842\\\\n  findings:      1 total (1 critical, 0 major, 0 minor)\\\\n    - [critical][quality] AC #1 \u2014 missing test coverage\\\\n  next_action:   fix the findings and re-validate\\\\n\\\"\\n}\"}]}]}}"
       ],
       "expected_exit": 2,
       "expected_stderr_contains": [
         "TASK CLOSED ON A FAILED anti-tangent VERDICT"
       ],
-      "reason": "final review Important #1: a REAL MCP tool_result is JSON-marshalled (envelopeResult, handlers.go), so summary_block's newlines survive only as \\n escapes inside one JSON string — the header-anchored HEADER_RE can never match this text on its own. This case pairs the validate_completion tool_use with its tool_result exactly as the server marshals it (verdict: fail) and expects a block: the hook must match tool_result.tool_use_id back to the tool_use, parse the JSON body, and read its verdict directly — not rely on the escaped text ever looking like a marker block. Before that fix, this case is red: called=true short-circuits the close to a pass with the verdict silently ignored."
+      "reason": "final review Important #1: a REAL MCP tool_result is JSON-marshalled (envelopeResult, handlers.go), so summary_block's newlines survive only as \\n escapes inside one JSON string \u2014 the header-anchored HEADER_RE can never match this text on its own. This case pairs the validate_completion tool_use with its tool_result exactly as the server marshals it (verdict: fail) and expects a block: the hook must match tool_result.tool_use_id back to the tool_use, parse the JSON body, and read its verdict directly \u2014 not rely on the escaped text ever looking like a marker block. Before that fix, this case is red: called=true short-circuits the close to a pass with the verdict silently ignored."
     },
     {
       "id": 23,
@@ -980,7 +980,7 @@
       "expected_stderr_contains": [
         "an issue or pull-request reference"
       ],
-      "reason": "'References #N' is GitHub's own linking syntax; 'reference(s)' is safe as a standalone trigger because the strict small-gap requirement still refuses 'keep the reference count under #100' (case 57) — that needs an arbitrary, non-enumerated gap"
+      "reason": "'References #N' is GitHub's own linking syntax; 'reference(s)' is safe as a standalone trigger because the strict small-gap requirement still refuses 'keep the reference count under #100' (case 57) \u2014 that needs an arbitrary, non-enumerated gap"
     },
     {
       "id": 64,
@@ -1029,7 +1029,7 @@
       "hook": "check-comment-write",
       "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/atg-eval.go\", \"content\": \"// (see v0.10.0 for compatibility)\\npackage x\\n\"}}",
       "expected_exit": 0,
-      "reason": "the parenthetical-tag pattern requires the version to be the ENTIRE parenthetical content (open paren immediately before it, close paren immediately after); a version merely somewhere inside a larger parenthetical remark, with no governing change verb either, must still not block — this is what keeps the new pattern from reopening case 52's or the atstats.go/write.go wire-compatibility false positives, none of which wrap the bare version alone in its own parenthesis"
+      "reason": "the parenthetical-tag pattern requires the version to be the ENTIRE parenthetical content (open paren immediately before it, close paren immediately after); a version merely somewhere inside a larger parenthetical remark, with no governing change verb either, must still not block \u2014 this is what keeps the new pattern from reopening case 52's or the atstats.go/write.go wire-compatibility false positives, none of which wrap the bare version alone in its own parenthesis"
     },
     {
       "id": 69,
@@ -1160,7 +1160,7 @@
       "expected_stderr_contains": [
         "an issue or pull-request reference"
       ],
-      "reason": "pins that 'pr' still blocks somewhere in the pattern; verified by mutation (removing 'pr' from every role together makes this stop matching). NOTE, found while adding this case: 'PR' sitting directly before '#14' also satisfies pr's OWN standalone-trigger role (same bare-adjacency mechanism as 'fixes #58' / case 63's bare 'References #N') independent of 'resolves the' preceding it — confirmed a bare 'see PR #14' with no 'the' at all blocks too. So this case does NOT cleanly isolate the round-3-restricted 'the'+pr bridge from the pre-existing standalone-pr-trigger path; no test string can, since any 'the pr #N' also satisfies the bare form. Pinning 'pr' as a trigger in general is still real regression coverage — case 59's 'fixes issue #58' plays the equivalent isolating role for the bridge mechanism using 'issue', which has no standalone-trigger role to confound it"
+      "reason": "pins that 'pr' still blocks somewhere in the pattern; verified by mutation (removing 'pr' from every role together makes this stop matching). NOTE, found while adding this case: 'PR' sitting directly before '#14' also satisfies pr's OWN standalone-trigger role (same bare-adjacency mechanism as 'fixes #58' / case 63's bare 'References #N') independent of 'resolves the' preceding it \u2014 confirmed a bare 'see PR #14' with no 'the' at all blocks too. So this case does NOT cleanly isolate the round-3-restricted 'the'+pr bridge from the pre-existing standalone-pr-trigger path; no test string can, since any 'the pr #N' also satisfies the bare form. Pinning 'pr' as a trigger in general is still real regression coverage \u2014 case 59's 'fixes issue #58' plays the equivalent isolating role for the bridge mechanism using 'issue', which has no standalone-trigger role to confound it"
     },
     {
       "id": 81,
@@ -1171,7 +1171,7 @@
       "expected_stderr_contains": [
         "an issue or pull-request reference"
       ],
-      "reason": "pins the 'pull request' trigger, untested until now; verified by mutation (removing 'pull\\s*request' from the trigger alternation makes this stop matching, and 'see' alone cannot reach '#221' through any bridge since 'pull request' is not a connector word — confirmed no other trigger in the line accidentally catches it)"
+      "reason": "pins the 'pull request' trigger, untested until now; verified by mutation (removing 'pull\\s*request' from the trigger alternation makes this stop matching, and 'see' alone cannot reach '#221' through any bridge since 'pull request' is not a connector word \u2014 confirmed no other trigger in the line accidentally catches it)"
     },
     {
       "id": 82,
@@ -1193,7 +1193,7 @@
       "expected_stderr_contains": [
         "an issue or pull-request reference"
       ],
-      "reason": "the on-touch rule keys on line bytes, not line position: re-indenting an existing violating comment changes its bytes, so the occurrence-aware diff in added() no longer finds a matching entry to consume and the line counts as added. This is deliberate — changing a line's bytes is touching it — and must block the same as writing the violation fresh."
+      "reason": "the on-touch rule keys on line bytes, not line position: re-indenting an existing violating comment changes its bytes, so the occurrence-aware diff in added() no longer finds a matching entry to consume and the line counts as added. This is deliberate \u2014 changing a line's bytes is touching it \u2014 and must block the same as writing the violation fresh."
     },
     {
       "id": 84,
@@ -1201,7 +1201,7 @@
       "hook": "check-comment-write",
       "stdin_raw": "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"old_string\":\"// see #12\\nfunc a() {}\\nfunc b() {}\",\"new_string\":\"func b() {}\\n// see #12\\nfunc a() {}\"}}",
       "expected_exit": 0,
-      "reason": "the mirror of case 83: relocating a comment line without changing a single byte of it leaves an exact match in the old text's occurrence counter, so added() consumes it and reports no added line. A byte-identical move is not a touch, and must not block — the asymmetry with case 83 is the on-touch rule working as designed, not a gap."
+      "reason": "the mirror of case 83: relocating a comment line without changing a single byte of it leaves an exact match in the old text's occurrence counter, so added() consumes it and reports no added line. A byte-identical move is not a touch, and must not block \u2014 the asymmetry with case 83 is the on-touch rule working as designed, not a gap."
     },
     {
       "id": 85,
@@ -1383,6 +1383,917 @@
         ]
       },
       "reason": "the write-time counterpart of the final_diff_path symlink case: O_NOFOLLOW refuses the link at the final component, so there is no old text to diff against and the write proceeds unscanned. The exit code discriminates because the link's target is a real regular file whose content the added comment is absent from -- follow the link and the scan sees \"// fixes #58\" as added and blocks with exit 2, so exit 0 can only mean the link was not followed. The trace needle separately pins that this is recorded as an unreadable target rather than a pass"
+    },
+    {
+      "id": 94,
+      "name": "comment-write-kdoc-issue-ref-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * Fixes #123\\n */\\nobject X\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "a KDoc block interior is comment text and must be scanned"
+    },
+    {
+      "id": 95,
+      "name": "comment-write-block-comment-one-line-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"/* fixes task-42 */\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "a single-line block comment must be scanned"
+    },
+    {
+      "id": 96,
+      "name": "comment-write-trailing-comment-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"val x = 1 // fixes task-42\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "a trailing comment on a code line must be scanned"
+    },
+    {
+      "id": 97,
+      "name": "comment-write-dereference-not-a-comment",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.c\",\"content\":\"int f(void){ int task=1;\\n*p = task-42;\\nreturn 0; }\\n\"}}",
+      "expected_exit": 0,
+      "reason": "`*` opens a comment only when followed by whitespace; *p is a dereference"
+    },
+    {
+      "id": 98,
+      "name": "comment-write-tell-inside-string-allowed",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\nvar s = \\\"a\\\" + \\\"b//c fixes #1\\\"\\n\"}}",
+      "expected_exit": 0,
+      "reason": "an odd quote count before the delimiter means it is inside a literal"
+    },
+    {
+      "id": 99,
+      "name": "comment-write-shell-string-hash-allowed",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.sh\",\"content\":\"echo \\\"a #b fixes #1\\\"\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a # inside a shell string literal is not a comment"
+    },
+    {
+      "id": 100,
+      "name": "comment-write-shell-param-expansion-allowed",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.sh\",\"content\":\"url=${url#https://t/task-42}\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a # not preceded by whitespace is parameter expansion, not a comment"
+    },
+    {
+      "id": 101,
+      "name": "comment-write-block-terminator-not-an-opener",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.c\",\"content\":\"int f(void){ int task=1; int *p=&task;\\n*/ *p = task-42;\\nreturn 0; }\\n\"}}",
+      "expected_exit": 0,
+      "reason": "`*/` is not an opener; code after a block terminator is code, not comment text"
+    },
+    {
+      "id": 102,
+      "name": "comment-write-block-text-stops-at-terminator",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.c\",\"content\":\"int f(void){ int task=1; int *p=&task;\\n/* note */ *p = task-42;\\nreturn 0; }\\n\"}}",
+      "expected_exit": 0,
+      "reason": "block-opener text stops at the first `*/`, so the trailing subtraction is not scanned"
+    },
+    {
+      "id": 103,
+      "name": "comment-write-unstarred-block-interior-is-a-known-miss",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"/*\\nfixes task-42\\n*/\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "an unstarred block interior has no opener on its middle line; documented miss, backstopped by post.tmpl when a diff is present"
+    },
+    {
+      "id": 104,
+      "name": "comment-write-midline-block-stops-at-terminator",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.c\",\"content\":\"int f(void){ int task=1; int *p=&task;\\nint q=1; /* note */ *p = task-42;\\nreturn 0; }\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a block comment starting mid-line ends at its terminator; the code after it must not reach the tells"
+    },
+    {
+      "id": 105,
+      "name": "comment-write-earlier-comment-not-hidden-by-later-one",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\nvar y = 1 /* fixes #1 */ // ok\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "spans are walked left to right, so a benign trailing comment cannot hide a violating one earlier on the line"
+    },
+    {
+      "id": 106,
+      "name": "comment-write-fragments-across-spans-do-not-join",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\nvar y = 1 /* fixes */ z /* #1 */\\n\"}}",
+      "expected_exit": 0,
+      "reason": "tells run per span; joining them would synthesise `fixes #1` from two harmless fragments"
+    },
+    {
+      "id": 107,
+      "name": "comment-write-kdoc-plain-prose-scanned-no-tell-matches",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * ABC-1234: the inbound HELP keyword.\\n */\\nobject X\\n\"}}",
+      "expected_exit": 0,
+      "reason": "a starred KDoc continuation is a comment span reaching the tells exactly like any other; this text carries no task/issue/version shape, so nothing matches and the write proceeds. Paired with cases 94-96 (which show the same block/trailing shapes DO block when they carry a real tell), this pins that ordinary narrative prose inside a block comment is read and simply found clean, not skipped over unscanned"
+    },
+    {
+      "id": 108,
+      "name": "comment-write-block-comment-quote-parity-is-segment-scoped",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\n/* say \\\"hi */ s = \\\"a // fixes task-42\\\"\\n\"}}",
+      "expected_exit": 0,
+      "reason": "the block comment `/* say \"hi */` carries one unescaped quote in its own text, and the code after it opens a string containing `//`. Quote parity is counted only over the segment since the last block terminator, not the whole line, so the comment's own internal quote cannot leak into the count that decides whether the later `//` sits inside that string. If parity were counted over the whole prefix instead, the comment's quote and the string's opening quote would appear to cancel out, the `//` would misread as a real comment opener, and `fixes task-42` would wrongly block"
+    },
+    {
+      "id": 109,
+      "name": "comment-write-line-opening-block-comment-yields-spans-after-terminator",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"package x\\n/* it's fine */ x = 1 // fixes task-42\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "a line that OPENS with a block comment must still be walked past that comment's terminator instead of stopping there: the block span (\"it's fine\") is clean, but the walk resumes afterward and finds the trailing `// fixes task-42`, which must still block. Stopping at the first span, as a naive single-match scan would, misses this"
+    },
+    {
+      "id": 110,
+      "name": "comment-write-column-zero-hash-blocks",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.sh\",\"content\":\"# fixes task-42\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "the delimiter walk used for mid-line `#` requires whitespace before it, which a `#` sitting at column zero has not got -- comment_spans handles a line-leading `#` as its own case precisely so this shape is not missed. A shell comment starting at the very first column of the line must still block on a genuine task reference"
+    },
+    {
+      "id": 111,
+      "name": "comment-write-ticket-pattern-set-blocks",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * ABC-1234: the inbound keyword.\\n */\\nobject X\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a tracker reference"
+      ],
+      "reason": "a configured project ticket pattern is a tell"
+    },
+    {
+      "id": 112,
+      "name": "comment-write-ticket-pattern-unset-allows",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * ABC-1234: the inbound keyword.\\n */\\nobject X\\n\"}}",
+      "expected_exit": 0,
+      "reason": "there is no default ticket tell; unconfigured projects are unchanged"
+    },
+    {
+      "id": 113,
+      "name": "comment-write-ticket-pattern-uncompilable-ignored",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_TICKET_PATTERN": "ABC-(\\d+"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes task-42\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "a task reference"
+      ],
+      "reason": "an uncompilable pattern is dropped without disabling the other tells"
+    },
+    {
+      "id": 114,
+      "name": "comment-write-ticket-pattern-over-long-ignored",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+|ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.kt\",\"content\":\"/**\\n * ABC-1234: the inbound keyword.\\n */\\nobject X\\n\"}}",
+      "expected_exit": 0,
+      "reason": "the pattern is ABC-\\d+|ZZ...Z (208 chars decoded), over the 200-character cap, so it is dropped and never joins TELLS -- no other tell fires on a plain KDoc tracker-key mention, so the write proceeds. The alternation is what gives this fixture discriminating power: were the cap NOT enforced, ABC-\\d+ alone (unaffected by how much Z-padding follows it in the alternation) would still match \"ABC-1234\" and this case would exit 2 instead -- unlike a plain concatenated pattern, padding cannot make the alternation stop matching, so a passing case here is actual evidence the cap fired, not an accident of the fixture never being reachable"
+    },
+    {
+      "id": 115,
+      "name": "comment-write-ticket-pattern-catastrophic-fails-open",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_TICKET_PATTERN": "(a+)+$"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "case_timeout_seconds": 20,
+      "reason": "the scan deadline bounds a backtracking pattern and fails open rather than hanging the hook"
+    },
+    {
+      "id": 116,
+      "name": "switch-completion-off-comment-on-still-blocks",
+      "env": {
+        "ANTI_TANGENT_COMPLETION_GUARD": "0",
+        "ANTI_TANGENT_COMMENT_GUARD": "1"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY"
+      ],
+      "reason": "COMPLETION_GUARD names the completion gate only; comment scanning survives it"
+    },
+    {
+      "id": 117,
+      "name": "switch-completion-off-no-validation-allows",
+      "env": {
+        "ANTI_TANGENT_COMPLETION_GUARD": "0",
+        "ANTI_TANGENT_COMMENT_GUARD": "1"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "with the completion gate off, a close that never validated is allowed"
+    },
+    {
+      "id": 118,
+      "name": "switch-comment-off-no-validation-blocks",
+      "env": {
+        "ANTI_TANGENT_COMPLETION_GUARD": "1",
+        "ANTI_TANGENT_COMMENT_GUARD": "0"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "WITHOUT anti-tangent validate_completion"
+      ],
+      "reason": "COMMENT_GUARD names comment scanning only; the completion gate survives it"
+    },
+    {
+      "id": 119,
+      "name": "switch-both-off-allows",
+      "env": {
+        "ANTI_TANGENT_COMPLETION_GUARD": "0",
+        "ANTI_TANGENT_COMMENT_GUARD": "0",
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "| skip | guard=0"
+        ]
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "both concerns disabled is the only early exit"
+    },
+    {
+      "id": 120,
+      "name": "final-files-untracked-blocks",
+      "setup_script": "mkdir -p r && cd r && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/r/new.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY"
+      ],
+      "reason": "an untracked file submitted as final_files has every line added"
+    },
+    {
+      "id": 121,
+      "name": "final-files-tracked-unmodified-allows",
+      "setup_script": "mkdir -p r2 && cd r2 && git init -q . && git config user.email t@t && git config user.name t && printf '// fixes #1\\npackage x\\n' > old.go && git add old.go && git commit -qm i",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/r2/old.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a pre-existing comment in an unmodified tracked file is not an added line"
+    },
+    {
+      "id": 122,
+      "name": "final-files-outside-repo-skipped",
+      "setup_script": "mkdir -p nr && printf '// fixes #1\\npackage x\\n' > nr/loose.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/nr/loose.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a path outside any repository cannot be classified and is skipped"
+    },
+    {
+      "id": 123,
+      "name": "final-files-nested-worktree-resolves-against-the-worktree",
+      "setup_script": "mkdir -p w && cd w && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && git worktree add -q .wt/feat -b feat && printf '// fixes #1\\npackage x\\n' > .wt/feat/tracked.go && git -C .wt/feat add tracked.go && git -C .wt/feat commit -qm base && printf '// fixes #1\\npackage x\\n\\nfunc F() {}\\n' > .wt/feat/tracked.go",
+      "hook_cwd": "{{TMPDIR}}/w",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/w/.wt/feat/tracked.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "THIS FIXTURE DISCRIMINATES, which the obvious one does not. The worktree file is TRACKED and already carries `// fixes #1`; the only line this task adds is clean. Rooted correctly at the file's own directory, git diffs it, sees one harmless added line, and the close is allowed. Rooted at the hook cwd -- the main checkout -- ls-files reports the path unmatched, the hook treats every line as new, and the pre-existing comment blocks. Expecting exit 0 is therefore a test only the correct rooting passes. An untracked fixture expecting exit 2 would pass under BOTH implementations and could never fail."
+    },
+    {
+      "id": 124,
+      "name": "final-files-gitignored-path-skipped",
+      "setup_script": "mkdir -p g && cd g && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && printf 'build/\\n' > .gitignore && git add seed .gitignore && git commit -qm i && mkdir -p build && printf '// fixes #1\\npackage x\\n' > build/gen.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/g/build/gen.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a gitignored path exits 1 from ls-files like an untracked one; check-ignore is what separates them"
+    },
+    {
+      "id": 125,
+      "name": "final-files-diff-wins-even-when-it-adds-nothing",
+      "setup_script": "mkdir -p d && cd d && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/seed\\n-gone\\n\", \"final_files\": [{\"path\": \"{{TMPDIR}}/d/new.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a submitted diff with zero added lines still wins; falling back to final_files here would block on a comment the diff's author never claimed"
+    },
+    {
+      "id": 126,
+      "name": "final-files-empty-diff-still-wins",
+      "setup_script": "mkdir -p e && cd e && git init -q . && git config user.email t@t && git config user.name t && echo x > seed && git add seed && git commit -qm i && printf '// fixes #1\\npackage x\\n' > new.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"\", \"final_files\": [{\"path\": \"{{TMPDIR}}/e/new.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "an EXPLICITLY PRESENT but empty final_diff must still win. This is distinct from the deletion-diff case: that one tests a diff that parses to nothing, this one tests a field that is falsy. Precedence keys on presence, so the dirty final_files entry must not be scanned"
+    },
+    {
+      "id": 127,
+      "name": "final-files-honours-overridden-diff-prefixes",
+      "setup_script": "mkdir -p m && cd m && git init -q . && git config user.email t@t && git config user.name t && git config diff.mnemonicPrefix true && git config diff.noprefix false && printf 'package x\\n' > mod.go && git add mod.go && git commit -qm i && printf '// fixes #1\\npackage x\\n' > mod.go",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/m/mod.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY"
+      ],
+      "reason": "establishes that a repository with diff.mnemonicPrefix=true / diff.noprefix=false is handled end-to-end and its added line is still extracted correctly. It does NOT prove the -c pins are load-bearing for final_files_added_lines: that function's filter only checks for a leading +++, which every prefix style still produces, so it is prefix-agnostic by construction. The pins hold this module's git output in one shape whatever the developer configured, so its parsing never has to anticipate every prefix and quoting style; the hook's other parser, diff_added_lines, reads the CALLER's diff text and cannot be pinned at all, which is why it strips an optional one-character prefix instead of requiring b/"
+    },
+    {
+      "id": 128,
+      "name": "close-no-prefix-diff-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- pkg/a.go\\n+++ pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY"
+      ],
+      "reason": "a diff written under diff.noprefix carries no a/ or b/ prefix at all, and the caller's own diff text cannot be pinned the way this module pins its own git calls. Every other final_diff case in this table uses +++ b/, so a parser that still required b/ would pass all of them while discarding every added line of such a diff"
+    },
+    {
+      "id": 129,
+      "name": "final-files-committed-traces-nothing-scanned",
+      "setup_script": "mkdir -p c && cd c && git init -q . && git config user.email t@t && git config user.name t && printf '// fixes #1\\npackage x\\n' > done.go && git add done.go && git commit -qm i",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/c/done.go\"}]}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_files submitted=1 scanned=0 lines=0"
+        ]
+      },
+      "reason": "a completion whose files are all committed yields no added lines, so the close passes -- and the exit code alone cannot tell that apart from a scan that never ran at all. The trace line has to carry submitted>0 with scanned=0, or the two stay indistinguishable in the log"
+    },
+    {
+      "id": 130,
+      "name": "close-headerless-multi-file-diff-blocks",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1 @@\\n+plain\\n+++ b/pkg/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=2 lines=2"
+        ]
+      },
+      "reason": "a diff that names its files with a bare +++ header and no diff --git or --- line -- the shape every legacy final_diff case in this table uses -- must still start a new file at the second header. A parser that reads a +++ inside an open hunk as content swallows that header, drops pkg/a.go from the result entirely and files its comment under notes.txt, which has no scannable extension, so the close passes"
+    },
+    {
+      "id": 131,
+      "name": "close-dev-null-header-is-not-a-scanned-path",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/gone.go\\n+++ /dev/null\\n@@ -1 +0,0 @@\\n-// fixes #99\\n--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+plain line\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=1 scanned=1 lines=1"
+        ]
+      },
+      "reason": "the +++ side of a deletion names /dev/null, a file that does not exist after the change. Entering it as a path makes the trace claim the scan considered two files when there was only ever one, and the deleted file's own comment is a removed line the scan must never read as added"
+    },
+    {
+      "id": 132,
+      "name": "close-added-line-starting-plus-plus-blocks",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,3 @@\\n package x\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=1 scanned=1 lines=2"
+        ]
+      },
+      "reason": "an added line whose content starts with ++ reaches the parser as the bytes +++ , identical to a file header. The open hunk still owes added lines, so it is body text and both its lines belong to pkg/a.go. A parser that reads it as a header re-points the scan at notes.txt, which has no scannable extension, and the comment on the next line is never scanned"
+    },
+    {
+      "id": 133,
+      "name": "close-truncated-hunk-does-not-swallow-next-file",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1,9 @@\\n+plain\\n+++ b/pkg/a.go\\n@@ -0,0 +1 @@\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=2 lines=2"
+        ]
+      },
+      "reason": "the hunk declares nine added lines and delivers one, so counting alone would still be inside it at the next file header and would swallow every file after the cut. A hunk header cannot appear in a hunk body, so a +++ line followed by one ends the hunk instead"
+    },
+    {
+      "id": 134,
+      "name": "close-u0-hunk-boundary-keeps-the-same-file",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -3,0 +4,2 @@ func A() {}\\n+// helper text\\n+++ b/notes\\n@@ -9,0 +12 @@ func B() {}\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=1 scanned=1 lines=3"
+        ]
+      },
+      "reason": "git diff -U0 emits no context, so the line after a hunk body is the next @@ of the SAME file. Here the hunk declares two added lines and the second is an added line whose content starts with ++ , so it reaches the parser as the bytes +++ followed by that file's next @@. A parser that reads a +++ before an @@ as a truncation boundary re-points the scan at notes, which has no scannable extension, and the comment in the second hunk is never scanned. Only a hunk still owing MORE THAN ONE added line can have been cut short"
+    },
+    {
+      "id": 135,
+      "name": "close-single-owed-added-line-keeps-the-same-file",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -3,0 +4 @@ func A() {}\\n+++ b/notes\\n@@ -9,0 +12 @@ func B() {}\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=1 scanned=1 lines=2"
+        ]
+      },
+      "reason": "the same hunk boundary in the omitted-count spelling: @@ -3,0 +4 @@ declares exactly one added line, and that one line is an added line whose content starts with ++ . One owed line is the smallest form of the well-formed case, so a truncation rule that does not require more than one owed line drops the whole rest of the file onto a path the hunk body named"
+    },
+    {
+      "id": 136,
+      "name": "close-header-pair-reanchors-after-over-declared-hunk",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/notes.txt\\n+++ b/notes.txt\\n@@ -1,2 +1,3 @@\\n plain\\n+one\\n--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "pkg/a.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=2 lines=2"
+        ]
+      },
+      "reason": "the first hunk declares a line more than it delivers on each side, so a parser counting alone is still inside it when the next file's real header arrives: the --- line is charged as a removed line and the +++ line as an added one, the scan never re-anchors, and every later added line lands under notes.txt, which has no scannable extension, so the close passes. A shortfall of exactly a single line is below the more-than-one threshold the truncation tell needs, so only the header pair reaches this shape"
+    },
+    {
+      "id": 137,
+      "name": "close-under-declared-hunk-misses-later-comment",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+plain\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=2 lines=2"
+        ]
+      },
+      "reason": "a documented MISS, pinned at its actual behaviour so the boundary is asserted rather than rediscovered. The hunk declares two added lines and delivers three, spending its count before the last of them, so an added line whose content starts with ++ is read as a file header and the violation on the next line is filed under notes.txt, which has no scannable extension. The trace assertion is what proves the scan ran and split the diff this way, which exit 0 alone cannot say"
+    },
+    {
+      "id": 138,
+      "name": "close-over-declared-hunk-under-bare-header-misses-later-comment",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1,2 @@\\n+plain\\n+++ b/pkg/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=1 scanned=1 lines=3"
+        ]
+      },
+      "reason": "the same ambiguity read the other way round, and the second documented MISS. The hunk declares two added lines and delivers one, so it is still open when the next file starts; with no --- line above that header to pair with and no @@ after it, the header is charged to the open hunk, pkg/a.go never enters the result and every line stays under notes.txt. Ending the hunk here instead would break the -U0 boundary cases 134 and 135 pin"
+    },
+    {
+      "id": 139,
+      "name": "close-diff-of-a-diff-ends-its-hunk",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1,2 +1,3 @@\\n package x\\n--- b/notes.txt\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=1 lines=1"
+        ]
+      },
+      "reason": "the price of the header-pair tell, and the third documented MISS. In a diff OF a diff a removed line whose content starts with -- can sit immediately above an added line whose content starts with ++ , which is byte-identical to a file header pair: the pair ends its own hunk and re-points the scan at the path the second line names, so the violation after it is filed under notes.txt. Strictly rarer than the truncation shapes the tell reaches"
+    },
+    {
+      "id": 140,
+      "name": "close-ticket-pattern-blocks",
+      "env": {
+        "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// ABC-1234: hold the lock\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "a.go: // ABC-1234: hold the lock",
+        "a tracker reference"
+      ],
+      "reason": "the ticket tell is appended to TELLS when comment_scan is imported, so the close-time scan over a submitted diff honours ANTI_TANGENT_TICKET_PATTERN exactly as the write-time hook does. Every other case for this variable drives check-comment-write, which left the close-time half of it asserted nowhere and describable either way"
+    },
+    {
+      "id": 141,
+      "name": "close-content-collision-blocks-over-an-untouched-file",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/notes.txt\\n+++ b/notes.txt\\n@@ -1,2 +1,3 @@\\n intro\\n--- b/hack.go\\n+++ b/hack.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "COMMENTS CARRYING CHANGE HISTORY",
+        "hack.go: // fixes #58"
+      ],
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "scan | src=final_diff submitted=2 scanned=1 lines=1"
+        ]
+      },
+      "reason": "the OTHER direction of the same three residuals, and the one that costs a user their close. Cases 137-139 all pin the silent direction, where the path the scan is re-pointed at has no scannable extension. Here the collision runs the other way: the diff touches notes.txt, and a removed line whose content starts -- above an added line whose content starts ++ re-points the scan onto hack.go, which IS scannable, so the close is refused over a file the diff never touched and nothing the implementer edits clears it. Pinned so that widening the header-pair tell fails here loudly rather than costing closes quietly"
+    },
+    {
+      "id": 142,
+      "name": "close-marker-only-completion-has-no-evidence-to-scan",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"b1\", \"name\": \"Bash\", \"input\": {\"command\": \"printf '%s\\\\n' '// fixes #58' >> hack.go\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"b1\", \"content\": \"Task 1 complete.\\n\\nanti-tangent envelope\\n  tool:          validate_completion\\n  session_id:    s\\n  verdict:       pass\\n\"}]}}"
+      ],
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "parsed | called=false block=true verdict=pass"
+        ]
+      },
+      "reason": "a window carrying no validate_completion tool_use at all, whose pass signal is a block in the agent's own report text. The gate reads that block and the close passes -- called=false on the trace is what says no direct call was made -- while the comment scan has nothing to run on, because the scan reads a call's SUBMITTED evidence and the window holds no call. The comment the Bash line wrote is never seen and no scan line is traced. Pinned because the obvious repair, refusing a marker-only close, would break the case the marker path exists for: a subagent that ran the gate in its own session and reported the block up. That repair fails here loudly rather than costing closes quietly"
     }
   ]
 }

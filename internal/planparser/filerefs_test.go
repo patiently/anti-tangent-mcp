@@ -135,3 +135,21 @@ func TestFileRefs_AnchorOnlyPathIsDropped(t *testing.T) {
 	refs := FileRefs("**Files:**\n- Modify: `:15-23`\n")
 	assert.Empty(t, refs.Modify)
 }
+
+func TestLineAnchorStripsCommaLists(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"docs/SomeDoc.md:60,166,174,419", "docs/SomeDoc.md"},
+		{"F.kt:27-30,40-50", "F.kt"},
+		{"File.kt:27", "File.kt"},
+		{"F.kt:27-30", "F.kt"},
+		{"F.kt:27,30", "F.kt"},
+		{"F.kt:12:3", "F.kt"},
+		{"plain.go", "plain.go"},
+		{`C:\x`, `C:\x`},
+		{"https://example.com/a", "https://example.com/a"},
+	} {
+		if got := stripLineAnchor(tc.in); got != tc.want {
+			t.Errorf("stripLineAnchor(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

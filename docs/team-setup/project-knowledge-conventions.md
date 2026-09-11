@@ -171,4 +171,4 @@ The `plugin/bm-scribe/` plugin owns the write side (`bm-scribe:add-todo`, `bm-sc
 - [`examples/project-knowledge/personal/`](../../examples/project-knowledge/personal/) — personal-namespace templates (v0.7.1).
 - [`plugin/bm-scribe/`](../../plugin/bm-scribe/) — the Claude Code plugin that writes notes per these conventions (v0.7.1).
 - [v0.6.0 spec](../superpowers/specs/2026-05-18-project-knowledge-design.md) and [v0.7.0 spec](../superpowers/specs/2026-05-21-project-knowledge-conventions-design.md) — authoritative design docs.
-- [`INTEGRATION.md` § "Project knowledge (optional)"](../../INTEGRATION.md#project-knowledge-optional) — generic-adopter integration guide.
+- [`docs/protocol/project-knowledge.md` § "Project knowledge (optional)"](../protocol/project-knowledge.md#project-knowledge-optional) — generic-adopter integration guide.

@@ -51,12 +51,13 @@ gate becomes visible from the controller's own transcript). It blocks
    surviving only as escapes inside one JSON string, so the hook parses that
    JSON directly for `verdict` rather than pattern-matching the escaped
    text.
-3. **The submitted diff contains added comment lines carrying change history.**
-   A scan of added lines in the diff detects comments matching a pattern set
-   (patterns stored in `comment_scan.py`), the same patterns the write-time
-   hook applies to `Edit` and `Write` calls. This scan detects rather than
-   prevents, catching comments that reached disk through `Bash` or other
-   pathways the write-time hook cannot intercept.
+3. **The evidence that call submitted adds comment lines carrying change
+   history.** A scan of added lines — from the submitted diff, or from git
+   for a completion that submits `final_files` — detects comments matching a
+   pattern set (patterns stored in `comment_scan.py`), the same patterns the
+   write-time hook applies to `Edit` and `Write` calls. This scan detects
+   rather than prevents, catching comments that reached disk through `Bash`
+   or other pathways the write-time hook cannot intercept.
 
 The first two messages state the same recovery flow explicitly: reopen the task with
 `status=in_progress`, address whatever the gate is asking for, run
@@ -276,13 +277,29 @@ rather than treating the reflow as separate from the touch.
 - `PostToolUse` detects rather than prevents: the close-time scan fires
   **after** the state change to `completed`, so a comment reaching disk
   through `Bash` blocks further progress only at close time, not at write time.
-- The scanner reads full-line comments only. Multi-line comments, including
-  those that span across lines, are not detected.
+- The scanner reads one line at a time: a full-line comment, a comment
+  trailing code on the same line, a `/* … */` opened and closed on one line,
+  and a starred block-continuation line. An *unstarred* block interior is a
+  known miss — nothing on such a line marks it as sitting inside a comment.
+- The starred block-continuation shape (a KDoc/Javadoc body line) has no
+  quote-parity check behind it — the prefix before a line-leading `*` is
+  always whitespace, so parity cannot tell it apart from a markdown bullet
+  inside a Go raw string or a Kotlin `"""` block. A write containing one can
+  block on a false positive; `ANTI_TANGENT_COMMENT_GUARD=0` is the escape
+  hatch if you hit this.
 - The scanner implements a small pattern set capturing common change-history
   markers. The reviewer layer at completion time covers prose narration the
   patterns cannot catch — an engineer writing a sentence like "I rewrote this
   for clarity" in a comment passes the scanner but may be flagged by the
   reviewer.
+- An untracked path under `vendor/`, `third_party/` or `node_modules/` is
+  not scanned at close time. Every line of an untracked file counts as
+  added, so a vendored file whose header narrates its own upstream history
+  would otherwise block the close and demand a rewrite of code this
+  repository did not write. Those names are matched against the path
+  relative to the repository root, so a checkout that itself lives under
+  one of them — a clone inside `third_party/`, a CI workspace under
+  `node_modules/` — keeps its own files scanned.
 - The extension allowlist (`comment_scan.py`'s `SCAN_EXTS`) is keyed on
   `os.path.splitext`, so a file with no extension — including this plugin's
   own extensionless `check-task-complete` and `check-comment-write` hook
@@ -294,9 +311,10 @@ PostToolUse scan), while leaving the completion-gate check active.
 
 ## Comment-hygiene scan at close
 
-Beyond the first two block conditions above, a close that is otherwise going to
-pass gets one more check: the LAST `validate_completion` call in the task
-window is scanned for added comment lines carrying change history — the
+Beyond the first two block conditions above, every close gets one more check,
+on its own switch and independent of the completion gate's verdict: the LAST
+`validate_completion` call in the task window is scanned for added comment
+lines carrying change history — the
 same rule the write-time `PreToolUse` hook applies to an `Edit`/`Write`, run
 again here as defence in depth for a comment that reached disk without going
 through either, most commonly a `Bash` heredoc.
@@ -314,14 +332,31 @@ above, and is recorded to the trace log the same way. Set
 `ANTI_TANGENT_COMMENT_GUARD=0` to skip this scan while the completion gate
 above still runs in full.
 
-**What this scan cannot see.** A completion whose evidence is `final_files`
-or `test_evidence` alone carries no diff of any kind, so there is nothing
-here to read — the close is not blocked on comment hygiene, one way or the
-other. That gap is not filled elsewhere: the reviewer's own rule for a
-change-history comment applies only when a diff is present in the same
-call, so a diff-less completion gets no comment scrutiny from the reviewer
-either. Such a close is covered by the write-time `Edit`/`Write` hook alone
-— and by nothing at all if the code reached disk through `Bash`.
+**What this scan cannot see.** A close whose task window holds no
+`validate_completion` call at all is scanned no further than that: the scan
+reads a call's submitted evidence, and a window whose pass signal is a pasted
+marker block carries none. The marker path satisfies the completion gate on
+its own (see "How much to trust each pass signal" above), so such a close
+passes with `called=false` on the trace and no `scan` line beside it. That is
+the shape of every close reported up from a subagent's own session, and the
+evidence it validated against is in that session, not this transcript.
+
+A completion that submits `final_files` is
+read through git rather than through a diff, and git reports a line as added
+only while it is uncommitted or its file is untracked. **Work already
+committed before the close therefore yields no added lines and is not
+scanned** — and committing per task before closing it is the common shape,
+so this is the case to plan around, not an edge. The same holds for a
+completion whose only evidence is `test_evidence`, and for a `final_files`
+path git cannot classify (outside a repository, or gitignored). That gap is
+not filled elsewhere: the reviewer's own rule for a change-history comment
+applies only when a diff is present in the same call, so such a completion
+gets no comment scrutiny from the reviewer either. It is covered by the
+write-time `Edit`/`Write` hook alone — and by nothing at all if the code
+reached disk through `Bash`. To have committed work scanned, submit it as a
+diff from the commit the task started at
+(`git diff <task-base-commit> -- <task paths>`) rather than as
+`final_files`.
 
 ## Dependencies
 
@@ -330,14 +365,30 @@ payload) and `python3` (to walk the transcript, since the signals it looks
 for are nested inside `tool_result` content that `jq` alone parses more
 awkwardly than a few lines of Python). Both must be on `PATH`.
 
+## Configuration
+
+### `ANTI_TANGENT_TICKET_PATTERN`
+
+A regex for your tracker's key shape, e.g. `ABC-\d+`. Set it per project in `.claude/settings.json`:
+
+```json
+{ "env": { "ANTI_TANGENT_TICKET_PATTERN": "ABC-\\d+" } }
+```
+
+Both hooks honour it: the tell is appended to the scanner's set when `comment_scan` is imported, so it is live in the write-time `Edit`/`Write` guard and in the close-time scan over a completion's submitted evidence alike.
+
+**There is no default, and without it a comment like `// ABC-1234: the keyword` is not detected.** A generic pattern cannot be made safe: measured over real comment lines, `[A-Z]+-\d+` matches hardware identifiers (`HDMI-0`, `DP-0`) and prose labels (`ROUND-1`) far more often than tracker keys, and the write-time hook blocks writes. An uncompilable or over-long pattern is ignored, and each file's scan runs under a two-second deadline that fails open. The close-time walk over every file a completion named is bounded in turn — a twenty-second budget over the git questions and another over the scans — so neither a stalled git nor a slow pattern can hold the session for minutes. What a budget cuts short is recorded on the trace line rather than reported as a clean scan.
+
 ## Kill switches
 
-- `ANTI_TANGENT_COMPLETION_GUARD=0` short-circuits the `PostToolUse` hook to
-  `exit 0` unconditionally, before it reads stdin or does any work. This
-  disables both the completion-gate check and the close-time comment-hygiene
-  scan.
-- `ANTI_TANGENT_COMMENT_GUARD=0` disables the comment-hygiene scan (both
-  write-time and close-time) while leaving the completion-gate check active.
+- `ANTI_TANGENT_COMPLETION_GUARD=0` disables the completion-gate check in the
+  `PostToolUse` hook — whether a close ran `validate_completion` at all. The
+  close-time comment-hygiene scan is a separate concern and keeps running.
+- `ANTI_TANGENT_COMMENT_GUARD=0` disables the comment-hygiene scan, both
+  write-time and close-time, while leaving the completion-gate check active.
+- Setting both to `0` is what short-circuits the `PostToolUse` hook to
+  `exit 0` before it reads stdin. With only one set, the hook reads stdin and
+  runs the half that is still enabled.
 
 ## Fail-open policy
 
@@ -405,6 +456,25 @@ the task id for `check-task-complete` (or `?` if the hook exited before
 reaching one), and the decision plus its reason (e.g. `skip | no-jq`,
 `pass | called=true block=false`, `block | verdict-fail`).
 
+A close whose comment scan ran also emits a `scan` line — for example
+`scan | src=final_files submitted=3 scanned=0 lines=0` — naming which
+evidence the scan read and how much of it there was to read. `submitted`
+counts the paths the evidence named, `scanned` the ones that yielded added
+lines, and `lines` those added lines. A completion whose files were all
+committed traces `submitted=3 scanned=0`, which is what distinguishes it
+from a scan of a real diff that legitimately found nothing. Either budget
+running out — the git walk's or the scan's — appends `budget-exhausted`, and
+paths dropped by the vendored-directory exemption append
+`vendored-skipped=N`; both shrink the result silently otherwise. A git that
+answers `129` — its generic usage error, which a git that does not know
+`--no-optional-locks` returns and so does a command line malformed any other
+way — makes the walk drop that flag and appends `optional-locks-dropped`,
+which the counts never show: the walk returns the same answer, having
+refreshed the index it meant to leave alone. The marker names what the walk
+did, not what git objected to. No `scan` line at all means no scan ran — the
+guard was off, no `validate_completion` fell inside the window, or the
+scanner could not be loaded (`skip | comment-scan-unavailable`).
+
 The log is capped so it cannot grow without bound: past
 `ANTI_TANGENT_GUARD_TRACE_MAX_BYTES` (default 1,048,576 — 1 MiB), the next
 write rotates the existing file to a single `.1` sibling (a rename, not a
@@ -419,10 +489,11 @@ land — is swallowed and never changes the hook's own exit status.
 bash evals/run.sh
 ```
 
-Runs the full eval suite (93 cases) against both hooks and exits non-zero on
-any mismatch — check-task-complete's three block conditions (the third being
-its own close-time comment-hygiene scan), plus check-comment-write's
-write-time comment-hygiene guard. See `evals/run.sh`'s header comment for the
+Runs the hooks' own unit tests (`hooks/*_test.py`) first, then the full eval
+suite (142 cases) against both hooks, and exits non-zero on either — the
+cases cover check-task-complete's three block conditions (the third being its
+own close-time comment-hygiene scan), plus check-comment-write's write-time
+comment-hygiene guard. See `evals/run.sh`'s header comment for the
 full breakdown by case. Cases 18/19 are deliberately un-escaped fixtures — they
 test positional extraction against an older server. Cases 20/21 are the
 current server's own rendering, pinned byte-for-byte to the formatters by

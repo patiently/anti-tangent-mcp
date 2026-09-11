@@ -13,8 +13,8 @@ import (
 // harness or fixture referenced in a task spec. The reviewer treats each
 // attestation as authoritative context (no independent verification) and
 // flags ACs that explicitly contradict an entry as
-// `attestation_contradiction` findings. See INTEGRATION.md §3 for the use
-// case.
+// `attestation_contradiction` findings. See docs/protocol/authoring.md §3
+// for the use case.
 //
 // JSON tags pin the caller-visible field names. Without them, reflection on
 // ValidateTaskSpecArgs would surface capitalized Go names (Harness, Path,

@@ -31,6 +31,8 @@ not on disk; it is deprecated and will be removed in 1.0.0.
    deterministic and free (no reviewer call). If you re-validate the plan after the 3-minute
    cache window expires, use the id from your **final** passing call.
 
+A `pass` on round N is not an audit of rounds 1..N-1. The reviewer re-reads the whole plan each round, but a defect present since round 1 can first surface in round 4 — earlier rounds finding other things is not evidence they inspected everything. Treat each round's findings as additive, and do not read a late-arriving finding as a regression you introduced.
+
 The implementing subagent still calls `validate_task_spec` at task start in its own session — see §4. The plan-level gate and the per-task implementer gate are two different responsibilities at two different moments.
 
 **Why this matters:** catching a vague AC at handoff costs one `validate_plan` call — cents without `context_paths`, up to roughly $1.31 per round with a large attached set (see §5.8) — versus a wasted dispatch after a subagent spent 10 minutes against a misread spec.
@@ -62,25 +64,31 @@ cannot prevent the close — this is post-close detection plus a mandated
 recovery flow, not a block on the close itself. It blocks (`exit 2`,
 returning the reason to the model as something it must address before its
 next action) in three cases: no pass signal is present anywhere in the
-window, the most recent one carries `verdict: fail`, or the submitted diff
-adds comment lines carrying change history (a scan of added lines against a
-small pattern set; see the `anti-tangent-guard` README's "Comment-hygiene
-scan at close" for what it catches and misses). All three name the same recovery:
-reopen with `status=in_progress`, address the findings — or remove/rewrite
-the flagged comment — re-run `validate_completion`, then re-close.
+window, the most recent one carries `verdict: fail`, or the evidence that
+call submitted adds comment lines carrying change history (a scan of added
+lines against a small pattern set; see the `anti-tangent-guard` README's
+"Comment-hygiene scan at close" for what it catches and misses). All three
+name the same recovery: reopen with `status=in_progress`, address the
+findings — or remove/rewrite the flagged comment — re-run
+`validate_completion`, then re-close.
 
 That scan is narrower than the comment policy it enforces (§4.4 of
-`implementer.md`): full-line comments only, against a small fixed pattern
-set, and only when a diff is actually submitted in the same call. Prose
-narration ("previously", "no longer", "this replaced") is deliberately left
-to the reviewer instead of the scanner, since it can't be pattern-matched
-without false positives. A clean hook run means the scanner found nothing —
+`implementer.md`): a small fixed pattern set, read over full-line comments,
+trailing comments, one-line `/* … */` blocks and starred block interiors —
+an unstarred block interior is a known miss. It reads a submitted diff or,
+for a completion carrying `final_files` instead, the lines git reports as
+added, which means work already committed before the close has no added
+lines and is not scanned at all. Prose narration ("previously", "no longer",
+"this replaced") is deliberately left to the reviewer instead of the scanner,
+since it can't be pattern-matched without false positives. A clean hook run means the scanner found nothing —
 it is not proof the comment policy was followed.
 
-Set `ANTI_TANGENT_COMPLETION_GUARD=0` to disable the hook outright — it
-short-circuits to a silent no-op before reading anything. It also fails open
-on its own errors (missing transcript, absent `jq`/`python3`, malformed
-input): it never blocks a close because the hook itself broke. Requires a
+`ANTI_TANGENT_COMPLETION_GUARD=0` turns off the completion gate only and
+`ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning; setting both is
+what disables the hook outright, short-circuiting it to a silent no-op
+before it reads anything. It also fails open on its own errors (missing
+transcript, absent `jq`/`python3`, malformed input): it never blocks a close
+because the hook itself broke. Requires a
 server ≥ 0.18.0 — an older server never emits the `tool:` tag the guard keys
 on, so every close backed only by a pasted block (no direct tool call in the
 window) blocks with the no-signal message even when the gate genuinely ran.
@@ -116,13 +124,13 @@ Do NOT have the controller call `validate_completion` itself after the subagent 
 
 The two analyses overlap intentionally: the plan gate catches plan-wide and per-task issues at handoff; the implementer gate catches anything that changed between handoff and dispatch and produces the session that the rest of the lifecycle uses.
 
-The `plan_quality` field (v0.3.1+) is a separate axis from `plan_verdict`: `plan_verdict` answers "is this dispatchable?" (pass / warn / fail); `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When consecutive `warn` verdicts aren't changing, watch `plan_quality` for convergence — `actionable → rigorous` is meaningful even when the verdict stays `warn`. Ship at `actionable` for ASAP work, `rigorous` for quarterly-rewrite scope.
+The `plan_quality` field is a separate axis from `plan_verdict`: `plan_verdict` answers "is this dispatchable?" (pass / warn / fail); `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When consecutive `warn` verdicts aren't changing, watch `plan_quality` for convergence — `actionable → rigorous` is meaningful even when the verdict stays `warn`. Ship at `actionable` for ASAP work, `rigorous` for quarterly-rewrite scope.
 
 The same reading applies one level down: a `validate_task_spec` `warn` whose
 findings are all `minor` is a proceed signal, not a defect. Do not send an
 implementer back to re-validate a spec whose findings have stopped moving.
 
-### 5.6 Per-call tool args and partial-response handling (v0.3.0+)
+### 5.6 Per-call tool args and partial-response handling
 
 **`max_tokens_override`** (all six reviewer-calling tools — `plan_run_report` makes no reviewer call, so it takes no token budget): optional non-negative int. Replaces `PerTaskMaxTokens` / `PlanMaxTokens` for this call. Clamped to `ANTI_TANGENT_MAX_TOKENS_CEILING` (default 16384); over-ceiling values are clamped and a `minor` finding appended. Negative values rejected with `max_tokens_override must be ≥ 0`.
 

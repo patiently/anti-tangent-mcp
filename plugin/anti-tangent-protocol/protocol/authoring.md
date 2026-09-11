@@ -76,7 +76,7 @@ When a task pastes verbatim test code the implementer must land as written, wrap
 
 When a plan snippet is wrapped in `.trimIndent()` (or any equivalent raw-string trim), multi-line source phrases render newlines exactly where they sit in the markdown — anti-tangent reads the source, not the rendered output. Keep example strings on a single source line, and phrase ACs against the rendered string (e.g. "output contains `please decline politely`"), not against source layout.
 
-### 3.8 Harness shape attestations (v0.5.2+)
+### 3.8 Harness shape attestations
 
 `harness_shape_attestation` is a structured optional input on `validate_task_spec`. Each entry is `{harness: string, path: string, assertions: []string}`. Use it when ACs depend on a test harness's stated capabilities (or non-capabilities). The reviewer treats each attestation as authoritative caller-attested context (no independent verification) and flags ACs that EXPLICITLY contradict an entry — e.g. an AC asking for behavior a `does not …` assertion forbids, or asserting a state directly contradicting a positive assertion — as `attestation_contradiction` findings. Absence of a capability is NOT a contradiction; do not list things to forbid them.
 
@@ -107,8 +107,9 @@ Rules the parser actually applies:
   `/` (`Create/Modify:`) for a file one task creates and another edits; both are recorded.
 - The path may be backtick-quoted or bare. Bare takes the first whitespace-delimited token.
 - A trailing parenthetical (`(the roots parsing)`) is dropped, and so is a trailing line anchor
-  — `:57`, `:57-70`, `:57,70`, and repeated forms like `:57:12` — so anchoring a `Modify:` to
-  the lines you are editing is safe.
+  — `:57`, `:57-70`, `:57,70`, a comma-separated list of either (`:60,166,174,419`,
+  `:57-70,90-95`), and repeated forms like `:57:12` — so anchoring a `Modify:` to the lines you
+  are editing is safe.
 - Paths are repo-relative. Collection stops at the first line that is neither a bullet nor
   blank, so a following `**Steps:**` section is never harvested.
 
@@ -117,13 +118,28 @@ guards plans that opt into the structure, it does not demand that they do. The `
 fence's `files` array is a flat list with no verb, so it cannot drive this check; the bullets are
 the only source.
 
+**State the comment policy, or point at it.** A plan is the one artifact every implementing
+subagent reads, and an implementer working without this plugin loaded has no comment policy
+otherwise. Either restate the policy in the plan's constraints section, or carry the canonical pointer line,
+byte for byte:
+
+```
+Comments: anti-tangent-protocol implementer.md §4.4
+```
+
+`validate_plan` emits a plan-level `major` (`criterion: comment_policy_absent`) when a plan carries
+neither. Equivalent wordings are accepted, but this is the line to paste.
+
 ### Write-time comment guard (if `anti-tangent-guard` is installed)
 
 The comment policy (`implementer.md` §4.4) can be enforced, not just stated. If the
 `anti-tangent-guard` plugin is installed, its `PreToolUse` hook on `Edit`/`Write` refuses — `exit
 2`, before the write ever lands — a write that adds a comment matching one of a small set of
 mechanical tells: an issue, pull-request or task reference, or a version reference narrating when
-something changed. Prose narration ("previously", "no longer", "this replaced") cannot be matched
+something changed. A tracker key (`ABC-1234:`) is matched only where the project sets
+`ANTI_TANGENT_TICKET_PATTERN` to its own key shape; there is deliberately no default, so an
+unconfigured project gets no tracker tell at all. Both hooks honour it: the pattern is compiled
+once and the close-time scan reads the same tell set this write-time one does. Prose narration ("previously", "no longer", "this replaced") cannot be matched
 without false positives, so that half of the policy is reviewer-led instead — `post.tmpl` catches
 it at completion time — and a clean write-time pass is not proof the whole of §4.4 was followed. A
 refused `Edit`/`Write` is not a bug in your call; it is the policy holding. Rewrite the flagged

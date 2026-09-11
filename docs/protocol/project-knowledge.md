@@ -6,7 +6,7 @@ unless a knowledge base is configured.
 
 ## Project knowledge (optional)
 
-An optional v0.6.0+ loop that grounds the reviewer in **what's already true about your project** — decisions, module invariants, feature surfaces, glossary terms, epic progress. Earns its keep on epic-scale projects with multiple agents and multiple authors where each task validates cleanly but the pieces stop composing into a working end product. Skip on single-author or short-lived projects.
+An optional loop that grounds the reviewer in **what's already true about your project** — decisions, module invariants, feature surfaces, glossary terms, epic progress. Earns its keep on epic-scale projects with multiple agents and multiple authors where each task validates cleanly but the pieces stop composing into a working end product. Skip on single-author or short-lived projects.
 
 Two new MCP tools — `prime_project_knowledge` (pre-task; recommends notes to read) and `extract_project_knowledge` (post-task; proposes notes to write) — plus a `project_knowledge` field on `validate_task_spec` and `validate_plan`. Knowledge lives in [Basic Memory](https://github.com/basicmachines-co/basic-memory) (recommended) or any markdown-backed store; anti-tangent has **zero code dependency** on Basic Memory.
 
@@ -53,16 +53,16 @@ Anti-tangent's `bm_commands` arrays are paste-ready *conceptual* shape — the t
 | `module` | durable | coherent capabilities (user-facing surface), not 1:1 Go packages |
 | `feature` | durable | user-facing capability catalog with release-tagged change pointers |
 | `glossary` | durable | canonical domain-term definitions |
-| `howto` | durable | operational runbook; slug key; update-in-place; `status: active`/`deprecated` (v0.9.0+) |
+| `howto` | durable | operational runbook; slug key; update-in-place; `status: active`/`deprecated` |
 | `epic` | operational | live dashboard: charter, stories table, open PRs, acceptance checklist, progress ledger |
-| `story` | operational | live dashboard: brief, multi-PR table, subtasks, deployment state, decisions produced (v0.7.0+) |
-| `gotcha` | lessons-learned | module-scoped lesson learned; ADR-numbered slug; supersede chain (v0.8.0+) |
+| `story` | operational | live dashboard: brief, multi-PR table, subtasks, deployment state, decisions produced |
+| `gotcha` | lessons-learned | module-scoped lesson learned; ADR-numbered slug; supersede chain |
 
-Templates: [`examples/project-knowledge/`](https://github.com/patiently/anti-tangent-mcp/tree/main/examples/project-knowledge); frozen real examples: [`examples/project-knowledge/dogfood/`](https://github.com/patiently/anti-tangent-mcp/tree/main/examples/project-knowledge/dogfood). Per-project tuning: [`docs/team-setup/project-knowledge-conventions.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/project-knowledge-conventions.md).
+Templates: [`examples/project-knowledge/`](https://github.com/patiently/anti-tangent-mcp/tree/main/examples/project-knowledge); frozen real examples: [`examples/project-knowledge/dogfood/`](https://github.com/patiently/anti-tangent-mcp/tree/main/examples/project-knowledge/dogfood). Per-project tuning: [`docs/team-setup/project-knowledge-conventions.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/team-setup/project-knowledge-conventions.md). Not every server proposes all eight — which types yours knows depends on its version, tabulated in [`README.md`, "Project knowledge (optional)"](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md#project-knowledge-optional).
 
 ### v0.7.0 canonical layout
 
-Permalinks follow `<PROJECT>/<type>/<key>/main`. Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`, `gotchas`, `howtos`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered) for decisions and gotchas, a `<slug>` for modules/features/howtos, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. The `plugin/bm-scribe/` plugin (v0.7.1+) auto-picks ADR numbers and enforces this layout.
+Permalinks follow `<PROJECT>/<type>/<key>/main`. Type folders are **plural** (`epics`, `stories`, `decisions`, `modules`, `features`, `glossary`, `gotchas`, `howtos`); `<key>` is a `<TICKET-ID>` for epics/stories, a `<NNNN>-<slug>` (ADR-numbered) for decisions and gotchas, a `<slug>` for modules/features/howtos, and a `<term>` for glossary. Example: `monorepo/decisions/0001-text-only-reviewer/main`. The `plugin/bm-scribe/` plugin auto-picks ADR numbers and enforces this layout.
 
 ### The `project_knowledge` field
 

@@ -47,7 +47,14 @@ var (
 	// deeper. Repeating cannot widen the match past the shapes above: every
 	// repetition must still be `:digits`, so `C:\x` and `https://…` are
 	// untouched.
-	lineAnchorRe = regexp.MustCompile(`(?::\d+(?:[-,]\d+)?)+$`)
+	//
+	// An anchor is a comma-separated LIST of lines-or-ranges, not a single
+	// line or a single pair: "a.md:60,166,174,419" and "a.md:27-30,40-50"
+	// are both ordinary plan bullets. A form permitting only one separator
+	// per group matches ":60,166" and then fails the whole anchor, leaving
+	// the digits attached to the path — which the disk tier stats verbatim
+	// and reports as a file that does not exist.
+	lineAnchorRe = regexp.MustCompile(`(?::\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)+$`)
 )
 
 // FileRefs extracts a task body's declared file operations.

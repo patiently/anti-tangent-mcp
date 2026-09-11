@@ -136,3 +136,41 @@ func TestCapCategoryCounts_CollidingKeysSaturateInsteadOfWrapping(t *testing.T) 
 	}
 	assert.Equal(t, math.MaxInt, merged, "colliding counts must saturate, not wrap")
 }
+
+func TestNormalizeBoundsSkipEvidence(t *testing.T) {
+	d := &Digest{SkipEvidence: "  " + strings.Repeat("é", 2500) + "  "}
+	d.Normalize()
+	// max RETAINED runes plus the ellipsis: truncateRunes appends the marker
+	// beyond the cap rather than inside it, matching SkipReason's behaviour.
+	got := []rune(d.SkipEvidence)
+	if len(got) != codesceneSkipEvidenceMaxRunes+1 {
+		t.Fatalf("got %d runes, want %d (cap plus ellipsis)",
+			len(got), codesceneSkipEvidenceMaxRunes+1)
+	}
+	if got[len(got)-1] != '…' {
+		t.Errorf("truncated value does not end in an ellipsis: %q", string(got[len(got)-3:]))
+	}
+	if got[0] != 'é' {
+		t.Errorf("leading whitespace was not trimmed: %q", string(got[0]))
+	}
+}
+
+func TestSkipReasonCapUnchanged(t *testing.T) {
+	assert.Equal(t, 300, codesceneSkipReasonMaxRunes)
+
+	d := &Digest{SkipReason: strings.Repeat("r", 400)}
+	d.Normalize()
+	assert.Equal(t, codesceneSkipReasonMaxRunes+1, len([]rune(d.SkipReason)),
+		"SkipReason must still truncate at its own cap, not at SkipEvidence's")
+}
+
+func TestSkipEvidenceJSONContract(t *testing.T) {
+	b, err := json.Marshal(&Digest{SkipEvidence: "MCP error: tool not found"})
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"skip_evidence":"MCP error: tool not found"`)
+
+	b, err = json.Marshal(&Digest{})
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "skip_evidence",
+		"the field must be omitted when empty, not emitted as an empty string")
+}

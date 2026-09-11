@@ -144,7 +144,7 @@ We cache for 3 minutes.
 
    Basic Memory does NOT ship a single-verb supersede operation; do not invent one. Use only the verbs listed above (`write_note`, `edit_note`). If the predecessor permalink is missing or the new note has no body, emit an `insufficient_evidence` finding instead of fabricating either command.
 
-   For the full mapping from extract's emitted `bm_commands` shape to BM v0.21.1's literal `write_note` / `edit_note` MCP signatures, see INTEGRATION.md § "Applying bm_commands to BM v0.21.1" (added in v0.6.2).
+   For the full mapping from extract's emitted `bm_commands` shape to BM v0.21.1's literal `write_note` / `edit_note` MCP signatures, see anti-tangent-protocol project-knowledge.md § "Applying bm_commands to BM v0.21.1".
 
    When you append a progress-ledger entry to `epics/2026-q2-project-knowledge` (per the **Epic in flight** section), emit an additional `edit_note` `bm_command` using `insert_before_section` keyed on the section that FOLLOWS `## Progress ledger` (usually `## Open questions`) so the new bullet appends to the end of the ledger without clobbering prior entries:
 

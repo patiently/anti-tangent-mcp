@@ -88,17 +88,74 @@ func codesceneCell(row TaskRow) string {
 		if row.Codescene == nil {
 			return "ran"
 		}
-		return fmt.Sprintf("%-7s %+.1fpp%s", row.Codescene.QualityGate, row.Codescene.NetPP,
-			topCategories(row.Codescene.CategoryCounts))
+		return flattenReportCell(fmt.Sprintf("%-7s %+.1fpp%s", row.Codescene.QualityGate,
+			row.Codescene.NetPP, topCategories(row.Codescene.CategoryCounts)))
 	case StateSkipped:
 		reason := "no reason given"
 		if row.Codescene != nil && strings.TrimSpace(row.Codescene.SkipReason) != "" {
 			reason = strings.TrimSpace(row.Codescene.SkipReason)
 		}
-		return "skipped (" + reason + ")"
+		// The evidence is what distinguishes a skip a reader can check from
+		// one they cannot. Omitting it here would leave the ledger showing
+		// only the caller's own sentence — but it arrives capped at 2,000
+		// runes, several screens of one cell in a table whose other columns
+		// are 40 wide, so the cell carries the head of it and the ledger
+		// keeps the whole.
+		if row.Codescene != nil && strings.TrimSpace(row.Codescene.SkipEvidence) != "" {
+			// Flattened BEFORE the cap so the cap counts runes the reader
+			// actually sees: a line break left in would spend none of the
+			// budget and buy a whole extra row instead.
+			ev := fitRunes(oneLine(strings.TrimSpace(row.Codescene.SkipEvidence)), reportCellEvidenceRunes)
+			return flattenReportCell("skipped (" + reason + ": " + ev + ")")
+		}
+		return flattenReportCell("skipped (" + reason + ")")
 	default:
 		return "not run"
 	}
+}
+
+// oneLine replaces every line break in s with a single space. Idempotent, so
+// a value that has already been through it can pass through
+// flattenReportCell again unchanged.
+func oneLine(s string) string {
+	return strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
+}
+
+// flattenReportCell makes one composed table cell printable as one row.
+//
+// Every free-text field that can reach a cell is caller-supplied and several
+// carry a tool's own output verbatim — a CodeScene skip reason, the failing
+// tool's error text, a category key. Two characters in that text decide
+// whether the row survives: a line break puts the remainder at column 0 of
+// the next physical line, and a "|" is the first character of the sentinel
+// EscapeContinuationLines writes at the head of a folded line, so an unmarked
+// one lets tool text read as a fold this renderer inserted. Line breaks
+// become spaces; a pipe is marked "\|".
+//
+// Applied to the COMPOSED cell rather than to its inputs, for the reason
+// given on Render's escape calls: one call covers every field that can reach
+// the cell, including any added later. It runs AFTER the display cap, so a
+// mark it adds can never be the half of a sequence the cut discards.
+//
+// This is display hygiene, not a reversible encoding: a pipe that was already
+// written "\|" comes out "\\|", and nothing reads a cell back.
+func flattenReportCell(s string) string {
+	return strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ", "|", `\|`).Replace(s)
+}
+
+// reportCellEvidenceRunes is how much of a skip evidence a table cell shows.
+const reportCellEvidenceRunes = 200
+
+// fitRunes shortens s so the RESULT is at most n runes, spending the last of
+// them on an ellipsis so a reader can tell a cut cell from a complete short
+// value: n-1 runes of s plus the marker. internal/codescene has a
+// truncateRunes whose bound counts only the RETAINED runes and appends the
+// marker on top, so a cap moved between the two shifts by one rune.
+func fitRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n-1]) + "…"
 }
 
 // topCategories renders the highest-count CodeScene categories for the report

@@ -1,12 +1,14 @@
 # Lightweight dispatch clause (anti-tangent-mcp, v0.3.1+)
 
-> Use this template for trivial tasks (doc-only edits, single-file mechanical relocations, dependency bumps). `validate_plan` may annotate a task with `lightweight_eligible: true` and `lightweight_reason`, but that annotation is advisory. Use the full dispatch clause from `INTEGRATION.md` for any task that produces production logic, has test-design choices, or involves ambiguous state transitions.
+> Use this template for trivial tasks (doc-only edits, single-file mechanical relocations, dependency bumps). `validate_plan` may annotate a task with `lightweight_eligible: true` and `lightweight_reason`, but that annotation is advisory. Use the full dispatch clause from `docs/protocol/implementer.md` §4.2 for any task that produces production logic, has test-design choices, or involves ambiguous state transitions.
 
 What lightweight mode skips:
 
 - **Skip** `validate_task_spec` (the spec is fully prescriptive; no design choices for the reviewer to shape).
 - **Skip** `check_progress` (already optional in full mode).
-- **Skip** the CodeScene MCP companion calls (`pre_commit_code_health_safeguard`, `analyze_change_set`) — there's nothing meaningful for static analysis on a trivial doc edit.
+- **Skip** the CodeScene MCP companion calls (`pre_commit_code_health_safeguard`, `analyze_change_set`) — but only when `ANTI_TANGENT_CODESCENE` is unset. There's nothing meaningful for static analysis on a trivial doc edit, and `codescene` is optional on the `validate_completion` call.
+
+**`ANTI_TANGENT_CODESCENE=required` overrides the bullet above.** The mode is an operator assertion that CodeScene is present on this host, so lightweight tasks must **run `analyze_change_set` and submit its result, exactly as any other task** — being lightweight is not a skip reason. `{"ran": false, "skip_reason": "…", "skip_evidence": "<the tool's own error text>"}` is for an attempted run that failed, never one not attempted; a skip carrying no `skip_evidence` draws a major, the same as omitting the argument.
 
 ## Drift-protection protocol (lightweight)
 
@@ -19,3 +21,4 @@ If the verdict is `fail` or contains `critical`/`major` findings, do not report 
 - `session_id`: pass an empty string `""`. Lightweight mode skips `validate_task_spec`, so there is no session_id to thread. The handler accepts the empty string when at least one piece of evidence is non-empty; it synthesizes a minimal task spec (Goal = summary; no ACs) for the reviewer.
 - `summary`: <one-paragraph summary of what was implemented>
 - `final_files`, `final_diff`, `test_evidence`: at least one must be non-empty
+- `codescene`: required under `ANTI_TANGENT_CODESCENE=required` — pass the `analyze_change_set` result the same as any other task; see the CodeScene bullets above for the skip shape and what draws a major. Optional and may be omitted when `ANTI_TANGENT_CODESCENE` is unset.

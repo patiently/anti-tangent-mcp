@@ -61,21 +61,19 @@
 # closes that, and only on a server new enough to have it.
 # internal/mcpsrv/summary_forgery_test.go enumerates the server's block
 # renderers by what their output is ASSIGNED TO (a summary_block), not by
-# what header literal they write — the earlier, header-keyed version was
-# blind to plan_run_report, whose header is honestly different and whose
-# fields shipped unescaped for a release. That test states its own blind
-# spots in its header; neither it nor this hook makes the marker path
-# trustworthy, since an agent can compose a block in its own report text
-# (README.md, "How much to trust each pass signal"). Across blocks, the LAST
-# one still wins (Task 8's pinned re-validation semantics) — only the
-# extraction WITHIN a block changed.
+# what header literal they write: plan_run_report's header is legitimately
+# different, so a header-keyed enumeration does not see it at all. That test
+# states its own blind spots in its header; neither it nor this hook makes
+# the marker path trustworthy, since an agent can compose a block in its own
+# report text (README.md, "How much to trust each pass signal"). Across
+# blocks, the LAST one wins.
 #
-# THE DIRECT-CALL RESULT IS ALSO READ FOR ITS VERDICT (final review
-# Important #1): a real MCP tool result arrives JSON-MARSHALLED
-# (envelopeResult, internal/mcpsrv/handlers.go) — summary_block's newlines
-# survive only as "\n" escapes inside one JSON string, on one physical line,
-# so HEADER_RE below can never match a validate_completion tool_result's raw
-# text. Without more, that left the direct-call path — the one signal that
+# THE DIRECT-CALL RESULT IS ALSO READ FOR ITS VERDICT: a real MCP tool
+# result arrives JSON-MARSHALLED (envelopeResult,
+# internal/mcpsrv/handlers.go) — summary_block's newlines survive only as
+# "\n" escapes inside one JSON string, on one physical line, so HEADER_RE
+# below can never match a validate_completion tool_result's raw text.
+# Without more, that left the direct-call path — the one signal that
 # cannot be fabricated — blind to `verdict: fail`: `called` would be true
 # and the close would pass regardless of what the gate actually returned.
 # The script below matches each validate_completion tool_use to its
@@ -167,11 +165,17 @@ trace() {
         >> "$TRACE_LOG" 2>/dev/null || true
 }
 
-[[ "${ANTI_TANGENT_COMPLETION_GUARD:-1}" == "0" ]] && { trace "?" "skip" "guard=0"; exit 0; }
-# Separate switch from the one above: with the comment guard off, the
-# completion gate itself (called / block_found / verdict) still runs in
-# full — only the comment-hygiene scan over the submitted diff is skipped.
+# Two switches, two concerns. COMPLETION_GUARD governs whether a close is
+# checked for having run validate_completion at all; COMMENT_GUARD governs
+# the comment-hygiene scan over the evidence that call submitted. Neither
+# implies the other, so the hook exits early only when both are off — a
+# variable that names one concern must not silently disable the other.
+COMPLETION_GUARD="${ANTI_TANGENT_COMPLETION_GUARD:-1}"
 COMMENT_GUARD="${ANTI_TANGENT_COMMENT_GUARD:-1}"
+if [[ "$COMPLETION_GUARD" == "0" && "$COMMENT_GUARD" == "0" ]]; then
+    trace "?" "skip" "guard=0"
+    exit 0
+fi
 trap 'trace "?" "error" "trap-ERR"; exit 0' ERR
 command -v jq >/dev/null 2>&1      || { trace "?" "skip" "no-jq"; exit 0; }
 command -v python3 >/dev/null 2>&1 || { trace "?" "skip" "no-python3"; exit 0; }
@@ -192,8 +196,13 @@ TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null | tr 
 # direct string comparison against TaskUpdate.input.taskId — every TaskUpdate
 # call carries its own taskId, so no reconstruction from creation order is
 # needed.
+#
+# NO APOSTROPHES ANYWHERE BELOW, code or comment: the whole body is one
+# single-quoted bash string, so a lone ' closes it and the rest of the
+# program becomes shell words. Use double quotes in Python, and rephrase
+# English possessives.
 PY='
-import json, os, re, sys
+import json, os, re, sys, time
 path, task_id = sys.argv[1], str(sys.argv[2])
 try:
     lines = open(path).readlines()
@@ -308,7 +317,51 @@ if qualifying:
 # must close on the diff it submitted, not on an earlier submission in the
 # same window.
 def diff_added_lines(inp):
-    """Return {path: [added lines]} from a validate_completion input dict."""
+    """Return {path: [added lines]} from a validate_completion input dict.
+
+    This parser is a robustness surface for honest-but-odd diffs, NOT a
+    security control. `final_diff` is written by the party being checked,
+    and two documented behaviours defeat the scan outright without going
+    near the parser: an explicitly empty `final_diff` still wins by
+    precedence over `final_files`, leaving nothing to read; and the path in
+    a "+++ " header is taken on trust, so a submitter who names their file
+    with an extension the scan excludes skips it. What is left for the
+    parser to get right is diffs written oddly but in good faith.
+
+    Three shapes are read wrong, and none of them is worth chasing. Two are
+    inherited from the declared counts; the third is the price of the pair
+    tell and is the only one here that misreads a WELL-FORMED diff.
+
+    UNDER-DECLARED COUNT: a hunk that declares FEWER added lines than it
+    delivers spends its count early, so a later added line whose content
+    starts with "++ " reads as a file header and re-points the scan at a
+    path the diff body itself named.
+
+    OVER-DECLARED COUNT UNDER A BARE HEADER: a hunk that declares MORE
+    added lines than it delivers is still open when the next file starts,
+    so a "+++ " header with no "--- " line above it is charged to that hunk
+    rather than read as a header, and every added line after it is filed
+    under the path above. Two tells rescue the ordinary spellings -- a
+    "--- "/"+++ " pair, and a header an "@@" follows while the hunk owes at
+    least two added lines -- and what neither tell reaches is the residual.
+
+    A "-- "/"++ " CONTENT COLLISION: the price of the pair tell. A removed
+    line whose content starts "-- " sitting immediately above an added line
+    whose content starts "++ " ends its hunk and re-points the scan at
+    whatever that second line names. A real diff OF a diff does NOT do this:
+    git writes those with four markers, "---- a/x" above "++++ b/x", which
+    the tell does not match. The trigger is ordinary source text.
+
+    Each of the three lands the added lines that follow on a path the diff
+    body named rather than the one it meant, and what that costs depends on
+    the invented path. Where it has no scannable extension the scan goes
+    SILENT and a comment carrying a tell reaches disk unflagged. Where it
+    has one the close is BLOCKED against a file the diff never touched, and
+    nothing the implementer can edit clears it -- the worse direction of the
+    two, because this hook is built to fail open. Each has an eval case
+    pinning the behaviour described here, so the boundary is asserted rather
+    than rediscovered.
+    """
     text = inp.get("final_diff") or ""
     if not text:
         p = inp.get("final_diff_path") or ""
@@ -322,14 +375,115 @@ def diff_added_lines(inp):
         text = read_text_capped(p)
         if not isinstance(text, str):
             return {}
+    lines = text.splitlines()
     out, cur = {}, None
-    for line in text.splitlines():
-        if line.startswith("+++ b/"):
-            cur = line[6:].strip()
-            out.setdefault(cur, [])
-        elif cur and line.startswith("+") and not line.startswith("+++"):
+    # Lines the open hunk still owes on each side; 0/0 means no hunk is open.
+    # The bytes of a "+++ " file header and of an added line whose content
+    # starts with "++ " are identical, so the line alone cannot say which it
+    # is. Two things can. The length the hunk declared for itself: while a
+    # hunk still owes added lines a "+++ " belongs to its body, and once the
+    # count is spent the hunk is closed and the next one is a header again.
+    # And a "--- " sitting immediately above it, which no declared count
+    # overrides.
+    old_left = new_left = 0
+    for i, line in enumerate(lines):
+        m = HUNK_HEADER_RE.match(line)
+        if m:
+            # An omitted count is one line: "@@ -1 +1 @@".
+            old_left = 1 if m.group(1) is None else int(m.group(1))
+            new_left = 1 if m.group(2) is None else int(m.group(2))
+            continue
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        # A "--- " line immediately above a "+++ " line is a file header
+        # pair whatever an open hunk still owes: every file boundary in a
+        # unified diff emits those two lines adjacent, and no count a hunk
+        # declared for itself makes the pair mean anything else. Closing the
+        # hunk here re-anchors the scan on the path the pair names, instead
+        # of charging both lines to the file above and filing every later
+        # added line there too. What it costs is a diff OF a diff -- see the
+        # docstring.
+        if line.startswith("--- ") and nxt.startswith("+++ "):
+            old_left = new_left = 0
+        if old_left or new_left:
+            # Each body line is charged to the side it belongs to, except
+            # the no-newline marker, which belongs to neither. Three things
+            # end the hunk early instead of being charged: a line carrying no
+            # diff marker at all, a marker the declared counts have no room
+            # left for, and a "+++ " that a new "@@" follows WHILE THE HUNK
+            # STILL OWES AT LEAST TWO ADDED LINES -- a diff cut short of the
+            # length it declared, whose remaining files must not be
+            # swallowed. The "at least two" is load-bearing: when the
+            # "+++ " is the LAST added line the hunk owes, a following "@@" is
+            # exactly what a well-formed diff produces -- under -U0 the next
+            # hunk of the same file starts on the very next line -- so ending
+            # the hunk there would file the rest of that file under a path
+            # invented by the hunk body itself.
+            if (line.startswith("+") and new_left
+                    and not (line.startswith("+++ ") and nxt.startswith("@@")
+                             and new_left > 1)):
+                new_left -= 1
+                if cur:
+                    out[cur].append(line[1:])
+                continue
+            if line.startswith("-") and old_left:
+                old_left -= 1
+                continue
+            if line.startswith(" ") or line == "":
+                old_left = max(0, old_left - 1)
+                new_left = max(0, new_left - 1)
+                continue
+            if line.startswith("\\"):
+                continue
+            old_left = new_left = 0
+        if line.startswith("+++ "):
+            cur = diff_path(line[4:].strip())
+            # The "+++" side of a deletion. It names no file that exists
+            # after the change, and setdefault would otherwise enter it as a
+            # path the scan considered.
+            if cur == "/dev/null":
+                cur = None
+            else:
+                out.setdefault(cur, [])
+        elif cur and line.startswith("+"):
             out[cur].append(line[1:])
     return out
+
+
+# A hunk header states how many lines the hunk holds on each side. Both counts
+# are optional and mean one line when absent. A combined diff writes "@@@" and
+# three ranges; it does not match here, so such a hunk opens none and every
+# "+++ " in it reads as a header -- the reading that scans the most, since a
+# path this parser never opens has its lines dropped.
+HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
+# The letters git puts in front of a diff path: "a"/"b" by default, and
+# "c" (commit), "i" (index), "w" (working tree), "o" (object) under
+# diff.mnemonicPrefix. Not the whole set it can emit -- a mnemonic-prefixed
+# `diff --no-index` numbers its two sides "1/" and "2/" instead. Those stay on
+# the path, which costs the scan nothing: whether a path is scanned at all is
+# decided by its extension, and the leading segment only shows up in the path
+# a violation is reported against.
+GIT_PATH_PREFIXES = frozenset("abciwo")
+
+
+def diff_path(raw):
+    """Strip the one-character path prefix from a "+++" header. -> path.
+
+    That prefix is git configuration, not diff syntax: "b/" by default,
+    "w/" or "i/" under diff.mnemonicPrefix, and nothing at all under
+    diff.noprefix. Requiring "b/" discards every added line of a diff
+    written under the other two, which is indistinguishable from a scan
+    that ran and found nothing. Stripping ANY one-character first segment
+    would eat a real top-level directory of one character, so only the
+    prefix letters git itself emits are stripped -- at the cost of
+    mis-reading an unprefixed path whose top-level directory is exactly
+    one of them.
+    """
+    if len(raw) > 2 and raw[1] == "/" and raw[0] in GIT_PATH_PREFIXES:
+        return raw[2:]
+    return raw
+
 
 comment_violations = []
 # Distinct from "scanned and found nothing": set only when an in-window call
@@ -339,26 +493,97 @@ comment_violations = []
 # clean scan on both the exit code and the "pass" trace line -- the guard
 # would be permanently and invisibly disabled.
 comment_scan_unavailable = False
+scan_stats = None
 in_window_completions = [inp for (i, inp) in completion_inputs if i >= scan_from]
 if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
     scan_violations = None
     try:
-        sys.path.insert(0, os.path.join(os.environ.get("ATG_ROOT", ""), "hooks"))
+        atg_root = os.environ.get("ATG_ROOT", "")
+        if not os.path.isabs(atg_root):
+            # An empty or relative value resolves "hooks" against the current
+            # working directory, re-opening the shadowing hole -I closes. A
+            # root that cannot be trusted is no root: report the scan as
+            # unavailable rather than import from wherever cwd points.
+            raise ImportError("ATG_ROOT must be an absolute path")
+        sys.path.insert(0, os.path.join(atg_root, "hooks"))
         from comment_scan import violations as scan_violations
         from comment_scan import read_text_capped
+        from git_added_lines import final_files_added_lines
     except Exception:
         scan_violations = None
         comment_scan_unavailable = True
     if scan_violations is not None:
-        added_by_path = diff_added_lines(in_window_completions[-1])
+        last_completion = in_window_completions[-1]
+        # Precedence is decided by what was SUBMITTED, never by what parsed.
+        # A diff can legitimately yield no added lines -- a pure deletion, or
+        # a shape this parser does not recognise -- and falling back on an
+        # empty result would scan the working tree for a submission whose
+        # author already told us which lines were theirs.
+        # Presence, not truthiness. An explicitly submitted empty final_diff
+        # is still a statement about which lines the author added -- reading
+        # it as absent would reconstruct from the working tree instead.
+
+        # What the git walk alone knows, none of it visible in the result
+        # it returns: whether its own budget stopped it, how many paths the
+        # vendored exemption dropped, and whether git answered 129 to
+        # --no-optional-locks so the walk ran without it. The first two shrink
+        # the result; the third changes nothing about it and only says the
+        # developer index was refreshed after all.
+        git_stats = {}
+        if ("final_diff" in last_completion or
+                "final_diff_path" in last_completion):
+            added_by_path = diff_added_lines(last_completion)
+        else:
+            added_by_path = final_files_added_lines(last_completion,
+                                                    stats=git_stats)
+        scan_source = ("final_diff" if ("final_diff" in last_completion or
+                                        "final_diff_path" in last_completion)
+                       else "final_files")
+        scan_stats = {
+            "source": scan_source,
+            # What the evidence named, against what the scan could actually
+            # read. A final_files submission whose paths are all committed
+            # reports submitted > 0 and scanned == 0 -- the difference
+            # between "scanned and found nothing" and "there was nothing to
+            # scan", which the exit code and the pass trace line cannot
+            # express on their own.
+            "submitted": (len(last_completion.get("final_files") or [])
+                          if scan_source == "final_files" else len(added_by_path)),
+            "scanned": sum(1 for v in added_by_path.values() if v),
+            "lines": sum(len(v) for v in added_by_path.values()),
+            # EITHER budget cutting the work short means the same thing to a
+            # reader of the trace: some of what the completion named was
+            # never looked at. The budget of the git walk is already spent by
+            # the time this dict is built, so it seeds the flag and the scan
+            # loop below can only add to it.
+            "truncated": bool(git_stats.get("truncated")),
+            "vendored_skipped": int(git_stats.get("vendored_skipped") or 0),
+            # git answered 129 -- its generic usage error -- to a call
+            # carrying --no-optional-locks, so the walk dropped the flag and
+            # every later call ran without it. Nothing in the counts moves, so
+            # a run that refreshed the developer index it promised to leave
+            # alone reads identically to one that did not. The marker says
+            # what the walk did, never that the flag was what git objected
+            # to: any malformed command line exits 129.
+            "optional_locks_dropped": bool(git_stats.get("optional_locks_dropped")),
+        }
+        # The deadline inside violations() bounds one file, not the walk over
+        # every file a completion named. Running out stops the walk, leaving
+        # the rest unscanned -- which the trace records rather than passing
+        # it off as a clean scan.
+        scan_deadline_at = time.monotonic() + 20.0
         for fpath, added in added_by_path.items():
+            if time.monotonic() > scan_deadline_at:
+                scan_stats["truncated"] = True
+                break
             for line, why in scan_violations(fpath, added):
                 comment_violations.append({"path": fpath, "line": line, "why": why})
 
 print(json.dumps({"error": False, "called": called,
                   "block_found": bool(qualifying), "verdict": verdict,
                   "comment_violations": comment_violations,
-                  "comment_scan_unavailable": comment_scan_unavailable}))
+                  "comment_scan_unavailable": comment_scan_unavailable,
+                  "scan": scan_stats}))
 '
 # -I isolates the interpreter: without it python3 -c puts the CURRENT WORKING
 # DIRECTORY first on sys.path, so a repo-root json.py, re.py or collections.py
@@ -391,6 +616,64 @@ trace "$TASK_ID" "parsed" "called=$CALLED block=$BLOCK verdict=$VERDICT"
 [[ "$(echo "$RESULT" | jq -r '.comment_scan_unavailable // false')" == "true" ]] && \
     trace "$TASK_ID" "skip" "comment-scan-unavailable"
 
+# Recorded whenever a scan ran, so an empty result stays legible: a
+# submission whose paths were all committed traces submitted>0 scanned=0,
+# which a scan of a real diff never does. Two of the suffixes say why a
+# result is smaller than what was submitted -- a budget stopped the work, or
+# the vendored exemption dropped paths -- neither of which the counts show.
+# The third says the git walk dropped --no-optional-locks after a 129 and
+# ran without it, which the counts do not show either.
+SCAN=$(echo "$RESULT" | jq -r '.scan | select(. != null) | "src=\(.source) submitted=\(.submitted) scanned=\(.scanned) lines=\(.lines)" + (if (.vendored_skipped // 0) > 0 then " vendored-skipped=\(.vendored_skipped)" else "" end) + (if .truncated then " budget-exhausted" else "" end) + (if .optional_locks_dropped then " optional-locks-dropped" else "" end)' 2>/dev/null)
+[[ -n "$SCAN" ]] && trace "$TASK_ID" "scan" "$SCAN"
+
+# Comment hygiene runs on its own switch, ahead of the completion gate and
+# independent of its verdict: a close that skipped validation entirely, and
+# one that passed, are both closes whose evidence can carry a bad comment.
+if [[ "$COMMENT_GUARD" != "0" ]]; then
+    VIOLATIONS=$(echo "$RESULT" | jq -c '.comment_violations // []')
+    VIOLATIONS_COUNT=$(echo "$VIOLATIONS" | jq 'length')
+    if [[ "$VIOLATIONS_COUNT" -gt 0 ]]; then
+        trace "$TASK_ID" "block" "comment-hygiene"
+        {
+            echo "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
+            echo
+            echo "Task #$TASK_ID was closed, and the evidence its last validate_completion"
+            echo "submitted carries added comment(s) referencing change history."
+            echo
+            # Both fields come from the submitted evidence and are unbounded
+            # there; a single very long line would otherwise reach the model as
+            # megabytes of hook stderr it is expected to act on.
+            echo "$VIOLATIONS" | jq -r '.[0:10][] | "  " + .path[0:200] + ": " + .line[0:200] + "\n    -> contains " + .why'
+            echo
+            # Both conditions in one payload. Reporting the comment alone
+            # sends the close back for a rewrite, and the failing verdict
+            # then greets it on the next attempt.
+            if [[ "$COMPLETION_GUARD" != "0" && "$VERDICT" == "fail" ]]; then
+                echo "That same validate_completion also returned verdict: fail, so both"
+                echo "have to be addressed: rewrite the comment(s) above AND fix the"
+                echo "findings from that response before re-closing."
+                echo
+            fi
+            echo "Comments must explain non-trivial behaviour or a non-obvious invariant, and must read"
+            echo "correctly to someone who never saw this change. Issue, task and version references belong"
+            echo "in the commit message, not the code. Rewrite the comment(s), then:"
+            echo
+            echo "  1. TaskUpdate taskId=$TASK_ID status=in_progress"
+            echo "  2. Fix the flagged comment(s)"
+            echo "  3. Call mcp__anti-tangent__validate_completion again with the updated evidence"
+            echo "  4. Re-close once the verdict is pass"
+            echo
+            echo "(Disable: ANTI_TANGENT_COMMENT_GUARD=0. Trace: $TRACE_LOG)"
+        } >&2
+        exit 2
+    fi
+fi
+
+if [[ "$COMPLETION_GUARD" == "0" ]]; then
+    trace "$TASK_ID" "skip" "completion-guard=0"
+    exit 0
+fi
+
 if [[ "$VERDICT" == "fail" ]]; then
     trace "$TASK_ID" "block" "verdict-fail"
     {
@@ -417,36 +700,6 @@ if [[ "$VERDICT" == "fail" ]]; then
 fi
 
 if [[ "$CALLED" == "true" || "$BLOCK" == "true" ]]; then
-    VIOLATIONS=$(echo "$RESULT" | jq -c '.comment_violations // []')
-    VIOLATIONS_COUNT=$(echo "$VIOLATIONS" | jq 'length')
-    if [[ "$VIOLATIONS_COUNT" -gt 0 ]]; then
-        trace "$TASK_ID" "block" "comment-hygiene"
-        {
-            echo "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
-            echo
-            echo "Task #$TASK_ID's completion gate passed, but the diff it was validated"
-            echo "against still carries added comment(s) referencing change history — a"
-            echo "Bash heredoc or similar write that never passed through Edit/Write, where"
-            echo "this project's write-time guard would have caught it."
-            echo
-            # Both fields come from the submitted diff and are unbounded there;
-            # a single very long line would otherwise reach the model as
-            # megabytes of hook stderr it is expected to act on.
-            echo "$VIOLATIONS" | jq -r '.[0:10][] | "  " + .path[0:200] + ": " + .line[0:200] + "\n    -> contains " + .why'
-            echo
-            echo "Comments must explain non-trivial behaviour or a non-obvious invariant, and must read"
-            echo "correctly to someone who never saw this change. Issue, task and version references belong"
-            echo "in the commit message, not the code. Rewrite the comment(s), then:"
-            echo
-            echo "  1. TaskUpdate taskId=$TASK_ID status=in_progress"
-            echo "  2. Fix the flagged comment(s)"
-            echo "  3. Call mcp__anti-tangent__validate_completion again with the updated diff"
-            echo "  4. Re-close once the verdict is pass"
-            echo
-            echo "(Disable: ANTI_TANGENT_COMMENT_GUARD=0. Trace: $TRACE_LOG)"
-        } >&2
-        exit 2
-    fi
     trace "$TASK_ID" "pass" "called=$CALLED block=$BLOCK"
     exit 0
 fi

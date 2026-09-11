@@ -148,11 +148,126 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # shapes of an unreadable target are pinned here; the FIFO and oversized-file
 # shapes share the same code path but have no case of their own.
 #
+# Three cases pin what the close-time scan looked at, which no exit code can
+# state. One submits a diff carrying NO path prefix at all — the shape
+# diff.noprefix produces, and the one every other final_diff case here is
+# blind to, since they all use "+++ b/" — and must still block. The second
+# closes on final_files whose paths are all committed: it passes, and the
+# trace line must show submitted>0 with scanned=0, which is what separates
+# "there was nothing to scan" from "the scan never ran". The third is a
+# window holding no validate_completion call at all, whose pass signal is a
+# block in the agent's own report text: the gate reads that block, the close
+# passes with called=false on the trace, and the scan has nothing to run on,
+# because what it reads is a call's submitted evidence. No scan line is
+# traced, which no assertion here can state directly — what the case pins is
+# that the close still passes, so refusing a marker-only close fails loudly
+# here instead of quietly ending the reporting path the marker exists for.
+#
+# Thirty-five cases cover the write-time scanner's span boundaries, the
+# optional ticket pattern at both hooks, the two kill switches, and the close
+# hook's final_files fallback — four groups.
+#
+# Seventeen pin where a comment span starts and stops, which is what decides
+# whether a tell is even reached. Three confirm the ordinary comment shapes
+# ARE scanned and do block on a real tell (a KDoc block interior, a one-line
+# block comment, a trailing comment on a code line). Seven hold the opposite
+# boundary, where something that merely looks like a delimiter is not one: a
+# "*" not followed by whitespace is a dereference, a tell inside a string
+# literal is not comment text, a "#" inside a shell string and a "#" straight
+# after a "$" are not comment openers, "*/" is a terminator and never an
+# opener, and block text stops at its terminator — pinned once for a block
+# that opens its line and once for a block that starts mid-line — so the code
+# after it never reaches the tells. Two more pin that the walk covers a whole
+# line rather than stopping at the first span it finds: a benign trailing
+# comment cannot hide a violating one earlier on the line, and a line that
+# OPENS with a clean block comment must still be walked past the terminator
+# to the trailing violation. The last
+# four are one apiece: tells run per span, so two harmless fragments never
+# join into one; quote parity is counted per segment, so a block comment's
+# own quote cannot leak into the parity that decides whether a later "//"
+# sits inside a string; plain narrative prose inside a block comment is read
+# and simply found clean rather than skipped unscanned; and a "#" at column
+# zero, which the mid-line delimiter walk cannot see, still blocks. An
+# unstarred block interior is a documented MISS with a case of its own, so
+# the gap is pinned rather than left to be rediscovered.
+#
+# Six pin the optional project ticket pattern. Five drive the write-time
+# hook: a configured pattern is a
+# tell, an unset one adds nothing (there is no built-in ticket tell), an
+# uncompilable one is dropped without disabling the other tells, one past
+# the length cap is dropped — the fixture is an alternation, so a pass is
+# evidence the cap fired rather than an accident of the pattern never
+# matching — and a catastrophically backtracking one is bounded by the scan
+# deadline and fails open instead of hanging the hook. A sixth drives the
+# CLOSE-time hook rather than the write-time one: the tell is appended to
+# TELLS when comment_scan is imported, so both hooks honour the variable, and
+# the other five all target check-comment-write.
+#
+# Four pin the two kill switches as one truth table: each names its own
+# concern and leaves the other armed (completion gate off still scans
+# comments, comment scanning off still gates the close), and only both off
+# is an early exit.
+#
+# Eight pin the final_files fallback, the path taken when no diff was
+# submitted at all. Three are the git classification itself: an untracked
+# file has every line added and blocks, a tracked unmodified file's
+# pre-existing comment is not an added line, and a gitignored path — which
+# exits from ls-files exactly like an untracked one — is separated from it
+# by check-ignore. Two are rooting: a path outside any repository cannot be
+# classified and is skipped, and a nested worktree is resolved against its
+# own root rather than the hook cwd, pinned by a TRACKED fixture expecting a
+# pass so that only the correct rooting passes. Three are precedence: a
+# submitted diff wins even when it adds nothing, an explicitly present but
+# EMPTY final_diff still wins (presence, not content, is the key), and a
+# repository with overridden diff prefixes is handled end to end.
+#
+# Ten more pin how the close-time scan divides a diff into files, on one
+# irreducible ambiguity: an added line whose content starts with "++ " reaches
+# the parser as the bytes "+++ ", byte-identical to a file header, and the
+# line on its own says nothing about which it is.
+# Four are a bare multi-file diff with no "diff --git" or "--- " line to
+# close the first hunk, an added line that really does start with "++ ", a
+# "+++ /dev/null" deletion header that must not enter the scan as a path, and
+# a hunk that delivers fewer lines than it declared, after which the next file
+# header must still be read as one. Two hold the opposite edge of
+# that last rule, where the "+++ " is the hunk's LAST owed added line and the
+# "@@" after it is the next hunk of the SAME file — what git diff -U0 emits
+# as a matter of course — in both spellings of the declared count, explicit
+# ("+4,2") and omitted ("+4"). A seventh pins the tell that reaches where a
+# declared count cannot: a "--- " line immediately above a "+++ " line is a
+# header pair whatever the open hunk still owes, so a hunk over-declaring by
+# a single line does not swallow the next file's real header.
+#
+# The last three are the shapes read wrong, each pinned at its actual
+# behaviour with expected_exit 0 and a trace assertion, so the boundary is
+# asserted rather than rediscovered: a hunk that UNDER-declares its count,
+# where a genuine body line is read as a header; a hunk that OVER-declares it
+# under a bare header with no "--- " above and no "@@" after, where a genuine
+# header is read as body; and ordinary source text carrying a removed line
+# starting "-- " immediately above an added line starting "++ ", which trips
+# the header-pair tell -- the price of that tell, and the only one of the
+# three that misreads a well-formed diff. A real diff OF a diff does not trip
+# it; git writes those with four markers. The trace assertion carries these:
+# a case expecting exit 0 would otherwise pass against a scan that never ran
+# at all. All three pin the SILENT direction, where the invented path has no
+# scannable extension.
+#
+# An eleventh pins the other direction, which is the one that costs a user
+# their close: where the path a collision lands on DOES carry a scannable
+# extension, the same shapes block instead, naming a file the diff never
+# touched. Widening the header-pair tell fails there loudly rather than
+# costing closes quietly.
+#
+# The per-group counts above PARTITION this table: every case belongs to
+# exactly one group, and they sum to EXPECTED_CASE_COUNT. Adding a case means
+# growing the group that describes it, or writing a new group; a breakdown
+# that no longer sums is a breakdown nobody can use to find anything.
+#
 # Both checks below must hold or the count assertion is vacuous: the JSON
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=93
+EXPECTED_CASE_COUNT=142
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
@@ -162,6 +277,14 @@ WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # file instead; a case that sets ANTI_TANGENT_GUARD_TRACE_LOG in its own "env"
 # block still wins, since `env` applies after this export.
 export ANTI_TANGENT_GUARD_TRACE_LOG="$WORKDIR/trace.log"
+# The suite must not inherit ambient values of the variables its own cases
+# exercise: a case that sets no "env" block would otherwise test the
+# invoking developer's shell rather than the behaviour it names. A case that
+# sets one of these in its own "env" block still wins, since `env` applies
+# after this unset.
+unset ANTI_TANGENT_TICKET_PATTERN
+unset ANTI_TANGENT_COMPLETION_GUARD
+unset ANTI_TANGENT_COMMENT_GUARD
 # Every hook invocation below runs with this as its cwd, run-scoped (inside
 # WORKDIR, so isolated from a concurrent run.sh invocation) rather than
 # per-case, so a "cwd_fixture" case can place a real file at a RELATIVE path
@@ -348,6 +471,42 @@ run_case() {
         done < <(jq -r ".evals[$idx].tmpdir_symlink | keys[]" "$EVALS_FILE")
     fi
 
+    # Optional "setup_script": a bash snippet run in this case's {{TMPDIR}}
+    # before the hook. The fixture hooks above can only place file CONTENT;
+    # a case asserting behaviour that depends on git's own view of a path
+    # (tracked, untracked, ignored, in a worktree) needs real repository
+    # state, which only running git can produce. Failures are fatal to the
+    # case rather than silent: a case whose setup did not run would assert
+    # against the wrong world and pass for the wrong reason.
+
+    local setup_script
+    setup_script=$(jq -r ".evals[$idx].setup_script // empty" "$EVALS_FILE")
+    if [[ -n "$setup_script" ]]; then
+        setup_script="${setup_script//\{\{TMPDIR\}\}/$case_tmp}"
+        if ! ( cd "$case_tmp" && bash -c "$setup_script" ) >/dev/null 2>&1; then
+            echo "  SETUP FAILED for case $id" >&2
+            return 1
+        fi
+    fi
+
+    # Optional "hook_cwd": run the hook from here instead of HOOK_CWD. The
+    # worktree case turns on the hook's cwd differing from the file's own
+    # directory, which is the whole point of rooting git at the file.
+    #
+    # Resolved AFTER setup_script, never before: the directory a case names
+    # here is usually one its own setup just created, so validating first
+    # would reject every such case before it could exist.
+    local hook_cwd_override case_cwd
+    hook_cwd_override=$(jq -r ".evals[$idx].hook_cwd // empty" "$EVALS_FILE")
+    hook_cwd_override="${hook_cwd_override//\{\{TMPDIR\}\}/$case_tmp}"
+    case_cwd="$HOOK_CWD"
+    if [[ -n "$hook_cwd_override" ]]; then
+        # A named cwd that does not exist must fail loudly. Falling back to
+        # HOOK_CWD would silently assert the opposite of the case's intent.
+        [[ -d "$hook_cwd_override" ]] || { echo "  [$id] BAD hook_cwd: $hook_cwd_override" >&2; return 1; }
+        case_cwd="$hook_cwd_override"
+    fi
+
     local stdin_raw
     stdin_raw=$(jq -r ".evals[$idx].stdin_raw // empty" "$EVALS_FILE")
 
@@ -408,19 +567,34 @@ run_case() {
         done < <(jq -r ".evals[$idx].env | to_entries[] | \"\(.key)=\(.value)\"" "$EVALS_FILE")
     fi
 
-    local path_exclude bash_path
+    local path_exclude bash_path timeout_prefix=()
     path_exclude=$(jq -r ".evals[$idx].path_stub_exclude // empty" "$EVALS_FILE")
     bash_path=$(command -v bash)
+
+    # Optional "case_timeout_seconds": wrap the hook in `timeout` so a case
+    # whose failure mode is a hang fails as a case instead of stalling the
+    # suite. `timeout` returns 124 on expiry, which no hook uses, so a
+    # timeout is distinguishable from every real exit status below.
+    local case_timeout
+    case_timeout=$(jq -r ".evals[$idx].case_timeout_seconds // empty" "$EVALS_FILE")
+    if [[ -n "$case_timeout" && "$case_timeout" =~ ^[0-9]+$ ]] && command -v timeout >/dev/null 2>&1; then
+        timeout_prefix=(timeout "$case_timeout")
+    fi
 
     local exit_code=0
     if [[ -n "$path_exclude" ]]; then
         local stub
         stub=$(build_stub_dir "$path_exclude")
-        ( cd "$HOOK_CWD" && PATH="$stub" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        ( cd "$case_cwd" && PATH="$stub" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     elif [[ ${#env_assignments[@]} -gt 0 ]]; then
-        ( cd "$HOOK_CWD" && env "${env_assignments[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        ( cd "$case_cwd" && env "${env_assignments[@]}" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
     else
-        ( cd "$HOOK_CWD" && "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        ( cd "$case_cwd" && "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+    fi
+
+    if [[ "$exit_code" == "124" ]]; then
+        echo "  TIMED OUT after ${case_timeout}s — the case hung rather than returning" >&2
+        return 1
     fi
 
     TOTAL=$((TOTAL + 1))
@@ -518,6 +692,9 @@ run_case() {
 }
 
 # ── Main ──
+
+echo "== module tests =="
+python3 -B -m unittest discover -s "$HOOK_DIR" -p '*_test.py' -v || exit 1
 
 # check-comment-write carries a copy of comment_scan.py's SCAN_EXTS so it can
 # decide "this file is never scanned" without paying for a python3 start. That
