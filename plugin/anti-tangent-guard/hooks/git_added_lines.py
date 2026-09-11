@@ -315,7 +315,11 @@ def final_files_added_lines(inp, deadline=None, stats=None, contexts=None):
                 continue
             if lines:
                 out[path] = lines
-            if contexts is not None:
+            if lines and contexts is not None:
+                # Only paths that reach `out` are ever looked up again, and a
+                # context is a whole file: holding one for every unchanged
+                # path a completion names would grow with the submission
+                # rather than with the work.
                 contexts[path] = new_text
             continue
         if rc != 1:
