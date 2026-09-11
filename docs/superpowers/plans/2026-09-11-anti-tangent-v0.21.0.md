@@ -1851,11 +1851,15 @@ git commit -m "test(guard): hook-level evals for the filter and lazy-fetch exec 
 **Files:**
 - Modify: `CHANGELOG.md` (new block at the top of the released sections)
 - Modify: `plugin/anti-tangent-guard/.claude-plugin/plugin.json:4`
+- Modify: `plugin/anti-tangent-guard/evals/guard-evals.json` — its own top-level `description` still says "142 cases"
+- Modify: `plugin/anti-tangent-guard/README.md:493` — "the full eval suite (142 cases)" is stale for the same reason
 
 **Acceptance Criteria:**
 - [ ] `CHANGELOG.md` has `## [0.21.0] - 2026-09-11` with `### Security`, `### Fixed`, `### Added`
 - [ ] `VERSION` is untouched at `0.20.1`
 - [ ] `anti-tangent-guard`'s `plugin.json` version is `0.4.0`
+- [ ] Every "142 cases" reference reads 145 — `guard-evals.json`'s own `description` and `README.md:493`. A file that miscounts itself is the one place the harness's own count check cannot catch, because that check compares `run.sh` against the JSON array, never against the JSON's prose
+- [ ] Eval 143's `reason` no longer opens by narrating the removed call ("git diff had to convert the worktree side before comparing") — state the hazard in the present tense, as eval 145's reason does
 - [ ] All repo gates pass
 
 **Verify:** `go test -race ./... && bash scripts/check-protocol-docs.sh && python3 scripts/check_md_links.py`
