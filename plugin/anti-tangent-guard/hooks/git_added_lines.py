@@ -31,29 +31,60 @@ _LOCK_FLAG = ["--no-optional-locks"]
 
 
 def _git(cwd, *args):
-    """Run git rooted at cwd with output formatting pinned. -> (rc, stdout).
+    """Run git rooted at cwd with config pinned. -> (rc, stdout as text)."""
+    return _git_call(cwd, args, True)
 
-    The diff pins are not load-bearing for what this module parses: the
-    filters below only ever test a diff line for a leading "+++", which every
-    prefix style produces. They are pinned so this module's own parsing never
-    has to anticipate the prefix and quoting styles a developer's git
-    configuration can produce. core.fsmonitor is pinned for a different
-    reason: a repository config can point it at an arbitrary command, which
-    git would otherwise run from inside this hook.
+
+def _git_bytes(cwd, *args):
+    """Run git rooted at cwd with config pinned. -> (rc, stdout as bytes).
+
+    A blob is under no obligation to be valid UTF-8, and subprocess's text
+    mode raises on the first byte that is not -- inside subprocess.run, where
+    the caller sees a failure and cannot tell it apart from git refusing the
+    command. Reading bytes lets the caller decode with the same
+    errors="replace" the worktree side uses, so both sides of a comparison
+    degrade identically on the same bytes instead of one of them vanishing.
+    """
+    return _git_call(cwd, args, False)
+
+
+def _git_call(cwd, args, text):
+    """Shared body of _git and _git_bytes.
+
+    The pins are best-effort hardening and must not be read as a completeness
+    claim -- the list has been found short twice. What this module actually
+    relies on is a property of the calls it makes: none of them converts
+    worktree content, and none of them fetches a missing object. The pins
+    cover two command-valued keys that an ordinary read-only question would
+    otherwise reach:
+
+    core.fsmonitor is a command git runs while answering, and a repository
+    config can point it anywhere. protocol.allow governs the transport a
+    partial clone spawns to lazily fetch an object it does not have, which
+    reaches core.sshCommand, remote.*.uploadpack and a git-remote-* helper on
+    PATH. GIT_NO_LAZY_FETCH stops that fetch being attempted at all; the two
+    are independent mechanisms and neither is known to subsume the other
+    across git versions, so both are applied.
+
+    core.quotePath is not a command. It is pinned because ls-files output is
+    parsed for a repository-relative path, and quoting would corrupt any name
+    outside ASCII.
     """
     pins = ["-C", cwd,
-            "-c", "diff.noprefix=false",
-            "-c", "diff.mnemonicPrefix=false",
             "-c", "core.quotePath=false",
             "-c", "core.fsmonitor=false",
+            "-c", "protocol.allow=never",
             "--no-pager"]
+    env = dict(os.environ, GIT_NO_LAZY_FETCH="1")
+    empty = "" if text else b""
 
     def run(prefix):
         try:
             p = subprocess.run(["git"] + prefix + pins + list(args),
-                               capture_output=True, text=True, timeout=10)
+                               capture_output=True, text=text, timeout=10,
+                               env=env)
         except Exception:
-            return 127, ""
+            return 127, empty
         return p.returncode, p.stdout
 
     rc, out = run(_LOCK_FLAG)

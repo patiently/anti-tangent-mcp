@@ -279,5 +279,52 @@ class DroppedOptionalLocksIsReported(unittest.TestCase):
                         "a walk that gave up the flag must say so")
 
 
+class LazyFetchCannotExec(unittest.TestCase):
+    # A blob missing from the object store sends read-only git commands down a
+    # partial-clone lazy fetch, and the fetch execs the configured transport.
+    # That is a second, independent way for a repository's own config to run a
+    # command inside this hook, and no amount of filter pinning closes it.
+    def test_a_missing_blob_in_a_partial_clone_runs_no_command(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+
+        tmp = tempfile.mkdtemp()
+        sentinel = os.path.join(tmp, "SENTINEL")
+        ssh = os.path.join(tmp, "ssh.sh")
+        with open(ssh, "w") as fh:
+            fh.write("#!/bin/sh\necho fired >> %s\nexit 1\n" % sentinel)
+        os.chmod(ssh, 0o755)
+
+        repo = os.path.join(tmp, "r")
+        os.makedirs(repo)
+
+        def git(*args):
+            subprocess.run(["git", "-C", repo] + list(args),
+                           capture_output=True, timeout=30)
+
+        git("init", "-q", ".")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        with open(os.path.join(repo, "f.go"), "w") as fh:
+            fh.write("package x\n")
+        git("add", "f.go")
+        git("commit", "-qm", "i")
+        blob = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD:f.go"],
+                              capture_output=True, text=True,
+                              timeout=30).stdout.strip()
+        git("config", "core.repositoryFormatVersion", "1")
+        git("config", "extensions.partialClone", "origin")
+        git("config", "remote.origin.promisor", "true")
+        git("config", "remote.origin.url", "ssh://evil.example/x.git")
+        git("config", "core.sshCommand", ssh)
+        os.remove(os.path.join(repo, ".git", "objects", blob[:2], blob[2:]))
+
+        rc, out = g._git_bytes(repo, "cat-file", "blob", "HEAD:f.go")
+        self.assertNotEqual(rc, 0, "the blob is gone, so this must not succeed")
+        self.assertFalse(
+            os.path.exists(sentinel),
+            "a missing blob must not be allowed to exec the configured transport")
+
+
 if __name__ == "__main__":
     unittest.main()
