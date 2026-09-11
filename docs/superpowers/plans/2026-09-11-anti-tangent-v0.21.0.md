@@ -595,11 +595,11 @@ Append to `comment_scan_test.py`:
 
 ```python
 class ConvertedContent(unittest.TestCase):
-    # The clean filter removed here is what used to make a converted file
-    # comparable to its worktree form. A pointer or ciphertext in HEAD against
-    # content on disk reads as a wholly new file; an encoding difference reads
-    # as no findings at all, which is the worse of the two because the scan
-    # looks like it ran.
+    # A filter driver converts between the HEAD blob and the worktree form, so
+    # a filtered file holds a pointer or ciphertext in HEAD against content on
+    # disk: comparing the two directly reads as a wholly new file. An encoding
+    # difference is the worse of the two, because it reads as no findings at
+    # all and the scan still looks like it ran.
     def test_a_filtered_path_is_skipped_not_scanned_whole(self):
         sys.path.insert(0, HOOKS)
         import git_added_lines as g
