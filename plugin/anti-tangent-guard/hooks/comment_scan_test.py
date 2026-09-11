@@ -391,13 +391,13 @@ class ContentFiltersAreNeverRun(unittest.TestCase):
 
 
 class UndecodableHeadBlob(unittest.TestCase):
-    # One byte that is not UTF-8, anywhere in the file, makes subprocess's
-    # text mode raise inside _git, which reports it as (127, "") -- the same
-    # shape as git refusing the command. The diff is then unanswerable and the
-    # path is dropped, so a file like this is currently unscannable and
-    # nothing says so. Reading the blob as bytes and decoding both sides with
-    # errors="replace" makes it comparable without widening what counts as
-    # added.
+    # A blob is under no obligation to be valid UTF-8, and subprocess's text
+    # mode raises on the first byte that is not -- which a caller sees only as
+    # a failure indistinguishable from git refusing the command. Reading the
+    # blob as bytes and decoding BOTH sides with errors="replace" keeps the
+    # two comparable: the offending byte becomes the same replacement
+    # character on each side, contributes no difference of its own, and only
+    # the genuinely added line is reported.
     def test_a_latin1_byte_does_not_widen_the_scan(self):
         sys.path.insert(0, HOOKS)
         import git_added_lines as g
@@ -464,9 +464,9 @@ class NoCommitsYet(unittest.TestCase):
 
 
 class HeadProbedOncePerRoot(unittest.TestCase):
-    # Two files in different subdirectories of ONE worktree. Keying the cache
-    # on the directory asked from would probe HEAD twice for the same
-    # repository.
+    # Two files in ONE worktree, submitted from different directories. Keying
+    # the cache on the directory asked from would probe HEAD twice for the
+    # same repository.
     def test_one_worktree_is_probed_once(self):
         sys.path.insert(0, HOOKS)
         import git_added_lines as g
