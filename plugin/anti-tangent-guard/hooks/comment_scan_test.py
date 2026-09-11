@@ -711,5 +711,71 @@ class MalformedCheckAttr(unittest.TestCase):
                     "other.go\0working-tree-encoding\0unspecified\0")
 
 
+GO_RAW = 'package x\n\nconst help = `\n * added in v1.2.3 the --foo flag\n`\n'
+KT_RAW = 'val doc = """\n * fixes #4321 in the parser\n"""\n'
+# A bare tracker key matches NOTHING by default: _ticket_tell() returns None
+# unless ANTI_TANGENT_TICKET_PATTERN is set, so an unconfigured project has no
+# tracker tell at all. Measured: ' * ABC-1234: widen the parser' -> []. The
+# preservation test therefore uses a built-in tell.
+KDOC = '/**\n * fixes #1 in the parser\n */\nfun f() {}\n'
+
+
+class StarredLineNeedsAnOpenBlock(unittest.TestCase):
+    def test_go_raw_string_is_not_a_comment(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        line = " * added in v1.2.3 the --foo flag"
+        self.assertEqual(violations("x.go", [line], GO_RAW), [])
+        self.assertNotEqual(violations("x.go", [line]), [],
+                            "without context the old behaviour must be kept")
+
+    def test_kotlin_triple_quote_is_not_a_comment(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        self.assertEqual(
+            violations("x.kt", [" * fixes #4321 in the parser"], KT_RAW), [])
+
+    def test_a_genuine_kdoc_still_blocks(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        self.assertNotEqual(
+            violations("x.kt", [" * fixes #1 in the parser"], KDOC), [],
+            "a real block continuation must still be caught")
+
+
+class StrayQuoteDoesNotBlindTheFile(unittest.TestCase):
+    # A quote span that ran to end of file would suppress every genuine block
+    # comment after it. Ending those spans at end of line confines one stray
+    # apostrophe to the line it is on.
+    CASES = {
+        "x.rs": "fn f<'a>(s: &'a str) {}\n",
+        "x.tsx": "const a = <p>don't</p>;\n",
+        "x.c": "#error don't do that\n",
+        "x.js": "const re = /it's/;\n",
+    }
+
+    def test_a_lone_apostrophe_leaves_later_comments_visible(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        for path, prefix in self.CASES.items():
+            ctx = prefix + "/**\n * fixes #1\n */\n"
+            self.assertNotEqual(
+                violations(path, [" * fixes #1"], ctx), [],
+                "%s: a stray quote must not hide a real block comment" % path)
+
+
+class TokenizerFailureFallsBack(unittest.TestCase):
+    def test_a_raising_walk_keeps_the_old_answer(self):
+        sys.path.insert(0, HOOKS)
+        import comment_scan as cs
+        real = cs.block_comment_lines
+        cs.block_comment_lines = lambda text: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            out = cs.violations("x.kt", [" * fixes #1"], "irrelevant")
+        finally:
+            cs.block_comment_lines = real
+        self.assertNotEqual(out, [], "a failed walk must fall back, not drop the scan")
+
+
 if __name__ == "__main__":
     unittest.main()
