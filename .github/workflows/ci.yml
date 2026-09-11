@@ -112,6 +112,15 @@ jobs:
       - name: Shunt hook evals
         run: bash plugin/anti-tangent-shunt/evals/run.sh
 
+      - name: Shunt hook evals under a hostile ANTI_TANGENT_SHUNT_MIN_LINES
+        # Every case must be decided by its own fixture and "env" block, never by
+        # the caller's shell. A low value flips the suite's allow cases and a high
+        # one its block cases, so both run; either failing means the harness has
+        # started inheriting the variable again.
+        run: |
+          ANTI_TANGENT_SHUNT_MIN_LINES=1 bash plugin/anti-tangent-shunt/evals/run.sh
+          ANTI_TANGENT_SHUNT_MIN_LINES=100000 bash plugin/anti-tangent-shunt/evals/run.sh
+
       - name: Completion guard evals
         run: bash plugin/anti-tangent-guard/evals/run.sh
 

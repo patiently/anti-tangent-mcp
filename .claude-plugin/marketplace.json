@@ -27,7 +27,7 @@
     {
       "name": "anti-tangent-shunt",
       "description": "Routes I/O-heavy implementer work to a cheap worker model via PreToolUse hooks. Intercepts oversized Read and Bash calls, delegating them to anti-tangent-mcp's bulk_read tool to keep the implementer's context small and token-efficient.",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "source": "./plugin/anti-tangent-shunt",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"

@@ -1,7 +1,7 @@
 {
   "name": "anti-tangent-shunt",
   "description": "Routes I/O-heavy implementer work to a cheap worker model through anti-tangent-mcp. PreToolUse hooks block oversized full-file reads and redirect them to the bulk_read MCP tool, so a large file corpus never enters the implementer's context.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "author": {
     "name": "Patrick Gilmore",
     "email": "p@patiently.io"
