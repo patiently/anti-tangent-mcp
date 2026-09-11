@@ -44,7 +44,7 @@
     {
       "id": 6,
       "subject": "Task 6: fp-scan --ticket-pattern mode",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** An operator can find out what `ANTI_TANGENT_TICKET_PATTERN` would newly block in this repository before committing to it.\n\n**Files:**\n- Modify: `plugin/anti-tangent-guard/evals/fp-scan.py:36-46` and `:83-93`\n\n**Acceptance Criteria:**\n- [ ] With no flag, the env var is popped exactly as today, and stdout AND stderr are proven byte-identical to the pre-change version with `cmp` (not merely rc 0)\n- [ ] `--ticket-pattern <regex>` sets the variable instead, before `comment_scan` is imported\n- [ ] A pattern that `_ticket_tell()` would silently drop (bad regex, over the length cap) exits non-zero with a message, rather than reporting a clean run\n- [ ] In `--ticket-pattern` mode the stderr summary reports total hits AND how many carry the ticket tell; in default mode the existing one-number summary is preserved byte-for-byte\n- [ ] A missing argument to the flag exits non-zero\n\n**Verify:**\n```bash\npython3 plugin/anti-tangent-guard/evals/fp-scan.py >/dev/null 2>&1; echo \"default rc=$?\"\npython3 plugin/anti-tangent-guard/evals/fp-scan.py --ticket-pattern '[A-Z]{2,}-[0-9]+' >/dev/null 2>&1; echo \"flag rc=$?\"\npython3 plugin/anti-tangent-guard/evals/fp-scan.py --ticket-pattern '(' >/dev/null 2>&1; echo \"bad-regex rc=$? (want 2)\"\npython3 plugin/anti-tangent-guard/evals/fp-scan.py --ticket-pattern >/dev/null 2>&1; echo \"missing-arg rc=$? (want 2)\"\n```\nThen `bash plugin/anti-tangent-guard/evals/fp-report.sh` must give the same verdict as on `main`.\n\nFull code is in the plan under \"Task 6\".\n\nORDER IS LOAD-BEARING: `comment_scan` binds the ticket tell at import time (`_ticket = _ticket_tell()`). Parse argv and set the environment BEFORE the `from comment_scan import ...` line, or the flag silently does nothing. Validate by asking the module what it actually bound (`comment_scan._ticket is None`) rather than re-implementing its rules, which would drift.\n\n```json:metadata\n{\"files\": [\"plugin/anti-tangent-guard/evals/fp-scan.py\"], \"verifyCommand\": \"python3 plugin/anti-tangent-guard/evals/fp-scan.py --ticket-pattern '[A-Z]{2,}-[0-9]+' >/dev/null 2>&1; echo rc=$?\", \"acceptanceCriteria\": [\"default stdout and stderr proven byte-identical with cmp against a baseline\", \"flag sets env before import\", \"dropped pattern exits non-zero\", \"summary splits total and ticket-attributable hits\", \"missing argument exits non-zero\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
@@ -73,5 +73,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-11T12:55:46.892391+00:00"
+  "lastUpdated": "2026-09-11T13:04:11.971253+00:00"
 }
