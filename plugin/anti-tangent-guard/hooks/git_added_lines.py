@@ -235,7 +235,7 @@ def _tracked_added_lines(parent, rel, new_text):
     return added(blob.decode("utf-8", errors="replace"), new_text), False
 
 
-def final_files_added_lines(inp, deadline=None, stats=None):
+def final_files_added_lines(inp, deadline=None, stats=None, contexts=None):
     """{path: [added lines]} for a completion that submitted final_files.
 
     final_files carries whole file contents and no signal for which lines are
@@ -266,6 +266,13 @@ def final_files_added_lines(inp, deadline=None, stats=None):
     without it, leaving the developer index open to a refresh this walk means
     not to cause. 129 is git's generic usage error, so this does not establish
     that the flag itself was what git objected to.
+
+    A `contexts` dict, if given, is filled with the full text each answer was
+    derived from. The scanner needs it to tell a block-comment continuation
+    from a line of a raw string literal, which cannot be decided from the
+    added lines alone. It is an out-param for the same reason `stats` is: the
+    return shape is what the close-time hook counts, and widening it would
+    break that reader.
     """
     out = {}
     roots = {}
@@ -308,6 +315,8 @@ def final_files_added_lines(inp, deadline=None, stats=None):
                 continue
             if lines:
                 out[path] = lines
+            if contexts is not None:
+                contexts[path] = new_text
             continue
         if rc != 1:
             continue
@@ -327,6 +336,8 @@ def final_files_added_lines(inp, deadline=None, stats=None):
             if not isinstance(content, str):
                 continue
         out[path] = content.splitlines()
+        if contexts is not None:
+            contexts[path] = content
     if stats is not None:
         stats["truncated"] = truncated
         stats["vendored_skipped"] = vendored_skipped

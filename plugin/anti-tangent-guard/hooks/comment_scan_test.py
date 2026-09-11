@@ -815,5 +815,84 @@ class TemplateInterpolationStaysCode(unittest.TestCase):
         self.assertEqual(violations("x.ts", [" * added in v1.2.3"], ctx), [])
 
 
+class ContextsAreHandedBack(unittest.TestCase):
+    def test_the_walk_reports_the_text_it_compared(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, _ = _repo(tmp, tracked=("f.go", "package x\n"),
+                        worktree="package x\nfunc F() {}\n")
+        path = os.path.join(repo, "f.go")
+        contexts = {}
+        out = g.final_files_added_lines({"final_files": [{"path": path}]},
+                                        contexts=contexts)
+        self.assertEqual(out.get(path), ["func F() {}"])
+        self.assertEqual(contexts.get(path), "package x\nfunc F() {}\n",
+                         "the scan needs the whole file, not just the added lines")
+
+
+class EditReconstruction(unittest.TestCase):
+    # Neither new_string nor the file on disk is the post-edit text: one is
+    # unbalanced when the edit lands inside a literal that already exists, the
+    # other does not contain the added line.
+    def _run(self, payload, disk):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "x.go")
+        with open(path, "w") as fh:
+            fh.write(disk)
+        payload = dict(payload)
+        payload["file_path"] = path
+        data = {"tool_name": "Edit", "tool_input": payload}
+        r = subprocess.run(
+            [sys.executable, "-I", os.path.join(HOOKS, "check_comment_write.py")],
+            input=json.dumps(data), capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, ATG_ROOT=os.path.dirname(HOOKS)))
+        return r.returncode
+
+    def test_a_starred_line_added_inside_an_existing_raw_string_is_allowed(self):
+        disk = 'package x\n\nconst help = `\nusage\n`\n'
+        rc = self._run({"old_string": "usage",
+                        "new_string": "usage\n * added in v1.2.3 the flag"}, disk)
+        self.assertEqual(rc, 0, "string content is not a comment")
+
+    def test_a_starred_line_added_inside_a_real_block_is_refused(self):
+        disk = 'package x\n\n/**\n * docs\n */\nfunc F() {}\n'
+        rc = self._run({"old_string": " * docs",
+                        "new_string": " * docs\n * fixes #1"}, disk)
+        self.assertEqual(rc, 2, "a real block continuation must still block")
+
+    def test_replace_all_reconstructs_every_site(self):
+        # Two raw strings; replace_all edits both. Reconstructing with a count
+        # of 1 would leave the second literal unbalanced in the context text.
+        disk = 'package x\n\nconst a = `\nusage\n`\nconst b = `\nusage\n`\n'
+        rc = self._run({"old_string": "usage",
+                        "new_string": "usage\n * added in v1.2.3 the flag",
+                        "replace_all": True}, disk)
+        self.assertEqual(rc, 0, "string content is not a comment at either site")
+
+    def test_an_unreadable_target_still_scans_by_line(self):
+        # context is None here, so the starred branch keeps its old behaviour
+        # rather than the scan being dropped: an ordinary // tell must block.
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "x.go")
+        os.symlink(os.path.join(tmp, "nowhere"), path)
+        data = {"tool_name": "Edit",
+                "tool_input": {"file_path": path, "old_string": "a",
+                               "new_string": "a\n// fixes #1"}}
+        r = subprocess.run(
+            [sys.executable, "-I", os.path.join(HOOKS, "check_comment_write.py")],
+            input=json.dumps(data), capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, ATG_ROOT=os.path.dirname(HOOKS)))
+        self.assertEqual(r.returncode, 2,
+                         "an unreadable target must not suppress line-based scanning")
+
+    def test_an_empty_old_string_passes_no_context(self):
+        # str.replace("", x) inserts between every character. Reconstructing
+        # from it would hand the scanner a file that never existed.
+        disk = 'package x\n'
+        rc = self._run({"old_string": "", "new_string": "// fixes #1"}, disk)
+        self.assertEqual(rc, 2, "the line-based scan must still see the tell")
+
+
 if __name__ == "__main__":
     unittest.main()

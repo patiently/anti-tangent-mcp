@@ -29,7 +29,21 @@ if (data.get("tool_name") or "") not in ("Edit", "Write") or not scannable(path)
     sys.exit(0)
 
 if data["tool_name"] == "Edit":
-    lines = added(inp.get("old_string") or "", inp.get("new_string") or "")
+    old_string = inp.get("old_string") or ""
+    new_string = inp.get("new_string") or ""
+    lines = added(old_string, new_string)
+    # The post-edit text, which is neither operand on its own: new_string is
+    # unbalanced when the edit lands inside a literal that already exists on
+    # disk, and the disk text does not contain the added line. An empty
+    # old_string is refused because str.replace("") inserts between every
+    # character and would hand the scanner a file that never existed.
+    existing = read_text_capped(path)
+    if old_string and isinstance(existing, str) and old_string in existing:
+        context = (existing.replace(old_string, new_string)
+                   if inp.get("replace_all")
+                   else existing.replace(old_string, new_string, 1))
+    else:
+        context = None
 else:
     content = inp.get("content") or ""
     existing = read_text_capped(path)
@@ -45,8 +59,9 @@ else:
         sys.exit(3)
     else:
         lines = added(existing, content)
+    context = content
 
-bad = violations(path, lines)
+bad = violations(path, lines, context)
 if not bad:
     sys.exit(0)
 
