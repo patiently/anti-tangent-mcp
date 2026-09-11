@@ -67,7 +67,12 @@ before being accepted here; three of them invalidated claims the draft made.
    span that ran to end of file and suppressed every genuine block comment after it. Today's
    per-line `_quotes_balanced` confines that damage to one line. Fixed by an end-of-line resync
    rule and by running the walk lazily (§2b).
-5. **`git diff HEAD` does not fail on a staged-new file.** The draft's state matrix and its
+5. **A non-UTF-8 `HEAD` blob is already skipped today**, not partially answered. The draft said
+   the new code would be "less informative than the old" here. It is the reverse: the decode
+   failure that skips it today happens on the diff output too, and reading bytes makes the file
+   scannable for the first time. Caught by the plan-handoff gate, after the review. (§1e,
+   Compatibility)
+6. **`git diff HEAD` does not fail on a staged-new file.** The draft's state matrix and its
    compatibility note both said it did. It returns rc 0 and the whole file. Reproduced. So the
    three-way split still has to exist, but it *preserves* current behaviour rather than widening
    it, and the draft's one "widens" claim was false (§1d, Compatibility).
@@ -237,11 +242,22 @@ whose committed second line is `// café fixes #1 pre-existing`:
 ```
 text=True  ->  RAISED UnicodeDecodeError  =>  _git() returns (127, '')
 bytes      ->  rc=0  b'package x\n// caf\xe9 fixes #1 pre-existing\n'
-today      ->  +func F() {}          (one line, correct)
 ```
 
-The draft would have reported thirteen lines including that pre-existing tell, and blocked the
-close.
+Two consequences, and the first draft of this section got the baseline wrong on both.
+
+**Today the path is silently skipped, not partially answered.** The same decode failure already
+happens on `git diff` output, which carries the offending byte as context; `_git` returns
+`(127, "")`, `rc_diff != 0`, and the path is dropped. Measured: today's
+`final_files_added_lines` returns `{}` for that file. So a file with one Latin-1 byte anywhere in
+it is currently unscannable, and nothing says so.
+
+**Reading bytes fixes that.** Both sides decode with `errors="replace"`, so the same byte becomes
+the same replacement character on both, `added()` sees no difference there, and the genuinely
+added line is reported. This case gets *better*, not worse.
+
+What the draft would have done is still the bug: mapping `(127, "")` onto "the whole file is new"
+would have reported thirteen lines including the pre-existing tell and blocked the close.
 
 So the blob is read through a bytes-mode sibling of `_git` and decoded with `errors="replace"`,
 which is exactly what `read_text_capped` already does for the worktree side. Both sides then
@@ -473,6 +489,12 @@ with.
 The KDoc case that motivated the v0.20.0 work — ` * ABC-1234: …` inside `/** … */` — is inside an
 open block and keeps firing; it is an explicit test. So do the four review fixtures from §2b.
 
+One trap in writing that test: a bare tracker key matches nothing on its own. `_ticket_tell()`
+returns `None` unless `ANTI_TANGENT_TICKET_PATTERN` is configured, and an unconfigured project
+therefore has no tracker tell at all — measured, ` * ABC-1234: widen the parser` yields `[]`
+while ` * fixes #1` yields a hit. The preservation test must use a built-in tell, or configure a
+pattern before importing the module.
+
 The fail-open rule is unchanged: any exception, or the scan deadline, yields no violations.
 
 ## Part 3 — F3: the false-positive gate cannot measure a configured pattern
@@ -547,18 +569,21 @@ format is untouched. `violations()` gains an optional third parameter and
 `final_files_added_lines()` an optional `contexts` dict; both stay call-compatible, and
 `final_files_added_lines()`'s return shape is unchanged.
 
-Behaviour changes visible to a user. The draft listed a widening that does not exist — `git diff`
-already reports a staged-new file in full — so every item here narrows what blocks a close:
+Behaviour changes visible to a user. The draft claimed a widening that does not exist (`git diff`
+already reports a staged-new file in full) and a narrowing that does not either (a non-UTF-8 blob
+is already skipped today, not partially answered):
 
-1. A file whose `HEAD` blob cannot be read or decoded is skipped, where today it yields a correct
-   partial answer (§1d, §1e). This is the one case where the new code is *less* informative than
-   the old; it is the price of refusing to guess, and it is reported through `stats`.
+1. **Widens.** A file containing a byte that is not UTF-8 is scanned correctly, where today the
+   decode failure silently skips it (§1e).
 2. A file carrying a `filter` attribute — git-lfs, git-crypt — is skipped (§1f). A
    `working-tree-encoding` file is **not**: it keeps working, via the declared codec. Only an
    encoding name Python cannot resolve falls through to a skip.
 3. A moved line is no longer reported as added (§1h).
 4. A ` * text` line outside any block comment no longer fires (§2d).
 5. A staged-new path under a vendored directory is now skipped (§1d) — it is scanned today.
+6. A path whose `HEAD` blob is genuinely unreadable — an unfetchable promisor object, a
+   `cat-file` that fails for any other reason — is skipped rather than guessed at (§1c). Today
+   the same path is also skipped, by a different route, so this is not a change in outcome.
 
 ## Release
 

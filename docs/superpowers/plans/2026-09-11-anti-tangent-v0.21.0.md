@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stop `anti-tangent-guard`'s close-time hook from executing commands that a repository's own `.git/config` names, and fix two smaller scanner defects found in the same audit.
+**Goal:** Stop `anti-tangent-guard`'s close-time hook from executing commands that a repository's own `.git/config` names, fix a scanner defect found in the same audit, and give the false-positive gate a mode that measures a candidate ticket pattern — the third item is a small operator feature rather than a defect fix, and is in scope because the audit showed the gate cannot currently measure the pattern v0.20.0 asks operators to set.
 
 **Architecture:** The hook derives "which lines are new" for a `final_files` completion by diffing the worktree against `HEAD`. `git diff` must convert the worktree side, and that conversion runs repository-defined content filters. The fix removes the conversion entirely: the `HEAD` side comes from `git cat-file blob` (raw object), the worktree side from an ordinary capped file read, and the comparison happens in Python via `added()` — the function the write-time hook already uses. Two config pins close a second, unrelated exec path through partial-clone lazy fetch. Separately, the `*`-continuation comment heuristic gains file context so it stops firing inside raw string literals.
 
@@ -22,7 +22,8 @@
 
 **User decisions (already made):**
 - All three findings ship in v0.21.0 together (one branch, one CHANGELOG block, one PR).
-- The coverage narrowing is accepted: undecodable-`HEAD`-blob files and `filter`-attributed (git-lfs / git-crypt) files are skipped, and moved lines are no longer reported as added.
+- The coverage narrowing is accepted: `filter`-attributed (git-lfs / git-crypt) files are skipped, and moved lines are no longer reported as added.
+- **Invalid UTF-8 is decoded, not skipped.** A blob carrying bytes that are not valid UTF-8 is decoded with `errors="replace"` on both sides and scanned — today such a file is silently skipped, so this WIDENS coverage. Skipping is reserved for a blob that cannot be retrieved at all, exceeds the cap, or declares a codec Python cannot resolve. These are different conditions and the plan must not conflate them.
 - `working-tree-encoding` files are **not** skipped — the detection is recovered by decoding with the declared codec.
 
 ---
@@ -220,9 +221,9 @@ git commit -m "fix(guard): pin git against lazy-fetch exec and add a bytes-mode 
 - [ ] No `git diff` call remains anywhere in `git_added_lines.py`
 - [ ] `rel` comes from `ls-files -z --full-name --error-unmatch`, never from `os.path.relpath`
 - [ ] Absence from `HEAD` is established by `rev-parse --verify --quiet HEAD:<rel>` returning rc 1 — not by `cat-file` failing
-- [ ] `HEAD` existence is verified once per repository root and cached; a repository with no commits skips the path
+- [ ] `HEAD` existence is cached on the worktree ROOT (not the submitted path's directory), so one repository reached through several subdirectories is probed once; a repository with no commits skips the path
 - [ ] The blob is read via `_git_bytes`, capped at `READ_CAP_BYTES`, decoded with `errors="replace"`
-- [ ] A `HEAD` blob containing a non-UTF-8 byte yields only the genuinely added line, not the whole file
+- [ ] A `HEAD` blob containing a non-UTF-8 byte yields only the genuinely added line — today that path returns `{}`, so this widens coverage
 - [ ] A tracked file with `filter.x.process` set produces correct added lines and no sentinel; same for `filter.x.clean`, as a separate fixture
 - [ ] A staged-new file yields its whole content; the same path under `vendor/` is skipped and counted in `vendored_skipped`
 - [ ] A worktree root reached through a symlink still resolves and scans
@@ -301,9 +302,13 @@ class ContentFiltersAreNeverRun(unittest.TestCase):
 
 
 class UndecodableHeadBlob(unittest.TestCase):
-    # One byte that is not UTF-8, on a line the task never touched, used to
-    # make subprocess raise inside _git. Read as "not in HEAD" that becomes a
-    # whole-file scan which blocks the close on a pre-existing comment.
+    # One byte that is not UTF-8, anywhere in the file, makes subprocess's
+    # text mode raise inside _git, which reports it as (127, "") -- the same
+    # shape as git refusing the command. The diff is then unanswerable and the
+    # path is dropped, so a file like this is currently unscannable and
+    # nothing says so. Reading the blob as bytes and decoding both sides with
+    # errors="replace" makes it comparable without widening what counts as
+    # added.
     def test_a_latin1_byte_does_not_widen_the_scan(self):
         sys.path.insert(0, HOOKS)
         import git_added_lines as g
@@ -390,7 +395,9 @@ class SymlinkedWorktreeRoot(unittest.TestCase):
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py ContentFiltersAreNeverRun UndecodableHeadBlob -v`
-Expected: FAIL — the filter sentinel exists, and the Latin-1 case reports the whole file.
+Expected: FAIL — the filter sentinel exists, and the Latin-1 case returns `{}` rather than the added line.
+
+Note the Latin-1 case fails by returning NOTHING, not by returning too much. Today the diff output carries the offending byte, `_git`'s `text=True` raises on it, `_git` converts that to `(127, "")`, and `rc_diff != 0` drops the path. Measured: today's `final_files_added_lines` returns `{}` for that file. Reading the blob as bytes is what makes it scannable at all.
 
 - [ ] **Step 3: Rewrite the tracked branch**
 
@@ -409,17 +416,23 @@ from comment_scan import READ_CAP_BYTES, added, read_text_capped
 Then add these two helpers immediately above `final_files_added_lines`:
 
 ```python
-def _head_exists(cwd, cache):
+def _head_exists(cwd, root, cache):
     """True when this worktree has a HEAD commit at all.
 
-    Asked once per directory and cached. Without it, `HEAD:<rel>` answering
-    "absent" in a repository that has no commits would be read as a new file
-    and scan every line of it.
+    Keyed on the worktree ROOT, not on the directory the question was asked
+    from: one repository reached through several of its subdirectories is one
+    answer, and keying on the directory would re-probe for each of them. A
+    root that could not be named falls back to the directory, which is a
+    cache miss every time rather than a wrong answer.
+
+    Without this check, `HEAD:<rel>` answering "absent" in a repository that
+    has no commits would be read as a new file and scan every line of it.
     """
-    if cwd not in cache:
+    key = root or cwd
+    if key not in cache:
         rc, _ = _git(cwd, "rev-parse", "--verify", "--quiet", "HEAD")
-        cache[cwd] = rc == 0
-    return cache[cwd]
+        cache[key] = rc == 0
+    return cache[key]
 
 
 def _tracked_added_lines(parent, rel, new_text):
@@ -470,13 +483,14 @@ Replace it with:
             new_text = read_text_capped(path)
             if not isinstance(new_text, str):
                 continue
-            if not _head_exists(parent, heads):
+            root = _repo_root(parent, roots)
+            if not _head_exists(parent, root, heads):
                 continue
             result = _tracked_added_lines(parent, rel, new_text)
             if result is None:
                 continue
             lines, whole_file = result
-            if whole_file and _is_vendored(path, _repo_root(parent, roots)):
+            if whole_file and _is_vendored(path, root):
                 vendored_skipped += 1
                 continue
             if lines:
@@ -528,6 +542,8 @@ git commit -m "fix(guard): derive added lines from the raw HEAD blob, never a wo
 - [ ] A path with `working-tree-encoding=UTF-16` still yields its genuine `// fixes #1`
 - [ ] A `check-attr` that fails to answer skips the path
 - [ ] No call added here runs a filter
+- [ ] `ContentFiltersAreNeverRun` from Task 2 is UPDATED here, not left to fail: those fixtures route `*.go` to `filter=x`, which is exactly the skip condition this task introduces
+- [ ] A new test pins the blob read's own no-conversion property with the attribute probe bypassed, since the skip now shadows it
 
 **Verify:** `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v` → OK
 
@@ -614,7 +630,60 @@ class ReadTextCappedEncoding(unittest.TestCase):
 Run: `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py ConvertedContent ReadTextCappedEncoding -v`
 Expected: FAIL — `read_text_capped()` takes 1 positional argument, and the filtered path is scanned whole.
 
-- [ ] **Step 3: Give `read_text_capped` an encoding**
+- [ ] **Step 3: Update the Task 2 filter tests this task invalidates**
+
+Task 2's `ContentFiltersAreNeverRun` asserts `out.get(path) == ["func F() {}"]` for a fixture whose `.gitattributes` routes `*.go` to `filter=x`. That attribute is precisely what `_converted` now skips on, so the expectation must move — the sentinel assertion, which is the part that matters, stays exactly as it is.
+
+Replace the body of `ContentFiltersAreNeverRun._case` with:
+
+```python
+    def _case(self, key):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, sentinel = _repo(
+            tmp, attrs="*.go filter=x\n", configs=(key,),
+            tracked=("f.go", "package x\n"),
+            worktree="package x\nfunc F() {}\n")
+        path = os.path.join(repo, "f.go")
+        out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        # The attribute probe skips this path before any comparison, because a
+        # filtered HEAD blob is a pointer or ciphertext and is not comparable
+        # to worktree content without running the filter.
+        self.assertEqual(out, {}, "a filter-attributed path must be skipped")
+        self.assertFalse(os.path.exists(sentinel),
+                         "%s must never be executed from inside this hook" % key)
+```
+
+The skip now shadows the blob comparison for every filter-attributed path, so the no-conversion property of `cat-file` itself needs a test that does not go through the probe. Add:
+
+```python
+class BlobReadConvertsNothingWithoutTheSkip(unittest.TestCase):
+    # The attribute probe skips filter-attributed paths before the comparison
+    # runs, so no fixture can reach the blob read by the ordinary route. This
+    # pins the underlying property directly: with the probe forced open, the
+    # raw blob read still executes nothing.
+    def test_cat_file_runs_no_filter_even_when_the_probe_is_bypassed(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        tmp = tempfile.mkdtemp()
+        repo, sentinel = _repo(
+            tmp, attrs="*.go filter=x\n", configs=("filter.x.clean",),
+            tracked=("f.go", "package x\n"),
+            worktree="package x\nfunc F() {}\n")
+        path = os.path.join(repo, "f.go")
+        real = g._converted
+        g._converted = lambda parent, rel: (False, None)
+        try:
+            out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        finally:
+            g._converted = real
+        self.assertEqual(out.get(path), ["func F() {}"])
+        self.assertFalse(os.path.exists(sentinel),
+                         "the raw blob read must convert nothing on its own")
+```
+
+- [ ] **Step 4: Give `read_text_capped` an encoding**
 
 In `comment_scan.py`, change the signature and the decode line:
 
@@ -638,7 +707,7 @@ Add this paragraph to its docstring, after the `errors="replace"` paragraph:
     every other unreadable path.
 ```
 
-- [ ] **Step 4: Add the attribute probe to `git_added_lines.py`**
+- [ ] **Step 5: Add the attribute probe to `git_added_lines.py`**
 
 Add `import codecs` to the imports at the top, then add above `_head_exists`:
 
@@ -682,7 +751,7 @@ def _converted(parent, rel):
     return False, enc
 ```
 
-- [ ] **Step 5: Call it from the tracked branch**
+- [ ] **Step 6: Call it from the tracked branch**
 
 In `final_files_added_lines`, the tracked branch from Task 2 currently reads the worktree immediately after resolving `rel`. Insert the probe between them:
 
@@ -698,12 +767,43 @@ In `final_files_added_lines`, the tracked branch from Task 2 currently reads the
                 continue
 ```
 
-- [ ] **Step 6: Run to verify passing**
+- [ ] **Step 7: Add the unanswerable-`check-attr` test**
+
+```python
+class UnanswerableCheckAttr(unittest.TestCase):
+    def test_a_check_attr_that_cannot_answer_skips_the_path(self):
+        sys.path.insert(0, HOOKS)
+        import git_added_lines as g
+        calls = []
+        real = g._git
+
+        def fake_git(cwd, *args):
+            calls.append(args[0])
+            if args[0] == "ls-files":
+                return 0, "f.go\0"
+            if args[0] == "check-attr":
+                return 128, ""
+            raise AssertionError("nothing may follow an unanswerable check-attr: %r" % (args,))
+
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "f.go")
+        with open(path, "w") as fh:
+            fh.write("// fixes #1\n")
+        g._git = fake_git
+        try:
+            out = g.final_files_added_lines({"final_files": [{"path": path}]})
+        finally:
+            g._git = real
+        self.assertEqual(out, {})
+        self.assertEqual(calls, ["ls-files", "check-attr"])
+```
+
+- [ ] **Step 8: Run to verify passing**
 
 Run: `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v`
-Expected: OK
+Expected: OK — including the rewritten `ContentFiltersAreNeverRun`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add plugin/anti-tangent-guard/hooks/comment_scan.py \
@@ -718,6 +818,8 @@ git commit -m "fix(guard): skip filtered paths and decode working-tree-encoding 
 
 **Goal:** A `*`-led line inside a raw string literal stops being scanned as a block-comment continuation, without losing any detection that works today.
 
+**Scope limit, stated up front:** matching is by line TEXT, not by line position, because the close-time caller derives its lines from a multiset difference and has no indices to offer. So a line whose exact text appears BOTH inside a real block comment and inside a raw string in the same file still fires. That is the conservative direction — it is the answer today's shape-only heuristic already gives — and it is not a regression. Do not try to fix it by matching on position; that would require changing what every caller passes.
+
 **Files:**
 - Modify: `plugin/anti-tangent-guard/hooks/comment_scan.py:157-190` (`comment_spans`) and `:370-391` (`violations`)
 - Modify: `plugin/anti-tangent-guard/hooks/comment_scan_test.py` (append test class)
@@ -730,7 +832,7 @@ git commit -m "fix(guard): skip filtered paths and decode working-tree-encoding 
 - [ ] `violations(path, added_lines, context=None)` computes the walk lazily — only when a starred candidate appears — and caches it per call
 - [ ] A walk that raises falls back to today's behaviour rather than dropping the scan
 - [ ] `context=None` behaves exactly as before
-- [ ] Go raw string and Kotlin triple-quoted fixtures yield `[]`; a KDoc `/** * ABC-1234 */` still yields a violation
+- [ ] Go raw string and Kotlin triple-quoted fixtures yield `[]`; a KDoc `/** * fixes #1 */` still yields a violation (a bare tracker key is NOT usable here — there is no default tracker tell)
 - [ ] A Rust lifetime, a JSX apostrophe, a C `#error` apostrophe and a JS regex literal each followed by a genuine `/** * fixes #1 */` all still fire
 
 **Verify:** `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v` → OK
@@ -744,7 +846,11 @@ Append to `comment_scan_test.py`:
 ```python
 GO_RAW = 'package x\n\nconst help = `\n * added in v1.2.3 the --foo flag\n`\n'
 KT_RAW = 'val doc = """\n * fixes #4321 in the parser\n"""\n'
-KDOC = '/**\n * ABC-1234: widen the parser\n */\nfun f() {}\n'
+# A bare tracker key matches NOTHING by default: _ticket_tell() returns None
+# unless ANTI_TANGENT_TICKET_PATTERN is set, so an unconfigured project has no
+# tracker tell at all. Measured: ' * ABC-1234: widen the parser' -> []. The
+# preservation test therefore uses a built-in tell.
+KDOC = '/**\n * fixes #1 in the parser\n */\nfun f() {}\n'
 
 
 class StarredLineNeedsAnOpenBlock(unittest.TestCase):
@@ -766,7 +872,7 @@ class StarredLineNeedsAnOpenBlock(unittest.TestCase):
         sys.path.insert(0, HOOKS)
         from comment_scan import violations
         self.assertNotEqual(
-            violations("x.kt", [" * ABC-1234: widen the parser"], KDOC), [],
+            violations("x.kt", [" * fixes #1 in the parser"], KDOC), [],
             "a real block continuation must still be caught")
 
 
@@ -1061,6 +1167,38 @@ class EditReconstruction(unittest.TestCase):
         rc = self._run({"old_string": " * docs",
                         "new_string": " * docs\n * fixes #1"}, disk)
         self.assertEqual(rc, 2, "a real block continuation must still block")
+
+    def test_replace_all_reconstructs_every_site(self):
+        # Two raw strings; replace_all edits both. Reconstructing with a count
+        # of 1 would leave the second literal unbalanced in the context text.
+        disk = 'package x\n\nconst a = `\nusage\n`\nconst b = `\nusage\n`\n'
+        rc = self._run({"old_string": "usage",
+                        "new_string": "usage\n * added in v1.2.3 the flag",
+                        "replace_all": True}, disk)
+        self.assertEqual(rc, 0, "string content is not a comment at either site")
+
+    def test_an_unreadable_target_still_scans_by_line(self):
+        # context is None here, so the starred branch keeps its old behaviour
+        # rather than the scan being dropped: an ordinary // tell must block.
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "x.go")
+        os.symlink(os.path.join(tmp, "nowhere"), path)
+        data = {"tool_name": "Edit",
+                "tool_input": {"file_path": path, "old_string": "a",
+                               "new_string": "a\n// fixes #1"}}
+        r = subprocess.run(
+            [sys.executable, "-I", os.path.join(HOOKS, "check_comment_write.py")],
+            input=json.dumps(data), capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, ATG_ROOT=os.path.dirname(HOOKS)))
+        self.assertEqual(r.returncode, 2,
+                         "an unreadable target must not suppress line-based scanning")
+
+    def test_an_empty_old_string_passes_no_context(self):
+        # str.replace("", x) inserts between every character. Reconstructing
+        # from it would hand the scanner a file that never existed.
+        disk = 'package x\n'
+        rc = self._run({"old_string": "", "new_string": "// fixes #1"}, disk)
+        self.assertEqual(rc, 2, "the line-based scan must still see the tell")
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1195,18 +1333,25 @@ git commit -m "feat(guard): hand the scanner the file text both hooks already ho
 - Modify: `plugin/anti-tangent-guard/evals/fp-scan.py:36-46` and `:83-93`
 
 **Acceptance Criteria:**
-- [ ] With no flag, the env var is popped exactly as today and output is byte-identical
+- [ ] With no flag, the env var is popped exactly as today, and stdout AND stderr are proven byte-identical to the pre-change version with `cmp` (not merely rc 0)
 - [ ] `--ticket-pattern <regex>` sets the variable instead, before `comment_scan` is imported
 - [ ] A pattern that `_ticket_tell()` would silently drop (bad regex, over the length cap) exits non-zero with a message, rather than reporting a clean run
-- [ ] The stderr summary reports total hits and how many carry the ticket tell
+- [ ] In `--ticket-pattern` mode the stderr summary reports total hits AND how many carry the ticket tell; in default mode the existing one-number summary is preserved byte-for-byte (the `cmp` above is what proves it)
 - [ ] A missing argument to the flag exits non-zero
 
-**Verify:**
+**Verify:** "byte-identical" has to be *compared*, not asserted — capture the pre-change output from the committed version and diff against it, keeping stdout and stderr separate (the TSV is the artefact `fp-report.sh` joins on):
 ```bash
-python3 plugin/anti-tangent-guard/evals/fp-scan.py > /tmp/a.tsv 2>/tmp/a.err; echo "rc=$?"
-python3 plugin/anti-tangent-guard/evals/fp-scan.py --ticket-pattern '[A-Z]{2,}-[0-9]+' 2>&1 >/dev/null | tail -1
-python3 plugin/anti-tangent-guard/evals/fp-scan.py --ticket-pattern '(' ; echo "rc=$? (must be non-zero)"
+git stash push -- plugin/anti-tangent-guard/evals/fp-scan.py
+python3 plugin/anti-tangent-guard/evals/fp-scan.py >/tmp/fp-base.tsv 2>/tmp/fp-base.err
+git stash pop
+python3 plugin/anti-tangent-guard/evals/fp-scan.py >/tmp/fp-new.tsv 2>/tmp/fp-new.err; echo "default rc=$?"
+cmp /tmp/fp-base.tsv /tmp/fp-new.tsv && echo "stdout byte-identical"
+cmp /tmp/fp-base.err /tmp/fp-new.err && echo "stderr byte-identical"
+python3 plugin/anti-tangent-guard/evals/fp-scan.py --ticket-pattern '[A-Z]{2,}-[0-9]+' >/dev/null 2>&1; echo "flag rc=$?"
+python3 plugin/anti-tangent-guard/evals/fp-scan.py --ticket-pattern '(' >/dev/null 2>&1; echo "bad-regex rc=$? (want 2)"
+python3 plugin/anti-tangent-guard/evals/fp-scan.py --ticket-pattern >/dev/null 2>&1; echo "missing-arg rc=$? (want 2)"
 ```
+Expected: both `cmp`s silent; default rc 0; flag rc 0; bad-regex rc 2; missing-arg rc 2.
 
 **Steps:**
 
@@ -1361,6 +1506,7 @@ A green suite alone does not close this task. An eval that passes whether or not
 - [ ] Ids continue from the current maximum
 - [ ] Captured output shows the suite GREEN with protections in place
 - [ ] Captured output shows each case RED when its protection is removed, then restored
+- [ ] The filter mutation disables BOTH `_converted`'s skip and the blob comparison — the skip fires first, so mutating only the comparison leaves the case green and proves nothing
 
 **Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all cases pass
 
@@ -1458,19 +1604,36 @@ Expected: every case passes, including the three new ones.
 
 - [ ] **Step 4: Prove the new cases can actually fail**
 
-A case that passes under the bug is not a test. Break each protection in turn and confirm the matching case goes red, then restore:
+A case that passes under the bug is not a test. The mutation must remove EVERY protection standing in front of the path, not only the last one — otherwise the case stays green and the mutation proves the opposite of what it appears to.
+
+**Filter cases — two layers, both must go.** After Task 3 a filter-attributed path is skipped by `_converted` *before* the comparison runs, and the comparison itself converts nothing. Restoring the old `git diff` alone leaves the case green, because the skip fires first and the diff is never reached. Disable both:
 
 ```bash
-# 1. the filter cases: put the worktree diff back
-#    (temporarily swap _tracked_added_lines' body for the old
-#     `_git(parent, "diff", "--no-color", "HEAD", "--", path)` call)
-# 2. the lazy-fetch case: drop `-c protocol.allow=never` from _git_call's pins
-#    AND remove GIT_NO_LAZY_FETCH from its env — either alone is enough to stop it
-bash plugin/anti-tangent-guard/evals/run.sh 2>&1 | grep -E 'FAIL|filter|lazy'
+# layer 1: make the attribute probe stop skipping
+#   in git_added_lines.py, temporarily make _converted's body `return False, None`
+# layer 2: put the converting call back.
+#   _tracked_added_lines(parent, rel, new_text) has NO `path` in scope, and a
+#   bare `rel` pathspec silently matches nothing when parent is a subdirectory
+#   -- rc 0, no output, no filter, so the mutation would look like proof and
+#   be the opposite. Use the :(top) magic pathspec, which is repo-root
+#   relative. Verified to fire the filter from a subdirectory.
+#   rc, d = _git(parent, "diff", "--no-color", "HEAD", "--", ":(top)" + rel)
+#   return [ln[1:] for ln in d.splitlines()
+#           if ln.startswith("+") and not ln.startswith("+++")], False
+bash plugin/anti-tangent-guard/evals/run.sh 2>&1 | grep -E 'FAIL|filter'
 git checkout plugin/anti-tangent-guard/hooks/git_added_lines.py
 ```
 
-Expected: with the protection removed the corresponding case reports `file must not exist: .../SENTINEL`. Restore before committing.
+**Lazy-fetch case — two independent pins, both must go.** Either one alone still blocks the fetch:
+
+```bash
+# drop BOTH `-c protocol.allow=never` from _git_call's pins
+# and GIT_NO_LAZY_FETCH from its env
+bash plugin/anti-tangent-guard/evals/run.sh 2>&1 | grep -E 'FAIL|lazy'
+git checkout plugin/anti-tangent-guard/hooks/git_added_lines.py
+```
+
+Expected in each case: the failure must be specifically `file must not exist: .../SENTINEL` for the matching eval. Any other RED — an exception, a changed exit code — means the mutation did not reach the filter and proves nothing; fix the mutation and re-run. Restore, re-run the full suite green, and only then commit. Capture both the GREEN and the RED output — this task's gate metadata requires evidence from both sides.
 
 - [ ] **Step 5: Commit**
 
@@ -1528,8 +1691,11 @@ Insert directly above the `## [0.20.1] - 2026-09-11` heading in `CHANGELOG.md`:
 - A path carrying a `filter` attribute (git-lfs, git-crypt) is skipped rather than
   reported as wholly new, and a `working-tree-encoding` path is decoded with its
   declared codec instead of being misread as UTF-8.
-- An unreadable or undecodable `HEAD` blob now skips the path instead of being treated
-  as a new file, which could block a close on pre-existing comments.
+- A `HEAD` blob carrying bytes that are not valid UTF-8 is now decoded with replacement and
+  scanned. Previously the decode failure made the whole comparison unanswerable and the file was
+  silently skipped, so a file with one stray byte was never checked. A blob that cannot be
+  retrieved, exceeds the read cap, or declares a codec Python cannot resolve is still skipped —
+  deliberately, rather than guessed at.
 
 ### Added
 
