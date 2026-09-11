@@ -258,6 +258,17 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # touched. Widening the header-pair tell fails there loudly rather than
 # costing closes quietly.
 #
+# Three final cases pin the two exec paths inside final_files_added_lines
+# that a repository's own config can point at an arbitrary command, end to
+# end through check-task-complete rather than at the function level: a
+# tracked path governed by a gitattributes filter, in both its clean and
+# process forms, must be compared without ever running the configured
+# filter command; and a blob missing from a partial clone must not send git
+# down a lazy fetch that execs the configured transport. Each arms the
+# command to write a sentinel file and asserts the sentinel's continued
+# absence, since an exit code alone cannot tell a skipped exec from one that
+# ran and still let the close through.
+#
 # The per-group counts above PARTITION this table: every case belongs to
 # exactly one group, and they sum to EXPECTED_CASE_COUNT. Adding a case means
 # growing the group that describes it, or writing a new group; a breakdown
@@ -267,7 +278,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=142
+EXPECTED_CASE_COUNT=145
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
