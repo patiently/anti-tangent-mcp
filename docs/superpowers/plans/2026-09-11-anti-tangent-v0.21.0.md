@@ -673,6 +673,43 @@ class ReadTextCappedEncoding(unittest.TestCase):
                           "an unusable codec must fail open, not raise")
 ```
 
+Add the class that pins the `${…}` behaviour — the AC requires it and nothing else in the suite covers it:
+
+```python
+class TemplateInterpolationStaysCode(unittest.TestCase):
+    # A ${...} hole inside a backtick span returns to CODE, so a block
+    # comment written inside one is a real comment. Only the second test
+    # below discriminates: the other three agree with a walk that jumps
+    # straight to the closing backtick, because their comment sits outside
+    # the literal. Keep all four -- they document the boundary -- but the
+    # interpolated-block-comment case is the one holding the rule down.
+    def test_a_block_comment_after_a_template_literal_fires(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = 'const t = `\n  ${ compute() }\n`;\n/**\n * fixes #1\n */\n'
+        self.assertNotEqual(violations("x.ts", [" * fixes #1"], ctx), [])
+
+    def test_a_starred_line_inside_an_interpolated_block_comment_fires(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = 'const t = `text ${ a /*\n * fixes #1\n */ b } more`;\n'
+        self.assertNotEqual(
+            violations("x.ts", [" * fixes #1"], ctx), [],
+            "a block comment opened inside ${} is a comment, not string content")
+
+    def test_nested_braces_do_not_end_the_hole_early(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = 'const t = `${ {a:1} }`;\n/**\n * fixes #1\n */\n'
+        self.assertNotEqual(violations("x.ts", [" * fixes #1"], ctx), [])
+
+    def test_a_starred_line_in_a_plain_template_literal_is_not_a_comment(self):
+        sys.path.insert(0, HOOKS)
+        from comment_scan import violations
+        ctx = 'const t = `\n * added in v1.2.3\n`;\n'
+        self.assertEqual(violations("x.ts", [" * added in v1.2.3"], ctx), [])
+```
+
 - [ ] **Step 2: Run to verify failure**
 
 Run: `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py ConvertedContent ReadTextCappedEncoding -v`
@@ -1011,7 +1048,10 @@ class StrayQuoteDoesNotBlindTheFile(unittest.TestCase):
     # comment after it. Ending those spans at end of line confines one stray
     # apostrophe to the line it is on.
     CASES = {
-        "x.rs": "fn f<'a>(s: &'a str) {}\n",
+        # ONE apostrophe, deliberately. `fn f<'a>(s: &'a str)` carries two,
+        # which pair on the line, so the end-of-line rule never engages and
+        # the case proves nothing about the rule it is named for.
+        "x.rs": "fn f<'a>() {}\n",
         "x.tsx": "const a = <p>don't</p>;\n",
         "x.c": "#error don't do that\n",
         "x.js": "const re = /it's/;\n",
@@ -1021,10 +1061,11 @@ class StrayQuoteDoesNotBlindTheFile(unittest.TestCase):
         sys.path.insert(0, HOOKS)
         from comment_scan import violations
         for path, prefix in self.CASES.items():
-            ctx = prefix + "/**\n * fixes #1\n */\n"
-            self.assertNotEqual(
-                violations(path, [" * fixes #1"], ctx), [],
-                "%s: a stray quote must not hide a real block comment" % path)
+            with self.subTest(path=path):
+                ctx = prefix + "/**\n * fixes #1\n */\n"
+                self.assertNotEqual(
+                    violations(path, [" * fixes #1"], ctx), [],
+                    "%s: a stray quote must not hide a real block comment" % path)
 
 
 class TokenizerFailureFallsBack(unittest.TestCase):
