@@ -155,8 +155,8 @@ The tracked-path branch of `final_files_added_lines()` currently runs one `git d
 ```python
 rc, rel  = _git(parent, "ls-files", "-z", "--full-name", "--error-unmatch", "--", path)
                                                # tracked? and the repo-relative name, in one call
-skip if check_attr(basename) sets filter or working-tree-encoding     # §1f
-new_text = read_text_capped(path, encoding)   # encoding comes from the probe just above
+skip, encoding = check_attr(basename)         # §1f: a filter skips; an encoding does not
+new_text = read_text_capped(path, encoding)   # decoded with the declared codec when there is one
 rc, rec  = _git(parent, "ls-tree", "-z", "HEAD", "--", ":(top)" + rel)       # §1c
 rc, blob = _git_bytes(parent, "cat-file", "blob", "HEAD:" + rel)             # §1e
 lines    = added(blob_text, new_text)
@@ -164,7 +164,9 @@ lines    = added(blob_text, new_text)
 
 The read cannot run first: its `encoding` argument is the attribute probe's output, so `ls-files`
 (which supplies `rel`) and `check_attr` (which supplies `encoding`) both have to run before
-`read_text_capped` can. `added()` lives in `comment_scan.py` and is already the write-time hook's
+`read_text_capped` can. Only a `filter` attribute ends the walk for that path; a
+`working-tree-encoding` names the codec the read then uses, which is the whole point of asking
+for both in one probe. `added()` lives in `comment_scan.py` and is already the write-time hook's
 definition of an added line. Both hooks converge on one definition, which they do not share today.
 
 ### 1b. Resolving `rel` without `os.path.relpath`
