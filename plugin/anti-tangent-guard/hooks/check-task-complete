@@ -530,12 +530,14 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
         # the result; the third changes nothing about it and only says the
         # developer index was refreshed after all.
         git_stats = {}
+        git_contexts = {}
         if ("final_diff" in last_completion or
                 "final_diff_path" in last_completion):
             added_by_path = diff_added_lines(last_completion)
         else:
             added_by_path = final_files_added_lines(last_completion,
-                                                    stats=git_stats)
+                                                    stats=git_stats,
+                                                    contexts=git_contexts)
         scan_source = ("final_diff" if ("final_diff" in last_completion or
                                         "final_diff_path" in last_completion)
                        else "final_files")
@@ -576,7 +578,8 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
             if time.monotonic() > scan_deadline_at:
                 scan_stats["truncated"] = True
                 break
-            for line, why in scan_violations(fpath, added):
+            for line, why in scan_violations(fpath, added,
+                                             git_contexts.get(fpath)):
                 comment_violations.append({"path": fpath, "line": line, "why": why})
 
 print(json.dumps({"error": False, "called": called,
