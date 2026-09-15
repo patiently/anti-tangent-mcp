@@ -346,7 +346,10 @@ The requirement is prompt-level: the pairing stays **advisory** on the anti-tang
 
 `validate_plan` accepts `plan_path`, and `validate_completion` accepts `final_diff_path` plus
 `final_files` entries with no `content`. The server reads those files itself, so a large plan or
-diff costs the calling agent no output tokens.
+diff costs the calling agent no output tokens. `validate_completion` also accepts `repo_root`: the
+server reads the post-change version of each file the diff names beneath it, within the
+`context_paths` byte caps, and sends the reviewer only the comment lines that still name a symbol
+the diff removes.
 
 This means the server reads files on your filesystem and sends their contents to the reviewer
 provider. It is stdio-only — the host spawns it as a child process, so it shares your container,

@@ -1024,7 +1024,8 @@ func validateCompletionTool() *mcp.Tool {
 			"The reviewer checks the full implementation against every acceptance criterion " +
 			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done. " +
 			"Omit a final_files entry's content to have the server read its absolute path, and pass final_diff_path instead of final_diff, to avoid emitting large evidence as output tokens. " +
-			"When ANTI_TANGENT_PLAN_ROOTS is set, both kinds of path must be under one of its roots, for example inside the repository; a per-session scratch directory under /tmp usually is not.",
+			"When ANTI_TANGENT_PLAN_ROOTS is set, both kinds of path must be under one of its roots, for example inside the repository; a per-session scratch directory under /tmp usually is not. " +
+			"Optionally pass repo_root, the checkout's absolute path, so the reviewer also sees comments outside the diff that still name a symbol the diff removes.",
 	}
 }
 
@@ -1034,6 +1035,7 @@ type ValidateCompletionArgs struct {
 	FinalFiles            []CompletionFileArg   `json:"final_files,omitempty" jsonschema:"Changed files, with full content or with content omitted so the server reads them. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; do not also send a file that final_diff already covers."`
 	FinalDiff             string                `json:"final_diff,omitempty" jsonschema:"A unified diff of the task's changes. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; when it is large, generate it with -U1 and leave out generated, lockfile and snapshot files."`
 	FinalDiffPath         string                `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, for example inside the repository; a per-session scratch directory under /tmp usually is not."`
+	RepoRoot              string                `json:"repo_root,omitempty" jsonschema:"Absolute path to the checkout the diff applies to. The server reads the post-change version of each file the diff names beneath it, within ANTI_TANGENT_PLAN_ROOTS and the context_paths byte caps, and shows the reviewer only the comment lines that still name a symbol the diff removes, so nothing it reads counts toward the payload cap. Without it those comments are looked for in the evidence alone; an unusable repo_root draws a minor finding."`
 	TestEvidence          string                `json:"test_evidence,omitempty" jsonschema:"The test run output that proves the change, verbatim. Output showing no test executed draws a finding."`
 	ExitContracts         []string              `json:"exit_contracts,omitempty" jsonschema:"Symbols or behavior later tasks rely on this task leaving in place, copied from validate_plan's exit_contracts for this task; a hard miss draws missing_acceptance_criterion. At most 50 entries of at most 500 characters each."`
 	ExitContractsInferred bool                  `json:"exit_contracts_inferred,omitempty" jsonschema:"validate_plan's exit_contracts_inferred for this task: true when the contracts were inferred from cross-task references rather than written in the plan, which caps a miss at minor."`
@@ -1551,6 +1553,9 @@ func hasNonEmptyEvidence(args *ValidateCompletionArgs, resolvedFiles []FileArg) 
 //     otherwise. On a session, buildCompletionReview matches this call's
 //     finding_responses to the stored prior findings and its
 //     controller_rulings to the IDs the session issued.
+//     8b. The stale-comment hint: the names the diff removes, found in comment
+//     lines of the post-change files, read under repo_root or taken from the
+//     evidence. See staleCommentHint.
 //
 // A call rejected at any of these steps writes nothing to the session and
 // carries no advisory about finding_responses or controller_rulings. Once the
@@ -1772,6 +1777,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		review = buildCompletionReview(state, state.PreFindings, knownSessionFindings(state), responses, rulingArgs)
 	}
 
+	// 8b. Built only once no rejection can follow: evidenceCacheKey leaves
+	// repo_root out, so a cached rejection must not depend on it, and the
+	// repo_root advisory belongs only on a reviewed call.
+	staleComments, repoRootAdvisory := staleCommentHint(h.deps.Cfg, args.FinalDiff, args.RepoRoot, resolvedFiles)
+
 	model, rendered, err := h.resolveModelAndRender(
 		args.ModelOverride,
 		h.deps.Cfg.PostModel,
@@ -1789,6 +1799,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				ExitContracts:                  exitContracts,
 				ExitContractsInferred:          args.ExitContractsInferred,
 				Codescene:                      args.Codescene,
+				StaleComments:                  staleComments,
 			})
 		},
 		"render post prompt",
@@ -1841,6 +1852,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		ControllerRulings: appliedRulings(review.rulings),
 	}
 	env.Findings = append(env.Findings, review.advisories...)
+	if repoRootAdvisory != nil {
+		env.Findings = append(env.Findings, *repoRootAdvisory)
+	}
 	if lightweight && (len(responses) > 0 || len(rulingArgs) > 0) {
 		env.Findings = append(env.Findings, noSessionRulingsAdvisory())
 	}

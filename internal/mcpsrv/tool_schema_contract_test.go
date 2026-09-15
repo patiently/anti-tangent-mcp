@@ -211,6 +211,7 @@ func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 		"validate_plan.context_paths":                               {n(maxContextFiles)},
 		"prime_project_knowledge.max_picks":                         {n(defaultMaxPicks), n(maxMaxPicks)},
 		"validate_completion.final_diff_path":                       {"ANTI_TANGENT_PLAN_ROOTS"},
+		"validate_completion.repo_root":                             {"ANTI_TANGENT_PLAN_ROOTS"},
 		"validate_plan.plan_text":                                   planPayload,
 		"validate_plan.plan_path":                                   append([]string{"ANTI_TANGENT_PLAN_ROOTS"}, planPayload...),
 		"validate_plan.project_knowledge":                           planPayload,

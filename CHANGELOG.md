@@ -50,6 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_completion`'s, and `controller_verified_references`, applied before the codebase
   reference checklist is built. Waived findings appear in `waived_findings`, at plan level and per
   task. A ruling whose id is not shaped like a finding id draws an advisory.
+- `validate_completion` shows the reviewer the comment lines that still name a symbol the diff
+  removes: names declared on the diff's removed lines that no added line declares again, found
+  in comment lines of the changed files, at most 20 lines. With the new optional `repo_root` the
+  server reads the post-change version of each file the diff names beneath it — within
+  `ANTI_TANGENT_PLAN_ROOTS` and the `context_paths` byte caps, never following a symlink out of
+  it, and never a deleted file — so comments outside the diff hunks are found too; without it,
+  the submitted evidence is scanned. Only matching lines reach the prompt. A `repo_root` the
+  server cannot use draws a minor finding.
 
 ### Changed
 
