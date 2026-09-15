@@ -10,6 +10,7 @@
 package codescene
 
 import (
+	"encoding/json"
 	"math"
 	"sort"
 	"strings"
@@ -49,6 +50,105 @@ const (
 	TrendRegression  = "regression"
 	TrendNeutral     = "neutral"
 )
+
+// rawChangeSetResult is one file entry of CodeScene's raw analyze_change_set
+// output: its verdict, and the findings whose problem points and categories
+// reduce into a Digest.
+type rawChangeSetResult struct {
+	Verdict  string `json:"verdict"`
+	Findings []struct {
+		Category string  `json:"category"`
+		NewPP    float64 `json:"new-pp"`
+		OldPP    float64 `json:"old-pp"`
+	} `json:"findings"`
+}
+
+// reduceChangeSetResults tallies rawChangeSetResult.Verdict into a Verdicts,
+// sums each finding's new-pp minus old-pp into a net problem-points delta,
+// and counts findings per non-empty category. Split out of UnmarshalJSON so
+// that function's own branching (whether each field is caller-present) stays
+// separate from this one's (how the raw results reduce).
+func reduceChangeSetResults(results []rawChangeSetResult) (verdicts Verdicts, netPP float64, categoryCounts map[string]int) {
+	categoryCounts = map[string]int{}
+	for _, r := range results {
+		switch r.Verdict {
+		case "improved":
+			verdicts.Improved++
+		case "degraded":
+			verdicts.Degraded++
+		case "stable":
+			verdicts.Stable++
+		}
+		for _, f := range r.Findings {
+			netPP += f.NewPP - f.OldPP
+			if f.Category != "" {
+				categoryCounts[f.Category]++
+			}
+		}
+	}
+	return verdicts, netPP, categoryCounts
+}
+
+// UnmarshalJSON accepts both the digest shape and CodeScene's raw
+// analyze_change_set output, reducing quality_gates and results[] the way
+// examples/hooks/codescene-log.sh does. A digest field present in the input
+// always wins over the value derived from raw keys. Unknown keys are ignored,
+// and each raw key is decoded on its own, so one of the wrong type is ignored
+// without disturbing the other: the argument is optional, and a malformed side
+// field must not cost the caller the whole call or the rest of the reduction.
+// A struct that embeds Digest anonymously inherits this method by Go's
+// promotion rules, which makes it the struct's own UnmarshalJSON — its other
+// fields are then never decoded unless that struct defines its own
+// UnmarshalJSON that delegates to this one.
+func (d *Digest) UnmarshalJSON(b []byte) error {
+	type plainDigest Digest
+	var p plainDigest
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*d = Digest(p)
+
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(b, &present); err != nil {
+		return nil
+	}
+	has := func(key string) bool { _, ok := present[key]; return ok }
+
+	var gate string
+	gateOK := has("quality_gates") && json.Unmarshal(present["quality_gates"], &gate) == nil
+	var results []rawChangeSetResult
+	resultsOK := has("results") && json.Unmarshal(present["results"], &results) == nil && results != nil
+	if !gateOK && !resultsOK {
+		return nil
+	}
+
+	if !has("ran") {
+		d.Ran = true
+	}
+	if !has("tool") {
+		d.Tool = "analyze_change_set"
+	}
+	if gateOK && !has("quality_gate") {
+		d.QualityGate = gate
+	}
+	if !resultsOK {
+		return nil
+	}
+	verdicts, netPP, counts := reduceChangeSetResults(results)
+	if !has("files_analyzed") {
+		d.FilesAnalyzed = len(results)
+	}
+	if !has("verdicts") {
+		d.Verdicts = &verdicts
+	}
+	if !has("net_pp") {
+		d.NetPP = netPP
+	}
+	if !has("category_counts") && len(counts) > 0 {
+		d.CategoryCounts = counts
+	}
+	return nil
+}
 
 // qualityGateUnrecognized is what Normalize maps QualityGate to when it is
 // non-empty but not one of the recognized values. QualityGate is caller-

@@ -174,3 +174,96 @@ func TestSkipEvidenceJSONContract(t *testing.T) {
 	assert.NotContains(t, string(b), "skip_evidence",
 		"the field must be omitted when empty, not emitted as an empty string")
 }
+
+func TestDigest_UnmarshalJSON_ReducesRawChangeSet(t *testing.T) {
+	raw := `{"quality_gates":"passed","results":[
+		{"name":"a.go","verdict":"improved","findings":[{"category":"Complex Method","new-pp":1.0,"old-pp":2.5}]},
+		{"name":"b.go","verdict":"stable","findings":[]},
+		{"name":"c.go","verdict":"degraded","findings":[{"category":"Complex Method","new-pp":3.0,"old-pp":2.0},{"category":"Bumpy Road Ahead","new-pp":1.0,"old-pp":0.0}]}
+	]}`
+	var d Digest
+	require.NoError(t, json.Unmarshal([]byte(raw), &d))
+	assert.True(t, d.Ran)
+	assert.Equal(t, "analyze_change_set", d.Tool)
+	assert.Equal(t, "passed", d.QualityGate)
+	assert.Equal(t, 3, d.FilesAnalyzed)
+	require.NotNil(t, d.Verdicts)
+	assert.Equal(t, Verdicts{Improved: 1, Degraded: 1, Stable: 1}, *d.Verdicts)
+	assert.InDelta(t, 0.5, d.NetPP, 1e-9)
+	assert.Equal(t, map[string]int{"Complex Method": 2, "Bumpy Road Ahead": 1}, d.CategoryCounts)
+}
+
+func TestDigest_UnmarshalJSON_EmptyChangeSetStillRan(t *testing.T) {
+	var d Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"quality_gates":"passed","results":[]}`), &d))
+	assert.True(t, d.Ran)
+	assert.Equal(t, 0, d.FilesAnalyzed)
+	require.NotNil(t, d.Verdicts)
+	assert.Equal(t, Verdicts{}, *d.Verdicts)
+}
+
+func TestDigest_UnmarshalJSON_PresentDigestFieldsWin(t *testing.T) {
+	raw := `{"ran":false,"skip_reason":"tool errored","quality_gate":"failed","quality_gates":"passed",
+		"files_analyzed":7,"verdicts":{"improved":0,"degraded":2,"stable":5},"net_pp":4,
+		"results":[{"verdict":"improved","findings":[{"category":"X","new-pp":0,"old-pp":9}]}]}`
+	var d Digest
+	require.NoError(t, json.Unmarshal([]byte(raw), &d))
+	assert.False(t, d.Ran)
+	assert.Equal(t, "failed", d.QualityGate)
+	assert.Equal(t, 7, d.FilesAnalyzed)
+	assert.Equal(t, Verdicts{Degraded: 2, Stable: 5}, *d.Verdicts)
+	assert.InDelta(t, 4.0, d.NetPP, 1e-9)
+	assert.Equal(t, map[string]int{"X": 1}, d.CategoryCounts, "category_counts was absent, so it is derived")
+}
+
+func TestDigest_UnmarshalJSON_SentToolWins(t *testing.T) {
+	var empty Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"tool":"","quality_gates":"passed","results":[]}`), &empty))
+	assert.Equal(t, "", empty.Tool, "a tool key the caller sent wins over the derived value, even when empty")
+
+	var named Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"tool":"codescene-cli","results":[]}`), &named))
+	assert.Equal(t, "codescene-cli", named.Tool)
+}
+
+func TestDigest_UnmarshalJSON_IgnoresUnknownAndMistypedRawKeys(t *testing.T) {
+	raw := `{"ran":true,"base_ref":"abc123","note":"free text","results":{"not":"a list"},
+		"verdicts":{"improved":9,"degraded":0,"stable":3,"unknown_or_no_findings":17}}`
+	var d Digest
+	require.NoError(t, json.Unmarshal([]byte(raw), &d))
+	assert.True(t, d.Ran)
+	assert.Equal(t, 0, d.FilesAnalyzed)
+	assert.Equal(t, Verdicts{Improved: 9, Stable: 3}, *d.Verdicts)
+}
+
+func TestDigest_UnmarshalJSON_MistypedRawKeyLeavesTheOtherReduced(t *testing.T) {
+	var badGate Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"quality_gates":true,"results":[
+		{"verdict":"degraded","findings":[{"category":"Complex Method","new-pp":2,"old-pp":1}]}]}`), &badGate))
+	assert.True(t, badGate.Ran)
+	assert.Equal(t, "analyze_change_set", badGate.Tool)
+	assert.Equal(t, "", badGate.QualityGate)
+	assert.Equal(t, 1, badGate.FilesAnalyzed)
+	require.NotNil(t, badGate.Verdicts)
+	assert.Equal(t, Verdicts{Degraded: 1}, *badGate.Verdicts)
+	assert.InDelta(t, 1.0, badGate.NetPP, 1e-9)
+	assert.Equal(t, map[string]int{"Complex Method": 1}, badGate.CategoryCounts)
+
+	var badResults Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"quality_gates":"failed","results":"n/a"}`), &badResults))
+	assert.True(t, badResults.Ran)
+	assert.Equal(t, "failed", badResults.QualityGate)
+	assert.Equal(t, 0, badResults.FilesAnalyzed)
+	assert.Nil(t, badResults.Verdicts)
+}
+
+func TestDigest_UnmarshalJSON_DigestShapeRoundTrips(t *testing.T) {
+	want := Digest{Ran: true, Tool: "analyze_change_set", QualityGate: "passed", FilesAnalyzed: 2,
+		Verdicts: &Verdicts{Improved: 1, Stable: 1}, Trend: TrendImprovement, NetPP: -1,
+		CategoryCounts: map[string]int{"Complex Method": 1}}
+	b, err := json.Marshal(want)
+	require.NoError(t, err)
+	var got Digest
+	require.NoError(t, json.Unmarshal(b, &got))
+	assert.Equal(t, want, got)
+}

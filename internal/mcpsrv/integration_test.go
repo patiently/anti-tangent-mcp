@@ -140,6 +140,53 @@ func callTool(t *testing.T, ctx context.Context, cs *mcp.ClientSession, name str
 	return env
 }
 
+func TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys(t *testing.T) {
+	d := newDeps(t, &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")})
+	d.Cfg.Codescene = "required"
+	srv := New(d)
+
+	st, ct := mcp.NewInMemoryTransports()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() { _ = srv.Run(ctx, st) }()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
+	require.NoError(t, err)
+	defer func() { _ = cs.Close() }()
+
+	cases := map[string]map[string]any{
+		"digest carrying unknown keys": {
+			"ran": true, "tool": "analyze_change_set", "quality_gate": "passed", "files_analyzed": 12,
+			"base_ref": "abc123",
+			"verdicts": map[string]any{"improved": 9, "degraded": 0, "stable": 3, "unknown_or_no_findings": 17},
+		},
+		"raw analyze_change_set output": {
+			"quality_gates": "passed",
+			"note":          "free text",
+			"results": []any{
+				map[string]any{"name": "a.go", "verdict": "improved", "findings": []any{
+					map[string]any{"category": "Complex Method", "new-pp": 1.0, "old-pp": 2.0},
+				}},
+				map[string]any{"name": "b.go", "verdict": "stable", "findings": []any{}},
+			},
+		},
+	}
+	for name, digest := range cases {
+		t.Run(name, func(t *testing.T) {
+			pre := callTool(t, ctx, cs, "validate_task_spec", map[string]any{
+				"task_title": "T", "goal": "G", "acceptance_criteria": []string{"AC"},
+			})
+			post := callTool(t, ctx, cs, "validate_completion", map[string]any{
+				"session_id": pre.SessionID,
+				"summary":    "done",
+				"final_diff": "diff --git a/x b/x\n+ok\n",
+				"codescene":  digest,
+			})
+			assert.False(t, hasCategory(post.Findings, verdict.CategoryCodesceneNotRun), "findings: %+v", post.Findings)
+			assert.False(t, hasCategory(post.Findings, verdict.CategoryCodesceneSkipped), "findings: %+v", post.Findings)
+		})
+	}
+}
+
 func TestIntegration_ValidatePlan(t *testing.T) {
 	cfg, err := config.Load(func(k string) string {
 		if k == "ANTHROPIC_API_KEY" {

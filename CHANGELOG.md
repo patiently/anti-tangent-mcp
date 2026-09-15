@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.22.0] - 2026-09-15
 
+### Added
+
+- `validate_completion`'s `codescene` argument accepts CodeScene's raw `analyze_change_set`
+  output and reduces it to the digest server-side: `quality_gates`, the length of `results`, the
+  per-file verdict tally, Σ(`new-pp` − `old-pp`) and per-category counts. A digest field that is
+  present wins over the derived value.
+
 ### Changed
 
 - A file path outside `ANTI_TANGENT_PLAN_ROOTS` is refused with a way to recover: pass a path
@@ -25,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   elided evidence. In a diff with hunk headers it now skips unchanged and removed lines and checks
   added lines with the `+` stripped. A bare `...` line in a `.py` or `.pyi` file, where it is the
   idiomatic stub body, is no longer flagged in either `final_files` or a diff.
+- An unexpected key in `validate_completion`'s optional `codescene` argument, or in its
+  `verdicts`, no longer fails schema validation and loses the whole call. Unknown keys are
+  ignored.
 
 ## [0.21.0] - 2026-09-11
 

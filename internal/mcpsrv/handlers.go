@@ -954,7 +954,8 @@ func tooLargeEnvelope(tool, id string, model config.ModelRef, size, limit int, s
 
 func validateCompletionTool() *mcp.Tool {
 	return &mcp.Tool{
-		Name: "validate_completion",
+		Name:        "validate_completion",
+		InputSchema: validateCompletionInputSchema(),
 		Description: "Final validation before declaring a task complete. " +
 			"The reviewer checks the full implementation against every acceptance criterion " +
 			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done. " +
