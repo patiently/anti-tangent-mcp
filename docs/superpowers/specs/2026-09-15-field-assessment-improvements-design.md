@@ -281,6 +281,12 @@ lets the digest template at `implementer.md` shrink to a pointer.
   and `F#3`-style IDs the server never issued, is removed.
 - **`implementer.md` §4.2 step 3** gains one clause: an `escalate` result is a stop-and-ask, not
   DONE.
+- **`implementer.md`'s `final_diff_path` recipe** writes the diff under
+  `git rev-parse --absolute-git-dir` unconditionally. In a git worktree that directory is
+  `<main repo>/.git/worktrees/<name>`, outside the worktree, so with `ANTI_TANGENT_PLAN_ROOTS` set
+  to the worktree alone the recipe is refused. Part 1's roots refusal already offers the git
+  directory only when a root contains it, and otherwise a file inside the repository deleted after
+  the call; the recipe says the same.
 - **`controller.md` new §5.9** "Ruling on an escalation": read the finding and the response,
   decide, reply with `controller_rulings` entries (ID plus a one-line ruling), keep rulings in the
   progress notes, and at DONE check every `waived:` line against a ruling actually issued — an
