@@ -64,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
 - `plan_run_report`'s unknown-run evidence leads with the usual cause, a `validate_task_spec`
   call that never passed `plan_run_id`, before idle expiry and a restarted server.
+- The per-task reviewer schema shared by `validate_task_spec`, `check_progress` and
+  `validate_completion` requires a nullable `same_as` on every finding: the reviewer names the
+  earlier finding it raises again, or `null`. Every provider must accept the nullable type. The
+  server reads `same_as` on `validate_completion` and never echoes it; a finding there gains
+  `repeat_of`, the `id` of an answered prior finding it raises again.
 - `check_progress` lists each earlier finding once, from the most recent call that raised it,
   with its `id`, shows the session's controller rulings, and leaves out findings a ruling covers.
 - `validate_plan`'s rolled-up codebase reference checklist is added after the verdict is decided,
