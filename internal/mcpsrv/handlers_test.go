@@ -488,7 +488,7 @@ func TestValidateCompletion_OversizedPathSuggestionIsActionable(t *testing.T) {
 func TestValidateCompletionTool_DescriptionStatesRootsRule(t *testing.T) {
 	d := validateCompletionTool().Description
 	assert.Contains(t, d, "ANTI_TANGENT_PLAN_ROOTS")
-	assert.Contains(t, d, "git directory")
+	assert.Contains(t, d, "inside the repository")
 	assert.Contains(t, d, "/tmp")
 }
 
@@ -2656,6 +2656,7 @@ func TestCheckEvidenceShape_EllipsisPlaceholderLine(t *testing.T) {
 		{name: "added line in a go file after a python file", diff: pyHunk + "+    ...\n" + goHunk + "+...\n", reject: true},
 		{name: "other marker added in a python diff", diff: pyHunk + "+# (truncated)\n", reject: true},
 		{name: "added stub under a diff -u header with a timestamp", diff: "--- s.py\t2026-09-15 10:00:00\n+++ s.py\t2026-09-15 10:05:00\n@@ -1,1 +1,2 @@\n def f():\n+    ...\n"},
+		{name: "added stub under a quoted +++ path", diff: "diff --git \"a/my file.py\" \"b/my file.py\"\n--- \"a/my file.py\"\n+++ \"b/my file.py\"\n@@ -1,1 +1,2 @@\n def f():\n+    ...\n"},
 		{name: "plain text evidence", diff: "header\n...\nmore", reject: true},
 		{name: "python file stub", files: []FileArg{{Path: "pkg/stub.py", Content: "def f():\n    ...\n"}}},
 		{name: "python interface stub", files: []FileArg{{Path: "pkg/stub.pyi", Content: "class C:\n    ...\n"}}},
@@ -3550,6 +3551,7 @@ func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
 		require.Error(t, err, "outside-roots must stay a transport error, not an envelope")
 		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
 		assert.Contains(t, err.Error(), "git rev-parse --absolute-git-dir")
+		assert.Contains(t, err.Error(), "when a root contains it")
 	})
 
 	t.Run("missing file stays a plain transport error", func(t *testing.T) {

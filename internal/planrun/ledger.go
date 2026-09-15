@@ -22,7 +22,10 @@ const ledgerFile = "plan-runs.jsonl"
 // index; a task row carries the task itself in Row and its run id under
 // PlanRunID, while a header carries no row, only its own CreatedAt and its
 // run id under HeaderPlanRunID — a distinct key, because a reader that
-// matches task rows on plan_run_id must never see a header line as one.
+// matches task rows on plan_run_id must never see a header line as one. A
+// reader that prunes only on a task row's completion time finds no such
+// stamp on a header line's zero-valued Row, so it keeps header lines instead
+// of pruning them.
 //
 // PRIVACY: unlike events.jsonl and codescene-events.jsonl, which are
 // deliberately content-free, this record carries TaskTitle. That is why it

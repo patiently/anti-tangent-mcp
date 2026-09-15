@@ -410,8 +410,7 @@ type FileArg struct {
 // transport error instead of a structured envelope.
 //
 // If both Path and a non-nil Content are supplied, Content wins and Path is
-// never read — this is the pre-0.16.0 always-inline behaviour, kept for
-// backward compatibility rather than treated as an error.
+// never read; a caller sending both is not treated as an error.
 type CompletionFileArg struct {
 	Path    string  `json:"path" jsonschema:"Path of the file. When content is omitted it must be absolute and the server reads the file itself; with ANTI_TANGENT_PLAN_ROOTS set, it must be under one of those roots."`
 	Content *string `json:"content,omitempty" jsonschema:"The file's full content. Omit it to have the server read path from disk; send an empty string for a deleted or genuinely empty file."`
@@ -1025,7 +1024,7 @@ func validateCompletionTool() *mcp.Tool {
 			"The reviewer checks the full implementation against every acceptance criterion " +
 			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done. " +
 			"Omit a final_files entry's content to have the server read its absolute path, and pass final_diff_path instead of final_diff, to avoid emitting large evidence as output tokens. " +
-			"When ANTI_TANGENT_PLAN_ROOTS is set, both kinds of path must be under one of its roots, such as the repository's git directory; a per-session scratch directory under /tmp usually is not.",
+			"When ANTI_TANGENT_PLAN_ROOTS is set, both kinds of path must be under one of its roots, for example inside the repository; a per-session scratch directory under /tmp usually is not.",
 	}
 }
 
@@ -1034,7 +1033,7 @@ type ValidateCompletionArgs struct {
 	Summary               string                `json:"summary"     jsonschema:"What you implemented and how each acceptance criterion is met. A claim in the summary is not evidence on its own."`
 	FinalFiles            []CompletionFileArg   `json:"final_files,omitempty" jsonschema:"Changed files, with full content or with content omitted so the server reads them. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; do not also send a file that final_diff already covers."`
 	FinalDiff             string                `json:"final_diff,omitempty" jsonschema:"A unified diff of the task's changes. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; when it is large, generate it with -U1 and leave out generated, lockfile and snapshot files."`
-	FinalDiffPath         string                `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, such as the repository's git directory; a per-session scratch directory under /tmp usually is not."`
+	FinalDiffPath         string                `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, for example inside the repository; a per-session scratch directory under /tmp usually is not."`
 	TestEvidence          string                `json:"test_evidence,omitempty" jsonschema:"The test run output that proves the change, verbatim. Output showing no test executed draws a finding."`
 	ExitContracts         []string              `json:"exit_contracts,omitempty" jsonschema:"Symbols or behavior later tasks rely on this task leaving in place, copied from validate_plan's exit_contracts for this task; a hard miss draws missing_acceptance_criterion. At most 50 entries of at most 500 characters each."`
 	ExitContractsInferred bool                  `json:"exit_contracts_inferred,omitempty" jsonschema:"validate_plan's exit_contracts_inferred for this task: true when the contracts were inferred from cross-task references rather than written in the plan, which caps a miss at minor."`
@@ -1047,9 +1046,9 @@ type ValidateCompletionArgs struct {
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
 type ValidatePlanArgs struct {
-	PlanText                     string                `json:"plan_text,omitempty" jsonschema:"Deprecated and removed in 1.0.0: the plan markdown inline. Pass plan_path instead; exactly one of plan_text and plan_path must be set."`
-	PlanPath                     string                `json:"plan_path,omitempty" jsonschema:"Absolute path to the plan markdown file, which the server reads. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots. Exactly one of plan_text and plan_path must be set."`
-	ProjectKnowledge             string                `json:"project_knowledge,omitempty" jsonschema:"Markdown excerpts from the project knowledge base that the controller selected for this plan. The reviewer treats them as authoritative."`
+	PlanText                     string                `json:"plan_text,omitempty" jsonschema:"Deprecated and removed in 1.0.0: the plan markdown inline. Pass plan_path instead; exactly one of plan_text and plan_path must be set. Counts toward the plan payload cap, ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES, default 1048576 bytes."`
+	PlanPath                     string                `json:"plan_path,omitempty" jsonschema:"Absolute path to the plan markdown file, which the server reads. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots. Exactly one of plan_text and plan_path must be set. The file's content counts toward the plan payload cap, ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES, default 1048576 bytes."`
+	ProjectKnowledge             string                `json:"project_knowledge,omitempty" jsonschema:"Markdown excerpts from the project knowledge base that the controller selected for this plan. The reviewer treats them as authoritative. Counts toward the plan payload cap, ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES, default 1048576 bytes."`
 	ModelOverride                string                `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
 	MaxTokensOverride            int                   `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default scaled by task count; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
 	Mode                         string                `json:"mode,omitempty" jsonschema:"thorough, the default, or quick, which surfaces only the most severe findings, at most 3 per scope."`
@@ -1143,7 +1142,7 @@ func diffEllipsisPlaceholderOffset(finalDiff string) int {
 			if tab := strings.IndexByte(name, '\t'); tab >= 0 {
 				name = name[:tab]
 			}
-			exempt = ellipsisExemptPath(strings.TrimPrefix(name, "b/"))
+			exempt = ellipsisExemptPath(strings.TrimPrefix(unquoteDiffPathName(name), "b/"))
 		case strings.HasPrefix(body, " "), strings.HasPrefix(body, "-"):
 		case strings.HasPrefix(body, "+"):
 			if !exempt && strings.TrimSpace(body[1:]) == "..." {
@@ -1157,6 +1156,20 @@ func diffEllipsisPlaceholderOffset(finalDiff string) int {
 		offset += len(line)
 	}
 	return -1
+}
+
+// unquoteDiffPathName strips one pair of surrounding double quotes from a
+// `+++`/`---` diff header's path, which git adds when the name contains a
+// space or a non-ASCII byte (e.g. `"b/my file.py"`), so a caller trimming a
+// `b/`/`a/` prefix afterward sees the bare filename either way.
+func unquoteDiffPathName(name string) string {
+	if !strings.HasPrefix(name, `"`) || !strings.HasSuffix(name, `"`) {
+		return name
+	}
+	if len(name) < 2 {
+		return name
+	}
+	return name[1 : len(name)-1]
 }
 
 // ellipsisExemptPath reports whether a bare `...` line is legitimate content
@@ -1244,10 +1257,8 @@ func (e *completionInputTooLargeError) Unwrap() error { return e.err }
 //
 // Content is resolved ONLY when nil — see CompletionFileArg: an explicit ""
 // means "this file is genuinely empty" (e.g. a deletion) and must NOT
-// trigger a read, unlike pre-0.16.0's string-based Content, whose empty
-// string was indistinguishable from omitted and always triggered one
-// (breaking a deleted-file entry, whose read would fail EvalSymlinks, and
-// any relative path, which would fail the path-must-be-absolute check).
+// trigger a read: a deleted file's read fails EvalSymlinks, and a relative
+// path fails the path-must-be-absolute check.
 //
 // Returns the resolved slice rather than mutating args.FinalFiles in place,
 // since ValidateCompletionArgs.FinalFiles is wire-typed []CompletionFileArg

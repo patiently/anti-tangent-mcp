@@ -340,7 +340,7 @@ func TestLedger_HeaderOnlyRunLoads(t *testing.T) {
 
 // TestLedger_HeaderLineKeyedOnHeaderPlanRunID pins the key a header line
 // carries its run id under: a reader that matches task rows on plan_run_id
-// (a pre-0.22 Load, or any future one) must never mistake a header line for
+// (an older binary's Load, or any future one) must never mistake a header line for
 // a row, so the header's id lives only under header_plan_run_id.
 func TestLedger_HeaderLineKeyedOnHeaderPlanRunID(t *testing.T) {
 	dir := t.TempDir()
