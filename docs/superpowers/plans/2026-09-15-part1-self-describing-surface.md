@@ -1339,6 +1339,8 @@ In `ValidateTaskSpec`, directly after `env = h.withSessionTTL(env, sess)`, add:
 	}
 ```
 
+Order matters, and this placement gets it right: `result = verdict.FinalizeVerdict(result)` has already run, so the advisory cannot move `env.Verdict`, and `ValidateTaskSpec` still ends with `return envelopeResult(env)`, whose first statement is `env.SummaryBlock = formatEnvelopeSummary(env)` — so the summary block is built from `env.Findings` after the append and includes the advisory with no further change.
+
 In `PlanRunReport`, replace the `Evidence` and `Suggestion` of the `session_not_found` finding:
 
 ```go
