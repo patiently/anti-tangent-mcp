@@ -32,7 +32,11 @@ import (
 //	}
 //
 // When the fixture records validate_task_spec, validate_completion runs on the
-// session that call opened, whatever session_id the fixture carries.
+// session that call opened, whatever session_id the fixture carries. A
+// fixture that records only validate_completion runs lightweight instead: any
+// session_id it carries (for example one copied from a recorded transcript)
+// is cleared first, since a session id no store opened would otherwise reject
+// the call as session_not_found on every run.
 type replayFixture struct {
 	Name               string                  `json:"name"`
 	ValidateTaskSpec   *ValidateTaskSpecArgs   `json:"validate_task_spec,omitempty"`
@@ -41,8 +45,11 @@ type replayFixture struct {
 }
 
 // replayExpectation names a call and the keywords that identify the issue it
-// should raise. A run meets it when any finding on that call contains any
-// keyword, ignoring case, in its category, criterion, evidence or suggestion.
+// should raise. A run meets it when any finding the REVIEWER itself raised on
+// that call contains any keyword, ignoring case, in its category, criterion,
+// evidence or suggestion — a server advisory prepended to the envelope (for
+// example an unusable repo_root) never counts, even when its text happens to
+// share a keyword.
 type replayExpectation struct {
 	Call          string   `json:"call"`
 	AnyOfKeywords []string `json:"any_of_keywords"`
@@ -177,24 +184,40 @@ type replayCallStats struct {
 	// keyed by severity, category and criterion, so two reports can be
 	// compared for a blocking finding only one of them raised.
 	Blocking map[string]int `json:"blocking,omitempty"`
-	Errors   []string       `json:"errors,omitempty"`
+	// Advisories counts the runs that raised each minor server advisory
+	// (category "other", such as an unusable repo_root), keyed by
+	// criterion, so a degraded run — one where the replay environment
+	// could not give the reviewer everything a real checkout would —
+	// stays visible instead of silently lowering recall.
+	Advisories map[string]int `json:"advisories,omitempty"`
+	Errors     []string       `json:"errors,omitempty"`
 	// PromptBytes is the largest prompt the call sent a reviewer in any run.
 	PromptBytes int `json:"prompt_bytes"`
 }
 
-// replayMeter records the size of the last prompt sent through a reviewer.
+// replayMeter records the size of the last prompt sent through a reviewer,
+// and the raw bytes of its last response, so replay can tell the reviewer's
+// own findings apart from the server advisories the envelope adds around
+// them.
 type replayMeter struct {
 	providers.Reviewer
 	lastPromptBytes int
+	lastRawJSON     []byte
 }
 
 func (m *replayMeter) Review(ctx context.Context, req providers.Request) (providers.Response, error) {
 	m.lastPromptBytes = len(req.System) + len(req.User)
-	return m.Reviewer.Review(ctx, req)
+	resp, err := m.Reviewer.Review(ctx, req)
+	// RawJSON carries the partial body even on ErrResponseTruncated, so a
+	// truncated call still yields whatever complete findings the reviewer
+	// emitted before the cut; any other error leaves resp (and RawJSON) zero.
+	m.lastRawJSON = resp.RawJSON
+	return resp, err
 }
 
 // replayMeters wraps a providers.Registry so every reviewer's calls record
-// their prompt size, and reports the largest one seen since the last read.
+// their prompt size and response, and reports the largest prompt, and the
+// findings from the last response, seen since the last read.
 type replayMeters struct {
 	list []*replayMeter
 }
@@ -218,6 +241,29 @@ func (m *replayMeters) largest() int {
 		meter.lastPromptBytes = 0
 	}
 	return n
+}
+
+// lastFindings reads, and resets, the reviewer findings from the last
+// response recorded since the previous read. It parses the raw bytes with
+// verdict.ParseResultPartial rather than trusting the caller's envelope, so
+// a keyword only present in a server-added advisory (never in anything the
+// reviewer itself said) cannot count as a match.
+func (m *replayMeters) lastFindings() []verdict.Finding {
+	var raw []byte
+	for _, meter := range m.list {
+		if len(meter.lastRawJSON) > 0 {
+			raw = meter.lastRawJSON
+		}
+		meter.lastRawJSON = nil
+	}
+	if raw == nil {
+		return nil
+	}
+	result, ok := verdict.ParseResultPartial(raw)
+	if !ok {
+		return nil
+	}
+	return result.Findings
 }
 
 // replayDryRunReviewer answers every review with an empty pass, so a dry run
@@ -258,8 +304,9 @@ func runReplayFixture(ctx context.Context, re replayEnv, fx replayFixture, runs 
 }
 
 // replayOneRun runs fx's calls once, on fresh session and plan-run stores,
-// records each call's outcome onto report, and returns the findings each
-// call raised, keyed by call name, for the expectation tally.
+// records each call's outcome onto report, and returns the REVIEWER's own
+// findings from each call, keyed by call name, for the expectation tally —
+// not the envelope's findings, which also carry the server's own advisories.
 func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, report *replayReport) map[string][]verdict.Finding {
 	h := &handlers{deps: Deps{
 		Cfg:      re.cfg,
@@ -272,7 +319,7 @@ func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, report *r
 	if fx.ValidateTaskSpec != nil {
 		_, taskEnv, err := h.ValidateTaskSpec(ctx, nil, *fx.ValidateTaskSpec)
 		report.record(replayCallTaskSpec, taskEnv, err, re.meters.largest())
-		findings[replayCallTaskSpec] = taskEnv.Findings
+		findings[replayCallTaskSpec] = re.meters.lastFindings()
 		sessionID = taskEnv.SessionID
 	}
 	if fx.ValidateCompletion == nil {
@@ -285,10 +332,14 @@ func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, report *r
 	args := *fx.ValidateCompletion
 	if fx.ValidateTaskSpec != nil {
 		args.SessionID = sessionID
+	} else {
+		// A completion-only fixture runs lightweight: a session_id it
+		// carries names no session this run's fresh store opened.
+		args.SessionID = ""
 	}
 	_, completionEnv, err := h.ValidateCompletion(ctx, nil, args)
 	report.record(replayCallCompletion, completionEnv, err, re.meters.largest())
-	findings[replayCallCompletion] = completionEnv.Findings
+	findings[replayCallCompletion] = re.meters.lastFindings()
 	return findings
 }
 
@@ -309,7 +360,7 @@ func tallyExpectations(report *replayReport, run int, findings map[string][]verd
 func (r *replayReport) record(call string, env Envelope, err error, promptBytes int) {
 	st := r.Calls[call]
 	if st == nil {
-		st = &replayCallStats{Verdicts: map[string]int{}, Blocking: map[string]int{}}
+		st = &replayCallStats{Verdicts: map[string]int{}, Blocking: map[string]int{}, Advisories: map[string]int{}}
 		r.Calls[call] = st
 	}
 	st.PromptBytes = max(st.PromptBytes, promptBytes)
@@ -318,17 +369,37 @@ func (r *replayReport) record(call string, env Envelope, err error, promptBytes 
 		return
 	}
 	st.Verdicts[env.Verdict]++
-	seen := map[string]bool{}
-	for _, f := range env.Findings {
-		if f.Severity != verdict.SeverityCritical && f.Severity != verdict.SeverityMajor {
+	tallyServerFindings(st, env.Findings)
+}
+
+// tallyServerFindings counts, at most once per finding kind, each blocking
+// (critical or major) finding and each minor category-other advisory in
+// findings onto st.
+func tallyServerFindings(st *replayCallStats, findings []verdict.Finding) {
+	seenBlocking := map[string]bool{}
+	seenAdvisory := map[string]bool{}
+	for _, f := range findings {
+		if isBlockingSeverity(f.Severity) {
+			key := fmt.Sprintf("%s %s %q", f.Severity, f.Category, f.Criterion)
+			if !seenBlocking[key] {
+				seenBlocking[key] = true
+				st.Blocking[key]++
+			}
 			continue
 		}
-		key := fmt.Sprintf("%s %s %q", f.Severity, f.Category, f.Criterion)
-		if !seen[key] {
-			seen[key] = true
-			st.Blocking[key]++
+		if isAdvisory(f) && !seenAdvisory[f.Criterion] {
+			seenAdvisory[f.Criterion] = true
+			st.Advisories[f.Criterion]++
 		}
 	}
+}
+
+func isBlockingSeverity(s verdict.Severity) bool {
+	return s == verdict.SeverityCritical || s == verdict.SeverityMajor
+}
+
+func isAdvisory(f verdict.Finding) bool {
+	return f.Severity == verdict.SeverityMinor && f.Category == verdict.CategoryOther
 }
 
 func firstMatchingFinding(findings []verdict.Finding, keywords []string) (verdict.Finding, bool) {
@@ -354,22 +425,35 @@ func (r replayReport) String() string {
 		}
 	}
 	for _, call := range []string{replayCallTaskSpec, replayCallCompletion} {
-		st := r.Calls[call]
-		if st == nil {
-			continue
-		}
-		fmt.Fprintf(&b, "  %s verdicts %v, largest prompt %d bytes\n", call, st.Verdicts, st.PromptBytes)
-		keys := make([]string, 0, len(st.Blocking))
-		for k := range st.Blocking {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Fprintf(&b, "    blocking %s in %d/%d\n", k, st.Blocking[k], r.Runs)
-		}
-		for _, e := range st.Errors {
-			fmt.Fprintf(&b, "    error: %s\n", e)
+		if st := r.Calls[call]; st != nil {
+			writeCallStats(&b, call, st, r.Runs)
 		}
 	}
 	return b.String()
+}
+
+// writeCallStats appends one call's verdicts, blocking findings, advisories
+// and errors to b, the blocking and advisory lines each sorted by key for a
+// stable render.
+func writeCallStats(b *strings.Builder, call string, st *replayCallStats, runs int) {
+	fmt.Fprintf(b, "  %s verdicts %v, largest prompt %d bytes\n", call, st.Verdicts, st.PromptBytes)
+	for _, k := range sortedKeys(st.Blocking) {
+		fmt.Fprintf(b, "    blocking %s in %d/%d\n", k, st.Blocking[k], runs)
+	}
+	for _, k := range sortedKeys(st.Advisories) {
+		fmt.Fprintf(b, "    advisory %s in %d/%d\n", k, st.Advisories[k], runs)
+	}
+	for _, e := range st.Errors {
+		fmt.Fprintf(b, "    error: %s\n", e)
+	}
+}
+
+// sortedKeys returns m's keys sorted, for a stable render order.
+func sortedKeys(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

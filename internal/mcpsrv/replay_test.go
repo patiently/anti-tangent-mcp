@@ -67,7 +67,7 @@ func TestRunReplayFixture_TalliesEachExpectationAcrossRuns(t *testing.T) {
 	fx := replayFixture{
 		Name:               "stale",
 		ValidateTaskSpec:   &ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC 1"}},
-		ValidateCompletion: &ValidateCompletionArgs{SessionID: "ignored", Summary: "done", FinalDiff: replayTestDiff},
+		ValidateCompletion: &ValidateCompletionArgs{SessionID: "ignored", Summary: "done", FinalDiff: replayTestDiff, RepoRoot: "relative/path"},
 		Expectations: []replayExpectation{
 			{Call: replayCallCompletion, AnyOfKeywords: []string{"HANDLERETIRED"}},
 			{Call: replayCallCompletion, AnyOfKeywords: []string{"scope_drift"}},
@@ -86,8 +86,63 @@ func TestRunReplayFixture_TalliesEachExpectationAcrossRuns(t *testing.T) {
 	completion := report.Calls[replayCallCompletion]
 	assert.Equal(t, map[string]int{"pass": 1, "warn": 1}, completion.Verdicts)
 	assert.Equal(t, map[string]int{`major scope_drift "AC 1"`: 1}, completion.Blocking)
+	assert.Equal(t, map[string]int{"repo_root": 2}, completion.Advisories, "the unusable repo_root advisory rides every run, unrelated to the reviewer's own findings")
 	assert.Positive(t, completion.PromptBytes)
 	assert.Contains(t, report.String(), `validate_completion ["HANDLERETIRED"]: 1/2`)
+	assert.Contains(t, report.String(), "advisory repo_root in 2/2")
+}
+
+// TestRunReplayFixture_MatchesOnlyTheReviewersOwnFindings pins A1: a keyword
+// that only appears in a server-added advisory (never in anything the
+// reviewer itself said) must not count as a match, or the replay's recall
+// number would be inflated by the server's own text rather than the
+// reviewer's.
+func TestRunReplayFixture_MatchesOnlyTheReviewersOwnFindings(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{reviewerFindingsResp()}}
+	cfg := newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg
+	fx := replayFixture{
+		Name: "repo-root-advisory",
+		ValidateCompletion: &ValidateCompletionArgs{
+			Summary:   "done",
+			FinalDiff: replayTestDiff,
+			RepoRoot:  "relative/path", // resolveDirInput rejects a relative repo_root
+		},
+		Expectations: []replayExpectation{
+			{Call: replayCallCompletion, AnyOfKeywords: []string{"repo_root"}},
+		},
+	}
+
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 1)
+
+	require.Equal(t, 1, sr.calls)
+	completion := report.Calls[replayCallCompletion]
+	require.Equal(t, map[string]int{"repo_root": 1}, completion.Advisories, "the envelope does carry the repo_root advisory")
+	assert.Equal(t, 0, report.Expectations[0].Matched, "the advisory is not a reviewer finding, so it must not match")
+}
+
+// TestRunReplayFixture_CompletionOnlyFixtureIgnoresATranscriptSessionID pins
+// A3: a completion-only fixture runs lightweight even when it carries a
+// session_id copied from a recorded transcript, since no store in this run
+// ever opened that session.
+func TestRunReplayFixture_CompletionOnlyFixtureIgnoresATranscriptSessionID(t *testing.T) {
+	sr := &scriptedReviewer{responses: []providers.Response{passResp("claude-sonnet-4-6")}}
+	cfg := newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg
+	fx := replayFixture{
+		Name: "completion-only",
+		ValidateCompletion: &ValidateCompletionArgs{
+			SessionID: "s_from_transcript",
+			Summary:   "done",
+			FinalDiff: replayTestDiff,
+		},
+	}
+
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 1)
+
+	assert.Equal(t, 1, sr.calls)
+	completion := report.Calls[replayCallCompletion]
+	require.NotNil(t, completion)
+	assert.Empty(t, completion.Errors)
+	assert.Equal(t, map[string]int{"pass": 1}, completion.Verdicts)
 }
 
 func TestRunReplayFixture_SkipsTheCompletionWhenTheTaskSpecOpensNoSession(t *testing.T) {
