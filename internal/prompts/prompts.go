@@ -174,6 +174,11 @@ func fenceFiles(files []File) string {
 	return fence(parts...)
 }
 
+// fenceLines returns one delimiter safe for a block quoting every line.
+func fenceLines(lines []string) string {
+	return fence(lines...)
+}
+
 // newlineRun matches one or more consecutive CR/LF characters, collapsed to a
 // single space by oneLine.
 var newlineRun = regexp.MustCompile(`[\r\n]+`)
@@ -190,6 +195,15 @@ func oneLine(s string) string {
 	return strings.TrimSpace(newlineRun.ReplaceAllString(s, " "))
 }
 
+// StaleCommentHint is the server's lead for the stale-comment check: the names
+// declared on a diff's removed lines that no added line declares again, and the
+// comment lines of the post-change files that contain one, each written
+// "path:line: text".
+type StaleCommentHint struct {
+	Names []string
+	Hits  []string
+}
+
 type PostInput struct {
 	Spec                           session.TaskSpec
 	Summary                        string
@@ -203,6 +217,7 @@ type PostInput struct {
 	Codescene                      *codescene.Digest
 	PriorFindings                  []PriorFinding
 	ControllerRulings              []session.Ruling
+	StaleComments                  *StaleCommentHint
 }
 
 type PlanInput struct {
@@ -664,6 +679,7 @@ func RenderExtract(in ExtractInput) (Output, error) {
 var templateFuncs = template.FuncMap{
 	"fence":      fence,
 	"fenceFiles": fenceFiles,
+	"fenceLines": fenceLines,
 	"oneLine":    oneLine,
 }
 

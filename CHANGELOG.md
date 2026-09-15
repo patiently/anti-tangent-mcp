@@ -79,6 +79,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `waived:` line at DONE, and judges `validate_plan` convergence by
   major findings' IDs. `implementer.md` §4.3 no longer tells implementers to dispute a finding
   through a `working_on` field `validate_completion` does not have.
+- `validate_completion`'s review looks for comments that still name a symbol, branch or case
+  label the diff removes, including comments outside the diff hunks, and reports all of them in
+  one minor `quality` finding with `criterion: stale_comments`, so a batch of stale comments is
+  one finding rather than several.
 
 ### Fixed
 
