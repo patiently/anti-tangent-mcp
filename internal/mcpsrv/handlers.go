@@ -2552,27 +2552,26 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 }
 
 // parsedTaskIndexes maps each reviewer task result to the index of the parsed
-// plan task it reports on, or -1 when that cannot be told.
+// plan task it reports on, or -1 when that cannot be told. The decision is
+// made per result, so one drifted title only affects its own result rather
+// than re-keying every result in the response.
 //
-// When every result's task_title names the parsed task at its own position
-// (compared as validateChunkIdentity compares them), results map by position.
-// That is the chunked path's shape, where validateChunkIdentity has checked
-// titles and order but not task_index, so a chunk-local task_index survives
-// and would name a task from the first chunk.
+// Result i maps by position when its task_title names the parsed task at
+// position i (compared as validateChunkIdentity compares them). That is the
+// chunked path's shape for a complete chunk, where validateChunkIdentity has
+// checked titles and order but not task_index, so a chunk-local task_index
+// survives and would otherwise name a task from the first chunk. A merged,
+// partially-recovered response can mix complete chunks (title-aligned) with a
+// truncation-recovered tail (title drifted, e.g. a restated heading) in one
+// list; each result is judged on its own title, not the list's.
 //
-// Otherwise results map by TaskIndex. The reviewer is prompted to emit a
-// 1-based TaskIndex, but plan_schema.json accepts minimum:0 and some
-// reviewers (and the parser_partial fixtures) emit 0-based: any result with
-// TaskIndex 0 makes the whole list 0-based. An index out of range after
-// de-basing maps to -1 rather than to a guess.
+// A result whose title does not match its position instead maps by its
+// de-based TaskIndex. The reviewer is prompted to emit a 1-based TaskIndex,
+// but plan_schema.json accepts minimum:0 and some reviewers (and the
+// parser_partial fixtures) emit 0-based: any result with TaskIndex 0 makes
+// every index in the response 0-based. An index out of range after de-basing
+// maps to -1 rather than to a guess.
 func parsedTaskIndexes(results []verdict.PlanTaskResult, tasks []planparser.RawTask) []int {
-	out := make([]int, len(results))
-	if alignedByTitle(results, tasks) {
-		for i := range out {
-			out[i] = i
-		}
-		return out
-	}
 	base := 1
 	for _, t := range results {
 		if t.TaskIndex == 0 {
@@ -2580,30 +2579,19 @@ func parsedTaskIndexes(results []verdict.PlanTaskResult, tasks []planparser.RawT
 			break
 		}
 	}
-	for i, t := range results {
-		idx := t.TaskIndex - base
+	out := make([]int, len(results))
+	for i, r := range results {
+		if i < len(tasks) && normalizeTaskTitle(r.TaskTitle) == normalizeTaskTitle(tasks[i].Title) {
+			out[i] = i
+			continue
+		}
+		idx := r.TaskIndex - base
 		if idx < 0 || idx >= len(tasks) {
 			idx = -1
 		}
 		out[i] = idx
 	}
 	return out
-}
-
-// alignedByTitle reports whether each result's task_title, without its
-// "Task N:" prefix, equals the title of the parsed task at the same position.
-// A truncated response's results are a prefix of the plan's tasks, so fewer
-// results than tasks can still align.
-func alignedByTitle(results []verdict.PlanTaskResult, tasks []planparser.RawTask) bool {
-	if len(results) > len(tasks) {
-		return false
-	}
-	for i, r := range results {
-		if normalizeTaskTitle(r.TaskTitle) != normalizeTaskTitle(tasks[i].Title) {
-			return false
-		}
-	}
-	return true
 }
 
 // populateNormativeTestBodies fills in pr.Tasks[i].NormativeTestBodies from

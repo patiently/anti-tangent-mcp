@@ -95,6 +95,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test-evidence check, `submission_defect_only` and the plan-run row update. A truncated review
   now runs the same steps as a complete one. It still records no `check_progress` checkpoint and
   creates no `validate_task_spec` session.
+- A chunked `validate_plan` review recovering from truncation could re-key every task finding in
+  the response to the wrong task. Alignment between a reviewer's `task_index` and the plan's own
+  task headings is now decided per result instead of for the whole response, so one result with a
+  drifted title (the truncation-recovered tail) no longer forces every other result onto a
+  chunk-local index.
 
 ## [0.21.0] - 2026-09-11
 
