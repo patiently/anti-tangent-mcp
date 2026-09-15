@@ -372,17 +372,18 @@ func TestPriorFindings_ListsEachFingerprintOnceAndLeavesOutRuledOnes(t *testing.
 	aAgain.Evidence = "checkpoint 1"
 	b := verdict.Finding{ID: verdict.Fingerprint(verdict.CategoryScopeDrift, "", "AC 1"), Severity: verdict.SeverityMajor,
 		Category: verdict.CategoryScopeDrift, Criterion: "AC 1", Evidence: "drift"}
-	sess := &session.Session{
-		PreFindings: []verdict.Finding{a},
-		Checkpoints: []session.Checkpoint{{Findings: []verdict.Finding{aAgain, b}}},
+	state := session.ReviewState{
+		PreFindings:        []verdict.Finding{a},
+		CheckpointFindings: [][]verdict.Finding{{aAgain, b}},
 	}
 
-	got := priorFindings(sess, nil)
+	got := priorFindings(state)
 	require.Len(t, got, 2)
 	assert.Equal(t, "checkpoint 1", got[0].Evidence, "only the most recent call's copy is listed")
 	assert.Equal(t, "drift", got[1].Evidence)
 
-	got = priorFindings(sess, map[string]session.Ruling{verdict.BaseID(b.ID): {ID: b.ID, Text: "r"}})
+	state.Rulings = map[string]session.Ruling{verdict.BaseID(b.ID): {ID: b.ID, Text: "r"}}
+	got = priorFindings(state)
 	require.Len(t, got, 1)
 	assert.Equal(t, "checkpoint 1", got[0].Evidence)
 }
@@ -443,4 +444,33 @@ func TestValidateCompletion_ConcurrentCallsKeepEachOthersRulings(t *testing.T) {
 
 	st, _ := h.deps.Sessions.ReviewState(sid)
 	assert.Len(t, st.Rulings, 2)
+}
+
+// TestValidateCompletionAndCheckProgress_ConcurrentCallsDoNotRace guards
+// against reading a session's pre-task or checkpoint findings off the live
+// *session.Session concurrently with check_progress's AppendCheckpoint, which
+// mutates that same slice under the store's lock. Both loops read only
+// through session.ReviewState, a locked copy, so this must pass under -race.
+func TestValidateCompletionAndCheckProgress_ConcurrentCallsDoNotRace(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+
+	h.deps.Reviews = providers.Registry{"anthropic": &lockedReviewer{resp: passResp("claude-opus-4-7")}}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			_, _, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{SessionID: sid, WorkingOn: "x"})
+			assert.NoError(t, err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			_, _, err := h.ValidateCompletion(context.Background(), nil, completionCallArgs(sid))
+			assert.NoError(t, err)
+		}
+	}()
+	wg.Wait()
 }

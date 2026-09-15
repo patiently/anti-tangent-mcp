@@ -92,15 +92,22 @@ func (s *Store) EvictExpired(now time.Time) int {
 	return evicted
 }
 
-// ReviewState is a copy of what validate_completion reads from a session
-// before its review. Handlers read a live *Session without the store's lock,
-// and concurrent calls on one session write these fields, so they are handed
-// out only as copies.
+// ReviewState is a copy of what validate_completion and check_progress read
+// from a session before their review. Handlers read a live *Session without
+// the store's lock, and concurrent calls on one session write these fields
+// (AppendCheckpoint, SetPreFindings, ApplyReview), so PriorFindings,
+// IssuedIDs, Rulings, Escalated, PreFindings and CheckpointFindings are all
+// handed out only as copies — a handler must never read the equivalent field
+// off the live *Session.
 type ReviewState struct {
 	PriorFindings []verdict.Finding
 	IssuedIDs     map[string]bool
 	Rulings       map[string]Ruling
 	Escalated     bool
+	// PreFindings is a copy of the session's pre-task findings.
+	PreFindings []verdict.Finding
+	// CheckpointFindings is one copy of Findings per checkpoint, in order.
+	CheckpointFindings [][]verdict.Finding
 }
 
 // ReviewState returns a copy of the session's review state.
@@ -113,16 +120,21 @@ func (s *Store) ReviewState(id string) (ReviewState, bool) {
 	}
 	sess.LastAccessed = time.Now()
 	st := ReviewState{
-		PriorFindings: append([]verdict.Finding(nil), sess.PostFindings...),
-		IssuedIDs:     make(map[string]bool, len(sess.IssuedIDs)),
-		Rulings:       make(map[string]Ruling, len(sess.Rulings)),
-		Escalated:     sess.Escalated,
+		PriorFindings:      append([]verdict.Finding(nil), sess.PostFindings...),
+		IssuedIDs:          make(map[string]bool, len(sess.IssuedIDs)),
+		Rulings:            make(map[string]Ruling, len(sess.Rulings)),
+		Escalated:          sess.Escalated,
+		PreFindings:        append([]verdict.Finding(nil), sess.PreFindings...),
+		CheckpointFindings: make([][]verdict.Finding, len(sess.Checkpoints)),
 	}
 	for k := range sess.IssuedIDs {
 		st.IssuedIDs[k] = true
 	}
 	for k, v := range sess.Rulings {
 		st.Rulings[k] = v
+	}
+	for i, cp := range sess.Checkpoints {
+		st.CheckpointFindings[i] = append([]verdict.Finding(nil), cp.Findings...)
 	}
 	return st, true
 }

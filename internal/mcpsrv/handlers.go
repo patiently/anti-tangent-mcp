@@ -466,7 +466,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		func() (prompts.Output, error) {
 			return prompts.RenderMid(prompts.MidInput{
 				Spec:              sess.Spec,
-				PriorFindings:     priorFindings(sess, state.Rulings),
+				PriorFindings:     priorFindings(state),
 				ControllerRulings: rulingsForPrompt(state.Rulings),
 				WorkingOn:         args.WorkingOn,
 				Files:             toPromptFiles(args.ChangedFiles),
@@ -608,16 +608,16 @@ func contextSources(files []contextFile) []fileSource {
 }
 
 // priorFindings lists what check_progress shows as prior findings: the
-// pre-task findings and every checkpoint's. For each fingerprint it keeps only
+// pre-task findings and every checkpoint's, read from state rather than a
+// live *session.Session because a concurrent validate_completion call mutates
+// the session outside this call's lock. For each fingerprint it keeps only
 // the findings of the most recent call that raised it, so a finding raised at
 // every checkpoint is listed once rather than once per checkpoint, and it
 // leaves out a finding whose fingerprint carries a ruling.
-func priorFindings(s *session.Session, rulings map[string]session.Ruling) []verdict.Finding {
-	calls := make([][]verdict.Finding, 0, 1+len(s.Checkpoints))
-	calls = append(calls, s.PreFindings)
-	for _, cp := range s.Checkpoints {
-		calls = append(calls, cp.Findings)
-	}
+func priorFindings(state session.ReviewState) []verdict.Finding {
+	calls := make([][]verdict.Finding, 0, 1+len(state.CheckpointFindings))
+	calls = append(calls, state.PreFindings)
+	calls = append(calls, state.CheckpointFindings...)
 	latest := map[string]int{}
 	for i, fs := range calls {
 		for _, f := range fs {
@@ -631,7 +631,7 @@ func priorFindings(s *session.Session, rulings map[string]session.Ruling) []verd
 			if latest[fp] != i {
 				continue
 			}
-			if _, ruled := rulings[fp]; ruled {
+			if _, ruled := state.Rulings[fp]; ruled {
 				continue
 			}
 			out = append(out, f)
@@ -1739,7 +1739,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		}
 		spec = sess.Spec
 		state, _ := h.deps.Sessions.ReviewState(sess.ID)
-		review = buildCompletionReview(state, sess.PreFindings, knownSessionFindings(sess, state), responses, rulingArgs)
+		review = buildCompletionReview(state, state.PreFindings, knownSessionFindings(state), responses, rulingArgs)
 	}
 
 	model, rendered, err := h.resolveModelAndRender(

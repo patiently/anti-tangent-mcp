@@ -100,6 +100,26 @@ func TestStore_ReviewStateIsACopy(t *testing.T) {
 	assert.Equal(t, map[string]Ruling{"f_0123abcd": {ID: "f_0123abcd", Text: "ruled"}}, again.Rulings)
 }
 
+func TestStore_ReviewStatePreAndCheckpointFindingsAreCopies(t *testing.T) {
+	s := NewStore(time.Hour)
+	sess := s.Create(TaskSpec{Title: "t"}, "")
+	require.True(t, s.SetPreFindings(sess.ID, []verdict.Finding{{ID: "f_0123abcd", Criterion: "pre"}}))
+	require.True(t, s.AppendCheckpoint(sess.ID, Checkpoint{Findings: []verdict.Finding{{ID: "f_89abcdef", Criterion: "cp1"}}}))
+
+	st, ok := s.ReviewState(sess.ID)
+	require.True(t, ok)
+	require.Len(t, st.PreFindings, 1)
+	require.Len(t, st.CheckpointFindings, 1)
+	require.Len(t, st.CheckpointFindings[0], 1)
+	st.PreFindings[0].Criterion = "mutated"
+	st.CheckpointFindings[0][0].Criterion = "mutated"
+
+	again, ok := s.ReviewState(sess.ID)
+	require.True(t, ok)
+	assert.Equal(t, "pre", again.PreFindings[0].Criterion)
+	assert.Equal(t, "cp1", again.CheckpointFindings[0][0].Criterion)
+}
+
 func TestStore_ReviewMethodsRejectAnUnknownSession(t *testing.T) {
 	s := NewStore(time.Hour)
 	_, ok := s.ReviewState("nope")

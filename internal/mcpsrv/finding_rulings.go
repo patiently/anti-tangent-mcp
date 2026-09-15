@@ -301,11 +301,13 @@ func rulingsForPrompt(rulings map[string]session.Ruling) []session.Ruling {
 }
 
 // knownSessionFindings is every finding the session still holds: pre-task,
-// every checkpoint's, and the stored prior findings.
-func knownSessionFindings(sess *session.Session, state session.ReviewState) []verdict.Finding {
-	out := append([]verdict.Finding(nil), sess.PreFindings...)
-	for _, cp := range sess.Checkpoints {
-		out = append(out, cp.Findings...)
+// every checkpoint's, and the stored prior findings. It reads state rather
+// than a live *session.Session because a concurrent check_progress call
+// mutates the session's checkpoints outside this call's lock.
+func knownSessionFindings(state session.ReviewState) []verdict.Finding {
+	out := append([]verdict.Finding(nil), state.PreFindings...)
+	for _, cp := range state.CheckpointFindings {
+		out = append(out, cp...)
 	}
 	return append(out, state.PriorFindings...)
 }
