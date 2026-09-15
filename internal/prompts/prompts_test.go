@@ -2255,3 +2255,49 @@ func TestRenderPost_StaleCommentsAreOneMinorFinding(t *testing.T) {
 	assert.Contains(t, out.User, "inside and outside the diff hunks")
 	assert.Contains(t, out.User, "Report every stale comment in ONE finding, however many there are: `category: quality`, `criterion: stale_comments`, `severity: minor`.")
 }
+
+func TestRenderPre_WithVerification_Golden(t *testing.T) {
+	spec := sampleSpec()
+	spec.NonGoals = append(spec.NonGoals, "Fixing existing lint warnings")
+	spec.Verification = []string{"go vet ./... reports no new warnings", "go test ./handlers/..."}
+	out, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	golden(t, "pre_with_verification", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestTaskTemplates_RenderVerificationOnlyWhenSet(t *testing.T) {
+	const section = "Verification (the task's steps and verify commands):\n- go vet ./... reports no new warnings\n"
+	spec := sampleSpec()
+	spec.Verification = []string{"go vet ./... reports no new warnings"}
+
+	pre, err := RenderPre(PreInput{Spec: spec})
+	require.NoError(t, err)
+	assert.Contains(t, pre.User, section)
+	post, err := RenderPost(PostInput{Spec: spec, Summary: "s", FinalDiff: "d"})
+	require.NoError(t, err)
+	assert.Contains(t, post.User, section)
+
+	bare, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.NotContains(t, bare.User, "Verification (")
+}
+
+func TestReviewTemplates_CheckGatesAgainstNonGoals(t *testing.T) {
+	pre, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.Contains(t, pre.User, "Check four things:")
+	assert.Contains(t, pre.User, "4. Gates against Non-goals")
+
+	tasks, _ := planparser.SplitTasks("### Task 1: one\n\n**Goal:** g\n")
+	require.Len(t, tasks, 1)
+	plan, err := RenderPlan(PlanInput{PlanText: "p"})
+	require.NoError(t, err)
+	chunk, err := RenderPlanTasksChunk(PlanChunkInput{PlanText: "p", ChunkTasks: tasks})
+	require.NoError(t, err)
+
+	for name, text := range map[string]string{"pre": pre.User, "plan": plan.User, "plan_tasks_chunk": chunk.UserSuffix} {
+		assert.Contains(t, text, `"no new warnings"`, name)
+		assert.Contains(t, text, "`ambiguous_spec` at `severity: major`, quoting the gate and the", name)
+		assert.Contains(t, text, "scopes to exclude that work", name)
+	}
+}

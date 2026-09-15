@@ -11,7 +11,10 @@ Non-goals:
 {{end}}{{if .Spec.Context}}
 Context:
 {{.Spec.Context}}
-{{end}}{{if .Spec.PinnedBy}}
+{{end}}{{if .Spec.Verification}}
+Verification (the task's steps and verify commands):
+{{range .Spec.Verification}}- {{.}}
+{{end}}{{end}}{{if .Spec.PinnedBy}}
 Pinned by:
 {{range .Spec.PinnedBy}}- {{.}}
 {{end}}{{end}}{{if .ExitContracts}}

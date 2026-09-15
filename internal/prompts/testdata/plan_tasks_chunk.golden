@@ -38,6 +38,12 @@ For each task in the list above, evaluate:
 2. **Acceptance criteria quality**: each AC is testable, specific, and
    unambiguous; ACs are observable outcomes, not implementation steps.
 3. **Unstated assumptions**: knowledge a fresh implementer would lack.
+4. **Gates against Non-goals**: a step or verification gate (for example
+   "no new warnings", "compiles", "lint clean") that can pass only once work
+   one of the task's Non-goals defers is done contradicts that Non-goal. Emit
+   it as `ambiguous_spec` at `severity: major`, quoting the gate and the
+   Non-goal. A gate the task scopes to exclude that work is not a
+   contradiction.
 
 For every task, also emit `lightweight_eligible` and `lightweight_reason`.
 Set `lightweight_eligible` to true only when ALL of these are true:

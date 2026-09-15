@@ -491,7 +491,9 @@ part.
 
 ### 3.2 A verification gate that contradicts a Non-goal
 
-- **Pre-task and plan check.** `pre.tmpl` and `plan_tasks_chunk.tmpl` gain a fourth check: does a
+- **Pre-task and plan check.** `pre.tmpl`, `plan.tmpl` and `plan_tasks_chunk.tmpl` gain a fourth
+  check (`plan.tmpl` reviews a plan of at most `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` tasks, so
+  leaving it out would make the check depend on plan size): does a
   step or verification gate ("no new warnings", "compiles", "lint clean") force work a Non-goal
   defers? If so, `ambiguous_spec` at major, quoting both.
 - **`verification` input on `validate_task_spec`.** Optional, at most 50 entries of at most 500

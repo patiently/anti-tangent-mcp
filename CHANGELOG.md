@@ -58,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, and never a deleted file — so comments outside the diff hunks are found too; without it,
   the submitted evidence is scanned. Only matching lines reach the prompt. A `repo_root` the
   server cannot use draws a minor finding.
+- `validate_task_spec` takes `verification`: the task's steps and verify commands, at most 50
+  entries of at most 500 characters. The pre-task review and the same session's
+  `validate_completion` review both see them.
 
 ### Changed
 
@@ -91,6 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   label the diff removes, including comments outside the diff hunks, and reports all of them in
   one minor `quality` finding with `criterion: stale_comments`, so a batch of stale comments is
   one finding rather than several.
+- The pre-task review and `validate_plan` check each step and verification gate, such as no new
+  warnings or lint clean, against the task's Non-goals, and report a gate that can pass only once
+  deferred work is done as a major `ambiguous_spec` quoting both.
 
 ### Fixed
 

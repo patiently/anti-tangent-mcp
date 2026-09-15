@@ -69,6 +69,7 @@ func normalizeCompletionExitContracts(entries []string) ([]string, error) {
 // task-spec inputs.
 type taskSpecInputs struct {
 	Phase                        string
+	Verification                 []string
 	PinnedBy                     []string
 	ControllerVerifiedReferences []string
 	TestStrategyNotes            []string
@@ -137,6 +138,7 @@ func totalNormalizedTaskSpecBytes(args ValidateTaskSpecArgs, projectKnowledge st
 	for _, s := range args.NonGoals {
 		total += len(s)
 	}
+	total += sumLen(in.Verification)
 	total += sumLen(in.PinnedBy)
 	total += sumLen(in.ControllerVerifiedReferences)
 	total += sumLen(in.TestStrategyNotes)
@@ -149,6 +151,10 @@ func totalNormalizedTaskSpecBytes(args ValidateTaskSpecArgs, projectKnowledge st
 
 func normalizeTaskSpecInputs(args ValidateTaskSpecArgs, maxPayload int) (taskSpecInputs, error) {
 	phase, err := normalizePhase(args.Phase)
+	if err != nil {
+		return taskSpecInputs{}, err
+	}
+	verification, err := normalizeBoundedStringList("verification", args.Verification, maxPinnedByEntries, maxPinnedByChars)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
@@ -183,6 +189,7 @@ func normalizeTaskSpecInputs(args ValidateTaskSpecArgs, maxPayload int) (taskSpe
 	projectKnowledge := normalizeProjectKnowledge(args.ProjectKnowledge)
 	in := taskSpecInputs{
 		Phase:                        phase,
+		Verification:                 verification,
 		PinnedBy:                     pinnedBy,
 		ControllerVerifiedReferences: controllerVerifiedReferences,
 		TestStrategyNotes:            testStrategyNotes,
