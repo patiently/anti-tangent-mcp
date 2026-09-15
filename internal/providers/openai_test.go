@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
 func TestOpenAI_Review_OK(t *testing.T) {
@@ -128,6 +130,55 @@ func TestOpenAI_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
 	assert.Contains(t, err.Error(), "openai: request timeout 1ms exceeded")
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_REQUEST_TIMEOUT")
 	assert.True(t, errors.Is(err, context.DeadlineExceeded))
+}
+
+// TestOpenAI_Review_PerTaskSchemaNullableSameAs mirrors
+// TestAnthropic_Review_PerTaskSchemaNullableSameAs for OpenAI's wire shape:
+// the schema travels under response_format.json_schema.schema, and the
+// canned response's message content is a JSON-ENCODED STRING (not a nested
+// object) carrying the Result.
+func TestOpenAI_Review_PerTaskSchemaNullableSameAs(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"model": "gpt-5",
+			"choices": [{
+				"message": {"role":"assistant","content":"{\"verdict\":\"warn\",\"findings\":[{\"severity\":\"minor\",\"category\":\"quality\",\"criterion\":\"first\",\"evidence\":\"e\",\"suggestion\":\"s\",\"same_as\":\"f_0123abcd\"},{\"severity\":\"minor\",\"category\":\"quality\",\"criterion\":\"second\",\"evidence\":\"e\",\"suggestion\":\"s\",\"same_as\":null}],\"next_action\":\"none\"}"}
+			}],
+			"usage": {"prompt_tokens": 12, "completion_tokens": 8}
+		}`))
+	}))
+	defer srv.Close()
+
+	rv := NewOpenAI("test-key", srv.URL, 5*time.Second)
+	resp, err := rv.Review(context.Background(), Request{
+		Model:      "gpt-5",
+		System:     "sys",
+		User:       "usr",
+		MaxTokens:  1024,
+		JSONSchema: verdict.Schema(),
+	})
+	require.NoError(t, err)
+
+	responseFormat, ok := gotBody["response_format"].(map[string]any)
+	require.True(t, ok, "response_format should be an object")
+	jsonSchema, ok := responseFormat["json_schema"].(map[string]any)
+	require.True(t, ok, "response_format.json_schema should be an object")
+	schema, ok := jsonSchema["schema"].(map[string]any)
+	require.True(t, ok, "response_format.json_schema.schema should be an object")
+	assert.Equal(t, []any{"string", "null"}, sameAsFindingType(t, schema))
+
+	result, err := verdict.Parse(resp.RawJSON)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 2)
+	require.NotNil(t, result.Findings[0].SameAs)
+	assert.Equal(t, "f_0123abcd", *result.Findings[0].SameAs)
+	assert.Nil(t, result.Findings[1].SameAs)
 }
 
 func TestOpenAI_CachePrefix(t *testing.T) {
