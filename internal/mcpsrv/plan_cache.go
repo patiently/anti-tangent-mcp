@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	planPassCacheVersion    = "plan-pass-cache-v5"
+	planPassCacheVersion    = "plan-pass-cache-v6"
 	planPassCacheTTL        = 3 * time.Minute
 	planPassCacheMaxEntries = 128
 )

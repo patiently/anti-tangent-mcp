@@ -144,7 +144,10 @@ Every finding in a `validate_task_spec`, `check_progress`, `validate_completion`
 - `task_key` is empty for session tools. For a `validate_plan` task finding it is the task title
   passed through `normalizeTaskTitle`, which removes a leading `Task <n>:`, then normalized like
   `criterion_key`. Plans get renumbered between rounds — the assessed plan went from 17 to 18
-  tasks — and a numbered key would change the ID of every task after the insertion.
+  tasks — and a numbered key would change the ID of every task after the insertion. The title is
+  the plan's own heading for the task the result reports on, not the reviewer's `task_title`,
+  which can drift between rounds. Two tasks whose titles normalize to the same key share
+  fingerprints, so one ruling covers findings on both.
 - The **display ID** is the fingerprint, with `-2`, `-3` appended to later findings that share
   it, in emitted order: findings first, then waived entries. Display IDs are assigned once per
   response by one helper, over its final list, server findings and advisories included. Session

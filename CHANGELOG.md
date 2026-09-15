@@ -28,8 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Every finding from `validate_task_spec`, `check_progress`, `validate_completion` and
   `validate_plan` carries an `id`: `f_` and eight hex digits of a hash of its category, task and
   criterion, with a `-2`, `-3` suffix when an earlier finding in the same response shares it. A
-  `validate_plan` task finding's `id` ignores the task's `Task N:` number, so renumbering a plan
-  keeps it. The summary block shows the `id` on every finding line.
+  `validate_plan` task finding's `id` comes from the plan's own task heading, without its
+  `Task N:` number, so renumbering a plan or a reviewer restating a task's title keeps it. The
+  summary block shows the `id` on every finding line.
 - `validate_completion` takes `finding_responses`: an implementer answers a finding from its last
   complete review by `id`, and the reviewer sees each prior finding with its answer. When the
   reviewer raises a critical or major finding again after it was answered, the response sets

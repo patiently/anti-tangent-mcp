@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -140,12 +141,14 @@ func suppressPlanVerifiedReferences(pr *verdict.PlanResult, refs []string) {
 
 // waivePlanFindings moves every reviewer finding a ruling covers into
 // WaivedFindings, plan-level and per task, fingerprinting a task's findings
-// under its task key. The assignment replaces any waived entries the parsed
-// response carried, since only the server fills them.
-func waivePlanFindings(pr *verdict.PlanResult, rulings map[string]session.Ruling) {
+// under the task key planTaskKeys derives from tasks, the parsed plan. The
+// assignment replaces any waived entries the parsed response carried, since
+// only the server fills them.
+func waivePlanFindings(pr *verdict.PlanResult, rulings map[string]session.Ruling, tasks []planparser.RawTask) {
 	pr.PlanFindings, pr.WaivedFindings = waiveRuled(pr.PlanFindings, "", rulings, nil)
+	keys := planTaskKeys(*pr, tasks)
 	for i := range pr.Tasks {
 		t := &pr.Tasks[i]
-		t.Findings, t.WaivedFindings = waiveRuled(t.Findings, planTaskKey(t.TaskTitle), rulings, nil)
+		t.Findings, t.WaivedFindings = waiveRuled(t.Findings, keys[i], rulings, nil)
 	}
 }

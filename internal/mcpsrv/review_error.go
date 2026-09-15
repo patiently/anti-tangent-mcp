@@ -169,8 +169,11 @@ type planCallContext struct {
 	// already knew for certain. Nil on the cache-hit path by design — see the
 	// type comment.
 	FileConsistency *verdict.Finding
-	// Tasks is the parsed plan, used to re-attach normative test bodies to the
-	// reviewer's per-task results (populateNormativeTestBodies).
+	// Tasks is the parsed plan. applyPreLadder re-attaches normative test
+	// bodies from it (populateNormativeTestBodies), and applyPreLadder's
+	// waivers and finish's display IDs both key task findings on its headings
+	// (planTaskKeys). Every path sets it, the cache hit included, so a task
+	// finding's ID is the same whichever path produced the response.
 	Tasks []planparser.RawTask
 	// Rulings are this call's controller rulings by fingerprint, which
 	// applyPreLadder waives findings against. Unset on the cache-hit path: the
@@ -219,7 +222,7 @@ func (c planCallContext) applyPreLadder(pr *verdict.PlanResult) {
 	suppressPlanVerifiedReferences(pr, c.VerifiedReferences)
 	// Before the file-consistency finding and the clamp join the list, so only
 	// reviewer findings are waived.
-	waivePlanFindings(pr, c.Rulings)
+	waivePlanFindings(pr, c.Rulings, c.Tasks)
 	if c.FileConsistency != nil {
 		pr.PlanFindings = append(pr.PlanFindings, *c.FileConsistency)
 	}
@@ -262,7 +265,7 @@ func (c planCallContext) finish(pr *verdict.PlanResult) {
 	}
 	*pr = prependRepoRootUnusable(*pr, c.RepoRootUnusable)
 	*pr = prependPlanDeprecation(*pr, c.UsedPlanText)
-	assignPlanIDs(pr)
+	assignPlanIDs(pr, c.Tasks)
 	pr.SummaryBlock = formatPlanSummary(*pr, c.meta())
 }
 

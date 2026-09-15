@@ -83,6 +83,72 @@ func TestValidatePlan_RulingMatchesATaskFindingAcrossRenumbering(t *testing.T) {
 	assert.Len(t, pr.Tasks[0].WaivedFindings, 1)
 }
 
+// TestValidatePlan_TaskFindingKeyComesFromThePlanHeading covers a reviewer that
+// restates a task's title differently every round. The finding's id, and a
+// ruling's waiver of it, follow the plan's heading on a fresh review and on a
+// cache hit, while the response keeps the reviewer's own task_title.
+func TestValidatePlan_TaskFindingKeyComesFromThePlanHeading(t *testing.T) {
+	plan := "# Plan\n\n### Task 1: Add the `parse` helper\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n"
+	finding := `{"severity":"major","category":"quality","criterion":"spec","evidence":"thin","suggestion":"s"}`
+	id := verdict.Fingerprint(verdict.CategoryQuality, "Add the `parse` helper", "spec")
+
+	rv := &fakeReviewer{name: "openai"}
+	d := newDeps(t, rv)
+	d.Cfg.PlanModel = config.ModelRef{Provider: "openai", Model: "gpt-5"}
+	d.Reviews = providers.Registry{"openai": rv}
+	h := &handlers{deps: d}
+	round := func(reviewerTitle string, args ValidatePlanArgs) verdict.PlanResult {
+		t.Helper()
+		rv.resp = providers.Response{RawJSON: planJSON("", reviewerTitle, finding), Model: "gpt-5"}
+		_, pr, err := h.ValidatePlan(context.Background(), nil, args)
+		require.NoError(t, err)
+		require.Len(t, pr.Tasks, 1)
+		return pr
+	}
+
+	first := round("Task 1: Add the parse helper", ValidatePlanArgs{PlanText: plan})
+	require.Len(t, first.Tasks[0].Findings, 1)
+	assert.Equal(t, id, first.Tasks[0].Findings[0].ID)
+	assert.Equal(t, "Task 1: Add the parse helper", first.Tasks[0].TaskTitle, "the response keeps the reviewer's title")
+
+	ruled := ValidatePlanArgs{PlanText: plan, ControllerRulings: []ControllerRulingArg{{FindingID: id, Ruling: "Covered by a later task"}}}
+	second := round("Task 1: parse helper", ruled)
+	assert.Empty(t, second.Tasks[0].Findings)
+	require.Len(t, second.Tasks[0].WaivedFindings, 1)
+	assert.Equal(t, id, second.Tasks[0].WaivedFindings[0].ID)
+
+	calls := rv.Calls
+	third := round("Task 1: parse helper", ruled)
+	require.Equal(t, calls, rv.Calls, "the third call must be a cache hit")
+	require.Len(t, third.Tasks[0].WaivedFindings, 1)
+	assert.Equal(t, id, third.Tasks[0].WaivedFindings[0].ID)
+}
+
+// TestValidatePlan_ChunkedTaskFindingKeyIgnoresAChunkLocalIndex covers a
+// chunked review whose second chunk numbers its task 1 instead of 9. The
+// chunk's titles were checked against the plan, so the finding is keyed on
+// task 9's heading, as a single-call review of the same plan keys it.
+func TestValidatePlan_ChunkedTaskFindingKeyIgnoresAChunkLocalIndex(t *testing.T) {
+	id := verdict.Fingerprint(verdict.CategoryQuality, "t9", "spec")
+	sr := &scriptedReviewer{responses: []providers.Response{
+		passOneResp(),
+		chunkResp(t, titlesRange(1, 8)),
+		{RawJSON: []byte(`{"tasks":[{"task_index":1,"task_title":"Task 9: t9","verdict":"warn","findings":[` +
+			`{"severity":"major","category":"quality","criterion":"spec","evidence":"thin","suggestion":"s"}` +
+			`],"suggested_header_block":"","suggested_header_reason":""}]}`), Model: "claude-sonnet-4-6"},
+	}}
+	h := &handlers{deps: newDepsWithScripted(t, sr, 8)}
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:          buildPlanWithNTasks(9),
+		ControllerRulings: []ControllerRulingArg{{FindingID: id, Ruling: "Covered by a later task"}},
+	})
+	require.NoError(t, err)
+	require.Len(t, pr.Tasks, 9)
+	assert.Empty(t, pr.Tasks[8].Findings)
+	require.Len(t, pr.Tasks[8].WaivedFindings, 1)
+	assert.Equal(t, id, pr.Tasks[8].WaivedFindings[0].ID)
+}
+
 func TestValidatePlan_RulingsAndVerifiedReferencesReachEveryReviewerCall(t *testing.T) {
 	sr := &scriptedReviewer{responses: []providers.Response{
 		passOneResp(),

@@ -2201,6 +2201,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			UsedPlanText:       args.PlanText != "",
 			RepoRootUnusable:   repoRootUnusable,
 			ContextFiles:       contextSources(contextFiles),
+			Tasks:              tasks,
 			MalformedRulingIDs: malformedRulingIDs,
 		}
 		cachedCall.finish(&cached)
@@ -2521,25 +2522,67 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 	return r, modelUsed, time.Since(start).Milliseconds(), nil, nil
 }
 
-// populateNormativeTestBodies fills in pr.Tasks[i].NormativeTestBodies from
-// the matching planparser.RawTask body. The reviewer is prompted to emit
+// parsedTaskIndexes maps each reviewer task result to the index of the parsed
+// plan task it reports on, or -1 when that cannot be told.
+//
+// When every result's task_title names the parsed task at its own position
+// (compared as validateChunkIdentity compares them), results map by position.
+// That is the chunked path's shape, where validateChunkIdentity has checked
+// titles and order but not task_index, so a chunk-local task_index survives
+// and would name a task from the first chunk.
+//
+// Otherwise results map by TaskIndex. The reviewer is prompted to emit a
 // 1-based TaskIndex, but plan_schema.json accepts minimum:0 and some
-// reviewers (and the parser_partial fixtures) emit 0-based; detect the base
-// from the lowest non-negative index and apply uniformly. Tasks whose index
-// is out of range after de-basing are left alone (defensive — chunked-path
-// reviewer responses occasionally drift on task_index, and we'd rather emit
-// no extraction for that task than panic or misattribute).
-func populateNormativeTestBodies(pr *verdict.PlanResult, tasks []planparser.RawTask) {
+// reviewers (and the parser_partial fixtures) emit 0-based: any result with
+// TaskIndex 0 makes the whole list 0-based. An index out of range after
+// de-basing maps to -1 rather than to a guess.
+func parsedTaskIndexes(results []verdict.PlanTaskResult, tasks []planparser.RawTask) []int {
+	out := make([]int, len(results))
+	if alignedByTitle(results, tasks) {
+		for i := range out {
+			out[i] = i
+		}
+		return out
+	}
 	base := 1
-	for _, t := range pr.Tasks {
+	for _, t := range results {
 		if t.TaskIndex == 0 {
 			base = 0
 			break
 		}
 	}
-	for i := range pr.Tasks {
-		idx := pr.Tasks[i].TaskIndex - base
+	for i, t := range results {
+		idx := t.TaskIndex - base
 		if idx < 0 || idx >= len(tasks) {
+			idx = -1
+		}
+		out[i] = idx
+	}
+	return out
+}
+
+// alignedByTitle reports whether each result's task_title, without its
+// "Task N:" prefix, equals the title of the parsed task at the same position.
+// A truncated response's results are a prefix of the plan's tasks, so fewer
+// results than tasks can still align.
+func alignedByTitle(results []verdict.PlanTaskResult, tasks []planparser.RawTask) bool {
+	if len(results) > len(tasks) {
+		return false
+	}
+	for i, r := range results {
+		if normalizeTaskTitle(r.TaskTitle) != normalizeTaskTitle(tasks[i].Title) {
+			return false
+		}
+	}
+	return true
+}
+
+// populateNormativeTestBodies fills in pr.Tasks[i].NormativeTestBodies from
+// the body of the parsed task the result reports on (see parsedTaskIndexes).
+// A result that names no parsed task gets no extraction.
+func populateNormativeTestBodies(pr *verdict.PlanResult, tasks []planparser.RawTask) {
+	for i, idx := range parsedTaskIndexes(pr.Tasks, tasks) {
+		if idx < 0 {
 			continue
 		}
 		pr.Tasks[i].NormativeTestBodies = planparser.ExtractNormativeTestBodies(tasks[idx].Body)
@@ -2641,7 +2684,7 @@ func finalizePlanVerdict(pr *verdict.PlanResult) {
 
 func finalizePlanResult(pr verdict.PlanResult, meta planSummaryMeta) verdict.PlanResult {
 	finalizePlanVerdict(&pr)
-	assignPlanIDs(&pr)
+	assignPlanIDs(&pr, nil)
 	pr.SummaryBlock = formatPlanSummary(pr, meta)
 	return pr
 }

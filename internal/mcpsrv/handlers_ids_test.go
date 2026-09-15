@@ -2,6 +2,8 @@ package mcpsrv
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -153,27 +155,37 @@ func TestCheckProgress_RejectedCallCarriesIDs(t *testing.T) {
 func TestValidatePlan_FindingsCarryDisplayIDs(t *testing.T) {
 	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable",
 		"plan_findings":[{"severity":"major","category":"ambiguous_spec","criterion":"AC","evidence":"vague","suggestion":"s"}],
-		"tasks":[{"task_index":1,"task_title":"Task 1: one","verdict":"warn","findings":[{"severity":"major","category":"quality","criterion":"spec","evidence":"e","suggestion":"s"}],"suggested_header_block":"","suggested_header_reason":""}],
+		"tasks":[{"task_index":1,"task_title":"Task 1: t1","verdict":"warn","findings":[{"severity":"major","category":"quality","criterion":"spec","evidence":"e","suggestion":"s"}],"suggested_header_block":"","suggested_header_reason":""}],
 		"next_action":"n"}`)
 	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
 	require.Len(t, pr.PlanFindings, 1)
 	assert.Equal(t, verdict.Fingerprint(verdict.CategoryAmbiguousSpec, "", "AC"), pr.PlanFindings[0].ID)
 	require.Len(t, pr.Tasks[0].Findings, 1)
-	assert.Equal(t, verdict.Fingerprint(verdict.CategoryQuality, "one", "spec"), pr.Tasks[0].Findings[0].ID)
+	assert.Equal(t, verdict.Fingerprint(verdict.CategoryQuality, "t1", "spec"), pr.Tasks[0].Findings[0].ID)
 	assert.Contains(t, pr.SummaryBlock, pr.Tasks[0].Findings[0].ID)
 }
 
 func TestValidatePlan_TaskFindingIDSurvivesRenumbering(t *testing.T) {
-	resp := func(title string) []byte {
-		return []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[{"task_index":1,"task_title":"` + title +
-			`","verdict":"warn","findings":[{"severity":"major","category":"quality","criterion":"spec","evidence":"e","suggestion":"s"}],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"n"}`)
+	finding := `{"severity":"major","category":"quality","criterion":"spec","evidence":"e","suggestion":"s"}`
+	task := func(n int, title string) string {
+		return fmt.Sprintf("### Task %d: %s\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n\n", n, title)
 	}
-	first, err := runValidatePlanWithReviewerJSON(t, resp("Task 1: Add parser"), 1)
-	require.NoError(t, err)
-	second, err := runValidatePlanWithReviewerJSON(t, resp("Task 2: Add parser"), 1)
-	require.NoError(t, err)
-	assert.Equal(t, first.Tasks[0].Findings[0].ID, second.Tasks[0].Findings[0].ID)
+	taskResult := func(n int, title, findings string) string {
+		return fmt.Sprintf(`{"task_index":%d,"task_title":"Task %d: %s","verdict":"warn","findings":[%s],"suggested_header_block":"","suggested_header_reason":""}`, n, n, title, findings)
+	}
+	planResp := func(tasks ...string) []byte {
+		return []byte(`{"plan_verdict":"warn","plan_quality":"actionable","plan_findings":[],"tasks":[` + strings.Join(tasks, ",") + `],"next_action":"n"}`)
+	}
+
+	first, _, _ := runPlanWithArgs(t, planResp(taskResult(1, "Add parser", finding)),
+		ValidatePlanArgs{PlanText: "# Plan\n\n" + task(1, "Add parser")})
+	second, _, _ := runPlanWithArgs(t, planResp(taskResult(1, "Add lexer", ""), taskResult(2, "Add parser", finding)),
+		ValidatePlanArgs{PlanText: "# Plan\n\n" + task(1, "Add lexer") + task(2, "Add parser")})
+
+	require.Len(t, first.Tasks[0].Findings, 1)
+	require.Len(t, second.Tasks[1].Findings, 1)
+	assert.Equal(t, first.Tasks[0].Findings[0].ID, second.Tasks[1].Findings[0].ID)
 }
 
 func TestValidatePlan_EarlyExitFindingsCarryIDs(t *testing.T) {
