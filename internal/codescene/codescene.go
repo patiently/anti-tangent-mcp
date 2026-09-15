@@ -65,9 +65,10 @@ type rawChangeSetResult struct {
 
 // reduceChangeSetResults tallies rawChangeSetResult.Verdict into a Verdicts,
 // sums each finding's new-pp minus old-pp into a net problem-points delta,
-// and counts findings per non-empty category. Split out of UnmarshalJSON so
-// that function's own branching (whether each field is caller-present) stays
-// separate from this one's (how the raw results reduce).
+// and counts findings per non-empty category. It is a separate function
+// because it holds the per-result tally, which keeps UnmarshalJSON's own
+// branching about which keys are present rather than how the raw results
+// reduce.
 func reduceChangeSetResults(results []rawChangeSetResult) (verdicts Verdicts, netPP float64, categoryCounts map[string]int) {
 	categoryCounts = map[string]int{}
 	for _, r := range results {

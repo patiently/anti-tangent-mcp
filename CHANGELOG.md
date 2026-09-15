@@ -28,9 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- A file path outside `ANTI_TANGENT_PLAN_ROOTS` is refused with a way to recover: pass a path
-  inside the repository you are working in. A per-session scratch directory under `/tmp` is
-  usually outside the roots, which is where a generated diff most often lands.
+- A file path outside `ANTI_TANGENT_PLAN_ROOTS` is refused with a way to recover: pass a file in
+  the repository's git directory (`git rev-parse --absolute-git-dir`), which git never tracks. A
+  per-session scratch directory under `/tmp` is usually outside the roots, which is where a
+  generated diff most often lands.
 - `validate_completion`'s `payload_too_large` suggestion no longer advises splitting the
   evidence into smaller chunks. Each call is reviewed on its own, so evidence spread over several
   calls is never seen together. It now names a `-U1` diff, leaving out generated, lockfile and

@@ -488,6 +488,7 @@ func TestValidateCompletion_OversizedPathSuggestionIsActionable(t *testing.T) {
 func TestValidateCompletionTool_DescriptionStatesRootsRule(t *testing.T) {
 	d := validateCompletionTool().Description
 	assert.Contains(t, d, "ANTI_TANGENT_PLAN_ROOTS")
+	assert.Contains(t, d, "git directory")
 	assert.Contains(t, d, "/tmp")
 }
 
@@ -3549,7 +3550,7 @@ func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
 		})
 		require.Error(t, err, "outside-roots must stay a transport error, not an envelope")
 		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
-		assert.Contains(t, err.Error(), "inside the repository you are working in")
+		assert.Contains(t, err.Error(), "git rev-parse --absolute-git-dir")
 	})
 
 	t.Run("missing file stays a plain transport error", func(t *testing.T) {

@@ -208,7 +208,10 @@ func (c planCallContext) applyPreLadder(pr *verdict.PlanResult) {
 
 // mintPlanRunID assigns a plan_run_id when pr does not already carry one.
 // Idempotent by that guard, which is what lets finish() call it
-// unconditionally while the fresh-review path hoists it above store().
+// unconditionally while the fresh-review path hoists it above store(). On a
+// freshly minted run it also appends a best-effort ledger header (no task
+// title, just the run id, verdict, quality and task count); the early return
+// on an existing id is what keeps a cache hit from writing a second header.
 func (c planCallContext) mintPlanRunID(pr *verdict.PlanResult) {
 	if pr.PlanRunID != "" {
 		return

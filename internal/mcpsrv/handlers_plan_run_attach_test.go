@@ -65,6 +65,7 @@ func TestValidateTaskSpec_PlanRunIDAdvisory(t *testing.T) {
 		assert.Equal(t, verdict.SeverityMinor, got[0].Severity)
 		assert.Equal(t, verdict.CategoryOther, got[0].Category)
 		assert.Contains(t, got[0].Suggestion, "plan_run_id="+run.ID)
+		assert.Contains(t, got[0].Suggestion, "session_id")
 		assert.Equal(t, want.Verdict, env.Verdict, "the advisory must not change the verdict")
 		assert.Contains(t, env.SummaryBlock, run.ID)
 	})
@@ -123,7 +124,10 @@ func TestValidatePlan_LedgerHeaderKeepsAnUnattachedRunKnown(t *testing.T) {
 	_, res, err := restarted.PlanRunReport(context.Background(), nil, PlanRunReportArgs{PlanRunID: pr.PlanRunID})
 	require.NoError(t, err)
 	assert.False(t, hasCategory(res.Findings, verdict.CategorySessionMissing), "a header-only run is known: %+v", res.Findings)
-	assert.Len(t, planRunIDFindings(res.Findings), 1)
+	got := planRunIDFindings(res.Findings)
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Evidence, "finished validate_completion")
+	assert.NotContains(t, got[0].Evidence, "no validate_task_spec call passed")
 	assert.Equal(t, string(pr.PlanVerdict), res.PlanVerdict)
 }
 
@@ -144,11 +148,11 @@ func TestValidatePlan_OneLedgerHeaderPerMintedRun(t *testing.T) {
 	headers := 0
 	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 		var rec struct {
-			PlanRunID string `json:"plan_run_id"`
-			Header    bool   `json:"header"`
+			HeaderPlanRunID string `json:"header_plan_run_id"`
+			Header          bool   `json:"header"`
 		}
 		require.NoError(t, json.Unmarshal([]byte(line), &rec))
-		if rec.Header && rec.PlanRunID == first.PlanRunID {
+		if rec.Header && rec.HeaderPlanRunID == first.PlanRunID {
 			headers++
 		}
 	}

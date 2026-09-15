@@ -1,6 +1,7 @@
 package planrun
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -335,6 +336,24 @@ func TestLedger_HeaderOnlyRunLoads(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(dir, ledgerFile))
 	require.NoError(t, err)
 	assert.NotContains(t, string(b), "task_title", "a header carries no task title")
+}
+
+// TestLedger_HeaderLineKeyedOnHeaderPlanRunID pins the key a header line
+// carries its run id under: a reader that matches task rows on plan_run_id
+// (a pre-0.22 Load, or any future one) must never mistake a header line for
+// a row, so the header's id lives only under header_plan_run_id.
+func TestLedger_HeaderLineKeyedOnHeaderPlanRunID(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+	require.NoError(t, l.AppendHeader(&Run{ID: "pr_headerkey01", CreatedAt: time.Now().UTC()}))
+
+	b, err := os.ReadFile(filepath.Join(dir, ledgerFile))
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(string(b))), &m))
+	_, hasPlanRunID := m["plan_run_id"]
+	assert.False(t, hasPlanRunID, "a header line must carry no plan_run_id key")
+	assert.Equal(t, "pr_headerkey01", m["header_plan_run_id"])
 }
 
 func TestLedger_HeaderIsNeverARow(t *testing.T) {

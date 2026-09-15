@@ -758,13 +758,32 @@ func planRunIDAdvisory(runID string) verdict.Finding {
 		Evidence: fmt.Sprintf("This call passed no plan_run_id, but this server holds a live plan run, %s, "+
 			"minted by the most recent validate_plan.", runID),
 		Suggestion: fmt.Sprintf("If this task belongs to that plan, call validate_task_spec with plan_run_id=%s "+
-			"so plan_run_report can include it. Ignore this if the task is not part of a plan run.", runID),
+			"so plan_run_report can include it. Use the session_id that call returns for the rest of the task. "+
+			"Ignore this if the task is not part of a plan run.", runID),
 	}
 }
 
-// unattachedPlanRunFinding explains a known plan run with no task rows: the
-// run was minted, but no validate_task_spec call passed its id.
-func unattachedPlanRunFinding(run *planrun.Run) verdict.Finding {
+// unattachedPlanRunFinding explains a known plan run with no task rows. The
+// cause differs by source: a run found in the live store has no rows because
+// rows are appended at validate_task_spec, so no call ever passed its id. A
+// run recovered from the ledger has no rows because the ledger records a task
+// only when it finishes validate_completion — a header-only run may have had
+// tasks attached and even in progress before a restart, and that live state
+// does not survive.
+func unattachedPlanRunFinding(run *planrun.Run, fromLedger bool) verdict.Finding {
+	if fromLedger {
+		return verdict.Finding{
+			Severity:  verdict.SeverityMinor,
+			Category:  verdict.CategoryOther,
+			Criterion: "plan_run_id",
+			Evidence: fmt.Sprintf("Plan run %s is known from the plan ledger (%d tasks in the plan), but no task "+
+				"attached to it finished validate_completion while the ledger was enabled; the ledger records a "+
+				"task only when it completes, and nothing about this run's live state survived the restart.",
+				run.ID, run.TaskCount),
+			Suggestion: "Report from the per-task DONE envelopes. If tasks did not pass plan_run_id on " +
+				"validate_task_spec, pass it on every call.",
+		}
+	}
 	return verdict.Finding{
 		Severity:  verdict.SeverityMinor,
 		Category:  verdict.CategoryOther,
@@ -997,7 +1016,7 @@ func validateCompletionTool() *mcp.Tool {
 			"The reviewer checks the full implementation against every acceptance criterion " +
 			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done. " +
 			"Omit a final_files entry's content to have the server read its absolute path, and pass final_diff_path instead of final_diff, to avoid emitting large evidence as output tokens. " +
-			"When ANTI_TANGENT_PLAN_ROOTS is set, both kinds of path must be under one of its roots, which a per-session scratch directory under /tmp usually is not.",
+			"When ANTI_TANGENT_PLAN_ROOTS is set, both kinds of path must be under one of its roots, such as the repository's git directory; a per-session scratch directory under /tmp usually is not.",
 	}
 }
 
@@ -1006,7 +1025,7 @@ type ValidateCompletionArgs struct {
 	Summary               string              `json:"summary"     jsonschema:"What you implemented and how each acceptance criterion is met. A claim in the summary is not evidence on its own."`
 	FinalFiles            []CompletionFileArg `json:"final_files,omitempty" jsonschema:"Changed files, with full content or with content omitted so the server reads them. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; do not also send a file that final_diff already covers."`
 	FinalDiff             string              `json:"final_diff,omitempty" jsonschema:"A unified diff of the task's changes. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; when it is large, generate it with -U1 and leave out generated, lockfile and snapshot files."`
-	FinalDiffPath         string              `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, which a per-session scratch directory under /tmp usually is not."`
+	FinalDiffPath         string              `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, such as the repository's git directory; a per-session scratch directory under /tmp usually is not."`
 	TestEvidence          string              `json:"test_evidence,omitempty" jsonschema:"The test run output that proves the change, verbatim. Output showing no test executed draws a finding."`
 	ExitContracts         []string            `json:"exit_contracts,omitempty" jsonschema:"Symbols or behavior later tasks rely on this task leaving in place, copied from validate_plan's exit_contracts for this task; a hard miss draws missing_acceptance_criterion. At most 50 entries of at most 500 characters each."`
 	ExitContractsInferred bool                `json:"exit_contracts_inferred,omitempty" jsonschema:"validate_plan's exit_contracts_inferred for this task: true when the contracts were inferred from cross-task references rather than written in the plan, which caps a miss at minor."`
@@ -2879,6 +2898,7 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 	// Snapshot, not Get: this walks run.Rows after the lock is released, and
 	// other subagents under the same plan run may be appending concurrently.
 	run, ok := h.deps.PlanRuns.Snapshot(args.PlanRunID)
+	fromLedger := !ok
 	if !ok {
 		// Fall back to the durable ledger (nil-safe: PlanLedger is nil unless
 		// both ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER are set).
@@ -2918,18 +2938,18 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 		res.Tasks = []planrun.TaskRow{}
 	}
 	if len(run.Rows) == 0 {
-		res.Findings = append(res.Findings, unattachedPlanRunFinding(run))
+		res.Findings = append(res.Findings, unattachedPlanRunFinding(run, fromLedger))
 	}
 	return planRunReportResult(res)
 }
 
 // formatUnknownPlanRunSummary renders plan_run_report's summary_block for a
-// plan_run_id this server does not know. planRunID is caller-supplied
-// (jsonschema "required", no other constraint), so it is folded through
-// escapeBlockValue for the same reason every other free-text value in a
-// summary block is: a newline in it would put the next physical line at
-// column 0, where plugin/anti-tangent-guard's line-based transcript scan can
-// read it as block grammar. Hygiene, not a security boundary — see
+// plan_run_id this server does not know. planRunID is caller-supplied and the
+// schema requires it but constrains nothing else about its content, so it is
+// folded through escapeBlockValue for the same reason every other free-text
+// value in a summary block is: a newline in it would put the next physical
+// line at column 0, where plugin/anti-tangent-guard's line-based transcript
+// scan can read it as block grammar. Hygiene, not a security boundary — see
 // blocktext.EscapeContinuationLines.
 //
 // It is a named function rather than an expression inline in PlanRunReport so

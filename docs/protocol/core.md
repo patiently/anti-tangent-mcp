@@ -122,7 +122,7 @@ If unsure, look for the structured task block. No block → no protocol. Don't f
 
 **How do I know my session expired?** A `category: session_not_found` finding. Default TTL 4h; re-call `validate_task_spec` for a fresh session.
 
-**My payload is too big.** A `category: payload_too_large` finding. Default cap 200 KB across `changed_files`, `final_files` and `final_diff`, set by `ANTI_TANGENT_MAX_PAYLOAD_BYTES`. For `validate_completion`, pass `final_diff` instead of or alongside `final_files`; for `check_progress`, reduce `changed_files` or split the call. `validate_plan` uses `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES`, and `context_paths` adds two of its own — `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` per file, `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` for the attached set — plus a fixed 50-file count cap. `evidence` names which one was breached.
+**My payload is too big.** A `category: payload_too_large` finding. Default cap 200 KB across `changed_files`, `final_files` and `final_diff`, set by `ANTI_TANGENT_MAX_PAYLOAD_BYTES`. For `validate_completion`, send a unified diff (`-U1` when large) instead of whole files, never the same file in both `final_diff` and `final_files`, and leave out generated, lockfile and snapshot files; for `check_progress`, reduce `changed_files` or split the call. `validate_plan` uses `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES`, and `context_paths` adds two of its own — `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` per file, `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` for the attached set — plus a fixed 50-file count cap. `evidence` names which one was breached.
 
 **A `validate_completion` call returned `category: malformed_evidence`.** The server's evidence-shape guard rejected your submission pre-review. `evidence` names the offending pattern — a truncation marker (`(truncated)`, `[truncated]`, `// ... unchanged`), a `...`-only placeholder line, or empty `Path` entries in `final_files`. Re-submit with full file contents or a complete unified diff. Rejection is cached for 5 minutes by canonical content hash. A bare `...` line is not flagged on a diff's unchanged or removed lines, or in a `.py`/`.pyi` file. The other markers are checked everywhere, `final_diff` included.
 
@@ -166,5 +166,7 @@ Defaults shown; [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob
   `codescene` argument or an unevidenced skip — see the ladder above. A lone CodeScene major
   yields `warn`; combined with another major it can tip a verdict to `fail`.
 - `ANTI_TANGENT_PLAN_LEDGER` — `0` (off). With `ANTI_TANGENT_STATS_DIR` set, `1` persists each
-  completed task row to `plan-runs.jsonl` so `plan_run_report` survives a restart. Unlike every
-  other stats artifact it carries task titles, hence its own opt-in.
+  completed task row to `plan-runs.jsonl` so `plan_run_report` survives a restart. It also holds
+  one header line per run minted by `validate_plan` (run id, verdict, quality, task count, creation
+  time — no task title), pruned by its creation time. Unlike every other stats artifact it carries
+  task titles, hence its own opt-in.

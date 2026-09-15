@@ -82,7 +82,10 @@ surfaces it in `plan_run_report`'s per-task table.
 
 Set `ANTI_TANGENT_PLAN_LEDGER=1` (with `ANTI_TANGENT_STATS_DIR`) to persist one line per
 completed task to `plan-runs.jsonl`, so `plan_run_report` survives a server restart — the
-in-memory plan-run store is otherwise lost like every other session state.
+in-memory plan-run store is otherwise lost like every other session state. The ledger also holds
+one header line per run minted by `validate_plan` — run id, verdict, quality, task count, creation
+time, no task title — pruned by its creation time, so a run no task ever attached to is still known
+after a restart.
 
 **Privacy: this file is different from the others.** `events.jsonl` and
 `codescene-events.jsonl` are deliberately content-free — no titles, no paths, no code.

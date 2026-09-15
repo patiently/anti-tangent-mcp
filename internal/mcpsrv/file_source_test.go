@@ -77,7 +77,7 @@ func TestResolveFileInput(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
 		assert.Contains(t, err.Error(), dirResolved, "the error must name the configured roots")
-		assert.Contains(t, err.Error(), "inside the repository you are working in")
+		assert.Contains(t, err.Error(), "git rev-parse --absolute-git-dir")
 		assert.Contains(t, err.Error(), "/tmp")
 	})
 
