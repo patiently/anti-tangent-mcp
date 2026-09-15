@@ -558,9 +558,8 @@ change in this part; §3.4 decides whether it stays.
   keeping the prior findings; ruling persistence, replacement and the 50-fingerprint cap;
   unknown-ID and no-session advisories; summary forgery tests with hostile ruling, response and
   waived-evidence text; `controller_rulings` and a `ruling:` line for every ruling applied, a
-ruling that waived nothing included, and none on a rejected call or a call without a session;
-`plan_run_report` `waived` and `escalated`, with older ledger lines still
-  loading; `validate_plan` rulings, the malformed-ruling advisory, no advisory for a ruling that
+  ruling that waived nothing included, and none on a rejected call or a call without a session;
+  `plan_run_report` `waived` and `escalated`, with older ledger lines still loading; `validate_plan` rulings, the malformed-ruling advisory, no advisory for a ruling that
   waives nothing, verified-reference suppression before the strip, the restated calibration
   condition, the checklist no longer lifting the verdict, a cache hit reproducing waivers without
   sharing slices with the stored entry, and IDs on the four early exits; a truncated
