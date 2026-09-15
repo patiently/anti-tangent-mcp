@@ -184,6 +184,36 @@ func TestStaleCommentHint_NeverReadsADeletedFile(t *testing.T) {
 	assert.Nil(t, hint)
 }
 
+// TestStaleCommentHint_NeverReadsAPathEscapingOrAbsolutePostChangePath pins
+// B5: a +++ header naming a path that walks out of repo_root with ".." or
+// names an absolute path must never be read from disk, even when a file
+// matching the removed name genuinely sits at that location. Both diff files
+// below remove handleRetired, but neither's hunk context or added lines
+// mention it, so a hit can only mean the disk file — outside repo_root —
+// was read.
+func TestStaleCommentHint_NeverReadsAPathEscapingOrAbsolutePostChangePath(t *testing.T) {
+	root := t.TempDir()
+	writeRepoFile(t, filepath.Dir(root), "outside.go", "// handleRetired still runs the sweep.\n")
+
+	diff := "diff --git a/../outside.go b/../outside.go\n" +
+		"--- a/../outside.go\n" +
+		"+++ b/../outside.go\n" +
+		"@@ -1,2 +1,1 @@\n" +
+		" package outside\n" +
+		"-func handleRetired() {}\n" +
+		"diff --git a/etc/passwd b/etc/passwd\n" +
+		"--- a/etc/passwd\n" +
+		"+++ /etc/passwd\n" +
+		"@@ -1,2 +1,1 @@\n" +
+		" root:x:0:0\n" +
+		"-func handleRetired() {}\n"
+
+	hint, advisories := staleCommentHint(hintCfg(t), diff, root, nil)
+
+	assert.Empty(t, advisories)
+	assert.Nil(t, hint, "neither post-change path is read from disk, so only the hunks are scanned, and neither hunk's context or added lines name handleRetired")
+}
+
 func TestStaleCommentHint_AFinalFilesEntryStandsInForItsDiffFileOnce(t *testing.T) {
 	files := []FileArg{
 		{Path: "/checkout/pkg/sweep.go", Content: sweepFile()},

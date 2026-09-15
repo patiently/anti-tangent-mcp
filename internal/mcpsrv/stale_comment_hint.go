@@ -140,11 +140,14 @@ type diskReadBudget struct {
 }
 
 // readUnderRepoRoot reads rel beneath root under the rules a context_paths
-// attachment follows: ANTI_TANGENT_PLAN_ROOTS checked after symlinks resolve,
-// no symlink followed at the last component, a regular file, and the per-file
-// byte cap. The resolved file must also stay beneath root, so a symlink in the
-// checkout cannot pull in a file from elsewhere. It reports false, having
-// spent one attempt, when the read fails or would overrun the byte budget.
+// attachment follows: symlinks are resolved (including at rel's own last
+// component), and the resolved path must stay beneath both
+// ANTI_TANGENT_PLAN_ROOTS and root, so a symlink in the checkout cannot pull
+// in a file from elsewhere. The open that follows then refuses only a
+// symlink introduced at the last component of that already-resolved path —
+// the race window between the roots check and the read — and requires a
+// regular file within the per-file byte cap. It reports false, having spent
+// one attempt, when the read fails or would overrun the byte budget.
 func readUnderRepoRoot(cfg config.Config, root, rel string, budget *diskReadBudget) (string, bool) {
 	if root == "" || budget.files <= 0 {
 		return "", false

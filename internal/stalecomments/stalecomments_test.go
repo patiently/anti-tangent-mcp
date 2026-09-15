@@ -60,14 +60,20 @@ func TestParseDiff_DeletedFileHasNoPathAndHeaderlessTextHasNoLines(t *testing.T)
 	assert.Empty(t, RemovedNames(ParseDiff("-func handleRetired() {\n+func other() {\n")))
 }
 
-func TestParseDiff_SeparatesFilesAndStripsQuotesAndTimestamps(t *testing.T) {
-	diff := "--- a/one.kt\t2026-09-15\n+++ \"b/dir with space/one.kt\"\t2026-09-15\n@@ -1 +1 @@\n-fun oldName() {}\n+fun newName() {}\n" +
-		"--- a/two.ts\n+++ b/two.ts\n@@ -3 +3 @@\n-export function legacyHandler() {}\n+export function handler() {}\n"
+func TestParseDiff_SeparatesFilesAndDecodesGitPathQuoting(t *testing.T) {
+	// Git never quotes a path merely for a space — it leaves the path bare
+	// and terminates it with a tab (usually followed by a timestamp).
+	diff := "--- a/one.kt\t2026-09-15\n+++ b/dir with space/one.kt\t2026-09-15\n@@ -1 +1 @@\n-fun oldName() {}\n+fun newName() {}\n" +
+		"--- a/two.ts\n+++ b/two.ts\n@@ -3 +3 @@\n-export function legacyHandler() {}\n+export function handler() {}\n" +
+		// Git quotes a path only for a non-ASCII byte, escaping it octal
+		// inside double quotes: café.go's é is UTF-8 0xC3 0xA9 = \303\251.
+		"--- \"a/caf\\303\\251.go\"\n+++ \"b/caf\\303\\251.go\"\n@@ -1 +1 @@\n-func oldCafe() {}\n+func newCafe() {}\n"
 	files := ParseDiff(diff)
-	require.Len(t, files, 2)
+	require.Len(t, files, 3)
 	assert.Equal(t, "dir with space/one.kt", files[0].Path)
 	assert.Equal(t, "two.ts", files[1].Path)
 	assert.Equal(t, []Line{{Number: 3, Text: "export function handler() {}"}}, files[1].Post)
+	assert.Equal(t, "café.go", files[2].Path)
 }
 
 func TestRemovedNames_AcrossLanguages(t *testing.T) {
@@ -118,6 +124,36 @@ func TestRemovedNames_StopsAtMaxNames(t *testing.T) {
 	assert.Equal(t, "removedName29", names[MaxNames-1])
 }
 
+func TestRemovedNames_SkipsProseFiles(t *testing.T) {
+	// Absent the path filter, this line's prose reads as code: "case each"
+	// declares "each", "type that" declares "that", "func handles" declares
+	// "handles" — three keyword-lookalike words a Markdown file never
+	// actually declares.
+	diff := "--- a/notes.md\n+++ b/notes.md\n@@ -1 +0,0 @@\n-case each; type that; func handles\n"
+	assert.Empty(t, RemovedNames(ParseDiff(diff)))
+}
+
+func TestRemovedNames_ADeletedFileHasNoPathSoItIsNeverSkippedAsProse(t *testing.T) {
+	// A deleted file's +++ header is /dev/null, so headerPath returns "".
+	// An empty Path must not be treated as prose: the removed line is the
+	// only evidence of what the file was, and it is Go, not Markdown.
+	diff := "diff --git a/legacy.go b/legacy.go\ndeleted file mode 100644\n--- a/legacy.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-func legacySweep() {}\n"
+	assert.Equal(t, []string{"legacySweep"}, RemovedNames(ParseDiff(diff)))
+}
+
+func TestRemovedNames_BlanksStringLiteralsBeforeMatchingDeclarations(t *testing.T) {
+	// "object" is itself a declaration keyword (Kotlin/Scala singleton
+	// objects), so the unblanked string "unknown object with id %d" reads as
+	// a declaration of "with".
+	diff := "--- a/a.go\n+++ b/a.go\n@@ -1 +0,0 @@\n-\treturn nil, fmt.Errorf(\"unknown object with id %d\", id)\n"
+	assert.Empty(t, RemovedNames(ParseDiff(diff)))
+}
+
+func TestRemovedNames_DropsLowercaseLocalsAfterValVarLetConst(t *testing.T) {
+	diff := "--- a/a.kt\n+++ b/a.kt\n@@ -1,2 +0,0 @@\n-val result = 1\n-const MAX_RETRIES = 3\n"
+	assert.Equal(t, []string{"MAX_RETRIES"}, RemovedNames(ParseDiff(diff)))
+}
+
 func TestIsComment(t *testing.T) {
 	for _, s := range []string{"// a", "  # a", " * a", "/* a", "<!-- a", "-- a", "\t//a"} {
 		assert.True(t, IsComment(s), "%q", s)
@@ -138,6 +174,18 @@ func TestScan_MatchesWholeIdentifiersInCommentsOnly(t *testing.T) {
 	require.Len(t, hits, 2)
 	assert.Equal(t, Hit{Path: "a.go", Line: 1, Name: "handleRetired", Text: "// handleRetired drains the queue."}, hits[0])
 	assert.Equal(t, "a.go:4: * see handleRetired().", hits[1].String())
+}
+
+func TestScan_MatchesInAProseFileSourceTooSinceOnlyRemovedNamesSkipsProse(t *testing.T) {
+	// A prose file's path is excluded from RemovedNames' name collection,
+	// but a removed name found in some other file can still hit a line in a
+	// prose source: the "#" heading marker reads as a comment.
+	sources := []Source{{Path: "notes.md", Lines: []Line{
+		{Number: 1, Text: "# still calls legacySweep here"},
+	}}}
+	hits := Scan([]string{"legacySweep"}, sources)
+	require.Len(t, hits, 1)
+	assert.Equal(t, "notes.md", hits[0].Path)
 }
 
 func TestScan_DeduplicatesAndCaps(t *testing.T) {

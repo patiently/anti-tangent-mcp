@@ -6,9 +6,11 @@ package stalecomments
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -78,8 +80,9 @@ func (p *diffParser) inHunk() bool {
 	return p.oldLeft > 0 || p.newLeft > 0
 }
 
-// hunkLine processes a line that is known to be in a hunk. Returns false if
-// the line is not a hunk body line (e.g., context marker but out of sync).
+// hunkLine processes a line that is known to be in a hunk. Returns false for
+// a line that is none of -, +, context, empty or \ — a header or garbage met
+// while the hunk's counts are still outstanding.
 func (p *diffParser) hunkLine(line string) bool {
 	switch {
 	case strings.HasPrefix(line, "-"):
@@ -175,18 +178,24 @@ func hunkCount(s string) int {
 	return n
 }
 
-// unquote removes one pair of surrounding double quotes, which git adds around
-// a path containing spaces or non-ASCII bytes.
+// unquote decodes a git-quoted path. Git does not quote a path merely for a
+// space — it leaves the path bare and terminates it with a tab instead — so
+// quoting means the path has a non-ASCII byte, which git escapes octal
+// (\NNN per byte, the same syntax Go string literals use) inside the
+// surrounding double quotes. strconv.Unquote reverses both the quoting and
+// the escapes; a name that is not validly quoted is returned unchanged
+// rather than dropped.
 func unquote(name string) string {
-	inner, ok := strings.CutPrefix(name, `"`)
-	if !ok {
+	if len(name) < 2 {
 		return name
 	}
-	inner, ok = strings.CutSuffix(inner, `"`)
-	if !ok {
+	if name[0] != '"' || name[len(name)-1] != '"' {
 		return name
 	}
-	return inner
+	if s, err := strconv.Unquote(name); err == nil {
+		return s
+	}
+	return name
 }
 
 // headerPath is the path a +++ header names, without a trailing timestamp,
@@ -269,9 +278,26 @@ func caseLabels(rest string) ([]string, string) {
 	return names, rest
 }
 
+// localDeclKeywords are the keywords whose declared name is dropped when the
+// name has no uppercase letter: "val result", "var value" and "let mut" are
+// almost always locals, while "const MAX_RETRIES" and "val StateRetired"
+// name symbols worth watching for staleness.
+var localDeclKeywords = map[string]bool{"val": true, "var": true, "let": true, "const": true}
+
+// hasUppercase reports whether s contains at least one uppercase letter.
+func hasUppercase(s string) bool {
+	for _, r := range s {
+		if unicode.IsUpper(r) {
+			return true
+		}
+	}
+	return false
+}
+
 // declaredNames lists the names a code line declares. A name that is itself a
 // declaration keyword starts the next match instead, so "enum class Foo"
-// declares Foo, and every label of "case A, B:" is declared.
+// declares Foo, and every label of "case A, B:" is declared. A name after
+// val/var/let/const with no uppercase letter is dropped as a local.
 func declaredNames(line string) []string {
 	var names []string
 	for rest := line; ; {
@@ -284,7 +310,9 @@ func declaredNames(line string) []string {
 			rest = rest[m[4]:]
 			continue
 		}
-		names = append(names, name)
+		if !localDeclKeywords[keyword] || hasUppercase(name) {
+			names = append(names, name)
+		}
 		rest = rest[m[1]:]
 		if keyword == "case" {
 			moreNames, r := caseLabels(rest)
@@ -298,23 +326,88 @@ func lastSegment(dotted string) string {
 	return dotted[strings.LastIndexByte(dotted, '.')+1:]
 }
 
+// quoteRunes are the characters that open a string literal a code line's
+// declaration matching must not look inside.
+const quoteRunes = `"'` + "`"
+
+// blankQuotedLiterals replaces the interior of every double-, single- and
+// backtick-quoted literal in line with spaces, left to right, honoring a
+// backslash escape inside the literal. This is a lexical scan, not a parser
+// for any one language: it exists only to keep a string's words (for example
+// `"unknown object with id %d"`) out of declaredNames, not to validate quoting.
+// An unterminated literal blanks to the end of the line.
+func blankQuotedLiterals(line string) string {
+	b := []byte(line)
+	for i := 0; i < len(b); i++ {
+		if !strings.ContainsRune(quoteRunes, rune(b[i])) {
+			continue
+		}
+		j := closingQuote(b, i)
+		blankRange(b, i, j)
+		i = j
+	}
+	return string(b)
+}
+
+// closingQuote finds the byte in b, after i, that closes the quote at b[i],
+// honoring a backslash escape. It returns the last index of b when the
+// literal is unterminated, so the caller blanks to the end of the line.
+func closingQuote(b []byte, i int) int {
+	quote := b[i]
+	for j := i + 1; j < len(b); j++ {
+		if b[j] == '\\' && j+1 < len(b) {
+			j++
+			continue
+		}
+		if b[j] == quote {
+			return j
+		}
+	}
+	return len(b) - 1
+}
+
+// blankRange overwrites b[i:j+1] with spaces, in place.
+func blankRange(b []byte, i, j int) {
+	for k := i; k <= j; k++ {
+		b[k] = ' '
+	}
+}
+
 // declaredOnCodeLines returns all names declared by non-comment lines, with
-// duplicates.
+// duplicates. Quoted string literals are blanked first, so a literal's words
+// are never mistaken for a declared name.
 func declaredOnCodeLines(lines []string) []string {
 	var names []string
 	for _, text := range lines {
 		if IsComment(text) {
 			continue
 		}
-		names = append(names, declaredNames(text)...)
+		names = append(names, declaredNames(blankQuotedLiterals(text))...)
 	}
 	return names
 }
 
-// redeclaredNames builds a set of names declared in added code lines.
+// proseExtensions are file extensions whose content is prose, not code: a
+// removed line there yields words like "each" or "handles", never a symbol
+// worth watching for staleness.
+var proseExtensions = map[string]bool{".md": true, ".markdown": true, ".txt": true, ".rst": true, ".adoc": true}
+
+// isProseFile reports whether path names a prose file by its extension,
+// case-insensitively. A deleted file's Path is empty (the diff's +++ header
+// names none), and an empty path is never prose: its removed lines are the
+// only evidence of what kind of file it was, so they are still scanned.
+func isProseFile(filePath string) bool {
+	return filePath != "" && proseExtensions[strings.ToLower(path.Ext(filePath))]
+}
+
+// redeclaredNames builds a set of names declared in added code lines,
+// skipping a prose file's lines: name collection only, never the hit scan.
 func redeclaredNames(files []File) map[string]bool {
 	redeclared := map[string]bool{}
 	for _, f := range files {
+		if isProseFile(f.Path) {
+			continue
+		}
 		for _, n := range declaredOnCodeLines(f.Added) {
 			redeclared[n] = true
 		}
@@ -323,10 +416,14 @@ func redeclaredNames(files []File) map[string]bool {
 }
 
 // removedCodeNames returns all names declared in removed code lines, in file
-// and line order with duplicates.
+// and line order with duplicates, skipping a prose file's lines: name
+// collection only, never the hit scan.
 func removedCodeNames(files []File) []string {
 	var names []string
 	for _, f := range files {
+		if isProseFile(f.Path) {
+			continue
+		}
 		names = append(names, declaredOnCodeLines(f.Removed)...)
 	}
 	return names

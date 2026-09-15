@@ -1560,7 +1560,8 @@ func hasNonEmptyEvidence(args *ValidateCompletionArgs, resolvedFiles []FileArg) 
 //     evidence. See staleCommentHint.
 //
 // A call rejected at any of these steps writes nothing to the session and
-// carries no advisory about finding_responses or controller_rulings. Once the
+// carries no advisory about finding_responses, controller_rulings or
+// repo_root. Once the
 // reviewer answers (runReview folds a truncated answer into an ordinary one):
 //
 //   - the reviewer's findings alone go through the ruling waiver and repeat

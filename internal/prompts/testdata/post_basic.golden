@@ -82,7 +82,7 @@ Emit these as `category: quality`, `criterion: comment_hygiene`, and `severity: 
 
 ### Stale comments
 
-A comment is stale when it still names a symbol, branch or case label the diff removes: a `-` line declares or handles the name, and no `+` line declares it again. This check covers the comments the change leaves in place, not only the ones it adds: read every comment visible in the evidence, inside and outside the diff hunks, and every line of the server hint above when it is present. A comment that names the removed thing to record its removal, or that names a different symbol sharing the name, is not stale.
+A comment is stale when it still names a symbol, branch or case label the diff removes: a `-` line declares or handles the name, and no `+` line declares it again. This check covers the comments the change leaves in place, not only the ones it adds: read every comment visible in the evidence, inside and outside the diff hunks, and every line of the server hint above when it is present. A comment that names the removed thing to record its removal, or that names a different symbol sharing the name, is not stale. Comment hygiene still applies to it: a comment recording a removal narrates change history.
 
 Like comment hygiene, apply this ONLY when a diff is present: without one, the evidence does not show what the change removed.
 
