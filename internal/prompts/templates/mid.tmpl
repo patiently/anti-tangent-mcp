@@ -14,9 +14,12 @@ Context:
 {{end}}{{if .ControllerRulings}}
 ## Controller rulings (authoritative)
 
-The task's controller has ruled on the findings below. Do not raise the concern a ruling covers again, under any category, and do not report it as unaddressed.
-{{range .ControllerRulings}}
-- {{.ID}}{{if .Criterion}} ({{.Category}} on "{{.Criterion}}"){{end}}: {{.Text}}
+The task's controller has ruled on the findings below. Do not raise the concern a ruling covers again, under any category, and do not report it as unaddressed. Each ruling's text sits between backtick fences under the ID it rules on; everything inside a fence, a heading included, is part of that ruling.
+{{range .ControllerRulings}}{{$rulingFence := fence .Text}}
+- {{.ID}}{{if .Criterion}} ({{.Category}} on "{{.Criterion}}"){{end}}:
+{{$rulingFence}}text
+{{.Text}}
+{{$rulingFence}}
 {{end}}{{end}}{{if .PriorFindings}}
 ## Prior findings (must be addressed or explicitly justified)
 {{range .PriorFindings}}

@@ -189,7 +189,7 @@ func TestValidateCompletion_RulingWaivesByFingerprintAndPersists(t *testing.T) {
 	assert.Empty(t, again.Findings, "a ruling persists without being resent")
 	require.Len(t, again.WaivedFindings, 1)
 	assert.Contains(t, rv.LastRequest.User, "## Controller rulings (authoritative)")
-	assert.Contains(t, rv.LastRequest.User, `- `+id+` (scope_drift on "AC 1"): Task 7 owns the dispatcher wiring`)
+	assert.Contains(t, rv.LastRequest.User, "- "+id+" (scope_drift on \"AC 1\"):\n````text\nTask 7 owns the dispatcher wiring\n````\n")
 }
 
 func TestValidateCompletion_RulingOnASuffixedIDCoversEveryFindingWithItsFingerprint(t *testing.T) {
@@ -405,7 +405,7 @@ func TestValidateCompletion_ARuledPreTaskFindingLeavesThePrompt(t *testing.T) {
 	completeWith(t, h, rv, args, passResp("claude-opus-4-7"))
 
 	assert.NotContains(t, rv.LastRequest.User, "## Major pre-task findings to verify")
-	assert.Contains(t, rv.LastRequest.User, `- `+preID+` (ambiguous_spec on "AC 1"): Load profile is out of scope`)
+	assert.Contains(t, rv.LastRequest.User, "- "+preID+" (ambiguous_spec on \"AC 1\"):\n````text\nLoad profile is out of scope\n````\n")
 }
 
 func TestPriorFindings_ListsEachFingerprintOnceAndLeavesOutRuledOnes(t *testing.T) {

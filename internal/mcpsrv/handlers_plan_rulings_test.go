@@ -166,7 +166,7 @@ func TestValidatePlan_RulingsAndVerifiedReferencesReachEveryReviewerCall(t *test
 	for i, req := range sr.requests {
 		prompt := req.CachePrefix + req.User
 		assert.Contains(t, prompt, "## Controller rulings (authoritative)", "call %d", i)
-		assert.Contains(t, prompt, "- f_0123abcd: Covered elsewhere", "call %d", i)
+		assert.Contains(t, prompt, "- f_0123abcd:\n````text\nCovered elsewhere\n````\n", "call %d", i)
 		assert.Contains(t, prompt, "Controller-verified references:", "call %d", i)
 		assert.Contains(t, prompt, "- internal/verdict/verdict.go", "call %d", i)
 	}

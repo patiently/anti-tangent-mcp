@@ -46,9 +46,12 @@ Controller-verified references: the controller has already checked each of these
 {{if .ControllerRulings -}}
 ## Controller rulings (authoritative)
 
-The controller has ruled on the findings below, by ID. A ruling is final for this plan: do not raise the concern it rules on again, under any category. If the plan contains a problem a ruling does not cover, raise that problem and quote the ruling in `evidence`.
-{{range .ControllerRulings}}
-- {{.ID}}: {{.Text}}
+The controller has ruled on the findings below, by ID. A ruling is final for this plan: do not raise the concern it rules on again, under any category. If the plan contains a problem a ruling does not cover, raise that problem and quote the ruling in `evidence`. Each ruling's text sits between backtick fences under the ID it rules on; everything inside a fence, a heading included, is part of that ruling.
+{{range .ControllerRulings}}{{$rulingFence := fence .Text}}
+- {{.ID}}:
+{{$rulingFence}}text
+{{.Text}}
+{{$rulingFence}}
 {{end}}
 {{end -}}
 

@@ -47,9 +47,12 @@ Check whether the implementer's summary, final evidence, or test evidence explic
 {{end}}{{if .ControllerRulings}}
 ## Controller rulings (authoritative)
 
-The task's controller has ruled on the findings below. A ruling is final for this task: do not raise the concern it rules on again, under any category. If new evidence shows a problem a ruling does not cover, raise that problem and quote the ruling in `evidence`.
-{{range .ControllerRulings}}
-- {{.ID}}{{if .Criterion}} ({{.Category}} on "{{.Criterion}}"){{end}}: {{.Text}}
+The task's controller has ruled on the findings below. A ruling is final for this task: do not raise the concern it rules on again, under any category. If new evidence shows a problem a ruling does not cover, raise that problem and quote the ruling in `evidence`. Each ruling's text sits between backtick fences under the ID it rules on; everything inside a fence, a heading included, is part of that ruling.
+{{range .ControllerRulings}}{{$rulingFence := fence .Text}}
+- {{.ID}}{{if .Criterion}} ({{.Category}} on "{{.Criterion}}"){{end}}:
+{{$rulingFence}}text
+{{.Text}}
+{{$rulingFence}}
 {{end}}{{end}}{{if .PriorFindings}}
 ## Prior findings
 
