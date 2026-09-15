@@ -104,30 +104,46 @@ func (p *diffParser) hunkLine(line string) bool {
 	return false
 }
 
-func (p *diffParser) headerLine(line string) {
+// fileHeader processes a file-level header line (diff, ---, +++). Reports
+// whether the line was handled.
+func (p *diffParser) fileHeader(line string) bool {
 	switch {
 	case strings.HasPrefix(line, "diff --git "):
 		p.start()
+		return true
 	case strings.HasPrefix(line, "--- "):
 		if p.cur == nil || len(p.cur.Removed)+len(p.cur.Post) > 0 {
 			p.start()
 		}
+		return true
 	case strings.HasPrefix(line, "+++ "):
 		if p.cur == nil {
 			p.start()
 		}
 		p.cur.Path = headerPath(strings.TrimPrefix(line, "+++ "))
-	default:
-		m := hunkHeader.FindStringSubmatch(line)
-		if m == nil {
-			return
-		}
-		if p.cur == nil {
-			p.start()
-		}
-		p.oldLeft, p.newLeft = hunkCount(m[1]), hunkCount(m[3])
-		p.newLine, _ = strconv.Atoi(m[2])
+		return true
 	}
+	return false
+}
+
+// hunkStart processes a hunk header line (@@ -...).
+func (p *diffParser) hunkStart(line string) {
+	m := hunkHeader.FindStringSubmatch(line)
+	if m == nil {
+		return
+	}
+	if p.cur == nil {
+		p.start()
+	}
+	p.oldLeft, p.newLeft = hunkCount(m[1]), hunkCount(m[3])
+	p.newLine, _ = strconv.Atoi(m[2])
+}
+
+func (p *diffParser) headerLine(line string) {
+	if p.fileHeader(line) {
+		return
+	}
+	p.hunkStart(line)
 }
 
 // ParseDiff splits a unified diff into file sections. Inside a hunk, lines are
@@ -159,12 +175,18 @@ func hunkCount(s string) int {
 	return n
 }
 
-// unquote removes surrounding quotes from a string.
+// unquote removes one pair of surrounding double quotes, which git adds around
+// a path containing spaces or non-ASCII bytes.
 func unquote(name string) string {
-	if len(name) >= 2 && strings.HasPrefix(name, `"`) && strings.HasSuffix(name, `"`) {
-		return name[1 : len(name)-1]
+	inner, ok := strings.CutPrefix(name, `"`)
+	if !ok {
+		return name
 	}
-	return name
+	inner, ok = strings.CutSuffix(inner, `"`)
+	if !ok {
+		return name
+	}
+	return inner
 }
 
 // headerPath is the path a +++ header names, without a trailing timestamp,
@@ -289,28 +311,49 @@ func declaredOnCodeLines(lines []string) []string {
 	return names
 }
 
-// RemovedNames lists the names declared on the diff's removed code lines that
-// no added code line declares again, in order of first appearance, skipping
-// names shorter than MinNameRunes and stopping at MaxNames.
-func RemovedNames(files []File) []string {
+// redeclaredNames builds a set of names declared in added code lines.
+func redeclaredNames(files []File) map[string]bool {
 	redeclared := map[string]bool{}
 	for _, f := range files {
 		for _, n := range declaredOnCodeLines(f.Added) {
 			redeclared[n] = true
 		}
 	}
-	seen := map[string]bool{}
+	return redeclared
+}
+
+// removedCodeNames returns all names declared in removed code lines, in file
+// and line order with duplicates.
+func removedCodeNames(files []File) []string {
 	var names []string
 	for _, f := range files {
-		for _, n := range declaredOnCodeLines(f.Removed) {
-			if utf8.RuneCountInString(n) < MinNameRunes || redeclared[n] || seen[n] {
-				continue
-			}
-			seen[n] = true
-			names = append(names, n)
-			if len(names) == MaxNames {
-				return names
-			}
+		names = append(names, declaredOnCodeLines(f.Removed)...)
+	}
+	return names
+}
+
+// RemovedNames lists the names declared on the diff's removed code lines that
+// no added code line declares again, in order of first appearance, skipping
+// names shorter than MinNameRunes and stopping at MaxNames.
+func RemovedNames(files []File) []string {
+	redeclared := redeclaredNames(files)
+	removed := removedCodeNames(files)
+	seen := map[string]bool{}
+	var names []string
+	for _, n := range removed {
+		if utf8.RuneCountInString(n) < MinNameRunes {
+			continue
+		}
+		if redeclared[n] {
+			continue
+		}
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
+		names = append(names, n)
+		if len(names) == MaxNames {
+			return names
 		}
 	}
 	return names
