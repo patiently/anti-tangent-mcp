@@ -1,8 +1,11 @@
 package mcpsrv
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -189,12 +192,47 @@ func TestValidatePlan_TaskFindingIDSurvivesRenumbering(t *testing.T) {
 }
 
 func TestValidatePlan_EarlyExitFindingsCarryIDs(t *testing.T) {
-	h := newTestPlanHandlers(t)
-	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: "# a plan with no task headings\n"})
-	require.NoError(t, err)
-	require.NotEmpty(t, pr.PlanFindings)
-	for _, f := range pr.PlanFindings {
-		assert.NotEmpty(t, f.ID, "finding %q", f.Criterion)
+	dir := t.TempDir()
+	bigPlan := filepath.Join(dir, "big.md")
+	require.NoError(t, os.WriteFile(bigPlan, bytes.Repeat([]byte("x"), 5000), 0o600))
+	bigContext := filepath.Join(dir, "big.go")
+	require.NoError(t, os.WriteFile(bigContext, bytes.Repeat([]byte("x"), 500), 0o600))
+
+	cases := []struct {
+		name     string
+		setup    func(*handlers)
+		args     ValidatePlanArgs
+		category verdict.Category
+	}{
+		{"plan too large", func(h *handlers) { h.deps.Cfg.PlanMaxPayloadBytes = 1024 },
+			ValidatePlanArgs{PlanPath: bigPlan}, verdict.CategoryTooLarge},
+		{"context too large", func(h *handlers) { h.deps.Cfg.ContextMaxFileBytes = 100 },
+			ValidatePlanArgs{PlanText: buildPlanWithNTasks(1), ContextPaths: []string{bigContext}}, verdict.CategoryTooLarge},
+		{"payload too large", func(h *handlers) { h.deps.Cfg.PlanMaxPayloadBytes = 10 },
+			ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)}, verdict.CategoryTooLarge},
+		{"no task headings", func(*handlers) {},
+			ValidatePlanArgs{PlanText: "# a plan with no task headings\n"}, verdict.CategoryOther},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rv := &fakeReviewer{name: "anthropic", resp: passPlanResp("go")}
+			h := &handlers{deps: newDeps(t, rv)}
+			tc.setup(h)
+			_, pr, err := h.ValidatePlan(context.Background(), nil, tc.args)
+			require.NoError(t, err)
+			require.Zero(t, rv.Calls, "an early exit never reaches the reviewer")
+			require.Equal(t, verdict.VerdictFail, pr.PlanVerdict)
+
+			var exitFinding bool
+			for _, f := range pr.PlanFindings {
+				assert.True(t, verdict.ValidDisplayID(f.ID), "finding %q has id %q", f.Criterion, f.ID)
+				assert.Contains(t, pr.SummaryBlock, f.ID+" [")
+				if f.Category == tc.category && f.Severity == verdict.SeverityCritical {
+					exitFinding = true
+				}
+			}
+			assert.True(t, exitFinding, "the early exit's own finding is present: %+v", pr.PlanFindings)
+		})
 	}
 }
 

@@ -2,6 +2,7 @@ package mcpsrv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -339,6 +340,45 @@ func TestValidateCompletion_ACallRejectedBeforeReviewWritesNoRulings(t *testing.
 	}
 	st, _ := h.deps.Sessions.ReviewState(sid)
 	assert.Empty(t, st.Rulings)
+}
+
+// TestValidateCompletion_AFailedProviderCallWritesNothing covers the review
+// state a call leaves when the reviewer call fails with an error other than
+// truncation: the prior findings, issued IDs, rulings and escalated flag are
+// exactly what they were, although the call carried a ruling and an answer.
+func TestValidateCompletion_AFailedProviderCallWritesNothing(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	nit := findingObj("minor", "quality", "comment_hygiene", "stale comment", "")
+	first := completeWith(t, h, rv, completionCallArgs(sid), reviewerFindingsResp(driftFinding, nit))
+	require.Len(t, first.Findings, 2)
+	driftID, nitID := first.Findings[0].ID, first.Findings[1].ID
+
+	args := completionCallArgs(sid)
+	args.FindingResponses = []FindingResponseArg{{FindingID: driftID, Response: "Task 7 owns it"}}
+	args.ControllerRulings = []ControllerRulingArg{{FindingID: nitID, Ruling: "Comments are cleaned up in a later task"}}
+	second := completeWith(t, h, rv, args, reviewerFindingsResp(driftFinding, nit))
+	require.True(t, second.Escalate)
+	require.Len(t, second.WaivedFindings, 1)
+
+	before, ok := h.deps.Sessions.ReviewState(sid)
+	require.True(t, ok)
+	require.True(t, before.Escalated)
+	require.Len(t, before.PriorFindings, 1)
+	require.Len(t, before.Rulings, 1)
+
+	failing := completionCallArgs(sid)
+	failing.FindingResponses = []FindingResponseArg{{FindingID: driftID, Response: "still Task 7"}}
+	failing.ControllerRulings = []ControllerRulingArg{{FindingID: driftID, Ruling: "Task 7 owns the dispatcher wiring"}}
+	rv.err = errors.New("provider unavailable")
+	rv.resp = providers.Response{}
+	_, _, err := h.ValidateCompletion(context.Background(), nil, failing)
+	rv.err = nil
+	require.Error(t, err)
+
+	after, ok := h.deps.Sessions.ReviewState(sid)
+	require.True(t, ok)
+	assert.Equal(t, before, after)
 }
 
 func TestValidateCompletion_WithoutASessionIgnoresAnswersAndRulings(t *testing.T) {
