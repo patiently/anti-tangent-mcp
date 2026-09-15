@@ -210,7 +210,7 @@ type PostInput struct {
 	Files                          []File
 	FinalDiff                      string
 	TestEvidence                   string
-	MajorPreFindings               []verdict.Finding
+	PreFindingsToVerify            []verdict.Finding
 	ReferencedPathsMissingEvidence []string
 	ExitContracts                  []string
 	ExitContractsInferred          bool

@@ -97,6 +97,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The pre-task review and `validate_plan` check each step and verification gate, such as no new
   warnings or lint clean, against the task's Non-goals, and report a gate that can pass only once
   deferred work is done as a major `ambiguous_spec` quoting both.
+- When a gate the task spec states forces work a Non-goal defers, `validate_completion`'s review
+  reports one minor `ambiguous_spec` against the spec instead of `scope_drift` against the code.
+  Its prompt lists every pre-task `ambiguous_spec` finding, not only the major ones, alongside the
+  major pre-task findings it verifies.
 
 ### Fixed
 

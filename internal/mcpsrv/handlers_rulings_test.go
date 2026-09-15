@@ -518,7 +518,7 @@ func TestValidateCompletion_ARuledPreTaskFindingLeavesThePrompt(t *testing.T) {
 	args.ControllerRulings = []ControllerRulingArg{{FindingID: preID, Ruling: "Load profile is out of scope"}}
 	completeWith(t, h, rv, args, passResp("claude-opus-4-7"))
 
-	assert.NotContains(t, rv.LastRequest.User, "## Major pre-task findings to verify")
+	assert.NotContains(t, rv.LastRequest.User, "## Pre-task findings to verify")
 	assert.Contains(t, rv.LastRequest.User, "- "+preID+" (ambiguous_spec on \"AC 1\"):\n````text\nLoad profile is out of scope\n````\n")
 }
 

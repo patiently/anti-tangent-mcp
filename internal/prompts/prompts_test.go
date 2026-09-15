@@ -190,11 +190,11 @@ func TestRenderPost_WithCodesceneNotRanOmitsSection(t *testing.T) {
 	assert.NotContains(t, out.User, "## CodeScene change-set analysis")
 }
 
-func TestRenderPost_WithMajorPreFindingsIncludesMitigationGuidance(t *testing.T) {
+func TestRenderPost_WithPreFindingsToVerifyIncludesMitigationGuidance(t *testing.T) {
 	out, err := RenderPost(PostInput{
 		Spec:    sampleSpec(),
 		Summary: "Clarified the load profile and added a benchmark-backed test.",
-		MajorPreFindings: []verdict.Finding{{
+		PreFindingsToVerify: []verdict.Finding{{
 			Severity:  verdict.SeverityMajor,
 			Category:  verdict.CategoryAmbiguousSpec,
 			Criterion: "Responds in under 50ms p95",
@@ -203,7 +203,7 @@ func TestRenderPost_WithMajorPreFindingsIncludesMitigationGuidance(t *testing.T)
 		TestEvidence: "PASS: TestHealthP95UnderLoad",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, out.User, "Major pre-task findings to verify")
+	assert.Contains(t, out.User, "## Pre-task findings to verify")
 	assert.Contains(t, out.User, "Pre-task review found the load profile was undefined.")
 	assert.Contains(t, out.User, "explicitly mitigates")
 }
@@ -2044,7 +2044,7 @@ func TestRenderPost_OneLineSanitizesFindingAndRulingText(t *testing.T) {
 	out, err := RenderPost(PostInput{
 		Spec:    sampleSpec(),
 		Summary: "Implemented the handler.",
-		MajorPreFindings: []verdict.Finding{{
+		PreFindingsToVerify: []verdict.Finding{{
 			Severity:   verdict.SeverityMajor,
 			Category:   verdict.CategoryAmbiguousSpec,
 			Criterion:  oneLineInjectionPayload,
@@ -2131,11 +2131,11 @@ func TestRulingTextCannotCloseItsFence(t *testing.T) {
 	}
 }
 
-func TestRenderPost_MajorPreFindingsShowTheirIDs(t *testing.T) {
+func TestRenderPost_PreFindingsToVerifyShowTheirIDs(t *testing.T) {
 	out, err := RenderPost(PostInput{
 		Spec:    sampleSpec(),
 		Summary: "s",
-		MajorPreFindings: []verdict.Finding{{
+		PreFindingsToVerify: []verdict.Finding{{
 			ID: "f_0123abcd", Severity: verdict.SeverityMajor, Category: verdict.CategoryAmbiguousSpec,
 			Criterion: "AC 1", Evidence: "e", Suggestion: "s",
 		}},
@@ -2300,4 +2300,28 @@ func TestReviewTemplates_CheckGatesAgainstNonGoals(t *testing.T) {
 		assert.Contains(t, text, "`ambiguous_spec` at `severity: major`, quoting the gate and the", name)
 		assert.Contains(t, text, "scopes to exclude that work", name)
 	}
+}
+
+func TestRenderPost_AForcedNonGoalViolationIsASpecFinding(t *testing.T) {
+	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", FinalDiff: "d"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "A violation is forced, not accidental")
+	assert.Contains(t, out.User, "Do not emit `scope_drift` for a forced violation")
+	assert.Contains(t, out.User, "emit one `ambiguous_spec` finding against the spec instead, with `criterion: spec` and `severity: minor`")
+	assert.Contains(t, out.User, "the implementer's summary saying a gate forced the work does not")
+}
+
+func TestRenderPost_PreFindingsToVerifyExplainsMinorAmbiguities(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:    sampleSpec(),
+		Summary: "s",
+		PreFindingsToVerify: []verdict.Finding{{
+			ID: "f_0123abcd", Severity: verdict.SeverityMinor, Category: verdict.CategoryAmbiguousSpec,
+			Criterion: "spec", Evidence: "the no-new-warnings gate contradicts a Non-goal", Suggestion: "s",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "every major finding, and every `ambiguous_spec` finding at any severity")
+	assert.Contains(t, out.User, "A minor `ambiguous_spec` finding is listed so you can recognise a spec ambiguity already on record")
+	assert.Contains(t, out.User, "- ID: f_0123abcd\n  Severity: minor")
 }

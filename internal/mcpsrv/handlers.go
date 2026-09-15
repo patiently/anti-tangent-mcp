@@ -1794,7 +1794,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				Files:                          toPromptFiles(resolvedFiles),
 				FinalDiff:                      args.FinalDiff,
 				TestEvidence:                   args.TestEvidence,
-				MajorPreFindings:               review.majorPre,
+				PreFindingsToVerify:            review.preToVerify,
 				PriorFindings:                  review.prior,
 				ControllerRulings:              rulingsForPrompt(review.rulings),
 				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args.Summary, resolvedFiles, args.FinalDiff),

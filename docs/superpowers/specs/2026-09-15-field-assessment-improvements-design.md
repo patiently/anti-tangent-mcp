@@ -501,8 +501,10 @@ part.
   Stored on `TaskSpec` and rendered in both the pre and post prompts.
 - **Forced deviations post-task.** `post.tmpl` currently turns a non-goal violation into
   `scope_drift`. When the violation is forced by a gate quoted from the spec fields — never from
-  the summary — the reviewer emits one `ambiguous_spec` against the spec instead. Non-major
-  pre-task `ambiguous_spec` findings are carried into the post prompt; today only majors are.
+  the summary — the reviewer emits one minor `ambiguous_spec` against the spec instead: its reader
+  is the controller, and a `fail` would send the implementer to change code that followed the
+  gate. Non-major pre-task `ambiguous_spec` findings are carried into the post prompt; today only
+  majors are.
 
 ### 3.3 Deletions walk
 
