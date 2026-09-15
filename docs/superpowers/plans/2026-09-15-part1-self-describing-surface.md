@@ -46,7 +46,15 @@
 - [ ] Both `validate_completion` `payload_too_large` suggestions mention `-U1` and `ANTI_TANGENT_MAX_PAYLOAD_BYTES` and never contain the word `split`
 - [ ] The `validate_completion` tool description states that path inputs must be under `ANTI_TANGENT_PLAN_ROOTS` when it is set
 
-**Verify:** `go test -race ./internal/mcpsrv/ -run 'TestResolveFileInput|TestValidateCompletion_PayloadTooLargeSuggestionIsActionable|TestValidateCompletion_OversizedPathSuggestionIsActionable|TestValidateCompletionPathInputs_TooLarge' -v` → all PASS
+**Non-goals:**
+- Do not change the 200 KB payload cap or split completion review across calls.
+- Do not edit `VERSION`.
+
+**Context:**
+- This task modifies path-refusal and oversized-payload recovery text in `internal/mcpsrv` and creates the shared `CHANGELOG.md` release entry used by later tasks.
+- Path inputs remain constrained by `ANTI_TANGENT_PLAN_ROOTS`; the implementation only makes that constraint and its recovery path explicit.
+
+**Verify:** `go test -race ./internal/mcpsrv/ -run 'TestResolveFileInput|TestValidateCompletion_PayloadTooLargeSuggestionIsActionable|TestValidateCompletion_OversizedPathSuggestionIsActionable|TestValidateCompletionPathInputs_TooLarge|TestValidateCompletionTool_DescriptionStatesRootsRule' -v` → all PASS
 
 **Steps:**
 
@@ -149,6 +157,16 @@ func TestValidateCompletion_OversizedPathSuggestionIsActionable(t *testing.T) {
 }
 ```
 
+In the same file, add:
+
+```go
+func TestValidateCompletionTool_DescriptionStatesRootsRule(t *testing.T) {
+	d := validateCompletionTool().Description
+	assert.Contains(t, d, "ANTI_TANGENT_PLAN_ROOTS")
+	assert.Contains(t, d, "/tmp")
+}
+```
+
 In the same file, inside `TestValidateCompletionPathInputs_TooLarge`, in the subtest `"path outside ANTI_TANGENT_PLAN_ROOTS stays a plain transport error"`, add after the existing `assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")`:
 
 ```go
@@ -157,8 +175,8 @@ In the same file, inside `TestValidateCompletionPathInputs_TooLarge`, in the sub
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
-Run: `go test -race ./internal/mcpsrv/ -run 'TestResolveFileInput|TestValidateCompletion_PayloadTooLargeSuggestionIsActionable|TestValidateCompletion_OversizedPathSuggestionIsActionable|TestValidateCompletionPathInputs_TooLarge' -v`
-Expected: FAIL — `"inside the repository you are working in"` not found, `"-U1"` not found, and the suggestion contains `split`.
+Run: `go test -race ./internal/mcpsrv/ -run 'TestResolveFileInput|TestValidateCompletion_PayloadTooLargeSuggestionIsActionable|TestValidateCompletion_OversizedPathSuggestionIsActionable|TestValidateCompletionPathInputs_TooLarge|TestValidateCompletionTool_DescriptionStatesRootsRule' -v`
+Expected: FAIL — `"inside the repository you are working in"` not found, `"-U1"` not found, the suggestion contains `split`, and the tool description does not mention `ANTI_TANGENT_PLAN_ROOTS`.
 
 - [ ] **Step 4: Implement**
 
@@ -208,7 +226,7 @@ In `validateCompletionTool`, replace the last description segment:
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `go test -race ./internal/mcpsrv/ -run 'TestResolveFileInput|TestValidateCompletion_PayloadTooLargeSuggestionIsActionable|TestValidateCompletion_OversizedPathSuggestionIsActionable|TestValidateCompletionPathInputs_TooLarge' -v`
+Run: `go test -race ./internal/mcpsrv/ -run 'TestResolveFileInput|TestValidateCompletion_PayloadTooLargeSuggestionIsActionable|TestValidateCompletion_OversizedPathSuggestionIsActionable|TestValidateCompletionPathInputs_TooLarge|TestValidateCompletionTool_DescriptionStatesRootsRule' -v`
 Expected: PASS
 
 Run: `go test -race ./...`
@@ -223,7 +241,7 @@ git commit -m "fix(mcpsrv): say how to recover from a roots refusal and an overs
 ```
 
 ```json:metadata
-{"files": ["internal/mcpsrv/file_source.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/file_source_test.go", "internal/mcpsrv/handlers_test.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/mcpsrv/ -run 'TestResolveFileInput|TestValidateCompletion_PayloadTooLargeSuggestionIsActionable|TestValidateCompletion_OversizedPathSuggestionIsActionable|TestValidateCompletionPathInputs_TooLarge' -v", "acceptanceCriteria": ["on branch version/0.22.0 with a 0.22.0 CHANGELOG entry", "roots refusal names roots and a recovery path", "payload_too_large suggestions name -U1 and ANTI_TANGENT_MAX_PAYLOAD_BYTES without split", "validate_completion description states the roots rule"], "modelTier": "mechanical"}
+{"files": ["internal/mcpsrv/file_source.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/file_source_test.go", "internal/mcpsrv/handlers_test.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/mcpsrv/ -run 'TestResolveFileInput|TestValidateCompletion_PayloadTooLargeSuggestionIsActionable|TestValidateCompletion_OversizedPathSuggestionIsActionable|TestValidateCompletionPathInputs_TooLarge|TestValidateCompletionTool_DescriptionStatesRootsRule' -v", "acceptanceCriteria": ["on branch version/0.22.0 with a 0.22.0 CHANGELOG entry", "roots refusal names roots and a recovery path", "payload_too_large suggestions name -U1 and ANTI_TANGENT_MAX_PAYLOAD_BYTES without split", "validate_completion description states the roots rule"], "modelTier": "mechanical"}
 ```
 
 ---
@@ -243,6 +261,14 @@ git commit -m "fix(mcpsrv): say how to recover from a roots refusal and an overs
 - [ ] A `final_diff` without hunk headers is still checked line by line
 - [ ] A bare `...` line is exempt in a `.py`/`.pyi` file, both in `final_files` and as an added line under that file's `+++` header; other truncation markers are still rejected there
 - [ ] `core.md` no longer advises passing a complete `final_diff` as a workaround; the plugin copy is identical and under 16,000 bytes
+
+**Non-goals:**
+- Do not exempt truncation markers other than a bare `...` line in Python files.
+- Do not treat unchanged or removed unified-diff lines as newly supplied evidence.
+
+**Context:**
+- The guard must distinguish added, removed, and context lines only when hunk headers identify the input as a unified diff.
+- Protocol documentation in `docs/protocol/core.md` must be copied to the plugin bundle and remain under 16,000 bytes.
 
 **Verify:** `go test -race ./internal/mcpsrv/ -run 'TestCheckEvidenceShape' -v` → PASS; `diff -r docs/protocol plugin/anti-tangent-protocol/protocol && wc -c docs/protocol/core.md` → no diff, under 16000
 
@@ -436,6 +462,14 @@ git commit -m "fix(mcpsrv): flag an added ... placeholder line, not an unchanged
 - [ ] A digest field that is present wins over the value derived from raw keys; a raw key of the wrong type is ignored rather than failing the call
 - [ ] Under `ANTI_TANGENT_CODESCENE=required`, both shapes above draw no `codescene_not_run` or `codescene_skipped` finding
 
+**Non-goals:**
+- Do not invoke CodeScene or change which CodeScene command analyzes a task.
+- Do not reject the optional `codescene` object solely because it contains unknown or mistyped raw side fields.
+
+**Context:**
+- The MCP input schema must admit both the existing digest and raw `analyze_change_set` JSON.
+- `codescene.Digest` performs server-side reduction, while explicitly present digest keys take precedence over derived values.
+
 **Verify:** `go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys' -v` → PASS
 
 **Steps:**
@@ -484,6 +518,16 @@ func TestDigest_UnmarshalJSON_PresentDigestFieldsWin(t *testing.T) {
 	assert.Equal(t, Verdicts{Degraded: 2, Stable: 5}, *d.Verdicts)
 	assert.InDelta(t, 4.0, d.NetPP, 1e-9)
 	assert.Equal(t, map[string]int{"X": 1}, d.CategoryCounts, "category_counts was absent, so it is derived")
+}
+
+func TestDigest_UnmarshalJSON_SentToolWins(t *testing.T) {
+	var empty Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"tool":"","quality_gates":"passed","results":[]}`), &empty))
+	assert.Equal(t, "", empty.Tool, "a tool key the caller sent wins over the derived value, even when empty")
+
+	var named Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"tool":"codescene-cli","results":[]}`), &named))
+	assert.Equal(t, "codescene-cli", named.Tool)
 }
 
 func TestDigest_UnmarshalJSON_IgnoresUnknownAndMistypedRawKeys(t *testing.T) {
@@ -564,7 +608,7 @@ func (d *Digest) UnmarshalJSON(b []byte) error {
 	if !has("ran") {
 		d.Ran = true
 	}
-	if d.Tool == "" {
+	if !has("tool") {
 		d.Tool = "analyze_change_set"
 	}
 	if !has("quality_gate") && raw.QualityGates != nil {
@@ -793,7 +837,15 @@ git commit -m "feat(codescene): accept raw analyze_change_set output and unknown
 - [ ] `plan_run_report` for a known run with zero rows includes a minor `other` finding saying no task passed its `plan_run_id`; after a restart with the ledger enabled, a header-only run is reported as known, not `session_not_found`
 - [ ] The unknown-run `session_not_found` evidence names a missing `plan_run_id` on `validate_task_spec` as the usual cause, then idle expiry, then a different or restarted server without a ledger
 
-**Verify:** `go test -race ./internal/planrun/ ./internal/mcpsrv/ -run 'TestLatest|TestLedger_Header|TestPlanRunReport|TestValidateTaskSpec_PlanRunIDAdvisory|TestValidatePlan_LedgerHeader' -v` → PASS
+**Non-goals:**
+- Do not let the missing-`plan_run_id` advisory affect the finalized task verdict.
+- Do not make the optional ledger required for plan validation or reporting.
+
+**Context:**
+- Live-run lookup is advisory and must not refresh idle lifetime.
+- A ledger header records run identity before any task row exists, allowing a header-only run to remain known after restart.
+
+**Verify:** `go test -race ./internal/planrun/ ./internal/mcpsrv/ -run 'TestLatest|TestLedger_Header|TestPlanRunReport|TestValidateTaskSpec_PlanRunIDAdvisory|TestValidatePlan_LedgerHeader|TestValidatePlan_OneLedgerHeader' -v` → PASS
 
 **Steps:**
 
@@ -1036,6 +1088,9 @@ package mcpsrv
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1157,12 +1212,40 @@ func TestValidatePlan_LedgerHeaderKeepsAnUnattachedRunKnown(t *testing.T) {
 	assert.Len(t, planRunIDFindings(res.Findings), 1)
 	assert.Equal(t, string(pr.PlanVerdict), res.PlanVerdict)
 }
+
+func TestValidatePlan_OneLedgerHeaderPerMintedRun(t *testing.T) {
+	dir := t.TempDir()
+	h := newTestPlanHandlers(t)
+	h.deps.PlanLedger = &planrun.Ledger{Dir: dir}
+	args := ValidatePlanArgs{PlanText: buildPlanWithNTasks(1)}
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	_, second, err := h.ValidatePlan(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.Equal(t, first.PlanRunID, second.PlanRunID, "an identical passing call inside the cache window reuses its run")
+
+	b, err := os.ReadFile(filepath.Join(dir, "plan-runs.jsonl"))
+	require.NoError(t, err)
+	headers := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var rec struct {
+			PlanRunID string `json:"plan_run_id"`
+			Header    bool   `json:"header"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(line), &rec))
+		if rec.Header && rec.PlanRunID == first.PlanRunID {
+			headers++
+		}
+	}
+	assert.Equal(t, 1, headers, "a cache hit must not append a second header")
+}
 ```
 
 - [ ] **Step 6: Run them to verify they fail**
 
-Run: `go test -race ./internal/mcpsrv/ -run 'TestValidateTaskSpec_PlanRunIDAdvisory|TestPlanRunReport_UnattachedRunIsExplained|TestPlanRunReport_UnknownRunNamesTheUsualCauseFirst|TestValidatePlan_LedgerHeaderKeepsAnUnattachedRunKnown' -v`
-Expected: FAIL — no `plan_run_id` advisory, no unattached finding, old evidence wording, and `session_not_found` after restart.
+Run: `go test -race ./internal/mcpsrv/ -run 'TestValidateTaskSpec_PlanRunIDAdvisory|TestPlanRunReport_UnattachedRunIsExplained|TestPlanRunReport_UnknownRunNamesTheUsualCauseFirst|TestValidatePlan_LedgerHeaderKeepsAnUnattachedRunKnown|TestValidatePlan_OneLedgerHeaderPerMintedRun' -v`
+Expected: FAIL — no `plan_run_id` advisory, no unattached finding, old evidence wording, `session_not_found` after restart, and no ledger file written by `validate_plan`.
 
 - [ ] **Step 7: Implement the handler changes**
 
@@ -1258,7 +1341,7 @@ and in the found branch, directly before `return planRunReportResult(res)`, add:
 
 - [ ] **Step 8: Run the tests to verify they pass**
 
-Run: `go test -race ./internal/planrun/ ./internal/mcpsrv/ -run 'TestLatest|TestLedger_|TestPlanRunReport|TestValidateTaskSpec_PlanRunIDAdvisory|TestValidatePlan_LedgerHeader' -v`
+Run: `go test -race ./internal/planrun/ ./internal/mcpsrv/ -run 'TestLatest|TestLedger_|TestPlanRunReport|TestValidateTaskSpec_PlanRunIDAdvisory|TestValidatePlan_LedgerHeader|TestValidatePlan_OneLedgerHeader' -v`
 Expected: PASS, including the existing `TestPlanRunReport_UnknownID`, `TestPlanRunReport_FoundZeroRows_TasksWireEmptyArray` and `TestPlanRunReport_RestartFallsBackToLedger`.
 
 Run: `go test -race ./...`
@@ -1293,7 +1376,7 @@ git commit -m "feat(planrun): name the live run a task forgot, and remember runs
 ```
 
 ```json:metadata
-{"files": ["internal/planrun/planrun.go", "internal/planrun/ledger.go", "internal/planrun/planrun_test.go", "internal/planrun/ledger_test.go", "internal/mcpsrv/review_error.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/handlers_plan_run_attach_test.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/planrun/ ./internal/mcpsrv/ -run 'TestLatest|TestLedger_Header|TestPlanRunReport|TestValidateTaskSpec_PlanRunIDAdvisory|TestValidatePlan_LedgerHeader' -v", "acceptanceCriteria": ["Store.Latest returns newest live run without touching it, nil-safe", "advisory names the run, never moves the verdict, absent when id passed or no run", "ledger header written on fresh mint, loads header-only, never a row, pruned by created_at", "report explains a known run with zero rows; restart with ledger reports it known", "unknown-run evidence orders causes by likelihood"], "modelTier": "standard"}
+{"files": ["internal/planrun/planrun.go", "internal/planrun/ledger.go", "internal/planrun/planrun_test.go", "internal/planrun/ledger_test.go", "internal/mcpsrv/review_error.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/handlers_plan_run_attach_test.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/planrun/ ./internal/mcpsrv/ -run 'TestLatest|TestLedger_Header|TestPlanRunReport|TestValidateTaskSpec_PlanRunIDAdvisory|TestValidatePlan_LedgerHeader|TestValidatePlan_OneLedgerHeader' -v", "acceptanceCriteria": ["Store.Latest returns newest live run without touching it, nil-safe", "advisory names the run, never moves the verdict, absent when id passed or no run", "exactly one ledger header per freshly minted run, cache hit adds none; loads header-only, never a row, pruned by created_at", "report explains a known run with zero rows; restart with ledger reports it known", "unknown-run evidence orders causes by likelihood"], "modelTier": "standard"}
 ```
 
 ---
@@ -1317,7 +1400,15 @@ git commit -m "feat(planrun): name the live run a task forgot, and remember runs
 **Acceptance Criteria:**
 - [ ] Across all nine tools' `tools/list` input schemas, recursively (nested objects and array items), no property has an empty description or the literal `required`
 - [ ] The stated limits match their Go constants: 50/500 on `validate_task_spec`'s five bounded string lists and on `exit_contracts`; 20/4000 on `normative_test_bodies`; 25, 240, 240, 10, 480 on `harness_shape_attestation`; `config.DefaultMaxPayloadBytes` on every payload-cap field; `maxContextFiles` on `context_paths`; `maxBulkReadPaths` on `bulk_read.paths`; `defaultMaxPicks`/`maxMaxPicks` on `max_picks`
-- [ ] Required-ness of every property is unchanged
+- [ ] Required-ness of every property is unchanged, pinned by a test over every object's `required` set
+
+**Non-goals:**
+- Do not change JSON field names, field types, required-ness, or runtime validation limits.
+- Do not add or remove tools.
+
+**Context:**
+- Descriptions are emitted through `tools/list` from `jsonschema` struct tags, including nested object and array-item types.
+- `config.DefaultMaxPayloadBytes` becomes the shared source for the default payload-cap value stated in schemas and used by configuration loading.
 
 **Verify:** `go test -race ./internal/mcpsrv/ -run 'TestToolInputSchemas' -v` → PASS
 
@@ -1423,6 +1514,59 @@ func TestToolInputSchemas_EveryPropertyDescribed(t *testing.T) {
 	assert.Empty(t, missing, "input properties without a real description")
 }
 
+// requiredSets records each object's sorted required property names under the
+// same dotted path propertyDescriptions uses.
+func requiredSets(schema map[string]any, path string, into map[string][]string) {
+	if req, ok := schema["required"].([]any); ok && len(req) > 0 {
+		names := make([]string, 0, len(req))
+		for _, r := range req {
+			names = append(names, fmt.Sprint(r))
+		}
+		sort.Strings(names)
+		into[path] = names
+	}
+	if props, ok := schema["properties"].(map[string]any); ok {
+		for name, raw := range props {
+			prop, _ := raw.(map[string]any)
+			requiredSets(prop, path+"."+name, into)
+		}
+	}
+	if items, ok := schema["items"].(map[string]any); ok {
+		requiredSets(items, path+"[]", into)
+	}
+}
+
+// TestToolInputSchemas_RequiredSetsUnchanged pins every object's required set.
+// Descriptions live in jsonschema tags and cannot change required-ness, but a
+// json tag edited alongside one can; update this table only for an intended
+// change to a tool's contract. validate_completion.codescene.verdicts is
+// absent on purpose: its keys are optional so a partial digest is accepted.
+func TestToolInputSchemas_RequiredSetsUnchanged(t *testing.T) {
+	want := map[string][]string{
+		"bulk_read":                        {"paths", "question"},
+		"check_progress":                   {"session_id", "working_on"},
+		"check_progress.changed_files[]":   {"content", "path"},
+		"code_write":                       {"reference_path", "spec"},
+		"extract_project_knowledge":        {"completion_envelopes"},
+		"extract_project_knowledge.completion_envelopes[]":               {"summary", "verdict"},
+		"extract_project_knowledge.completion_envelopes[].final_files[]": {"content", "path"},
+		"extract_project_knowledge.completion_envelopes[].findings[]":    {"category", "criterion", "evidence", "severity", "suggestion"},
+		"extract_project_knowledge.kb_index[]":                           {"permalink", "summary", "title", "type"},
+		"plan_run_report":                                                {"plan_run_id"},
+		"prime_project_knowledge":                                        {"acceptance_criteria", "goal", "task_title"},
+		"prime_project_knowledge.kb_index[]":                             {"permalink", "summary", "title", "type"},
+		"validate_completion":                                            {"session_id", "summary"},
+		"validate_completion.final_files[]":                              {"path"},
+		"validate_task_spec":                                             {"goal", "task_title"},
+		"validate_task_spec.harness_shape_attestation[]":                 {"assertions", "harness", "path"},
+	}
+	got := map[string][]string{}
+	for name, schema := range toolInputSchemas(t) {
+		requiredSets(schema, name, got)
+	}
+	assert.Equal(t, want, got)
+}
+
 func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 	descs := allPropertyDescriptions(t)
 	n := strconv.Itoa
@@ -1482,7 +1626,7 @@ const DefaultMaxPayloadBytes = 204800
 and in `Load`, replace `MaxPayloadBytes:        204800,` with `MaxPayloadBytes:        DefaultMaxPayloadBytes,`.
 
 Run: `go test -race ./internal/mcpsrv/ -run TestToolInputSchemas -v`
-Expected: FAIL — `EveryPropertyDescribed` lists undescribed properties across all nine tools; `StatedLimitsMatchConstants` fails on every case.
+Expected: FAIL — `EveryPropertyDescribed` lists undescribed properties across all nine tools; `StatedLimitsMatchConstants` fails on every case. `RequiredSetsUnchanged` already PASSES: it is the guard that Step 4's tag edits must keep green.
 
 - [ ] **Step 4: Describe every property**
 
@@ -1728,7 +1872,7 @@ git commit -m "feat(mcpsrv): describe every tool input property and hold limits 
 ```
 
 ```json:metadata
-{"files": ["internal/mcpsrv/tool_schema_contract_test.go", "internal/config/config.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/prime_handler.go", "internal/mcpsrv/extract_handler.go", "internal/mcpsrv/worker_handlers.go", "internal/session/session.go", "internal/codescene/codescene.go", "internal/verdict/verdict.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/mcpsrv/ -run 'TestToolInputSchemas' -v", "acceptanceCriteria": ["no input property across the nine tools has an empty or 'required' description", "stated limits match their Go constants", "required-ness unchanged"], "modelTier": "standard"}
+{"files": ["internal/mcpsrv/tool_schema_contract_test.go", "internal/config/config.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/prime_handler.go", "internal/mcpsrv/extract_handler.go", "internal/mcpsrv/worker_handlers.go", "internal/session/session.go", "internal/codescene/codescene.go", "internal/verdict/verdict.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/mcpsrv/ -run 'TestToolInputSchemas' -v", "acceptanceCriteria": ["no input property across the nine tools has an empty or 'required' description", "stated limits match their Go constants", "required-ness unchanged, pinned by a test over every object's required set"], "modelTier": "standard"}
 ```
 
 ---
