@@ -459,16 +459,18 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		return rejectionEnvelopeResult(env)
 	}
 
+	state, _ := h.deps.Sessions.ReviewState(sess.ID)
 	model, rendered, err := h.resolveModelAndRender(
 		args.ModelOverride,
 		h.deps.Cfg.MidModel,
 		func() (prompts.Output, error) {
 			return prompts.RenderMid(prompts.MidInput{
-				Spec:          sess.Spec,
-				PriorFindings: priorFindings(sess),
-				WorkingOn:     args.WorkingOn,
-				Files:         toPromptFiles(args.ChangedFiles),
-				Questions:     args.Questions,
+				Spec:              sess.Spec,
+				PriorFindings:     priorFindings(sess, state.Rulings),
+				ControllerRulings: rulingsForPrompt(state.Rulings),
+				WorkingOn:         args.WorkingOn,
+				Files:             toPromptFiles(args.ChangedFiles),
+				Questions:         args.Questions,
 			})
 		},
 		"render mid prompt",
@@ -605,10 +607,35 @@ func contextSources(files []contextFile) []fileSource {
 	return out
 }
 
-func priorFindings(s *session.Session) []verdict.Finding {
-	out := append([]verdict.Finding{}, s.PreFindings...)
+// priorFindings lists what check_progress shows as prior findings: the
+// pre-task findings and every checkpoint's. For each fingerprint it keeps only
+// the findings of the most recent call that raised it, so a finding raised at
+// every checkpoint is listed once rather than once per checkpoint, and it
+// leaves out a finding whose fingerprint carries a ruling.
+func priorFindings(s *session.Session, rulings map[string]session.Ruling) []verdict.Finding {
+	calls := make([][]verdict.Finding, 0, 1+len(s.Checkpoints))
+	calls = append(calls, s.PreFindings)
 	for _, cp := range s.Checkpoints {
-		out = append(out, cp.Findings...)
+		calls = append(calls, cp.Findings)
+	}
+	latest := map[string]int{}
+	for i, fs := range calls {
+		for _, f := range fs {
+			latest[fingerprintOf(f)] = i
+		}
+	}
+	var out []verdict.Finding
+	for i, fs := range calls {
+		for _, f := range fs {
+			fp := fingerprintOf(f)
+			if latest[fp] != i {
+				continue
+			}
+			if _, ruled := rulings[fp]; ruled {
+				continue
+			}
+			out = append(out, f)
+		}
 	}
 	return out
 }
@@ -999,17 +1026,19 @@ func validateCompletionTool() *mcp.Tool {
 }
 
 type ValidateCompletionArgs struct {
-	SessionID             string              `json:"session_id"  jsonschema:"The session_id returned by this task's validate_task_spec call. An empty string runs a lightweight review with no session."`
-	Summary               string              `json:"summary"     jsonschema:"What you implemented and how each acceptance criterion is met. A claim in the summary is not evidence on its own."`
-	FinalFiles            []CompletionFileArg `json:"final_files,omitempty" jsonschema:"Changed files, with full content or with content omitted so the server reads them. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; do not also send a file that final_diff already covers."`
-	FinalDiff             string              `json:"final_diff,omitempty" jsonschema:"A unified diff of the task's changes. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; when it is large, generate it with -U1 and leave out generated, lockfile and snapshot files."`
-	FinalDiffPath         string              `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, such as the repository's git directory; a per-session scratch directory under /tmp usually is not."`
-	TestEvidence          string              `json:"test_evidence,omitempty" jsonschema:"The test run output that proves the change, verbatim. Output showing no test executed draws a finding."`
-	ExitContracts         []string            `json:"exit_contracts,omitempty" jsonschema:"Symbols or behavior later tasks rely on this task leaving in place, copied from validate_plan's exit_contracts for this task; a hard miss draws missing_acceptance_criterion. At most 50 entries of at most 500 characters each."`
-	ExitContractsInferred bool                `json:"exit_contracts_inferred,omitempty" jsonschema:"validate_plan's exit_contracts_inferred for this task: true when the contracts were inferred from cross-task references rather than written in the plan, which caps a miss at minor."`
-	ModelOverride         string              `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
-	MaxTokensOverride     int                 `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
-	Codescene             *codescene.Digest   `json:"codescene,omitempty" jsonschema:"The CodeScene result for this task: analyze_change_set's raw JSON, or the reduced digest. Unknown keys are ignored. pre_commit_code_health_safeguard sees only uncommitted changes, so after a commit it reports zero files and is not a run of the task. When a run was attempted and failed, send ran false with skip_reason and skip_evidence."`
+	SessionID             string                `json:"session_id"  jsonschema:"The session_id returned by this task's validate_task_spec call. An empty string runs a lightweight review with no session."`
+	Summary               string                `json:"summary"     jsonschema:"What you implemented and how each acceptance criterion is met. A claim in the summary is not evidence on its own."`
+	FinalFiles            []CompletionFileArg   `json:"final_files,omitempty" jsonschema:"Changed files, with full content or with content omitted so the server reads them. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; do not also send a file that final_diff already covers."`
+	FinalDiff             string                `json:"final_diff,omitempty" jsonschema:"A unified diff of the task's changes. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; when it is large, generate it with -U1 and leave out generated, lockfile and snapshot files."`
+	FinalDiffPath         string                `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, such as the repository's git directory; a per-session scratch directory under /tmp usually is not."`
+	TestEvidence          string                `json:"test_evidence,omitempty" jsonschema:"The test run output that proves the change, verbatim. Output showing no test executed draws a finding."`
+	ExitContracts         []string              `json:"exit_contracts,omitempty" jsonschema:"Symbols or behavior later tasks rely on this task leaving in place, copied from validate_plan's exit_contracts for this task; a hard miss draws missing_acceptance_criterion. At most 50 entries of at most 500 characters each."`
+	ExitContractsInferred bool                  `json:"exit_contracts_inferred,omitempty" jsonschema:"validate_plan's exit_contracts_inferred for this task: true when the contracts were inferred from cross-task references rather than written in the plan, which caps a miss at minor."`
+	ModelOverride         string                `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
+	MaxTokensOverride     int                   `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
+	Codescene             *codescene.Digest     `json:"codescene,omitempty" jsonschema:"The CodeScene result for this task: analyze_change_set's raw JSON, or the reduced digest. Unknown keys are ignored. pre_commit_code_health_safeguard sees only uncommitted changes, so after a commit it reports zero files and is not a run of the task. When a run was attempted and failed, send ran false with skip_reason and skip_evidence."`
+	FindingResponses      []FindingResponseArg  `json:"finding_responses,omitempty" jsonschema:"Your answers to findings you dispute from this task's last validate_completion response that was not partial, one per finding id. If the reviewer raises a critical or major finding you answered again, the response sets escalate. At most 50 entries of at most 2000 characters each; not counted toward the payload cap."`
+	ControllerRulings     []ControllerRulingArg `json:"controller_rulings,omitempty" jsonschema:"Rulings your controller issued on findings from this task's session, copied verbatim. A ruling covers every later finding with the same id, ignoring any -n suffix, for the rest of the session, which keeps at most 50 rulings. At most 50 entries of at most 2000 characters each; not counted toward the payload cap."`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
@@ -1472,16 +1501,6 @@ func hasNonEmptyEvidence(args *ValidateCompletionArgs, resolvedFiles []FileArg) 
 	return false
 }
 
-func majorFindings(findings []verdict.Finding) []verdict.Finding {
-	var major []verdict.Finding
-	for _, finding := range findings {
-		if finding.Severity == verdict.SeverityMajor {
-			major = append(major, finding)
-		}
-	}
-	return major
-}
-
 // ValidateCompletion runs the post-implementation reviewer call. Eight-step
 // ordering (preserved here to keep the AC-mapping legible):
 //
@@ -1649,6 +1668,18 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, err
 	}
 
+	// 5c. finding_responses and controller_rulings. Their limits are argument
+	// errors, like exit_contracts'; which entries apply is decided once the
+	// session is known.
+	responses, err := normalizeFindingResponses(args.FindingResponses)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+	rulingArgs, err := normalizeControllerRulings(args.ControllerRulings)
+	if err != nil {
+		return nil, Envelope{}, err
+	}
+
 	// 6. evidence-shape guard. Runs BEFORE session lookup so a broken payload
 	// rejects fast regardless of session state. Cache hit → return the same
 	// envelope without re-running the guard or hitting the reviewer.
@@ -1684,7 +1715,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// 7/8. session lookup + spec selection.
 	var sess *session.Session
 	var spec session.TaskSpec
-	var majorPreFindings []verdict.Finding
+	var review completionReview
 	if lightweight {
 		// Synthesize a minimal spec for the reviewer. No session is created.
 		spec = session.TaskSpec{
@@ -1707,7 +1738,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			return rejectionEnvelopeResult(env)
 		}
 		spec = sess.Spec
-		majorPreFindings = majorFindings(sess.PreFindings)
+		state, _ := h.deps.Sessions.ReviewState(sess.ID)
+		review = buildCompletionReview(state, sess.PreFindings, knownSessionFindings(sess, state), responses, rulingArgs)
 	}
 
 	model, rendered, err := h.resolveModelAndRender(
@@ -1720,7 +1752,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				Files:                          toPromptFiles(resolvedFiles),
 				FinalDiff:                      args.FinalDiff,
 				TestEvidence:                   args.TestEvidence,
-				MajorPreFindings:               majorPreFindings,
+				MajorPreFindings:               review.majorPre,
+				PriorFindings:                  review.prior,
+				ControllerRulings:              rulingsForPrompt(review.rulings),
 				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args.Summary, resolvedFiles, args.FinalDiff),
 				ExitContracts:                  exitContracts,
 				ExitContractsInferred:          args.ExitContractsInferred,
@@ -1750,7 +1784,10 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if clamp.Severity != "" {
 		head = append(head, clamp)
 	}
-	reviewer := out.Result.Findings
+	// Rulings and repeats see the reviewer's findings alone, before any server
+	// finding joins them.
+	reviewer, waived := waiveRuled(out.Result.Findings, "", review.rulings, review.shown)
+	escalateIDs := markRepeats(reviewer, review.prior, review.shown)
 	findings := make([]verdict.Finding, 0, len(head)+len(reviewer)+len(out.Server))
 	findings = append(findings, head...)
 	findings = append(findings, reviewer...)
@@ -1762,22 +1799,38 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	})
 
 	env := Envelope{
-		Tool:       "validate_completion",
-		Verdict:    string(result.Verdict),
-		Findings:   result.Findings,
-		NextAction: result.NextAction,
-		ModelUsed:  out.ModelUsed,
-		ReviewMS:   out.ReviewMS,
-		Partial:    result.Partial,
+		Tool:           "validate_completion",
+		Verdict:        string(result.Verdict),
+		Findings:       result.Findings,
+		NextAction:     result.NextAction,
+		ModelUsed:      out.ModelUsed,
+		ReviewMS:       out.ReviewMS,
+		Partial:        result.Partial,
+		Escalate:       len(escalateIDs) > 0,
+		WaivedFindings: waived,
 	}
-	if isSubmissionDefectOnly(env.Findings) {
+	env.Findings = append(env.Findings, review.advisories...)
+	if lightweight && (len(responses) > 0 || len(rulingArgs) > 0) {
+		env.Findings = append(env.Findings, noSessionRulingsAdvisory())
+	}
+	// An escalated response does not say resubmit: resubmitting without a code
+	// change is the loop escalation stops, and a repeated insufficient_evidence
+	// finding is both a submission defect and an escalation.
+	switch {
+	case env.Escalate:
+		env.NextAction = escalationNextAction(escalateIDs) + env.NextAction
+	case isSubmissionDefectOnly(env.Findings):
 		env.SubmissionDefectOnly = true
 		env.NextAction = resubmitNextAction + env.NextAction
 	}
 	assignEnvelopeIDs(&env)
 
 	if !lightweight {
-		update := session.ReviewUpdate{IssuedIDs: envelopeIDs(env)}
+		update := session.ReviewUpdate{
+			IssuedIDs: envelopeIDs(env),
+			Rulings:   review.newRulings,
+			Escalated: env.Escalate,
+		}
 		// A truncated review keeps the prior findings of the last complete one:
 		// its own list is incomplete, and a finding lost to truncation would
 		// read as new on the next call.

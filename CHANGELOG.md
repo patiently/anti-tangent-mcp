@@ -30,6 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   criterion, with a `-2`, `-3` suffix when an earlier finding in the same response shares it. A
   `validate_plan` task finding's `id` ignores the task's `Task N:` number, so renumbering a plan
   keeps it. The summary block shows the `id` on every finding line.
+- `validate_completion` takes `finding_responses`: an implementer answers a finding from its last
+  complete review by `id`, and the reviewer sees each prior finding with its answer. When the
+  reviewer raises a critical or major finding again after it was answered, the response sets
+  `escalate: true`, the summary block says so, and `next_action` says to stop resubmitting and
+  ask the controller for a ruling.
+- `validate_completion` takes `controller_rulings`. A ruling covers every later finding with its
+  `id`, ignoring the `-n` suffix, for the rest of the session: matching findings move to
+  `waived_findings`, stop counting toward the verdict, and appear in the summary block as a
+  `waived:` line with their evidence. Server findings such as `codescene_not_run` are never
+  waived.
 
 ### Changed
 
@@ -44,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
 - `plan_run_report`'s unknown-run evidence leads with the usual cause, a `validate_task_spec`
   call that never passed `plan_run_id`, before idle expiry and a restarted server.
+- `check_progress` lists each earlier finding once, from the most recent call that raised it,
+  with its `id`, shows the session's controller rulings, and leaves out findings a ruling covers.
 
 ### Fixed
 
