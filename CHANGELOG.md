@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output and reduces it to the digest server-side: `quality_gates`, the length of `results`, the
   per-file verdict tally, Σ(`new-pp` − `old-pp`) and per-category counts. A digest field that is
   present wins over the derived value.
+- `validate_task_spec` called without `plan_run_id` while the server holds a live plan run
+  returns a minor `other` finding naming the most recently created run, so the task can be
+  attached. It is added after the verdict is decided and never changes it.
+- With the plan ledger enabled, `validate_plan` records a header for each run it mints, so
+  `plan_run_report` recognises a run no task was attached to — including after a restart — and
+  says no `validate_task_spec` call passed its `plan_run_id`.
 
 ### Changed
 
@@ -24,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calls is never seen together. It now names a `-U1` diff, leaving out generated, lockfile and
   snapshot files, not sending a file in both `final_diff` and `final_files`, and
   `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
+- `plan_run_report`'s unknown-run evidence leads with the usual cause, a `validate_task_spec`
+  call that never passed `plan_run_id`, before idle expiry and a restarted server.
 
 ### Fixed
 

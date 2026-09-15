@@ -192,6 +192,12 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}
 	env = h.withSessionTTL(env, sess)
 
+	if args.PlanRunID == "" {
+		if run, ok := h.deps.PlanRuns.Latest(); ok {
+			env.Findings = append(env.Findings, planRunIDAdvisory(run.ID))
+		}
+	}
+
 	if args.PlanRunID != "" {
 		// Best-effort: an unknown or expired run must not fail the review.
 		if !h.deps.PlanRuns.AppendRow(args.PlanRunID, planrun.TaskRow{
@@ -737,6 +743,37 @@ func prependPlanDeprecation(pr verdict.PlanResult, usedPlanText bool) verdict.Pl
 	}
 	pr.PlanFindings = append([]verdict.Finding{f}, pr.PlanFindings...)
 	return pr
+}
+
+// planRunIDAdvisory tells a validate_task_spec caller that this server holds a
+// live plan run the call did not name. It describes the call's arguments, not
+// the task, so it is appended after the verdict is finalized and must never
+// move it. It names the most recently created run because every validate_plan
+// round mints a new id and supersedes the previous one.
+func planRunIDAdvisory(runID string) verdict.Finding {
+	return verdict.Finding{
+		Severity:  verdict.SeverityMinor,
+		Category:  verdict.CategoryOther,
+		Criterion: "plan_run_id",
+		Evidence: fmt.Sprintf("This call passed no plan_run_id, but this server holds a live plan run, %s, "+
+			"minted by the most recent validate_plan.", runID),
+		Suggestion: fmt.Sprintf("If this task belongs to that plan, call validate_task_spec with plan_run_id=%s "+
+			"so plan_run_report can include it. Ignore this if the task is not part of a plan run.", runID),
+	}
+}
+
+// unattachedPlanRunFinding explains a known plan run with no task rows: the
+// run was minted, but no validate_task_spec call passed its id.
+func unattachedPlanRunFinding(run *planrun.Run) verdict.Finding {
+	return verdict.Finding{
+		Severity:  verdict.SeverityMinor,
+		Category:  verdict.CategoryOther,
+		Criterion: "plan_run_id",
+		Evidence: fmt.Sprintf("Plan run %s is known (%d tasks in the plan), but no validate_task_spec call passed "+
+			"its plan_run_id, so no task is attached to it.", run.ID, run.TaskCount),
+		Suggestion: "Pass plan_run_id on every implementing subagent's validate_task_spec call. " +
+			"For this run, report from the per-task DONE envelopes instead.",
+	}
 }
 
 // prependRepoRootUnusable adds the in-band signal that a supplied repo_root
@@ -2107,6 +2144,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		// purpose.
 		cachedCall := planCallContext{
 			PlanRuns:         h.deps.PlanRuns,
+			PlanLedger:       h.deps.PlanLedger,
 			Source:           planSrc.String(),
 			ModelUsed:        cachedModelUsed,
 			ReviewMS:         0,
@@ -2169,6 +2207,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// steps. See planCallContext.
 	call := planCallContext{
 		PlanRuns:         h.deps.PlanRuns,
+		PlanLedger:       h.deps.PlanLedger,
 		Source:           planSrc.String(),
 		ModelUsed:        modelUsed,
 		ReviewMS:         ms,
@@ -2854,10 +2893,13 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 				Severity:  verdict.SeverityMajor,
 				Category:  verdict.CategorySessionMissing,
 				Criterion: "plan_run_id",
-				Evidence: fmt.Sprintf("No plan run %q is known to this server. Runs expire after %s, "+
-					"and in-memory state is lost on restart.", args.PlanRunID, h.deps.PlanRuns.TTL()),
+				Evidence: fmt.Sprintf("No plan run %q is known to this server. The usual cause is that no validate_task_spec "+
+					"call passed it as plan_run_id: nothing then keeps a run alive, so it expired %s after validate_plan minted it. "+
+					"A run is also unknown to a different or restarted server unless the plan ledger recorded it.",
+					args.PlanRunID, h.deps.PlanRuns.TTL()),
 				Suggestion: "Nothing to recover — report from the per-task DONE envelopes instead. " +
-					"Set ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER=1 to persist future runs.",
+					"Pass plan_run_id on every validate_task_spec call, and set ANTI_TANGENT_STATS_DIR and " +
+					"ANTI_TANGENT_PLAN_LEDGER=1 so a run survives a restart.",
 			}},
 			SummaryBlock: formatUnknownPlanRunSummary(args.PlanRunID),
 		}
@@ -2874,6 +2916,9 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 	}
 	if res.Tasks == nil {
 		res.Tasks = []planrun.TaskRow{}
+	}
+	if len(run.Rows) == 0 {
+		res.Findings = append(res.Findings, unattachedPlanRunFinding(run))
 	}
 	return planRunReportResult(res)
 }

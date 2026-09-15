@@ -34,6 +34,23 @@ type ledgerLine struct {
 	PlanQuality string  `json:"plan_quality,omitempty"`
 	TaskCount   int     `json:"task_count,omitempty"`
 	Row         TaskRow `json:"row"`
+	// Header marks the line validate_plan writes when it mints a run, before any
+	// task is attached. It has no row, so Load must not turn it into one.
+	Header bool `json:"header,omitempty"`
+	// CreatedAt is set on header lines only. Prune keys task rows on
+	// Row.CompletedAt, and a header has no row to key on.
+	CreatedAt time.Time `json:"created_at,omitzero"`
+}
+
+// ledgerHeaderLine is the on-disk shape of a header. It is marshalled from its
+// own type rather than from ledgerLine so the line carries no zero-valued row.
+type ledgerHeaderLine struct {
+	PlanRunID   string    `json:"plan_run_id"`
+	PlanVerdict string    `json:"plan_verdict,omitempty"`
+	PlanQuality string    `json:"plan_quality,omitempty"`
+	TaskCount   int       `json:"task_count,omitempty"`
+	Header      bool      `json:"header"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Ledger appends completed task rows to plan-runs.jsonl. A nil *Ledger is a
@@ -85,6 +102,26 @@ func (l *Ledger) Append(run *Run, row TaskRow) error {
 	if err != nil {
 		return err
 	}
+	return l.appendLine(b)
+}
+
+// AppendHeader records a run when validate_plan mints it, so a run that no
+// task was ever attached to is still known to Load. It carries no task title.
+func (l *Ledger) AppendHeader(run *Run) error {
+	if l == nil || l.Dir == "" {
+		return nil
+	}
+	b, err := json.Marshal(ledgerHeaderLine{
+		PlanRunID: run.ID, PlanVerdict: run.PlanVerdict, PlanQuality: run.PlanQuality,
+		TaskCount: run.TaskCount, Header: true, CreatedAt: run.CreatedAt.UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	return l.appendLine(b)
+}
+
+func (l *Ledger) appendLine(b []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.afterAppendLock != nil {
@@ -95,11 +132,10 @@ func (l *Ledger) Append(run *Run, row TaskRow) error {
 		return err
 	}
 	defer f.Close()
-	// OpenFile's mode argument only applies at creation, so a file left behind
-	// by a pre-fix binary (0o644) would otherwise never get tightened by a
-	// plain append. Chmod is best-effort and its error is intentionally
-	// swallowed: ledger writes are advisory, and a chmod failure must never
-	// turn into a failed append.
+	// OpenFile's mode argument only applies at creation, so a file created with
+	// a wider mode would otherwise never get tightened by a plain append. Chmod
+	// is best-effort and its error is intentionally swallowed: ledger writes
+	// are advisory, and a chmod failure must never turn into a failed append.
 	_ = f.Chmod(0o600)
 	_, err = f.Write(append(b, '\n'))
 	return err
@@ -148,6 +184,12 @@ func (l *Ledger) Load(planRunID string) (*Run, bool) {
 				ID: ln.PlanRunID, PlanVerdict: ln.PlanVerdict,
 				PlanQuality: ln.PlanQuality, TaskCount: ln.TaskCount,
 			}
+		}
+		if ln.Header {
+			if run.CreatedAt.IsZero() {
+				run.CreatedAt = ln.CreatedAt
+			}
+			continue
 		}
 		byIndex[ln.Row.Index] = ln.Row // last-seen wins: a resubmission overwrites its own index
 	}
@@ -213,8 +255,12 @@ func (l *Ledger) Prune(cutoff time.Time) error {
 		if err := json.Unmarshal(line, &ln); err != nil {
 			continue // tolerate (drop) a torn trailing line, same as Load
 		}
-		if !ln.Row.CompletedAt.IsZero() && ln.Row.CompletedAt.Before(cutoff) {
-			continue // has a real completion time and it is stale: drop
+		stamp := ln.Row.CompletedAt
+		if ln.Header {
+			stamp = ln.CreatedAt
+		}
+		if !stamp.IsZero() && stamp.Before(cutoff) {
+			continue // has a real timestamp and it is stale: drop
 		}
 		kept = append(kept, append([]byte(nil), line...)) // copy: sc.Bytes() is reused by the next Scan
 	}

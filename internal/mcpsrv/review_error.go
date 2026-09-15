@@ -3,6 +3,7 @@ package mcpsrv
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -123,6 +124,9 @@ type planCallContext struct {
 	// context rather than reached through *handlers so finish() stays a method
 	// on the context and all three sites construct one identical thing.
 	PlanRuns *planrun.Store
+	// PlanLedger receives a header line for every freshly minted run. Nil-safe:
+	// nil unless ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER are set.
+	PlanLedger *planrun.Ledger
 	// Source is the caller's pre-rendered provenance string (planSrc.String()),
 	// empty when plan_text was used. Threaded through so every envelope —
 	// recovery and cache hit included — carries the same source line a
@@ -211,6 +215,9 @@ func (c planCallContext) mintPlanRunID(pr *verdict.PlanResult) {
 	}
 	run := c.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
 	pr.PlanRunID = run.ID
+	if err := c.PlanLedger.AppendHeader(run); err != nil {
+		slog.Warn("plan ledger header append failed", "plan_run_id", run.ID, "err", err)
+	}
 }
 
 // finish runs the post-ladder tail every validate_plan exit path shares:

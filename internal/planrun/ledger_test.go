@@ -318,3 +318,46 @@ func TestLedger_PruneConcurrentAppendNotLost(t *testing.T) {
 	titles := []string{got.Rows[0].TaskTitle, got.Rows[1].TaskTitle}
 	assert.ElementsMatch(t, []string{"before", "concurrent"}, titles)
 }
+
+func TestLedger_HeaderOnlyRunLoads(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+	created := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, l.AppendHeader(&Run{ID: "pr_aaaaaaaaaaaa", CreatedAt: created, PlanVerdict: "warn", PlanQuality: "actionable", TaskCount: 18}))
+
+	got, ok := l.Load("pr_aaaaaaaaaaaa")
+	require.True(t, ok)
+	assert.Equal(t, "warn", got.PlanVerdict)
+	assert.Equal(t, 18, got.TaskCount)
+	assert.True(t, got.CreatedAt.Equal(created))
+	assert.Empty(t, got.Rows)
+
+	b, err := os.ReadFile(filepath.Join(dir, ledgerFile))
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "task_title", "a header carries no task title")
+}
+
+func TestLedger_HeaderIsNeverARow(t *testing.T) {
+	l := &Ledger{Dir: t.TempDir()}
+	run := &Run{ID: "pr_bbbbbbbbbbbb", CreatedAt: time.Now().UTC(), PlanVerdict: "pass", PlanQuality: "rigorous", TaskCount: 2}
+	require.NoError(t, l.AppendHeader(run))
+	require.NoError(t, l.Append(run, TaskRow{Index: 1, TaskTitle: "Add endpoint", PostVerdict: "pass", CompletedAt: time.Now().UTC()}))
+
+	got, ok := l.Load(run.ID)
+	require.True(t, ok)
+	require.Len(t, got.Rows, 1)
+	assert.Equal(t, "Add endpoint", got.Rows[0].TaskTitle)
+}
+
+func TestLedger_HeaderPrunedByCreatedAt(t *testing.T) {
+	l := &Ledger{Dir: t.TempDir()}
+	cutoff := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, l.AppendHeader(&Run{ID: "pr_old000000000", CreatedAt: cutoff.Add(-time.Hour)}))
+	require.NoError(t, l.AppendHeader(&Run{ID: "pr_new000000000", CreatedAt: cutoff.Add(time.Hour)}))
+
+	require.NoError(t, l.Prune(cutoff))
+	_, ok := l.Load("pr_old000000000")
+	assert.False(t, ok, "a header older than the cutoff is pruned")
+	_, ok = l.Load("pr_new000000000")
+	assert.True(t, ok)
+}
