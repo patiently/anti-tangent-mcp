@@ -63,7 +63,8 @@ If the verdict is `fail` or contains `critical`/`major` findings, do
 not report DONE — fix the findings and re-validate. **Exception: when the
 response carries `submission_defect_only: true`, every blocking finding is
 about what you submitted, not about your code. Attach the missing evidence
-and re-submit; no rework is implied.**
+and re-submit; no rework is implied.** A response with `escalate: true` is a
+stop-and-ask (§4.3), not DONE.
 - Prefer paths over inline content: omit a `final_files` entry's `content` and the server reads
   its absolute `path`, and pass `final_diff_path` instead of `final_diff`. Write the diff first:
   `f=$(mktemp "$(git rev-parse --absolute-git-dir)/anti-tangent-change-XXXXXX") && git add -- <task paths> && git diff HEAD -- <task paths> > "$f"` —
@@ -95,8 +96,8 @@ and re-submit; no rework is implied.**
 **3b. CodeScene pre-DONE check (REQUIRED when codescene-mcp is
 configured in your host).** Call `analyze_change_set` for the full
 branch-vs-base Code Health view, then pass the result to
-`validate_completion` as the `codescene` argument:
-`{"ran": true, "quality_gate": …, "verdicts": {…}, "trend": …, "net_pp": …, "category_counts": {…}}`.
+`validate_completion` as the `codescene` argument; its raw JSON is accepted,
+and the argument's schema description gives the digest shape.
 If the run was attempted and failed, pass `{"ran": false, "skip_reason": "…", "skip_evidence": "<the tool's own error text>"}` instead; omitting `skip_evidence` draws a major, like omitting the argument.
 The structured field supersedes the prose status line: it reaches the reviewer as
 caller-attested context (no independent verification) and lands in the plan-run
@@ -183,7 +184,7 @@ alone — it carries no reliable line anchors.
 
 ### 4.3 How to address findings
 
-**Address vs. push back.** Reviewer LLMs can be wrong. If a finding misreads the code, document the disagreement in the next call's `working_on` field — e.g. `working_on: "addressed all findings except F#3, which is incorrect: the helper does perform the length check, handlers.go line 42"` — and re-validate. Don't silently ignore: the next reviewer call won't see your reasoning unless you write it.
+**Address vs. push back.** Reviewer LLMs can be wrong. To dispute a finding, resubmit once with `finding_responses: [{finding_id, response}]`, naming its `id` from your last response without `partial: true` and what the reviewer misread. If the reviewer repeats a critical or major finding you answered, the response carries `escalate: true`: stop resubmitting and report the finding IDs and your responses to your controller. Resubmit with its ruling verbatim in `controller_rulings`; your summary block then shows a `waived:` line for each finding the ruling covers.
 
 **The retry loop.** Parse failures on the reviewer's response are handled inside the server (one retry with a JSON-only reminder); the implementer does nothing.
 

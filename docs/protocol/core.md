@@ -142,6 +142,8 @@ response is about what you submitted — absent evidence, malformed evidence, or
 that did not happen — not about your code. Attach what is missing and call again. No rework is
 implied; the reviewer has not yet seen your code.
 
+**What are `id`, `repeat_of`, `escalate` and `waived_findings`?** Every finding carries an `id`. Implementers answer one with `finding_responses` and controllers rule on one with `controller_rulings`; see [`implementer.md`](implementer.md) §4.3 and [`controller.md`](controller.md) §5.9.
+
 **A hook returned `category: other` with `criterion: reviewer_response`.** Reviewer output was cut off at the token budget. The server parses truncated responses tolerantly and surfaces any complete findings before the cap (look for `"partial": true` and a `severity: minor` truncation marker). For the full response next call, raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` / `ANTI_TANGENT_PLAN_MAX_TOKENS` globally, or pass `max_tokens_override`.
 
 **A finding has `category: attestation_contradiction` — what is that?** An AC explicitly contradicts a `harness_shape_attestation` entry (see [`authoring.md`](authoring.md) §3.8). NOT severity-floored (unlike `convention_deviation` / `unverifiable_codebase_claim`); the reviewer's chosen severity is preserved.

@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `validate_plan`'s rolled-up codebase reference checklist is added after the verdict is decided,
   so it no longer counts toward the three-minor rule that lifts a plan to `warn`. A plan that the
   checklist alone had lifted to `warn` can now pass.
+- The protocol describes answering a finding with `finding_responses`, stopping on `escalate`,
+  and ruling on an escalation (`controller.md` §5.9), and judges `validate_plan` convergence by
+  major findings' IDs. `implementer.md` §4.3 no longer tells implementers to dispute a finding
+  through a `working_on` field `validate_completion` does not have.
 
 ### Fixed
 

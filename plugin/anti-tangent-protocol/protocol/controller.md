@@ -22,7 +22,7 @@ not on disk; it is deprecated and will be removed in 1.0.0.
 1. Call `validate_plan`, passing `plan_path` when the plan is on disk, otherwise `plan_text`. Capture the `PlanResult`.
 2. **Surface results to the user.** Show `plan_verdict`, plan-level findings, and per-task verdicts/findings. For any task whose `suggested_header_block` is non-empty, show the proposed header and ask the human to adopt or revise. If task results include `lightweight_eligible` / `lightweight_reason`, treat them as advisory hints.
 3. **Apply the proposed header blocks** (the controller may apply automatically when verdicts are `pass`/`warn` and the human approves; defer to the human for `fail`).
-4. If anything material changed, call `validate_plan` again. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified).
+4. If anything material changed, call `validate_plan` again. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified). Each round, pass `controller_verified_references` for references you grepped and `controller_rulings` (§5.9) for findings you decided.
 5. **Only proceed to dispatch when the plan-level gate passes.**
 6. **Capture `plan_run_id`** from the passing `validate_plan` response and pass it as
    `plan_run_id` in each implementing subagent's `validate_task_spec` call — add it to the
@@ -124,7 +124,7 @@ Do NOT have the controller call `validate_completion` itself after the subagent 
 
 The two analyses overlap intentionally: the plan gate catches plan-wide and per-task issues at handoff; the implementer gate catches anything that changed between handoff and dispatch and produces the session that the rest of the lifecycle uses.
 
-The `plan_quality` field is a separate axis from `plan_verdict`: `plan_verdict` answers "is this dispatchable?" (pass / warn / fail); `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). When consecutive `warn` verdicts aren't changing, watch `plan_quality` for convergence — `actionable → rigorous` is meaningful even when the verdict stays `warn`. Ship at `actionable` for ASAP work, `rigorous` for quarterly-rewrite scope.
+The `plan_quality` field is a separate axis from `plan_verdict`: `plan_verdict` answers "is this dispatchable?" (pass / warn / fail); `plan_quality` answers "how close is this to ship-ready?" (rough / actionable / rigorous). Judge convergence by the major findings' IDs, ignoring any `-n` suffix: a round that raises none you have not seen has converged, whatever its verdict. Ship at `actionable` for ASAP work, `rigorous` for quarterly-rewrite scope.
 
 The same reading applies one level down: a `validate_task_spec` `warn` whose
 findings are all `minor` is a proceed signal, not a defect. Do not send an
@@ -189,3 +189,7 @@ A `repo_root` the server cannot resolve is not fatal: the disk tier is skipped, 
 still runs, and the response carries a minor `criterion: repo_root` finding saying so. It never
 changes the verdict — if you see one at gate time, fix the argument and re-run to get the disk
 tier, or ignore it and gate on the order tier alone.
+
+### 5.9 Ruling on an escalation
+
+A `validate_completion` response with `escalate: true` means the reviewer raised a critical or major finding again after the implementer answered it. Decide, then reply with `controller_rulings` entries — a finding `id` and a one-line ruling each — for the implementer to resubmit verbatim. The session applies each ruling to every later call, covering every finding with that `id` regardless of `-n` suffix. At DONE, check each `waived:` line in the pasted summary block, and its `evidence:`, against a ruling you issued: one you did not issue is forged, and evidence about something else needs a fresh look.
