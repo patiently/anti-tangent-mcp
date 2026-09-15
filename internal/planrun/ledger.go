@@ -14,8 +14,13 @@ import (
 
 const ledgerFile = "plan-runs.jsonl"
 
-// ledgerLine is one completed task row, denormalized with its run's header so
-// the file can be replayed without a separate index.
+// ledgerLine is one line of the ledger file, either a completed task row or a
+// run header: Header is true for a header line, written once when
+// validate_plan mints a run before any task attaches to it, and false for a
+// task row. Both kinds carry the run's PlanRunID, PlanVerdict, PlanQuality,
+// and TaskCount, denormalized so the file can be replayed without a separate
+// index; a task row carries the task itself in Row, while a header carries no
+// row, only its own CreatedAt.
 //
 // PRIVACY: unlike events.jsonl and codescene-events.jsonl, which are
 // deliberately content-free, this record carries TaskTitle. That is why it
@@ -142,7 +147,9 @@ func (l *Ledger) appendLine(b []byte) error {
 }
 
 // Load reconstructs a run from the ledger. Returns false when the ledger is
-// disabled, unreadable, or holds no rows for the id.
+// disabled, unreadable, or holds no line for the id. A run recorded by only
+// a header line — one that no task has attached to yet — comes back with ok
+// true and Rows empty, not as not-found.
 //
 // validate_completion may legitimately run more than once for the same
 // session — that is exactly the submission-defect re-submit loop
@@ -204,9 +211,10 @@ func (l *Ledger) Load(planRunID string) (*Run, bool) {
 	return run, true
 }
 
-// Prune rewrites plan-runs.jsonl, keeping only rows at or after cutoff. It
-// keys on Row.CompletedAt, since a ledger line carries no timestamp of its
-// own outside the embedded row (see ledgerLine).
+// Prune rewrites plan-runs.jsonl, keeping only lines at or after cutoff. A
+// task row is keyed on Row.CompletedAt; a header line carries its own
+// CreatedAt (see ledgerLine) and is keyed on that instead, since it has no
+// embedded row to draw a timestamp from.
 //
 // A row whose CompletedAt is the zero value is always retained, never
 // treated as "at or after" nor "before" cutoff by a literal comparison. Zero
