@@ -1,6 +1,7 @@
 package mcpsrv
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/stalecomments"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -53,26 +55,26 @@ func hintCfg(t *testing.T) config.Config {
 }
 
 func TestStaleCommentHint_WithoutRepoRootScansTheDiffHunks(t *testing.T) {
-	hint, advisory := staleCommentHint(hintCfg(t), sweepDiff, "", nil)
-	assert.Nil(t, advisory)
+	hint, advisories := staleCommentHint(hintCfg(t), sweepDiff, "", nil)
+	assert.Empty(t, advisories)
 	require.NotNil(t, hint)
 	assert.Equal(t, []string{"handleRetired"}, hint.Names)
 	assert.Equal(t, []string{sweepHunkHit}, hint.Hits)
 }
 
 func TestStaleCommentHint_NoRemovedNameMeansNoHint(t *testing.T) {
-	hint, advisory := staleCommentHint(hintCfg(t), "--- a/x.go\n+++ b/x.go\n@@ -1 +1 @@\n-x := 1\n+x := 2\n", "", nil)
+	hint, advisories := staleCommentHint(hintCfg(t), "--- a/x.go\n+++ b/x.go\n@@ -1 +1 @@\n-x := 1\n+x := 2\n", "", nil)
 	assert.Nil(t, hint)
-	assert.Nil(t, advisory)
+	assert.Empty(t, advisories)
 }
 
 func TestStaleCommentHint_ReadsThePostChangeFileUnderRepoRoot(t *testing.T) {
 	root := t.TempDir()
 	writeRepoFile(t, root, "pkg/sweep.go", sweepFile())
 
-	hint, advisory := staleCommentHint(hintCfg(t), sweepDiff, root, nil)
+	hint, advisories := staleCommentHint(hintCfg(t), sweepDiff, root, nil)
 
-	assert.Nil(t, advisory)
+	assert.Empty(t, advisories)
 	require.NotNil(t, hint)
 	assert.Equal(t, []string{sweepHunkHit, sweepDiskHit}, hint.Hits)
 }
@@ -83,13 +85,13 @@ func TestStaleCommentHint_RepoRootOutsidePlanRootsFallsBackWithAnAdvisory(t *tes
 	cfg := hintCfg(t)
 	cfg.PlanRoots = []string{t.TempDir()}
 
-	hint, advisory := staleCommentHint(cfg, sweepDiff, root, nil)
+	hint, advisories := staleCommentHint(cfg, sweepDiff, root, nil)
 
-	require.NotNil(t, advisory)
-	assert.Equal(t, verdict.SeverityMinor, advisory.Severity)
-	assert.Equal(t, verdict.CategoryOther, advisory.Category)
-	assert.Equal(t, "repo_root", advisory.Criterion)
-	assert.Contains(t, advisory.Evidence, "outside ANTI_TANGENT_PLAN_ROOTS")
+	require.Len(t, advisories, 1)
+	assert.Equal(t, verdict.SeverityMinor, advisories[0].Severity)
+	assert.Equal(t, verdict.CategoryOther, advisories[0].Category)
+	assert.Equal(t, "repo_root", advisories[0].Criterion)
+	assert.Contains(t, advisories[0].Evidence, "outside ANTI_TANGENT_PLAN_ROOTS")
 	require.NotNil(t, hint)
 	assert.Equal(t, []string{sweepHunkHit}, hint.Hits)
 }
@@ -116,6 +118,44 @@ func TestStaleCommentHint_SkipsAFileOverThePerFileCap(t *testing.T) {
 
 	require.NotNil(t, hint)
 	assert.Equal(t, []string{sweepHunkHit}, hint.Hits)
+}
+
+func TestReadUnderRepoRoot_ReturnsFalseOnceTheAttemptBudgetIsSpent(t *testing.T) {
+	root := t.TempDir()
+	writeRepoFile(t, root, "pkg/sweep.go", sweepFile())
+	cfg := hintCfg(t)
+	budget := &diskReadBudget{files: 0, bytes: cfg.ContextMaxPayloadBytes}
+
+	_, ok := readUnderRepoRoot(cfg, root, "pkg/sweep.go", budget)
+
+	assert.False(t, ok, "an existing, in-budget-bytes file is still refused once the attempt budget is spent")
+}
+
+func TestPostChangeSources_StopsReadingPastTheAttemptCap(t *testing.T) {
+	root := t.TempDir()
+	cfg := hintCfg(t)
+	n := maxContextFiles + 1
+
+	var diff strings.Builder
+	for i := 0; i < n; i++ {
+		path := fmt.Sprintf("pkg/f%d.go", i)
+		writeRepoFile(t, root, path, fmt.Sprintf("disk line %d\n", i))
+		fmt.Fprintf(&diff, "diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -1 +1 @@\n diff line %d\n",
+			path, path, path, path, i)
+	}
+	diffFiles := stalecomments.ParseDiff(diff.String())
+	require.Len(t, diffFiles, n)
+
+	sources := postChangeSources(cfg, diffFiles, nil, root)
+	require.Len(t, sources, n)
+
+	for i := 0; i < maxContextFiles; i++ {
+		want := stalecomments.FileLines(fmt.Sprintf("disk line %d\n", i))
+		assert.Equal(t, want, sources[i].Lines, "source %d is within the %d-attempt cap, so it is read from disk", i, maxContextFiles)
+	}
+	last := sources[n-1]
+	assert.Equal(t, diffFiles[n-1].Post, last.Lines,
+		"the (maxContextFiles+1)th file is past the attempt cap, so its diff hunk lines are used instead of a disk read")
 }
 
 func TestStaleCommentHint_StopsReadingAtTheWholeSetCap(t *testing.T) {

@@ -1779,8 +1779,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 
 	// 8b. Built only once no rejection can follow: evidenceCacheKey leaves
 	// repo_root out, so a cached rejection must not depend on it, and the
-	// repo_root advisory belongs only on a reviewed call.
-	staleComments, repoRootAdvisory := staleCommentHint(h.deps.Cfg, args.FinalDiff, args.RepoRoot, resolvedFiles)
+	// repo_root advisories belong only on a reviewed call.
+	staleComments, repoRootAdvisories := staleCommentHint(h.deps.Cfg, args.FinalDiff, args.RepoRoot, resolvedFiles)
 
 	model, rendered, err := h.resolveModelAndRender(
 		args.ModelOverride,
@@ -1852,9 +1852,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		ControllerRulings: appliedRulings(review.rulings),
 	}
 	env.Findings = append(env.Findings, review.advisories...)
-	if repoRootAdvisory != nil {
-		env.Findings = append(env.Findings, *repoRootAdvisory)
-	}
+	env.Findings = append(env.Findings, repoRootAdvisories...)
 	if lightweight && (len(responses) > 0 || len(rulingArgs) > 0) {
 		env.Findings = append(env.Findings, noSessionRulingsAdvisory())
 	}

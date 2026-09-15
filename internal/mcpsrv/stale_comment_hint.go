@@ -11,33 +11,33 @@ import (
 // check: the names the diff removes, and the comment lines of the post-change
 // files that still contain one. Only those lines reach the prompt, so reading
 // whole files under repo_root does not grow the payload. The hint is nil when
-// no comment line matches. The advisory is non-nil when repo_root was supplied
-// and cannot be used, in which case the scan uses the submitted evidence alone.
-func staleCommentHint(cfg config.Config, finalDiff, repoRoot string, files []FileArg) (*prompts.StaleCommentHint, *verdict.Finding) {
-	root, advisory := resolveRepoRootForHint(cfg, repoRoot)
+// no comment line matches. advisories holds the one repo_root advisory when
+// repo_root was supplied and cannot be used, and is nil otherwise — the
+// caller appends it unconditionally, with no nil branch of its own.
+func staleCommentHint(cfg config.Config, finalDiff, repoRoot string, files []FileArg) (*prompts.StaleCommentHint, []verdict.Finding) {
+	root, advisories := resolveRepoRootForHint(cfg, repoRoot)
 	diffFiles := stalecomments.ParseDiff(finalDiff)
 	names := stalecomments.RemovedNames(diffFiles)
 	if len(names) == 0 {
-		return nil, advisory
+		return nil, advisories
 	}
 	hits := stalecomments.Scan(names, postChangeSources(cfg, diffFiles, files, root))
 	if len(hits) == 0 {
-		return nil, advisory
+		return nil, advisories
 	}
-	return hintFromHits(hits), advisory
+	return hintFromHits(hits), advisories
 }
 
 // resolveRepoRootForHint resolves repo_root for staleCommentHint: empty input
-// resolves to no root and no advisory, and a root resolveDirInput rejects
-// resolves to no root plus the advisory reporting why.
-func resolveRepoRootForHint(cfg config.Config, repoRoot string) (string, *verdict.Finding) {
+// resolves to no root and no advisories, and a root resolveDirInput rejects
+// resolves to no root plus one repo_root advisory.
+func resolveRepoRootForHint(cfg config.Config, repoRoot string) (string, []verdict.Finding) {
 	if repoRoot == "" {
 		return "", nil
 	}
 	resolved, err := resolveDirInput(repoRoot, cfg.PlanRoots)
 	if err != nil {
-		a := repoRootUnusableAdvisory(err.Error())
-		return "", &a
+		return "", []verdict.Finding{repoRootUnusableAdvisory(err.Error())}
 	}
 	return resolved, nil
 }
