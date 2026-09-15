@@ -333,7 +333,7 @@ lets the digest template at `implementer.md` shrink to a pointer.
 `post.tmpl` asks the reviewer, for each branch, case or state the diff removes, to name what it
 handled and check the guards, sets and `when`-style dispatches visible in the evidence that
 enumerate those states. Minor unless the evidence shows a regression. This is the least certain
-change in the release; §3.4 decides whether it stays.
+change in this part; §3.4 decides whether it stays.
 
 ### 3.4 Replay gate
 
