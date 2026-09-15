@@ -294,6 +294,7 @@ func TestCheckEvidenceShape_EllipsisPlaceholderLine(t *testing.T) {
 		{name: "added indented line in a diff", diff: goHunk + "+    ...\n", reject: true},
 		{name: "added stub line in a python diff", diff: pyHunk + "+    ...\n"},
 		{name: "added line in a go file after a python file", diff: pyHunk + "+    ...\n" + goHunk + "+...\n", reject: true},
+		{name: "other marker added in a python diff", diff: pyHunk + "+# (truncated)\n", reject: true},
 		{name: "plain text evidence", diff: "header\n...\nmore", reject: true},
 		{name: "python file stub", files: []FileArg{{Path: "pkg/stub.py", Content: "def f():\n    ...\n"}}},
 		{name: "python interface stub", files: []FileArg{{Path: "pkg/stub.pyi", Content: "class C:\n    ...\n"}}},
@@ -448,7 +449,7 @@ git commit -m "fix(mcpsrv): flag an added ... placeholder line, not an unchanged
 **Goal:** An unexpected key in the optional `codescene` argument no longer rejects the whole `validate_completion` call, and CodeScene's raw `analyze_change_set` output is reduced to the digest server-side.
 
 **Files:**
-- Modify: `internal/codescene/codescene.go` (new `rawChangeSet` type and `(*Digest).UnmarshalJSON`)
+- Modify: `internal/codescene/codescene.go` (new `rawChangeSetResult` type and `(*Digest).UnmarshalJSON`)
 - Test: `internal/codescene/codescene_test.go`
 - Create: `internal/mcpsrv/completion_schema.go` (`validateCompletionInputSchema`)
 - Modify: `internal/mcpsrv/handlers.go` (`validateCompletionTool` sets `InputSchema`)
@@ -459,7 +460,7 @@ git commit -m "fix(mcpsrv): flag an added ... placeholder line, not an unchanged
 **Acceptance Criteria:**
 - [ ] A `validate_completion` call whose `codescene` object, or its `verdicts`, carries keys outside the digest shape is accepted over MCP instead of failing schema validation
 - [ ] Raw `analyze_change_set` output (`quality_gates`, `results[]`) passed as `codescene` yields `ran=true`, `tool=analyze_change_set`, `quality_gate`, `files_analyzed = len(results)`, per-verdict counts, `net_pp = Σ(new-pp − old-pp)` and per-category counts
-- [ ] A digest field that is present wins over the value derived from raw keys; a raw key of the wrong type is ignored rather than failing the call
+- [ ] A digest field that is present wins over the value derived from raw keys; a raw key of the wrong type is ignored on its own, without failing the call or stopping the reduction of the other raw key
 - [ ] Under `ANTI_TANGENT_CODESCENE=required`, both shapes above draw no `codescene_not_run` or `codescene_skipped` finding
 
 **Non-goals:**
@@ -540,6 +541,27 @@ func TestDigest_UnmarshalJSON_IgnoresUnknownAndMistypedRawKeys(t *testing.T) {
 	assert.Equal(t, Verdicts{Improved: 9, Stable: 3}, *d.Verdicts)
 }
 
+func TestDigest_UnmarshalJSON_MistypedRawKeyLeavesTheOtherReduced(t *testing.T) {
+	var badGate Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"quality_gates":true,"results":[
+		{"verdict":"degraded","findings":[{"category":"Complex Method","new-pp":2,"old-pp":1}]}]}`), &badGate))
+	assert.True(t, badGate.Ran)
+	assert.Equal(t, "analyze_change_set", badGate.Tool)
+	assert.Equal(t, "", badGate.QualityGate)
+	assert.Equal(t, 1, badGate.FilesAnalyzed)
+	require.NotNil(t, badGate.Verdicts)
+	assert.Equal(t, Verdicts{Degraded: 1}, *badGate.Verdicts)
+	assert.InDelta(t, 1.0, badGate.NetPP, 1e-9)
+	assert.Equal(t, map[string]int{"Complex Method": 1}, badGate.CategoryCounts)
+
+	var badResults Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"quality_gates":"failed","results":"n/a"}`), &badResults))
+	assert.True(t, badResults.Ran)
+	assert.Equal(t, "failed", badResults.QualityGate)
+	assert.Equal(t, 0, badResults.FilesAnalyzed)
+	assert.Nil(t, badResults.Verdicts)
+}
+
 func TestDigest_UnmarshalJSON_DigestShapeRoundTrips(t *testing.T) {
 	want := Digest{Ran: true, Tool: "analyze_change_set", QualityGate: "passed", FilesAnalyzed: 2,
 		Verdicts: &Verdicts{Improved: 1, Stable: 1}, Trend: TrendImprovement, NetPP: -1,
@@ -562,26 +584,25 @@ Expected: FAIL — `ReducesRawChangeSet` and `EmptyChangeSetStillRan` see `Ran=f
 In `internal/codescene/codescene.go`, add `"encoding/json"` to the import block and add:
 
 ```go
-// rawChangeSet is the part of CodeScene's own analyze_change_set output that
-// maps onto a Digest, so a caller can pass that output unreduced.
-type rawChangeSet struct {
-	QualityGates *string `json:"quality_gates"`
-	Results      []struct {
-		Verdict  string `json:"verdict"`
-		Findings []struct {
-			Category string  `json:"category"`
-			NewPP    float64 `json:"new-pp"`
-			OldPP    float64 `json:"old-pp"`
-		} `json:"findings"`
-	} `json:"results"`
+// rawChangeSetResult is one file entry of CodeScene's raw analyze_change_set
+// output: its verdict, and the findings whose problem points and categories
+// reduce into a Digest.
+type rawChangeSetResult struct {
+	Verdict  string `json:"verdict"`
+	Findings []struct {
+		Category string  `json:"category"`
+		NewPP    float64 `json:"new-pp"`
+		OldPP    float64 `json:"old-pp"`
+	} `json:"findings"`
 }
 
 // UnmarshalJSON accepts both the digest shape and CodeScene's raw
 // analyze_change_set output, reducing quality_gates and results[] the way
 // examples/hooks/codescene-log.sh does. A digest field present in the input
 // always wins over the value derived from raw keys. Unknown keys are ignored,
-// and so is a raw key whose type does not match: the argument is optional,
-// and a malformed side field must not cost the caller the whole call.
+// and each raw key is decoded on its own, so one of the wrong type is ignored
+// without disturbing the other: the argument is optional, and a malformed side
+// field must not cost the caller the whole call or the rest of the reduction.
 func (d *Digest) UnmarshalJSON(b []byte) error {
 	type plainDigest Digest
 	var p plainDigest
@@ -594,16 +615,15 @@ func (d *Digest) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &present); err != nil {
 		return nil
 	}
-	_, hasResults := present["results"]
-	_, hasGates := present["quality_gates"]
-	if !hasResults && !hasGates {
-		return nil
-	}
-	var raw rawChangeSet
-	if err := json.Unmarshal(b, &raw); err != nil {
-		return nil
-	}
 	has := func(key string) bool { _, ok := present[key]; return ok }
+
+	var gate string
+	gateOK := has("quality_gates") && json.Unmarshal(present["quality_gates"], &gate) == nil
+	var results []rawChangeSetResult
+	resultsOK := has("results") && json.Unmarshal(present["results"], &results) == nil && results != nil
+	if !gateOK && !resultsOK {
+		return nil
+	}
 
 	if !has("ran") {
 		d.Ran = true
@@ -611,16 +631,16 @@ func (d *Digest) UnmarshalJSON(b []byte) error {
 	if !has("tool") {
 		d.Tool = "analyze_change_set"
 	}
-	if !has("quality_gate") && raw.QualityGates != nil {
-		d.QualityGate = *raw.QualityGates
+	if gateOK && !has("quality_gate") {
+		d.QualityGate = gate
 	}
-	if raw.Results == nil {
+	if !resultsOK {
 		return nil
 	}
 	var verdicts Verdicts
 	var netPP float64
 	counts := map[string]int{}
-	for _, r := range raw.Results {
+	for _, r := range results {
 		switch r.Verdict {
 		case "improved":
 			verdicts.Improved++
@@ -637,7 +657,7 @@ func (d *Digest) UnmarshalJSON(b []byte) error {
 		}
 	}
 	if !has("files_analyzed") {
-		d.FilesAnalyzed = len(raw.Results)
+		d.FilesAnalyzed = len(results)
 	}
 	if !has("verdicts") {
 		d.Verdicts = &verdicts
@@ -652,7 +672,7 @@ func (d *Digest) UnmarshalJSON(b []byte) error {
 }
 ```
 
-Note: `json.Unmarshal` of `{"results":[]}` into `rawChangeSet` gives a non-nil empty `Results` slice, which is why `EmptyChangeSetStillRan` gets zero-valued `Verdicts`; `{"results":{"not":"a list"}}` fails the raw decode and returns before any derivation.
+Note: `{"results":[]}` decodes to a non-nil empty slice, which is why `EmptyChangeSetStillRan` gets zero-valued `Verdicts`; `"results": null` or a non-array `results` leaves `resultsOK` false, so only a valid `quality_gates` can still mark the run.
 
 - [ ] **Step 4: Run the unit tests to verify they pass**
 
@@ -812,7 +832,7 @@ git commit -m "feat(codescene): accept raw analyze_change_set output and unknown
 ```
 
 ```json:metadata
-{"files": ["internal/codescene/codescene.go", "internal/codescene/codescene_test.go", "internal/mcpsrv/completion_schema.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/integration_test.go", "go.mod", "go.sum", "README.md", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys' -v", "acceptanceCriteria": ["unknown keys in codescene and verdicts accepted over MCP", "raw analyze_change_set output reduced to the digest", "present digest fields win; mistyped raw keys ignored", "required mode draws no codescene_not_run or codescene_skipped for either shape"], "modelTier": "standard"}
+{"files": ["internal/codescene/codescene.go", "internal/codescene/codescene_test.go", "internal/mcpsrv/completion_schema.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/integration_test.go", "go.mod", "go.sum", "README.md", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys' -v", "acceptanceCriteria": ["unknown keys in codescene and verdicts accepted over MCP", "raw analyze_change_set output reduced to the digest", "present digest fields win; a mistyped raw key is ignored without stopping the other's reduction", "required mode draws no codescene_not_run or codescene_skipped for either shape"], "modelTier": "standard"}
 ```
 
 ---
@@ -1398,6 +1418,7 @@ git commit -m "feat(planrun): name the live run a task forgot, and remember runs
 - Modify: `CHANGELOG.md`
 
 **Acceptance Criteria:**
+- [ ] The `tools/list` tool set is exactly the nine named tools, and their input schemas contain no `$ref`, `$defs`, `definitions`, `allOf`, `anyOf` or `oneOf` node the contract walkers would skip
 - [ ] Across all nine tools' `tools/list` input schemas, recursively (nested objects and array items), no property has an empty description or the literal `required`
 - [ ] The stated limits match their Go constants: 50/500 on `validate_task_spec`'s five bounded string lists and on `exit_contracts`; 20/4000 on `normative_test_bodies`; 25, 240, 240, 10, 480 on `harness_shape_attestation`; `config.DefaultMaxPayloadBytes` on every payload-cap field; `maxContextFiles` on `context_paths`; `maxBulkReadPaths` on `bulk_read.paths`; `defaultMaxPicks`/`maxMaxPicks` on `max_picks`
 - [ ] Required-ness of every property is unchanged, pinned by a test over every object's `required` set
@@ -1500,9 +1521,44 @@ func allPropertyDescriptions(t *testing.T) map[string]string {
 	return descs
 }
 
-func TestToolInputSchemas_EveryPropertyDescribed(t *testing.T) {
+// schemaIndirections lists every $ref, $defs, definitions, allOf, anyOf or oneOf
+// node under node. propertyDescriptions and requiredSets follow only properties
+// and items, which covers a schema completely only while it has none of these.
+func schemaIndirections(node any, path string, into *[]string) {
+	switch v := node.(type) {
+	case map[string]any:
+		for key, child := range v {
+			switch key {
+			case "$ref", "$defs", "definitions", "allOf", "anyOf", "oneOf":
+				*into = append(*into, path+"."+key)
+			}
+			schemaIndirections(child, path+"."+key, into)
+		}
+	case []any:
+		for i, child := range v {
+			schemaIndirections(child, fmt.Sprintf("%s[%d]", path, i), into)
+		}
+	}
+}
+
+func TestToolInputSchemas_ToolSetAndShape(t *testing.T) {
 	schemas := toolInputSchemas(t)
-	require.Len(t, schemas, 9)
+	names := make([]string, 0, len(schemas))
+	var indirections []string
+	for name, schema := range schemas {
+		names = append(names, name)
+		schemaIndirections(schema, name, &indirections)
+	}
+	sort.Strings(names)
+	assert.Equal(t, []string{
+		"bulk_read", "check_progress", "code_write", "extract_project_knowledge", "plan_run_report",
+		"prime_project_knowledge", "validate_completion", "validate_plan", "validate_task_spec",
+	}, names)
+	sort.Strings(indirections)
+	assert.Empty(t, indirections, "the contract walkers do not follow these nodes; extend them before trusting the other schema tests")
+}
+
+func TestToolInputSchemas_EveryPropertyDescribed(t *testing.T) {
 	descs := allPropertyDescriptions(t)
 	var missing []string
 	for path, desc := range descs {
@@ -1872,7 +1928,7 @@ git commit -m "feat(mcpsrv): describe every tool input property and hold limits 
 ```
 
 ```json:metadata
-{"files": ["internal/mcpsrv/tool_schema_contract_test.go", "internal/config/config.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/prime_handler.go", "internal/mcpsrv/extract_handler.go", "internal/mcpsrv/worker_handlers.go", "internal/session/session.go", "internal/codescene/codescene.go", "internal/verdict/verdict.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/mcpsrv/ -run 'TestToolInputSchemas' -v", "acceptanceCriteria": ["no input property across the nine tools has an empty or 'required' description", "stated limits match their Go constants", "required-ness unchanged, pinned by a test over every object's required set"], "modelTier": "standard"}
+{"files": ["internal/mcpsrv/tool_schema_contract_test.go", "internal/config/config.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/prime_handler.go", "internal/mcpsrv/extract_handler.go", "internal/mcpsrv/worker_handlers.go", "internal/session/session.go", "internal/codescene/codescene.go", "internal/verdict/verdict.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/mcpsrv/ -run 'TestToolInputSchemas' -v", "acceptanceCriteria": ["tool set is exactly the nine named tools and schemas carry no indirection nodes", "no input property across the nine tools has an empty or 'required' description", "stated limits match their Go constants", "required-ness unchanged, pinned by a test over every object's required set"], "modelTier": "standard"}
 ```
 
 ---
