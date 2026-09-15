@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `waived_findings`, stop counting toward the verdict, and appear in the summary block as a
   `waived:` line with their evidence. Server findings such as `codescene_not_run` are never
   waived.
+- `plan_run_report` shows, for each task, how many findings controller rulings waived on its last
+  `validate_completion` and whether any of its calls escalated, with totals for the run. The plan
+  ledger records both.
 
 ### Changed
 

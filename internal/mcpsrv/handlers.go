@@ -1864,6 +1864,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			row.Codescene = args.Codescene
 			row.CodesceneState = state
 			row.CompletedAt = time.Now().UTC()
+			row.Waived = len(env.WaivedFindings)
+			row.Escalated = row.Escalated || env.Escalate
 		}) {
 			slog.Warn("plan run row update failed; run or row unknown",
 				"plan_run_id", sess.PlanRunID, "session_id", sess.ID)

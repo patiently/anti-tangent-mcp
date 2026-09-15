@@ -36,6 +36,11 @@ type TaskRow struct {
 	Codescene      *codescene.Digest `json:"codescene,omitempty"`
 	CodesceneState string            `json:"codescene_state,omitempty"`
 	CompletedAt    time.Time         `json:"completed_at,omitempty"`
+	// Waived is how many findings controller rulings waived on the task's most
+	// recent validate_completion.
+	Waived int `json:"waived,omitempty"`
+	// Escalated is set once any validate_completion on the task escalated.
+	Escalated bool `json:"escalated,omitempty"`
 }
 
 // Run is one plan execution.

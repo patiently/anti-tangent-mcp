@@ -404,6 +404,8 @@ func summaryFormatterCases() []summaryFormatterCase {
 							Checkpoints:    1,
 							PostVerdict:    "pass",
 							Severity:       map[string]int{"major": 1},
+							Waived:         2,
+							Escalated:      true,
 							CodesceneState: planrun.StateRan,
 							Codescene: &codescene.Digest{
 								Ran:            true,
