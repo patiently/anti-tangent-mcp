@@ -4,7 +4,7 @@
     {
       "id": 1,
       "subject": "Task 1: Replay harness",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** An `e2e`-tagged test replays recorded `validate_task_spec` and `validate_completion` fixtures from `ANTI_TANGENT_REPLAY_DIR` and reports, per expectation, how many runs raised the issue.\n\n**Files:**\n- Create: `internal/mcpsrv/replay_harness_test.go`\n- Create: `internal/mcpsrv/replay_test.go`\n- Create: `internal/mcpsrv/replay_e2e_test.go`\n\n**Acceptance Criteria:**\n- [ ] `loadReplayFixtures(dir)` reads every `*.json` file in `dir` in file-name order, names an unnamed fixture after its file, ignores unknown argument keys, and rejects an expectation whose `call` the fixture does not record\n- [ ] `filterReplayFixtures(fixtures, only)` keeps the comma-separated names in load order, keeps everything for an empty list, and errors on a name no fixture has\n- [ ] `runReplayFixture` runs `validate_task_spec` then `validate_completion` on the session it opened, once per run on fresh stores, skips the completion with a recorded error when no session opened, and tallies matched runs, verdicts, blocking findings and the largest prompt size per call\n- [ ] `TestReplay_E2E` skips when `ANTI_TANGENT_REPLAY_DIR` is unset, runs with a local empty-pass reviewer when `ANTI_TANGENT_REPLAY_DRY_RUN=1`, and writes the reports as JSON to `ANTI_TANGENT_REPLAY_OUT` when set\n- [ ] `go vet -tags=e2e ./internal/mcpsrv/` passes\n\n**Verify:** `go test -race -count=1 -run 'TestLoadReplayFixtures|TestFilterReplayFixtures|TestRunReplayFixture' ./internal/mcpsrv/ && go vet -tags=e2e ./internal/mcpsrv/ && go test -tags=e2e -count=1 -run TestReplay_E2E ./internal/mcpsrv/ -v` → tests PASS, vet silent, `TestReplay_E2E` SKIP\n\nFull steps, code, Non-goals and Context: docs/superpowers/plans/2026-09-15-part3-reviewer-recall.md (Task 1: Replay harness).\n\n```json:metadata\n{\"files\": [\"internal/mcpsrv/replay_harness_test.go\", \"internal/mcpsrv/replay_test.go\", \"internal/mcpsrv/replay_e2e_test.go\"], \"verifyCommand\": \"go test -race -count=1 -run 'TestLoadReplayFixtures|TestFilterReplayFixtures|TestRunReplayFixture' ./internal/mcpsrv/ && go vet -tags=e2e ./internal/mcpsrv/\", \"acceptanceCriteria\": [\"loadReplayFixtures reads *.json in name order, names unnamed fixtures after the file, ignores unknown argument keys, rejects an expectation on a call the fixture lacks\", \"filterReplayFixtures keeps named fixtures in load order, keeps all for an empty list, errors on an unknown name\", \"runReplayFixture runs validate_task_spec then validate_completion on its session per run on fresh stores, skips the completion when no session opened, and tallies matches, verdicts, blocking findings and prompt size\", \"TestReplay_E2E skips without ANTI_TANGENT_REPLAY_DIR, dry-runs with ANTI_TANGENT_REPLAY_DRY_RUN=1, writes JSON to ANTI_TANGENT_REPLAY_OUT\", \"go vet -tags=e2e ./internal/mcpsrv/ passes\"], \"modelTier\": \"standard\"}\n```"
     },
     {
@@ -80,5 +80,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-15T19:49:46Z"
+  "lastUpdated": "2026-09-15T20:23:39Z"
 }
