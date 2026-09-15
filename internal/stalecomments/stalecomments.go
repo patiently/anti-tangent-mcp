@@ -62,68 +62,92 @@ func (h Hit) String() string {
 
 var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
+// diffParser is the mutable state used to parse a unified diff.
+type diffParser struct {
+	files                     []File
+	cur                       *File
+	oldLeft, newLeft, newLine int
+}
+
+func (p *diffParser) start() {
+	p.files = append(p.files, File{})
+	p.cur = &p.files[len(p.files)-1]
+}
+
+func (p *diffParser) inHunk() bool {
+	return p.oldLeft > 0 || p.newLeft > 0
+}
+
+// hunkLine processes a line that is known to be in a hunk. Returns false if
+// the line is not a hunk body line (e.g., context marker but out of sync).
+func (p *diffParser) hunkLine(line string) bool {
+	switch {
+	case strings.HasPrefix(line, "-"):
+		p.cur.Removed = append(p.cur.Removed, line[1:])
+		p.oldLeft--
+		return true
+	case strings.HasPrefix(line, "+"):
+		p.cur.Added = append(p.cur.Added, line[1:])
+		p.cur.Post = append(p.cur.Post, Line{Number: p.newLine, Text: line[1:]})
+		p.newLine++
+		p.newLeft--
+		return true
+	case strings.HasPrefix(line, " "), line == "":
+		p.cur.Post = append(p.cur.Post, Line{Number: p.newLine, Text: strings.TrimPrefix(line, " ")})
+		p.newLine++
+		p.oldLeft--
+		p.newLeft--
+		return true
+	case strings.HasPrefix(line, `\`):
+		return true
+	}
+	return false
+}
+
+func (p *diffParser) headerLine(line string) {
+	switch {
+	case strings.HasPrefix(line, "diff --git "):
+		p.start()
+	case strings.HasPrefix(line, "--- "):
+		if p.cur == nil || len(p.cur.Removed)+len(p.cur.Post) > 0 {
+			p.start()
+		}
+	case strings.HasPrefix(line, "+++ "):
+		if p.cur == nil {
+			p.start()
+		}
+		p.cur.Path = headerPath(strings.TrimPrefix(line, "+++ "))
+	default:
+		m := hunkHeader.FindStringSubmatch(line)
+		if m == nil {
+			return
+		}
+		if p.cur == nil {
+			p.start()
+		}
+		p.oldLeft, p.newLeft = hunkCount(m[1]), hunkCount(m[3])
+		p.newLine, _ = strconv.Atoi(m[2])
+	}
+}
+
 // ParseDiff splits a unified diff into file sections. Inside a hunk, lines are
 // classified by the counts in the hunk header, so a removed line whose body
 // starts with -- or ++ is not mistaken for a file header. Text with no hunk
 // header yields sections with no lines.
 func ParseDiff(diff string) []File {
-	var files []File
-	var cur *File
-	oldLeft, newLeft, newLine := 0, 0, 0
-	start := func() {
-		files = append(files, File{})
-		cur = &files[len(files)-1]
-	}
+	p := &diffParser{}
 	for _, raw := range strings.Split(diff, "\n") {
 		line := strings.TrimSuffix(raw, "\r")
-		if oldLeft > 0 || newLeft > 0 {
-			switch {
-			case strings.HasPrefix(line, "-"):
-				cur.Removed = append(cur.Removed, line[1:])
-				oldLeft--
-				continue
-			case strings.HasPrefix(line, "+"):
-				cur.Added = append(cur.Added, line[1:])
-				cur.Post = append(cur.Post, Line{Number: newLine, Text: line[1:]})
-				newLine++
-				newLeft--
-				continue
-			case strings.HasPrefix(line, " "), line == "":
-				cur.Post = append(cur.Post, Line{Number: newLine, Text: strings.TrimPrefix(line, " ")})
-				newLine++
-				oldLeft--
-				newLeft--
-				continue
-			case strings.HasPrefix(line, `\`):
-				continue
+		if p.inHunk() {
+			if !p.hunkLine(line) {
+				p.oldLeft, p.newLeft = 0, 0
+				p.headerLine(line)
 			}
-			oldLeft, newLeft = 0, 0
-		}
-		switch {
-		case strings.HasPrefix(line, "diff --git "):
-			start()
-		case strings.HasPrefix(line, "--- "):
-			if cur == nil || len(cur.Removed)+len(cur.Post) > 0 {
-				start()
-			}
-		case strings.HasPrefix(line, "+++ "):
-			if cur == nil {
-				start()
-			}
-			cur.Path = headerPath(strings.TrimPrefix(line, "+++ "))
-		default:
-			m := hunkHeader.FindStringSubmatch(line)
-			if m == nil {
-				continue
-			}
-			if cur == nil {
-				start()
-			}
-			oldLeft, newLeft = hunkCount(m[1]), hunkCount(m[3])
-			newLine, _ = strconv.Atoi(m[2])
+		} else {
+			p.headerLine(line)
 		}
 	}
-	return files
+	return p.files
 }
 
 // hunkCount reads an optional hunk-header count, which defaults to 1.
@@ -135,15 +159,21 @@ func hunkCount(s string) int {
 	return n
 }
 
+// unquote removes surrounding quotes from a string.
+func unquote(name string) string {
+	if len(name) >= 2 && strings.HasPrefix(name, `"`) && strings.HasSuffix(name, `"`) {
+		return name[1 : len(name)-1]
+	}
+	return name
+}
+
 // headerPath is the path a +++ header names, without a trailing timestamp,
 // surrounding quotes or the b/ prefix; /dev/null names no file.
 func headerPath(name string) string {
 	if tab := strings.IndexByte(name, '\t'); tab >= 0 {
 		name = name[:tab]
 	}
-	if len(name) >= 2 && strings.HasPrefix(name, `"`) && strings.HasSuffix(name, `"`) {
-		name = name[1 : len(name)-1]
-	}
+	name = unquote(name)
 	if name == "/dev/null" {
 		return ""
 	}
@@ -202,6 +232,21 @@ var declaration = regexp.MustCompile(`\b(` + strings.Join(declKeywords, "|") + `
 // moreCaseLabels matches one further label of a comma-separated case list.
 var moreCaseLabels = regexp.MustCompile(`^\s*,\s*\.?((?:` + identifier + `\.)*` + identifier + `)`)
 
+// caseLabels returns additional case labels from a comma-separated case list
+// and the remaining text after them.
+func caseLabels(rest string) ([]string, string) {
+	var names []string
+	for {
+		more := moreCaseLabels.FindStringSubmatchIndex(rest)
+		if more == nil {
+			break
+		}
+		names = append(names, lastSegment(rest[more[2]:more[3]]))
+		rest = rest[more[1]:]
+	}
+	return names, rest
+}
+
 // declaredNames lists the names a code line declares. A name that is itself a
 // declaration keyword starts the next match instead, so "enum class Foo"
 // declares Foo, and every label of "case A, B:" is declared.
@@ -219,13 +264,10 @@ func declaredNames(line string) []string {
 		}
 		names = append(names, name)
 		rest = rest[m[1]:]
-		for keyword == "case" {
-			more := moreCaseLabels.FindStringSubmatchIndex(rest)
-			if more == nil {
-				break
-			}
-			names = append(names, lastSegment(rest[more[2]:more[3]]))
-			rest = rest[more[1]:]
+		if keyword == "case" {
+			moreNames, r := caseLabels(rest)
+			names = append(names, moreNames...)
+			rest = r
 		}
 	}
 }
@@ -234,41 +276,67 @@ func lastSegment(dotted string) string {
 	return dotted[strings.LastIndexByte(dotted, '.')+1:]
 }
 
+// declaredOnCodeLines returns all names declared by non-comment lines, with
+// duplicates.
+func declaredOnCodeLines(lines []string) []string {
+	var names []string
+	for _, text := range lines {
+		if IsComment(text) {
+			continue
+		}
+		names = append(names, declaredNames(text)...)
+	}
+	return names
+}
+
 // RemovedNames lists the names declared on the diff's removed code lines that
 // no added code line declares again, in order of first appearance, skipping
 // names shorter than MinNameRunes and stopping at MaxNames.
 func RemovedNames(files []File) []string {
 	redeclared := map[string]bool{}
 	for _, f := range files {
-		for _, text := range f.Added {
-			if IsComment(text) {
-				continue
-			}
-			for _, n := range declaredNames(text) {
-				redeclared[n] = true
-			}
+		for _, n := range declaredOnCodeLines(f.Added) {
+			redeclared[n] = true
 		}
 	}
 	seen := map[string]bool{}
 	var names []string
 	for _, f := range files {
-		for _, text := range f.Removed {
-			if IsComment(text) {
+		for _, n := range declaredOnCodeLines(f.Removed) {
+			if utf8.RuneCountInString(n) < MinNameRunes || redeclared[n] || seen[n] {
 				continue
 			}
-			for _, n := range declaredNames(text) {
-				if utf8.RuneCountInString(n) < MinNameRunes || redeclared[n] || seen[n] {
-					continue
-				}
-				seen[n] = true
-				names = append(names, n)
-				if len(names) == MaxNames {
-					return names
-				}
+			seen[n] = true
+			names = append(names, n)
+			if len(names) == MaxNames {
+				return names
 			}
 		}
 	}
 	return names
+}
+
+// nameMatcher builds a regex that matches any of the given names as whole
+// identifiers.
+func nameMatcher(names []string) *regexp.Regexp {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = regexp.QuoteMeta(n)
+	}
+	return regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(` + strings.Join(quoted, "|") + `)(?:[^A-Za-z0-9_]|$)`)
+}
+
+// matchLine checks if a line is a comment that contains a name match and
+// returns the matched name, or empty string if no match.
+func matchLine(matcher *regexp.Regexp, text string) string {
+	if !IsComment(text) {
+		return ""
+	}
+	m := matcher.FindStringSubmatch(text)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
 
 // Scan reports the comment lines in sources that contain one of names as a
@@ -278,20 +346,13 @@ func Scan(names []string, sources []Source) []Hit {
 	if len(names) == 0 {
 		return nil
 	}
-	quoted := make([]string, len(names))
-	for i, n := range names {
-		quoted[i] = regexp.QuoteMeta(n)
-	}
-	matcher := regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(` + strings.Join(quoted, "|") + `)(?:[^A-Za-z0-9_]|$)`)
+	matcher := nameMatcher(names)
 	seen := map[string]bool{}
 	var hits []Hit
 	for _, src := range sources {
 		for _, l := range src.Lines {
-			if !IsComment(l.Text) {
-				continue
-			}
-			m := matcher.FindStringSubmatch(l.Text)
-			if m == nil {
+			name := matchLine(matcher, l.Text)
+			if name == "" {
 				continue
 			}
 			key := src.Path + "\x00" + strconv.Itoa(l.Number)
@@ -299,7 +360,7 @@ func Scan(names []string, sources []Source) []Hit {
 				continue
 			}
 			seen[key] = true
-			hits = append(hits, Hit{Path: src.Path, Line: l.Number, Name: m[1], Text: clip(strings.TrimSpace(l.Text))})
+			hits = append(hits, Hit{Path: src.Path, Line: l.Number, Name: name, Text: clip(strings.TrimSpace(l.Text))})
 			if len(hits) == MaxHits {
 				return hits
 			}

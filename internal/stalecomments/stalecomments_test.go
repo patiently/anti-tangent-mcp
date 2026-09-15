@@ -14,7 +14,7 @@ index 1111111..2222222 100644
 --- a/internal/state/sweep.go
 +++ b/internal/state/sweep.go
 @@ -10,9 +10,5 @@ import "time"
- // handleRetired drains a retired driver before the sweep.
+ // handleRetired drains retired entries before the sweep.
  func (s *Sweeper) Run() {
  	switch s.state {
 -	case StateRetired, StateArchived:
@@ -34,7 +34,7 @@ func TestParseDiff_ClassifiesHunkLinesAndNumbersPostChangeLines(t *testing.T) {
 	assert.Equal(t, []string{"\tcase StateRetired, StateArchived:", "\t\ts.handleRetired()", "\t}", "func (s *Sweeper) handleRetired() {", "}"}, f.Removed)
 	assert.Equal(t, []string{"\t}"}, f.Added)
 	assert.Equal(t, []Line{
-		{Number: 10, Text: "// handleRetired drains a retired driver before the sweep."},
+		{Number: 10, Text: "// handleRetired drains retired entries before the sweep."},
 		{Number: 11, Text: "func (s *Sweeper) Run() {"},
 		{Number: 12, Text: "\tswitch s.state {"},
 		{Number: 13, Text: "\t}"},
@@ -83,9 +83,9 @@ func TestRemovedNames_AcrossLanguages(t *testing.T) {
 @@ -1,4 +1,2 @@
 -enum class LegacyState { A, B }
 -fun String.toLegacyLabel(): String = this
--fun retireDriver(id: Long) {}
+-fun retireAccount(id: Long) {}
 -val id = 1
-+fun retireDriver(id: Long, reason: String) {}
++fun retireAccount(id: Long, reason: String) {}
 +// fun ghostName() is gone
 --- a/c.py
 +++ b/c.py
