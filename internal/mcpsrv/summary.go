@@ -15,16 +15,18 @@ import (
 // characters mid-codepoint.
 const summaryEvidenceMax = 120
 
-// waivedRulingSummaryMax caps a ruling's text on its waived: line, in runes.
+// waivedRulingSummaryMax caps a ruling's text on its ruling: and waived:
+// lines, in runes.
 const waivedRulingSummaryMax = 200
 
 // formatEnvelopeSummary renders a deterministic, paste-ready text block for a
 // per-task Envelope (validate_task_spec / check_progress / validate_completion).
 // It includes the originating tool name (when set), the session id, verdict,
-// partial flag (when set), model + review timing, optional session TTL line,
-// findings counts plus per-finding lines, an escalate line and one waived line per waived finding when set, and the next_action. Output is
-// plain text and intentionally stable so downstream tooling can
-// substring-assert against it.
+// partial flag (when set), escalate flag (when set), model + review timing,
+// optional session TTL line, findings counts plus per-finding lines, one
+// ruling: line per controller ruling applied, one waived: line per waived
+// finding, and the next_action. Output is plain text and intentionally stable
+// so downstream tooling can substring-assert against it.
 //
 // The `tool:` line exists so a consumer that sees only this pasted text (not
 // which MCP tool produced it) can still tell the three per-task tools apart —
@@ -54,6 +56,7 @@ func formatEnvelopeSummary(env Envelope) string {
 		fmt.Fprintf(&b, "  session_ttl_remaining_seconds: %d\n", *env.SessionTTLRemainingSeconds)
 	}
 	writeFindingsSummary(&b, env.Findings, "  ")
+	writeRulingsSummary(&b, env.ControllerRulings, "  ")
 	writeWaivedSummary(&b, env.WaivedFindings, "  ")
 	// next_action is reviewer-authored free text (schema: minLength 1, no
 	// other constraint — see internal/verdict/schema.json) rendered LAST in
@@ -229,6 +232,20 @@ func findingIDPrefix(id, contIndent string) string {
 		return ""
 	}
 	return escapeContinuationLines(id, contIndent) + " "
+}
+
+// writeRulingsSummary writes a ruling: line for each controller ruling a
+// review applied. A ruling the reviewer obeyed waives nothing and so has no
+// waived: line; this line is what lets the controller check every ruling in
+// force against the rulings it issued. The text is truncated and escaped as
+// on a waived: line.
+func writeRulingsSummary(b *strings.Builder, rulings []AppliedRuling, indent string) {
+	cont := indent + "    "
+	for _, r := range rulings {
+		fmt.Fprintf(b, "%sruling: %s \"%s\"\n", indent,
+			escapeContinuationLines(r.FindingID, cont),
+			escapeContinuationLines(truncate(r.Ruling, waivedRulingSummaryMax), cont))
+	}
 }
 
 // writeWaivedSummary writes, for each waived finding, a waived: line naming

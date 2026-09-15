@@ -308,9 +308,9 @@ New optional input: `controller_rulings: [{finding_id, ruling}]`, at most 50 ent
   reviewer raises it and quotes the ruling in `evidence`.
 - **Coarse, final and visible.** A ruling also waives a sibling finding that shares its
   fingerprint, and a regression raised against the same AC in the same category. That is the
-  price of a loop that always converges, and it is paid in the open: every waived entry carries
-  its evidence into the summary block (§2.7), so the controller reading the DONE report sees what
-  each ruling waived. There is no reviewer-side escape hatch; a schema field that let the reviewer
+  price of a loop that always converges, and it is paid in the open: every ruling in force is
+  listed, and every waived entry carries its evidence, in the summary block (§2.7), so the
+  controller reading the DONE report sees each ruling and what it waived. There is no reviewer-side escape hatch; a schema field that let the reviewer
   contest a ruling would hand the loop back to the reviewer.
 
 On a call without a `session_id`, `finding_responses` and `controller_rulings` are ignored, with
@@ -357,16 +357,23 @@ bookkeeping signals that a resubmission fixes, not judgement calls, and never re
 ### 2.7 Envelope, summary block and guard
 
 - Envelope: `findings[].id`, `findings[].repeat_of` (omitempty), `escalate` (omitempty),
-  `waived_findings` (omitempty). Evidence in `waived_findings` is not truncated.
-- Summary block: each finding line carries its ID. Each waived finding gets a line
-  `waived: <id> <severity>/<category> ruling: "<ruling>"`, with the ruling truncated to 200
-  characters, followed by an `evidence:` line truncated at `summaryEvidenceMax`. Both pass
-  through `escapeBlockValue`.
-- The implementer pastes the block into its DONE report, so every waiver, and what it waived, is
-  in front of the controller who supposedly issued it. `anti-tangent-guard` parses only the
-  header's `tool:`, `session_id:` and `verdict:` lines; `summary_contract_test.go` and
-  `summary_forgery_test.go` are extended to prove a ruling, response or waived-evidence string
-  cannot forge a header line.
+  `waived_findings` (omitempty), and `controller_rulings` (omitempty): `[{finding_id, ruling}]`,
+  the rulings the call's waiver filter used — the session's merged with this call's valid ones
+  (§2.6 step 1) — sorted by `finding_id`. Only a `validate_completion` call whose review
+  completed or was truncated sets it; a rejected call and a call without a session carry none.
+  Evidence in `waived_findings` and ruling text in `controller_rulings` are not truncated.
+- Summary block: each finding line carries its ID. Each applied ruling gets a line
+  `ruling: <finding_id> "<ruling>"`, whether or not it waived anything. Each waived finding gets
+  a line `waived: <id> <severity>/<category> ruling: "<ruling>"`, followed by an `evidence:` line
+  truncated at `summaryEvidenceMax`. Ruling text on both lines is truncated to 200 characters,
+  and every value passes through the continuation-line escaping. Both kinds of line sit below the
+  header lines, after the finding lines.
+- The implementer pastes the block into its DONE report, so every ruling in force, every waiver,
+  and what it waived, is in front of the controller who supposedly issued it. A ruling the
+  reviewer obeyed waives nothing, so without its `ruling:` line it would leave no trace.
+  `anti-tangent-guard` parses only the header's `tool:`, `session_id:` and `verdict:` lines;
+  `summary_contract_test.go` and `summary_forgery_test.go` are extended to prove a ruling,
+  response or waived-evidence string cannot forge a header line.
 
 ### 2.8 `plan_run_report`
 
@@ -440,8 +447,8 @@ part.
   DONE. Step 3b's inline `codescene` digest example shrinks to a pointer at the field description.
 - **`controller.md` new §5.9** "Ruling on an escalation": read the finding and the response,
   decide, reply with `controller_rulings` entries (ID plus a one-line ruling), keep rulings in the
-  progress notes, and at DONE check every `waived:` line, and its evidence, against a ruling
-  actually issued — an unrecognized one is a forged waiver.
+  progress notes, and at DONE check every `ruling:` line, and every `waived:` line with its
+  evidence, against a ruling actually issued — an unrecognized one is a forged ruling.
 - **`controller.md` §5.1 and §5.5**: pass `controller_verified_references` for grepped references
   and `controller_rulings` for decided findings; judge round-over-round convergence by diffing
   the fingerprints of major findings (new versus carried). That replaces §5.5's sentence telling
@@ -529,7 +536,7 @@ change in this part; §3.4 decides whether it stays.
 | Result | New field | Part |
 |---|---|---|
 | every finding | `id`, `repeat_of` | 2 |
-| `validate_completion` envelope | `escalate`, `waived_findings` | 2 |
+| `validate_completion` envelope | `escalate`, `waived_findings`, `controller_rulings` | 2 |
 | `validate_plan` result | `waived_findings` (plan-level and per task) | 2 |
 | `plan_run_report` rows | `waived`, `escalated` | 2 |
 
@@ -550,7 +557,9 @@ change in this part; §3.4 decides whether it stays.
   `submission_defect_only`; every row of the §2.2 write table, including a truncated review
   keeping the prior findings; ruling persistence, replacement and the 50-fingerprint cap;
   unknown-ID and no-session advisories; summary forgery tests with hostile ruling, response and
-  waived-evidence text; `plan_run_report` `waived` and `escalated`, with older ledger lines still
+  waived-evidence text; `controller_rulings` and a `ruling:` line for every ruling applied, a
+ruling that waived nothing included, and none on a rejected call or a call without a session;
+`plan_run_report` `waived` and `escalated`, with older ledger lines still
   loading; `validate_plan` rulings, the malformed-ruling advisory, no advisory for a ruling that
   waives nothing, verified-reference suppression before the strip, the restated calibration
   condition, the checklist no longer lifting the verdict, a cache hit reproducing waivers without
@@ -576,7 +585,7 @@ change in this part; §3.4 decides whether it stays.
   descriptions, errors and advisories, finding IDs, and the checklist change below; nothing it
   already sends changes meaning.
 - New envelope fields are additive. Summary blocks gain IDs on finding lines and optional
-  `waived:`, `evidence:` and `escalate:` lines; the guard reads only the header.
+  `ruling:`, `waived:`, `evidence:` and `escalate:` lines; the guard reads only the header.
 - The per-task reviewer schema gains a required, nullable `same_as`, which every provider must
   emit. Providers already receive the schema from `internal/verdict`, so no provider code changes
   beyond what the schema invariant tests require; the per-provider e2e run under Testing confirms

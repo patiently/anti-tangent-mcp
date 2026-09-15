@@ -289,6 +289,28 @@ func escalationNextAction(ids []string) string {
 		" and your responses to your controller for a ruling, then resubmit with controller_rulings. Then: "
 }
 
+// AppliedRuling is one controller ruling a validate_completion review applied.
+type AppliedRuling struct {
+	FindingID string `json:"finding_id"`
+	Ruling    string `json:"ruling"`
+}
+
+// appliedRulings lists the rulings a review applied, in finding_id order and
+// with their full text. The summary block shows each one, so a ruling the
+// reviewer obeyed, which leaves no waived entry, is still in front of the
+// controller at DONE.
+func appliedRulings(rulings map[string]session.Ruling) []AppliedRuling {
+	sorted := rulingsForPrompt(rulings)
+	if len(sorted) == 0 {
+		return nil
+	}
+	out := make([]AppliedRuling, 0, len(sorted))
+	for _, r := range sorted {
+		out = append(out, AppliedRuling{FindingID: r.ID, Ruling: r.Text})
+	}
+	return out
+}
+
 // rulingsForPrompt lists rulings in ID order, so a prompt renders them
 // deterministically.
 func rulingsForPrompt(rulings map[string]session.Ruling) []session.Ruling {

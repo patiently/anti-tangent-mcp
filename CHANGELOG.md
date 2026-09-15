@@ -40,7 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `id`, ignoring the `-n` suffix, for the rest of the session: matching findings move to
   `waived_findings`, stop counting toward the verdict, and appear in the summary block as a
   `waived:` line with their evidence. Server findings such as `codescene_not_run` are never
-  waived.
+  waived. Every ruling the review applied, including one the reviewer obeyed and that therefore
+  waived nothing, is listed in the response's `controller_rulings` and as a `ruling:` line in the
+  summary block, so the controller sees each ruling in force at DONE.
 - `plan_run_report` shows, for each task, how many findings controller rulings waived on its last
   `validate_completion` and whether any of its calls escalated, with totals for the run. The plan
   ledger records both.
@@ -68,7 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so it no longer counts toward the three-minor rule that lifts a plan to `warn`. A plan that the
   checklist alone had lifted to `warn` can now pass.
 - The protocol describes answering a finding with `finding_responses`, stopping on `escalate`,
-  and ruling on an escalation (`controller.md` §5.9), and judges `validate_plan` convergence by
+  and ruling on an escalation (`controller.md` §5.9), including checking every `ruling:` and
+  `waived:` line at DONE, and judges `validate_plan` convergence by
   major findings' IDs. `implementer.md` §4.3 no longer tells implementers to dispute a finding
   through a `working_on` field `validate_completion` does not have.
 

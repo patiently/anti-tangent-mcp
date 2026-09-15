@@ -3,6 +3,7 @@ package mcpsrv
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -315,6 +316,7 @@ func TestValidateCompletion_TruncatedReviewWritesRulingsButKeepsPriorFindings(t 
 
 	require.True(t, env.Partial)
 	require.Len(t, env.WaivedFindings, 1, "a truncated review still applies rulings")
+	assert.Equal(t, []AppliedRuling{{FindingID: id, Ruling: "Task 7 owns it"}}, env.ControllerRulings)
 	st, _ := h.deps.Sessions.ReviewState(sid)
 	require.Len(t, st.PriorFindings, 1)
 	assert.Equal(t, id, st.PriorFindings[0].ID, "the truncated review did not replace the prior findings")
@@ -343,11 +345,52 @@ func TestValidateCompletion_WithoutASessionIgnoresAnswersAndRulings(t *testing.T
 	h, rv := newRulingsHandlers(t)
 	args := completionCallArgs("")
 	args.FindingResponses = []FindingResponseArg{{FindingID: "f_0123abcd", Response: "a"}}
+	args.ControllerRulings = []ControllerRulingArg{{FindingID: "f_0123abcd", Ruling: "r"}}
 	env := completeWith(t, h, rv, args, passResp("claude-opus-4-7"))
 
 	require.NotEmpty(t, env.Findings)
 	assert.Equal(t, "session_id", env.Findings[len(env.Findings)-1].Criterion)
 	assert.Equal(t, "pass", env.Verdict)
+	assert.Empty(t, env.ControllerRulings)
+	assert.NotContains(t, env.SummaryBlock, "ruling:")
+}
+
+func TestValidateCompletion_ListsEveryRulingInForceEvenWhenItWaivesNothing(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	first := completeWith(t, h, rv, completionCallArgs(sid), reviewerFindingsResp(
+		findingObj("major", "scope_drift", "AC 1", "one", ""),
+		findingObj("major", "quality", "AC 1", "two", ""),
+	))
+	require.Len(t, first.Findings, 2)
+	assert.Empty(t, first.ControllerRulings)
+
+	long := strings.Repeat("r", waivedRulingSummaryMax+50)
+	args := completionCallArgs(sid)
+	args.ControllerRulings = []ControllerRulingArg{
+		{FindingID: first.Findings[1].ID, Ruling: long},
+		{FindingID: first.Findings[0].ID, Ruling: "Task 7 owns the dispatcher wiring"},
+	}
+	env := completeWith(t, h, rv, args, passResp("claude-opus-4-7"))
+
+	want := []AppliedRuling{
+		{FindingID: first.Findings[0].ID, Ruling: "Task 7 owns the dispatcher wiring"},
+		{FindingID: first.Findings[1].ID, Ruling: long},
+	}
+	sort.Slice(want, func(i, j int) bool { return want[i].FindingID < want[j].FindingID })
+	assert.Empty(t, env.WaivedFindings, "the reviewer obeyed both rulings, so nothing was waived")
+	assert.Equal(t, want, env.ControllerRulings, "sorted by finding_id, with the full ruling text")
+	assert.Contains(t, env.SummaryBlock, "  ruling: "+first.Findings[0].ID+` "Task 7 owns the dispatcher wiring"`+"\n")
+	assert.Contains(t, env.SummaryBlock, "  ruling: "+first.Findings[1].ID+` "`+long[:waivedRulingSummaryMax]+`…"`+"\n")
+
+	again := completeWith(t, h, rv, completionCallArgs(sid), passResp("claude-opus-4-7"))
+	assert.Equal(t, want, again.ControllerRulings, "a persisted ruling is listed without being resent")
+
+	h.deps.Cfg.MaxPayloadBytes = 10
+	rejected := completeWith(t, h, rv, completionCallArgs(sid), passResp("claude-opus-4-7"))
+	require.True(t, hasCategory(rejected.Findings, verdict.CategoryTooLarge))
+	assert.Empty(t, rejected.ControllerRulings, "a call that never reached the reviewer lists no rulings")
+	assert.NotContains(t, rejected.SummaryBlock, "ruling:")
 }
 
 func TestValidateCompletion_ARuledPreTaskFindingLeavesThePrompt(t *testing.T) {

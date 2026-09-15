@@ -253,6 +253,7 @@ func summaryFormatterCases() []summaryFormatterCase {
 					SubmissionDefectOnly:       true,
 					Escalate:                   true,
 					WaivedFindings:             []verdict.WaivedFinding{seedWaived()},
+					ControllerRulings:          []AppliedRuling{{FindingID: "f_89abcdef", Ruling: "ruling"}},
 				}
 			},
 			render: func(in any) string { return formatEnvelopeSummary(*in.(*Envelope)) },

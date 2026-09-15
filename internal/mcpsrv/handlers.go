@@ -58,6 +58,10 @@ type Envelope struct {
 	// WaivedFindings holds the reviewer findings a controller ruling covered.
 	// They do not count toward Verdict.
 	WaivedFindings []verdict.WaivedFinding `json:"waived_findings,omitempty"`
+	// ControllerRulings lists every ruling a validate_completion review
+	// applied, including the ones that waived nothing because the reviewer
+	// obeyed them. Only a call that reached the reviewer on a session sets it.
+	ControllerRulings []AppliedRuling `json:"controller_rulings,omitempty"`
 }
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
@@ -1801,15 +1805,16 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	})
 
 	env := Envelope{
-		Tool:           "validate_completion",
-		Verdict:        string(result.Verdict),
-		Findings:       result.Findings,
-		NextAction:     result.NextAction,
-		ModelUsed:      out.ModelUsed,
-		ReviewMS:       out.ReviewMS,
-		Partial:        result.Partial,
-		Escalate:       len(escalateIDs) > 0,
-		WaivedFindings: waived,
+		Tool:              "validate_completion",
+		Verdict:           string(result.Verdict),
+		Findings:          result.Findings,
+		NextAction:        result.NextAction,
+		ModelUsed:         out.ModelUsed,
+		ReviewMS:          out.ReviewMS,
+		Partial:           result.Partial,
+		Escalate:          len(escalateIDs) > 0,
+		WaivedFindings:    waived,
+		ControllerRulings: appliedRulings(review.rulings),
 	}
 	env.Findings = append(env.Findings, review.advisories...)
 	if lightweight && (len(responses) > 0 || len(rulingArgs) > 0) {

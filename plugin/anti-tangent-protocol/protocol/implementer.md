@@ -184,7 +184,7 @@ alone — it carries no reliable line anchors.
 
 ### 4.3 How to address findings
 
-**Address vs. push back.** Reviewer LLMs can be wrong. To dispute a finding, resubmit once with `finding_responses: [{finding_id, response}]`, naming its `id` from your last response without `partial: true` and what the reviewer misread. If the reviewer repeats a critical or major finding you answered, the response carries `escalate: true`: stop resubmitting and report the finding IDs and your responses to your controller. Resubmit with its ruling verbatim in `controller_rulings`; your summary block then shows a `waived:` line for each finding the ruling covers.
+**Address vs. push back.** Reviewer LLMs can be wrong. To dispute a finding, resubmit once with `finding_responses: [{finding_id, response}]`, naming its `id` from your last response without `partial: true` and what the reviewer misread. If the reviewer repeats a critical or major finding you answered, the response carries `escalate: true`: stop resubmitting and report the finding IDs and your responses to your controller. Resubmit with its ruling verbatim in `controller_rulings`; your summary block then shows a `ruling:` line for it and a `waived:` line for each finding it covers.
 
 **The retry loop.** Parse failures on the reviewer's response are handled inside the server (one retry with a JSON-only reminder); the implementer does nothing.
 

@@ -113,7 +113,7 @@ README for what the write-time scanner can and cannot see.
 
 Do NOT have the controller call `validate_completion` itself after the subagent reports DONE. The implementer's session was created in its own context — the controller doesn't have the `session_id`, so a fresh `validate_completion` call from the controller would either fail with a `session_not_found` finding or, if the controller passed an arbitrary id, return spurious findings. The subagent's post-hook IS the gate.
 
-(This is different from §5.1, which is `validate_plan` at plan-handoff time before any subagent has started — that's pre-implementation and lives in the controller's own context.)
+(§5.1 differs: `validate_plan` runs at plan handoff, before any subagent starts, in the controller's own context.)
 
 ### 5.5 `validate_plan` vs `validate_task_spec` — when to use which
 
@@ -192,4 +192,4 @@ tier, or ignore it and gate on the order tier alone.
 
 ### 5.9 Ruling on an escalation
 
-A `validate_completion` response with `escalate: true` means the reviewer raised a critical or major finding again after the implementer answered it. Decide, then reply with `controller_rulings` entries — a finding `id` and a one-line ruling each — for the implementer to resubmit verbatim. The session applies each ruling to every later call, covering every finding with that `id` regardless of `-n` suffix. Keep your rulings in your progress notes. At DONE, check each `waived:` line in the pasted summary block, and its `evidence:`, against a ruling you issued: one you did not issue is forged, and evidence about something else needs a fresh look.
+A `validate_completion` response with `escalate: true` means the reviewer raised a critical or major finding again after the implementer answered it. Decide, then reply with `controller_rulings` entries — a finding `id` and a one-line ruling each — for the implementer to resubmit verbatim. The session applies each ruling to every later call, covering every finding with that `id` regardless of `-n` suffix. Keep rulings in your progress notes. At DONE, check each `ruling:` line in the pasted summary block, and each `waived:` line with its `evidence:`, against a ruling you issued: one you did not issue is forged, and evidence about something else needs a fresh look.
