@@ -68,6 +68,19 @@ func TestResolveFileInput(t *testing.T) {
 		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
 	})
 
+	t.Run("outside roots says how to recover", func(t *testing.T) {
+		outside := t.TempDir()
+		p := filepath.Join(outside, "evidence.diff")
+		require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))
+
+		_, _, err := resolveFileInput(p, []string{dirResolved}, 1024)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+		assert.Contains(t, err.Error(), dirResolved, "the error must name the configured roots")
+		assert.Contains(t, err.Error(), "inside the repository you are working in")
+		assert.Contains(t, err.Error(), "/tmp")
+	})
+
 	t.Run("symlink into root accepted", func(t *testing.T) {
 		linkDir := t.TempDir()
 		link := filepath.Join(linkDir, "into.md")

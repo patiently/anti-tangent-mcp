@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-09-15
+
+### Changed
+
+- A file path outside `ANTI_TANGENT_PLAN_ROOTS` is refused with a way to recover: pass a path
+  inside the repository you are working in. A per-session scratch directory under `/tmp` is
+  usually outside the roots, which is where a generated diff most often lands.
+- `validate_completion`'s `payload_too_large` suggestion no longer advises splitting the
+  evidence into smaller chunks. Each call is reviewed on its own, so evidence spread over several
+  calls is never seen together. It now names a `-U1` diff, leaving out generated, lockfile and
+  snapshot files, not sending a file in both `final_diff` and `final_files`, and
+  `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
+
 ## [0.21.0] - 2026-09-11
 
 ### Security

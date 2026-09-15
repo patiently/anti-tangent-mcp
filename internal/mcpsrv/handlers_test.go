@@ -433,7 +433,7 @@ func TestCheckProgress_PayloadTooLarge(t *testing.T) {
 	assert.Contains(t, env.Findings[0].Evidence, "10")
 }
 
-func TestValidateCompletion_PayloadTooLargeSuggestsFinalDiff(t *testing.T) {
+func TestValidateCompletion_PayloadTooLargeSuggestionIsActionable(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
 	d := newDeps(t, rv)
 	d.Cfg.MaxPayloadBytes = 10
@@ -450,11 +450,45 @@ func TestValidateCompletion_PayloadTooLargeSuggestsFinalDiff(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, "payload_too_large", string(env.Findings[0].Category))
-	assert.Contains(t, env.Findings[0].Suggestion, "final_diff")
-	assert.Contains(t, env.Findings[0].Suggestion, "split")
-	// Evidence must still include actual size and cap values.
+	s := env.Findings[0].Suggestion
+	assert.Contains(t, s, "final_diff")
+	assert.Contains(t, s, "-U1")
+	assert.Contains(t, s, "ANTI_TANGENT_MAX_PAYLOAD_BYTES")
+	assert.NotContains(t, s, "split", "each call is reviewed alone, so splitting evidence across calls must not be advised")
 	assert.Contains(t, env.Findings[0].Evidence, "bytes")
 	assert.Contains(t, env.Findings[0].Evidence, "10")
+}
+
+func TestValidateCompletion_OversizedPathSuggestionIsActionable(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "big.diff")
+	require.NoError(t, os.WriteFile(p, []byte(strings.Repeat("x", 100)), 0o644))
+
+	h := newTestHandlers(t)
+	h.deps.Cfg.MaxPayloadBytes = 10
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		Summary:       "s",
+		FinalDiffPath: p,
+	})
+	require.NoError(t, err)
+	var s string
+	for _, f := range env.Findings {
+		if f.Category == verdict.CategoryTooLarge {
+			s = f.Suggestion
+		}
+	}
+	require.NotEmpty(t, s, "expected a payload_too_large finding, got %+v", env.Findings)
+	assert.Contains(t, s, "final_diff_path is 100 bytes")
+	assert.Contains(t, s, "-U1")
+	assert.Contains(t, s, "ANTI_TANGENT_MAX_PAYLOAD_BYTES")
+	assert.NotContains(t, s, "split")
+}
+
+func TestValidateCompletionTool_DescriptionStatesRootsRule(t *testing.T) {
+	d := validateCompletionTool().Description
+	assert.Contains(t, d, "ANTI_TANGENT_PLAN_ROOTS")
+	assert.Contains(t, d, "/tmp")
 }
 
 func TestValidateCompletion_HappyPath(t *testing.T) {
@@ -3468,6 +3502,7 @@ func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
 		})
 		require.Error(t, err, "outside-roots must stay a transport error, not an envelope")
 		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+		assert.Contains(t, err.Error(), "inside the repository you are working in")
 	})
 
 	t.Run("missing file stays a plain transport error", func(t *testing.T) {

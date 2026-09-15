@@ -923,6 +923,15 @@ func recoverPartialPlanFindings(rawJSON []byte, prior verdict.PlanResult) (verdi
 	return pr, true
 }
 
+// completionShrinkAdvice is the recovery advice on validate_completion's
+// payload_too_large finding. It must not suggest spreading evidence over
+// several calls: each call is reviewed on its own, so the reviewer never sees
+// split evidence together and answers every part with insufficient_evidence.
+const completionShrinkAdvice = "Each call is reviewed on its own, so evidence spread over several calls is never seen together. " +
+	"Regenerate the diff with -U1, leave out generated, lockfile and snapshot files, " +
+	"and do not send a file in both final_diff and final_files. " +
+	"The operator can raise the cap with ANTI_TANGENT_MAX_PAYLOAD_BYTES."
+
 // tooLargeEnvelope builds the rejection envelope for a payload-too-large hit.
 // Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
 func tooLargeEnvelope(tool, id string, model config.ModelRef, size, limit int, suggestion string) Envelope {
@@ -948,7 +957,8 @@ func validateCompletionTool() *mcp.Tool {
 		Description: "Final validation before declaring a task complete. " +
 			"The reviewer checks the full implementation against every acceptance criterion " +
 			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done. " +
-			"Omit a final_files entry's content to have the server read its absolute path, and pass final_diff_path instead of final_diff, to avoid emitting large evidence as output tokens.",
+			"Omit a final_files entry's content to have the server read its absolute path, and pass final_diff_path instead of final_diff, to avoid emitting large evidence as output tokens. " +
+			"When ANTI_TANGENT_PLAN_ROOTS is set, both kinds of path must be under one of its roots, which a per-session scratch directory under /tmp usually is not.",
 	}
 }
 
@@ -1466,8 +1476,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		var tooLarge *completionInputTooLargeError
 		if errors.As(err, &tooLarge) {
 			env := prependClamp(tooLargeEnvelope("validate_completion", args.SessionID, h.deps.Cfg.PostModel, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes,
-				fmt.Sprintf("%s is %d bytes, over the %d-byte cap; shrink it or split the evidence into smaller chunks.",
-					tooLarge.field, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes)), clamp)
+				fmt.Sprintf("%s is %d bytes, over the %d-byte cap. %s",
+					tooLarge.field, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes, completionShrinkAdvice)), clamp)
 			h.recordStat(statParams{
 				tool:         "validate_completion",
 				verdict:      env.Verdict,
@@ -1530,7 +1540,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// empty; otherwise we don't have the session yet, so use args.SessionID.
 	if size := totalCompletionBytes(resolvedFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
 		env := prependClamp(tooLargeEnvelope("validate_completion", args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
-			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp)
+			"Send a unified diff via final_diff rather than whole files. "+completionShrinkAdvice), clamp)
 		h.recordStat(statParams{
 			tool:         "validate_completion",
 			verdict:      env.Verdict,
