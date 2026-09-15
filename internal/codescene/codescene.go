@@ -10,6 +10,7 @@
 package codescene
 
 import (
+	"encoding/json"
 	"math"
 	"sort"
 	"strings"
@@ -17,9 +18,9 @@ import (
 
 // Verdicts is the per-file verdict tally from an analyze_change_set run.
 type Verdicts struct {
-	Improved int `json:"improved"`
-	Degraded int `json:"degraded"`
-	Stable   int `json:"stable"`
+	Improved int `json:"improved" jsonschema:"Files whose Code Health improved."`
+	Degraded int `json:"degraded" jsonschema:"Files whose Code Health degraded."`
+	Stable   int `json:"stable" jsonschema:"Files whose Code Health did not change."`
 }
 
 // Digest is one analyze_change_set result reduced to counts and metadata.
@@ -31,16 +32,16 @@ type Verdicts struct {
 // with Ran=false and is distinguished from a caller-declared skip by
 // SkipReason being empty too.
 type Digest struct {
-	Ran            bool           `json:"ran,omitempty"`
-	SkipReason     string         `json:"skip_reason,omitempty"`
-	SkipEvidence   string         `json:"skip_evidence,omitempty"`
-	Tool           string         `json:"tool,omitempty"`
-	QualityGate    string         `json:"quality_gate,omitempty"` // passed|failed
-	FilesAnalyzed  int            `json:"files_analyzed,omitempty"`
-	Verdicts       *Verdicts      `json:"verdicts,omitempty"`
-	Trend          string         `json:"trend,omitempty"` // improvement|regression|neutral
-	NetPP          float64        `json:"net_pp,omitempty"`
-	CategoryCounts map[string]int `json:"category_counts,omitempty"`
+	Ran            bool           `json:"ran,omitempty" jsonschema:"True when a CodeScene analysis of the task's changes actually ran."`
+	SkipReason     string         `json:"skip_reason,omitempty" jsonschema:"Why the analysis did not run, when ran is false. The first 300 characters are kept."`
+	SkipEvidence   string         `json:"skip_evidence,omitempty" jsonschema:"The failing tool's own error text, when ran is false. Without it a skip is graded like no analysis at all. The first 2000 characters are kept."`
+	Tool           string         `json:"tool,omitempty" jsonschema:"The CodeScene tool that produced the result, normally analyze_change_set."`
+	QualityGate    string         `json:"quality_gate,omitempty" jsonschema:"passed or failed; analyze_change_set reports it as quality_gates."` // passed|failed
+	FilesAnalyzed  int            `json:"files_analyzed,omitempty" jsonschema:"Number of files analysed: the length of analyze_change_set's results."`
+	Verdicts       *Verdicts      `json:"verdicts,omitempty" jsonschema:"Per-file verdict counts."`
+	Trend          string         `json:"trend,omitempty" jsonschema:"Ignored on input; the server derives it from net_pp."` // improvement|regression|neutral
+	NetPP          float64        `json:"net_pp,omitempty" jsonschema:"Net change in problem points: the sum of new-pp minus old-pp over every finding. Positive means worse."`
+	CategoryCounts map[string]int `json:"category_counts,omitempty" jsonschema:"Number of findings per CodeScene category, such as Complex Method. The 20 largest are kept."`
 }
 
 // Trend values.
@@ -49,6 +50,116 @@ const (
 	TrendRegression  = "regression"
 	TrendNeutral     = "neutral"
 )
+
+// rawChangeSetResult is one file entry of CodeScene's raw analyze_change_set
+// output: its verdict, and the findings whose problem points and categories
+// reduce into a Digest.
+type rawChangeSetResult struct {
+	Verdict  string `json:"verdict"`
+	Findings []struct {
+		Category string  `json:"category"`
+		NewPP    float64 `json:"new-pp"`
+		OldPP    float64 `json:"old-pp"`
+	} `json:"findings"`
+}
+
+// reduceChangeSetResults tallies rawChangeSetResult.Verdict into a Verdicts,
+// sums each finding's new-pp minus old-pp into a net problem-points delta,
+// and counts findings per non-empty category. It is a separate function
+// because it holds the per-result tally, which keeps UnmarshalJSON's own
+// branching about which keys are present rather than how the raw results
+// reduce.
+func reduceChangeSetResults(results []rawChangeSetResult) (verdicts Verdicts, netPP float64, categoryCounts map[string]int) {
+	categoryCounts = map[string]int{}
+	for _, r := range results {
+		switch r.Verdict {
+		case "improved":
+			verdicts.Improved++
+		case "degraded":
+			verdicts.Degraded++
+		case "stable":
+			verdicts.Stable++
+		}
+		for _, f := range r.Findings {
+			netPP += f.NewPP - f.OldPP
+			if f.Category != "" {
+				categoryCounts[f.Category]++
+			}
+		}
+	}
+	return verdicts, netPP, categoryCounts
+}
+
+// hasNonNull reports whether present carries key with a value other than
+// JSON null. json.Unmarshal of null into a string or slice succeeds as a
+// no-op, so a caller-sent null for quality_gates or results must not be
+// treated the same as a real value: that would mark the digest as run with
+// an empty gate.
+func hasNonNull(present map[string]json.RawMessage, key string) bool {
+	raw, ok := present[key]
+	return ok && strings.TrimSpace(string(raw)) != "null"
+}
+
+// UnmarshalJSON accepts both the digest shape and CodeScene's raw
+// analyze_change_set output, reducing quality_gates and results[] the way
+// examples/hooks/codescene-log.sh does. A digest field present in the input
+// always wins over the value derived from raw keys. Unknown keys are ignored,
+// and each raw key is decoded on its own, so one of the wrong type is ignored
+// without disturbing the other: the argument is optional, and a malformed side
+// field must not cost the caller the whole call or the rest of the reduction.
+// A struct that embeds Digest anonymously inherits this method by Go's
+// promotion rules, which makes it the struct's own UnmarshalJSON — its other
+// fields are then never decoded unless that struct defines its own
+// UnmarshalJSON that delegates to this one.
+func (d *Digest) UnmarshalJSON(b []byte) error {
+	type plainDigest Digest
+	var p plainDigest
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	*d = Digest(p)
+
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(b, &present); err != nil {
+		return nil
+	}
+	has := func(key string) bool { _, ok := present[key]; return ok }
+
+	var gate string
+	gateOK := hasNonNull(present, "quality_gates") && json.Unmarshal(present["quality_gates"], &gate) == nil
+	var results []rawChangeSetResult
+	resultsOK := hasNonNull(present, "results") && json.Unmarshal(present["results"], &results) == nil && results != nil
+	if !gateOK && !resultsOK {
+		return nil
+	}
+
+	if !has("ran") {
+		d.Ran = true
+	}
+	if !has("tool") {
+		d.Tool = "analyze_change_set"
+	}
+	if gateOK && !has("quality_gate") {
+		d.QualityGate = gate
+	}
+	if !resultsOK {
+		return nil
+	}
+	verdicts, netPP, counts := reduceChangeSetResults(results)
+	if !has("files_analyzed") {
+		d.FilesAnalyzed = len(results)
+	}
+	if !has("verdicts") {
+		d.Verdicts = &verdicts
+	}
+	if !has("net_pp") {
+		d.NetPP = netPP
+	}
+	if !has("category_counts") && len(counts) > 0 {
+		d.CategoryCounts = counts
+	}
+	return nil
+}
 
 // qualityGateUnrecognized is what Normalize maps QualityGate to when it is
 // non-empty but not one of the recognized values. QualityGate is caller-

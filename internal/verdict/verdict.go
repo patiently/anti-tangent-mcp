@@ -92,11 +92,11 @@ const (
 )
 
 type Finding struct {
-	Severity   Severity `json:"severity"`
-	Category   Category `json:"category"`
-	Criterion  string   `json:"criterion"`
-	Evidence   string   `json:"evidence"`
-	Suggestion string   `json:"suggestion"`
+	Severity   Severity `json:"severity" jsonschema:"critical, major or minor."`
+	Category   Category `json:"category" jsonschema:"The finding's category, such as missing_acceptance_criterion or scope_drift."`
+	Criterion  string   `json:"criterion" jsonschema:"The acceptance criterion or spec field the finding is about."`
+	Evidence   string   `json:"evidence" jsonschema:"What the reviewer saw that supports the finding."`
+	Suggestion string   `json:"suggestion" jsonschema:"The concrete next action that would resolve the finding."`
 }
 
 type Result struct {

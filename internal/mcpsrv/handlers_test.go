@@ -433,7 +433,7 @@ func TestCheckProgress_PayloadTooLarge(t *testing.T) {
 	assert.Contains(t, env.Findings[0].Evidence, "10")
 }
 
-func TestValidateCompletion_PayloadTooLargeSuggestsFinalDiff(t *testing.T) {
+func TestValidateCompletion_PayloadTooLargeSuggestionIsActionable(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-opus-4-7")}
 	d := newDeps(t, rv)
 	d.Cfg.MaxPayloadBytes = 10
@@ -450,11 +450,46 @@ func TestValidateCompletion_PayloadTooLargeSuggestsFinalDiff(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, "payload_too_large", string(env.Findings[0].Category))
-	assert.Contains(t, env.Findings[0].Suggestion, "final_diff")
-	assert.Contains(t, env.Findings[0].Suggestion, "split")
-	// Evidence must still include actual size and cap values.
+	s := env.Findings[0].Suggestion
+	assert.Contains(t, s, "final_diff")
+	assert.Contains(t, s, "-U1")
+	assert.Contains(t, s, "ANTI_TANGENT_MAX_PAYLOAD_BYTES")
+	assert.NotContains(t, s, "split", "each call is reviewed alone, so splitting evidence across calls must not be advised")
 	assert.Contains(t, env.Findings[0].Evidence, "bytes")
 	assert.Contains(t, env.Findings[0].Evidence, "10")
+}
+
+func TestValidateCompletion_OversizedPathSuggestionIsActionable(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "big.diff")
+	require.NoError(t, os.WriteFile(p, []byte(strings.Repeat("x", 100)), 0o644))
+
+	h := newTestHandlers(t)
+	h.deps.Cfg.MaxPayloadBytes = 10
+
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		Summary:       "s",
+		FinalDiffPath: p,
+	})
+	require.NoError(t, err)
+	var s string
+	for _, f := range env.Findings {
+		if f.Category == verdict.CategoryTooLarge {
+			s = f.Suggestion
+		}
+	}
+	require.NotEmpty(t, s, "expected a payload_too_large finding, got %+v", env.Findings)
+	assert.Contains(t, s, "final_diff_path is 100 bytes")
+	assert.Contains(t, s, "-U1")
+	assert.Contains(t, s, "ANTI_TANGENT_MAX_PAYLOAD_BYTES")
+	assert.NotContains(t, s, "split")
+}
+
+func TestValidateCompletionTool_DescriptionStatesRootsRule(t *testing.T) {
+	d := validateCompletionTool().Description
+	assert.Contains(t, d, "ANTI_TANGENT_PLAN_ROOTS")
+	assert.Contains(t, d, "inside the repository")
+	assert.Contains(t, d, "/tmp")
 }
 
 func TestValidateCompletion_HappyPath(t *testing.T) {
@@ -2605,6 +2640,54 @@ func TestCheckEvidenceShape_GoPackageRecursionAccepted(t *testing.T) {
 	}
 }
 
+func TestCheckEvidenceShape_EllipsisPlaceholderLine(t *testing.T) {
+	goHunk := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,3 +1,3 @@\n"
+	pyHunk := "diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n@@ -1,1 +1,2 @@\n def f():\n"
+	cases := []struct {
+		name   string
+		diff   string
+		files  []FileArg
+		reject bool
+	}{
+		{name: "unchanged line in a diff", diff: goHunk + " ...\n+ok := true\n"},
+		{name: "removed line in a diff", diff: goHunk + "-...\n+ok := true\n"},
+		{name: "added line in a diff", diff: goHunk + "+...\n", reject: true},
+		{name: "added indented line in a diff", diff: goHunk + "+    ...\n", reject: true},
+		{name: "added stub line in a python diff", diff: pyHunk + "+    ...\n"},
+		{name: "added line in a go file after a python file", diff: pyHunk + "+    ...\n" + goHunk + "+...\n", reject: true},
+		{name: "other marker added in a python diff", diff: pyHunk + "+# (truncated)\n", reject: true},
+		{name: "added stub under a diff -u header with a timestamp", diff: "--- s.py\t2026-09-15 10:00:00\n+++ s.py\t2026-09-15 10:05:00\n@@ -1,1 +1,2 @@\n def f():\n+    ...\n"},
+		{name: "added stub under a quoted +++ path", diff: "diff --git \"a/my file.py\" \"b/my file.py\"\n--- \"a/my file.py\"\n+++ \"b/my file.py\"\n@@ -1,1 +1,2 @@\n def f():\n+    ...\n"},
+		{name: "plain text evidence", diff: "header\n...\nmore", reject: true},
+		{name: "python file stub", files: []FileArg{{Path: "pkg/stub.py", Content: "def f():\n    ...\n"}}},
+		{name: "python interface stub", files: []FileArg{{Path: "pkg/stub.pyi", Content: "class C:\n    ...\n"}}},
+		{name: "go file placeholder", files: []FileArg{{Path: "x.go", Content: "package x\n...\n"}}, reject: true},
+		{name: "python file with another marker", files: []FileArg{{Path: "s.py", Content: "x = 1\n# (truncated)\n"}}, reject: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reason := checkEvidenceShape(tc.diff, tc.files)
+			if tc.reject {
+				assert.NotEmpty(t, reason, "must reject")
+			} else {
+				assert.Empty(t, reason, "must accept")
+			}
+		})
+	}
+}
+
+func TestCheckEvidenceShape_PythonExemptionCoversOnlyTheEllipsis(t *testing.T) {
+	pyHunk := "diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n@@ -1,1 +1,2 @@\n def f():\n"
+	for _, marker := range evidenceTruncationPatterns {
+		t.Run("final_diff:"+marker, func(t *testing.T) {
+			assert.NotEmpty(t, checkEvidenceShape(pyHunk+"+    "+marker+"\n", nil))
+		})
+		t.Run("final_files:"+marker, func(t *testing.T) {
+			assert.NotEmpty(t, checkEvidenceShape("", []FileArg{{Path: "s.py", Content: "def f():\n    " + marker + "\n"}}))
+		})
+	}
+}
+
 func TestValidateTaskSpec_CVRSuppressesUnverifiableClaim_ClaimLevel(t *testing.T) {
 	rv := &fakeReviewer{
 		name: "anthropic",
@@ -3468,6 +3551,8 @@ func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
 		})
 		require.Error(t, err, "outside-roots must stay a transport error, not an envelope")
 		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
+		assert.Contains(t, err.Error(), "git rev-parse --absolute-git-dir")
+		assert.Contains(t, err.Error(), "when a root contains it")
 	})
 
 	t.Run("missing file stays a plain transport error", func(t *testing.T) {

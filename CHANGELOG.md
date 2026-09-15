@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-09-15
+
+### Added
+
+- `validate_completion`'s `codescene` argument accepts CodeScene's raw `analyze_change_set`
+  output and reduces it to the digest server-side: `quality_gates`, the length of `results`, the
+  per-file verdict tally, Σ(`new-pp` − `old-pp`) and per-category counts. A digest field that is
+  present wins over the derived value.
+- `validate_task_spec` called without `plan_run_id` while the server holds a live plan run
+  returns a minor `other` finding naming the most recently created run, so the task can be
+  attached. It is added after the verdict is decided and never changes it.
+- With the plan ledger enabled, `validate_plan` records a header for each run it mints, so
+  `plan_run_report` recognises a run no task was attached to — including after a restart — and
+  says why no task is attached to it.
+- Every tool input property carries a real description in the MCP schema, including its limits:
+  entry and character caps on the bounded lists, the payload cap and its env var, the
+  `ANTI_TANGENT_PLAN_ROOTS` rule on path inputs, and the accepted `codescene` shapes. Before this,
+  a required field's description was the literal word `required` and every other field had none.
+  A contract test over `tools/list` fails when a property is undescribed or a stated limit
+  disagrees with the constant that enforces it.
+
+### Changed
+
+- A file path outside `ANTI_TANGENT_PLAN_ROOTS` is refused naming a recovery that no commit picks
+  up: the repository's git directory (`git rev-parse --absolute-git-dir`) when a root contains it,
+  otherwise a file in the repository deleted after the call. A per-session scratch directory under
+  `/tmp` is usually outside the roots, which is where a generated diff most often lands.
+- `validate_completion`'s `payload_too_large` suggestion no longer advises splitting the
+  evidence into smaller chunks. Each call is reviewed on its own, so evidence spread over several
+  calls is never seen together. It now names a `-U1` diff, leaving out generated, lockfile and
+  snapshot files, not sending a file in both `final_diff` and `final_files`, and
+  `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
+- `plan_run_report`'s unknown-run evidence leads with the usual cause, a `validate_task_spec`
+  call that never passed `plan_run_id`, before idle expiry and a restarted server.
+
+### Fixed
+
+- The evidence-shape guard's bare `...` placeholder check read a unified diff backwards: it
+  flagged an unchanged ` ...` line and never an added `+...` line, which is the one that signals
+  elided evidence. In a diff with hunk headers it now skips unchanged and removed lines and checks
+  added lines with the `+` stripped. A bare `...` line in a `.py` or `.pyi` file, where it is the
+  idiomatic stub body, is no longer flagged in either `final_files` or a diff.
+- An unexpected key in `validate_completion`'s optional `codescene` argument, or in its
+  `verdicts`, no longer fails schema validation and loses the whole call. Unknown keys are
+  ignored.
+
 ## [0.21.0] - 2026-09-11
 
 ### Security

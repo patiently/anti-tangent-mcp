@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -55,25 +56,25 @@ type Envelope struct {
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
 type ValidateTaskSpecArgs struct {
-	TaskTitle                    string                            `json:"task_title"           jsonschema:"required"`
-	Goal                         string                            `json:"goal"                 jsonschema:"required"`
-	AcceptanceCriteria           []string                          `json:"acceptance_criteria,omitempty"`
-	NonGoals                     []string                          `json:"non_goals,omitempty"`
-	Context                      string                            `json:"context,omitempty"`
-	PinnedBy                     []string                          `json:"pinned_by,omitempty"`
-	ControllerVerifiedReferences []string                          `json:"controller_verified_references,omitempty"`
-	TestStrategyNotes            []string                          `json:"test_strategy_notes,omitempty"`
-	CodebaseConventions          []string                          `json:"codebase_conventions,omitempty"`
-	TestabilityExtractions       []string                          `json:"testability_extractions,omitempty"`
-	NormativeTestBodies          []string                          `json:"normative_test_bodies,omitempty"`
-	HarnessShapeAttestation      []session.HarnessShapeAttestation `json:"harness_shape_attestation,omitempty"`
-	ProjectKnowledge             string                            `json:"project_knowledge,omitempty"`
-	Phase                        string                            `json:"phase,omitempty"`
-	ModelOverride                string                            `json:"model_override,omitempty"`
-	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty"`
+	TaskTitle                    string                            `json:"task_title"           jsonschema:"The task's title, verbatim from its heading in the plan."`
+	Goal                         string                            `json:"goal"                 jsonschema:"The task's Goal line, verbatim."`
+	AcceptanceCriteria           []string                          `json:"acceptance_criteria,omitempty" jsonschema:"The task's acceptance criteria, one entry per bullet, verbatim."`
+	NonGoals                     []string                          `json:"non_goals,omitempty" jsonschema:"The task's Non-goals bullets, verbatim, when the task has them."`
+	Context                      string                            `json:"context,omitempty" jsonschema:"The task's Context section, verbatim: constraints, repo carve-outs and prior decisions a fresh implementer needs. The reviewer treats it as authoritative."`
+	PinnedBy                     []string                          `json:"pinned_by,omitempty" jsonschema:"Existing tests, docs, commands or static checks that pin behavior an acceptance criterion says stays unchanged. Caller-supplied anchors, not verified facts. At most 50 entries of at most 500 characters each."`
+	ControllerVerifiedReferences []string                          `json:"controller_verified_references,omitempty" jsonschema:"Paths, symbols, line anchors, commands or adjacent patterns the controller already verified before dispatch; a matching unverifiable_codebase_claim finding is suppressed by substring match. At most 50 entries of at most 500 characters each, so split a long reference list into several short entries."`
+	TestStrategyNotes            []string                          `json:"test_strategy_notes,omitempty" jsonschema:"How tests divide coverage between this task and adjacent ones, so complementary tests read as joint coverage. At most 50 entries of at most 500 characters each."`
+	CodebaseConventions          []string                          `json:"codebase_conventions,omitempty" jsonschema:"Module conventions the task must follow; a spec that conflicts with one draws convention_deviation. At most 50 entries of at most 500 characters each."`
+	TestabilityExtractions       []string                          `json:"testability_extractions,omitempty" jsonschema:"Code the task deliberately extracts to make it testable, so the reviewer does not flag the extraction as scope_drift. At most 50 entries of at most 500 characters each."`
+	NormativeTestBodies          []string                          `json:"normative_test_bodies,omitempty" jsonschema:"Test bodies the implementer must land verbatim; the reviewer treats each as binding scope. At most 20 entries of at most 4000 characters each."`
+	HarnessShapeAttestation      []session.HarnessShapeAttestation `json:"harness_shape_attestation,omitempty" jsonschema:"Caller-attested facts about test harnesses or fixtures; an acceptance criterion that contradicts one draws attestation_contradiction. At most 25 entries."`
+	ProjectKnowledge             string                            `json:"project_knowledge,omitempty" jsonschema:"Markdown excerpts from the project knowledge base that the controller selected for this task. The reviewer treats them as authoritative. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes."`
+	Phase                        string                            `json:"phase,omitempty" jsonschema:"pre, the default, for the review at task start; post only for a post-hoc or session-recovery review."`
+	ModelOverride                string                            `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
+	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
 	// PlanRunID ties this task to a plan run minted by validate_plan. Best
 	// effort: an unknown or expired id must not fail the review.
-	PlanRunID string `json:"plan_run_id,omitempty"`
+	PlanRunID string `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call."`
 }
 
 type handlers struct {
@@ -190,6 +191,12 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		Partial:    result.Partial,
 	}
 	env = h.withSessionTTL(env, sess)
+
+	if args.PlanRunID == "" {
+		if run, ok := h.deps.PlanRuns.Latest(); ok {
+			env.Findings = append(env.Findings, planRunIDAdvisory(run.ID))
+		}
+	}
 
 	if args.PlanRunID != "" {
 		// Best-effort: an unknown or expired run must not fail the review.
@@ -387,8 +394,8 @@ func checkProgressTool() *mcp.Tool {
 // NOT use this type for final_files; it has its own CompletionFileArg, whose
 // pointer Content field can distinguish "omitted" from "explicitly empty".
 type FileArg struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
+	Path    string `json:"path" jsonschema:"Path of the file, as the task names it."`
+	Content string `json:"content" jsonschema:"The file's full current content."`
 }
 
 // CompletionFileArg is validate_completion's final_files entry — the only
@@ -403,20 +410,19 @@ type FileArg struct {
 // transport error instead of a structured envelope.
 //
 // If both Path and a non-nil Content are supplied, Content wins and Path is
-// never read — this is the pre-0.16.0 always-inline behaviour, kept for
-// backward compatibility rather than treated as an error.
+// never read; a caller sending both is not treated as an error.
 type CompletionFileArg struct {
-	Path    string  `json:"path"`
-	Content *string `json:"content,omitempty"`
+	Path    string  `json:"path" jsonschema:"Path of the file. When content is omitted it must be absolute and the server reads the file itself; with ANTI_TANGENT_PLAN_ROOTS set, it must be under one of those roots."`
+	Content *string `json:"content,omitempty" jsonschema:"The file's full content. Omit it to have the server read path from disk; send an empty string for a deleted or genuinely empty file."`
 }
 
 type CheckProgressArgs struct {
-	SessionID         string    `json:"session_id"     jsonschema:"required"`
-	WorkingOn         string    `json:"working_on"     jsonschema:"required"`
-	ChangedFiles      []FileArg `json:"changed_files,omitempty"`
-	Questions         []string  `json:"questions,omitempty"`
-	ModelOverride     string    `json:"model_override,omitempty"`
-	MaxTokensOverride int       `json:"max_tokens_override,omitempty"`
+	SessionID         string    `json:"session_id"     jsonschema:"The session_id returned by this task's validate_task_spec call."`
+	WorkingOn         string    `json:"working_on"     jsonschema:"What you are doing right now, in a sentence or two. The reviewer checks the changed files against it for drift."`
+	ChangedFiles      []FileArg `json:"changed_files,omitempty" jsonschema:"Files changed so far, each with its full current content. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes."`
+	Questions         []string  `json:"questions,omitempty" jsonschema:"Open questions you want the reviewer to weigh in on."`
+	ModelOverride     string    `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
+	MaxTokensOverride int       `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
 }
 
 func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, args CheckProgressArgs) (*mcp.CallToolResult, Envelope, error) {
@@ -738,6 +744,56 @@ func prependPlanDeprecation(pr verdict.PlanResult, usedPlanText bool) verdict.Pl
 	return pr
 }
 
+// planRunIDAdvisory tells a validate_task_spec caller that this server holds a
+// live plan run the call did not name. It describes the call's arguments, not
+// the task, so it is appended after the verdict is finalized and must never
+// move it. It names the most recently created run because every validate_plan
+// round mints a new id and supersedes the previous one.
+func planRunIDAdvisory(runID string) verdict.Finding {
+	return verdict.Finding{
+		Severity:  verdict.SeverityMinor,
+		Category:  verdict.CategoryOther,
+		Criterion: "plan_run_id",
+		Evidence: fmt.Sprintf("This call passed no plan_run_id, but this server holds a live plan run, %s, "+
+			"minted by the most recent validate_plan.", runID),
+		Suggestion: fmt.Sprintf("If this task belongs to that plan, call validate_task_spec with plan_run_id=%s "+
+			"so plan_run_report can include it. Use the session_id that call returns for the rest of the task. "+
+			"Ignore this if the task is not part of a plan run.", runID),
+	}
+}
+
+// unattachedPlanRunFinding explains a known plan run with no task rows. The
+// cause differs by source: a run found in the live store has no rows because
+// rows are appended at validate_task_spec, so no call ever passed its id. A
+// run recovered from the ledger has no rows because the ledger records a task
+// only when it finishes validate_completion — a header-only run may have had
+// tasks attached and even in progress before a restart, and that live state
+// does not survive.
+func unattachedPlanRunFinding(run *planrun.Run, fromLedger bool) verdict.Finding {
+	if fromLedger {
+		return verdict.Finding{
+			Severity:  verdict.SeverityMinor,
+			Category:  verdict.CategoryOther,
+			Criterion: "plan_run_id",
+			Evidence: fmt.Sprintf("Plan run %s is known from the plan ledger (%d tasks in the plan), but no task "+
+				"attached to it finished validate_completion while the ledger was enabled; the ledger records a "+
+				"task only when it completes, and nothing about this run's live state survived the restart.",
+				run.ID, run.TaskCount),
+			Suggestion: "Report from the per-task DONE envelopes. If tasks did not pass plan_run_id on " +
+				"validate_task_spec, pass it on every call.",
+		}
+	}
+	return verdict.Finding{
+		Severity:  verdict.SeverityMinor,
+		Category:  verdict.CategoryOther,
+		Criterion: "plan_run_id",
+		Evidence: fmt.Sprintf("Plan run %s is known (%d tasks in the plan), but no validate_task_spec call passed "+
+			"its plan_run_id, so no task is attached to it.", run.ID, run.TaskCount),
+		Suggestion: "Pass plan_run_id on every implementing subagent's validate_task_spec call. " +
+			"For this run, report from the per-task DONE envelopes instead.",
+	}
+}
+
 // prependRepoRootUnusable adds the in-band signal that a supplied repo_root
 // could not be used and the Create/Modify disk tier was therefore skipped.
 // reason is empty when repo_root was usable or was never supplied, in which
@@ -923,6 +979,15 @@ func recoverPartialPlanFindings(rawJSON []byte, prior verdict.PlanResult) (verdi
 	return pr, true
 }
 
+// completionShrinkAdvice is the recovery advice on validate_completion's
+// payload_too_large finding. It must not suggest spreading evidence over
+// several calls: each call is reviewed on its own, so the reviewer never sees
+// split evidence together and answers every part with insufficient_evidence.
+const completionShrinkAdvice = "Each call is reviewed on its own, so evidence spread over several calls is never seen together. " +
+	"Regenerate the diff with -U1, leave out generated, lockfile and snapshot files, " +
+	"and do not send a file in both final_diff and final_files. " +
+	"The operator can raise the cap with ANTI_TANGENT_MAX_PAYLOAD_BYTES."
+
 // tooLargeEnvelope builds the rejection envelope for a payload-too-large hit.
 // Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
 func tooLargeEnvelope(tool, id string, model config.ModelRef, size, limit int, suggestion string) Envelope {
@@ -944,38 +1009,40 @@ func tooLargeEnvelope(tool, id string, model config.ModelRef, size, limit int, s
 
 func validateCompletionTool() *mcp.Tool {
 	return &mcp.Tool{
-		Name: "validate_completion",
+		Name:        "validate_completion",
+		InputSchema: validateCompletionInputSchema(),
 		Description: "Final validation before declaring a task complete. " +
 			"The reviewer checks the full implementation against every acceptance criterion " +
 			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done. " +
-			"Omit a final_files entry's content to have the server read its absolute path, and pass final_diff_path instead of final_diff, to avoid emitting large evidence as output tokens.",
+			"Omit a final_files entry's content to have the server read its absolute path, and pass final_diff_path instead of final_diff, to avoid emitting large evidence as output tokens. " +
+			"When ANTI_TANGENT_PLAN_ROOTS is set, both kinds of path must be under one of its roots, for example inside the repository; a per-session scratch directory under /tmp usually is not.",
 	}
 }
 
 type ValidateCompletionArgs struct {
-	SessionID             string              `json:"session_id"  jsonschema:"required"`
-	Summary               string              `json:"summary"     jsonschema:"required"`
-	FinalFiles            []CompletionFileArg `json:"final_files,omitempty"`
-	FinalDiff             string              `json:"final_diff,omitempty"`
-	FinalDiffPath         string              `json:"final_diff_path,omitempty"`
-	TestEvidence          string              `json:"test_evidence,omitempty"`
-	ExitContracts         []string            `json:"exit_contracts,omitempty"`
-	ExitContractsInferred bool                `json:"exit_contracts_inferred,omitempty"`
-	ModelOverride         string              `json:"model_override,omitempty"`
-	MaxTokensOverride     int                 `json:"max_tokens_override,omitempty"`
-	Codescene             *codescene.Digest   `json:"codescene,omitempty"`
+	SessionID             string              `json:"session_id"  jsonschema:"The session_id returned by this task's validate_task_spec call. An empty string runs a lightweight review with no session."`
+	Summary               string              `json:"summary"     jsonschema:"What you implemented and how each acceptance criterion is met. A claim in the summary is not evidence on its own."`
+	FinalFiles            []CompletionFileArg `json:"final_files,omitempty" jsonschema:"Changed files, with full content or with content omitted so the server reads them. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; do not also send a file that final_diff already covers."`
+	FinalDiff             string              `json:"final_diff,omitempty" jsonschema:"A unified diff of the task's changes. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; when it is large, generate it with -U1 and leave out generated, lockfile and snapshot files."`
+	FinalDiffPath         string              `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, for example inside the repository; a per-session scratch directory under /tmp usually is not."`
+	TestEvidence          string              `json:"test_evidence,omitempty" jsonschema:"The test run output that proves the change, verbatim. Output showing no test executed draws a finding."`
+	ExitContracts         []string            `json:"exit_contracts,omitempty" jsonschema:"Symbols or behavior later tasks rely on this task leaving in place, copied from validate_plan's exit_contracts for this task; a hard miss draws missing_acceptance_criterion. At most 50 entries of at most 500 characters each."`
+	ExitContractsInferred bool                `json:"exit_contracts_inferred,omitempty" jsonschema:"validate_plan's exit_contracts_inferred for this task: true when the contracts were inferred from cross-task references rather than written in the plan, which caps a miss at minor."`
+	ModelOverride         string              `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
+	MaxTokensOverride     int                 `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
+	Codescene             *codescene.Digest   `json:"codescene,omitempty" jsonschema:"The CodeScene result for this task: analyze_change_set's raw JSON, or the reduced digest. Unknown keys are ignored. pre_commit_code_health_safeguard sees only uncommitted changes, so after a commit it reports zero files and is not a run of the task. When a run was attempted and failed, send ran false with skip_reason and skip_evidence."`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
 type ValidatePlanArgs struct {
-	PlanText          string   `json:"plan_text,omitempty"`
-	PlanPath          string   `json:"plan_path,omitempty"`
-	ProjectKnowledge  string   `json:"project_knowledge,omitempty"`
-	ModelOverride     string   `json:"model_override,omitempty"`
-	MaxTokensOverride int      `json:"max_tokens_override,omitempty"`
-	Mode              string   `json:"mode,omitempty"`
-	ContextPaths      []string `json:"context_paths,omitempty"`
-	RepoRoot          string   `json:"repo_root,omitempty"`
+	PlanText          string   `json:"plan_text,omitempty" jsonschema:"Deprecated and removed in 1.0.0: the plan markdown inline. Pass plan_path instead; exactly one of plan_text and plan_path must be set. Counts toward the plan payload cap, ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES, default 1048576 bytes."`
+	PlanPath          string   `json:"plan_path,omitempty" jsonschema:"Absolute path to the plan markdown file, which the server reads. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots. Exactly one of plan_text and plan_path must be set. The file's content counts toward the plan payload cap, ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES, default 1048576 bytes."`
+	ProjectKnowledge  string   `json:"project_knowledge,omitempty" jsonschema:"Markdown excerpts from the project knowledge base that the controller selected for this plan. The reviewer treats them as authoritative. Counts toward the plan payload cap, ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES, default 1048576 bytes."`
+	ModelOverride     string   `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
+	MaxTokensOverride int      `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default scaled by task count; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
+	Mode              string   `json:"mode,omitempty" jsonschema:"thorough, the default, or quick, which surfaces only the most severe findings, at most 3 per scope."`
+	ContextPaths      []string `json:"context_paths,omitempty" jsonschema:"Absolute paths to source files the plan makes claims about, at most 50. Each file is sent in full to the reviewer vendor on every reviewer call of the round, so attach only files the plan touches and never secrets. With ANTI_TANGENT_PLAN_ROOTS set they must be under those roots."`
+	RepoRoot          string   `json:"repo_root,omitempty" jsonschema:"Absolute path to the repository root; enables the disk tier of the Create/Modify consistency check. With ANTI_TANGENT_PLAN_ROOTS set it must be under those roots."`
 }
 
 func validatePlanTool() *mcp.Tool {
@@ -1037,6 +1104,71 @@ var evidenceTruncationPatterns = []string{
 // surrounding whitespace). The (?m) flag anchors ^/$ to line boundaries.
 var evidenceEllipsisLine = regexp.MustCompile(`(?m)^\s*\.\.\.\s*$`)
 
+// diffEllipsisPlaceholderOffset returns the byte offset of the first bare `...`
+// line in finalDiff, or -1. In a unified diff (one with hunk headers) an
+// unchanged or removed line carries no new evidence and is skipped, and an
+// added line is checked with its `+` stripped; a bare `...` on an unchanged
+// line is ordinary code, while on an added line it is elided evidence. Text
+// with no hunk header is not a unified diff and is checked line by line as it
+// stands. Lines under a `+++` header for a file ellipsisExemptPath accepts are
+// not checked.
+func diffEllipsisPlaceholderOffset(finalDiff string) int {
+	if !strings.HasPrefix(finalDiff, "@@ ") && !strings.Contains(finalDiff, "\n@@ ") {
+		if loc := evidenceEllipsisLine.FindStringIndex(finalDiff); loc != nil {
+			return loc[0]
+		}
+		return -1
+	}
+	offset := 0
+	exempt := false
+	for _, line := range strings.SplitAfter(finalDiff, "\n") {
+		body := strings.TrimRight(line, "\r\n")
+		switch {
+		case strings.HasPrefix(body, "+++ "):
+			name := strings.TrimPrefix(body, "+++ ")
+			if tab := strings.IndexByte(name, '\t'); tab >= 0 {
+				name = name[:tab]
+			}
+			exempt = ellipsisExemptPath(strings.TrimPrefix(unquoteDiffPathName(name), "b/"))
+		case strings.HasPrefix(body, " "), strings.HasPrefix(body, "-"):
+		case strings.HasPrefix(body, "+"):
+			if !exempt && strings.TrimSpace(body[1:]) == "..." {
+				return offset
+			}
+		default:
+			if !exempt && strings.TrimSpace(body) == "..." {
+				return offset
+			}
+		}
+		offset += len(line)
+	}
+	return -1
+}
+
+// unquoteDiffPathName strips one pair of surrounding double quotes from a
+// `+++`/`---` diff header's path, which git adds when the name contains a
+// space or a non-ASCII byte (e.g. `"b/my file.py"`), so a caller trimming a
+// `b/`/`a/` prefix afterward sees the bare filename either way.
+func unquoteDiffPathName(name string) string {
+	if !strings.HasPrefix(name, `"`) || !strings.HasSuffix(name, `"`) {
+		return name
+	}
+	if len(name) < 2 {
+		return name
+	}
+	return name[1 : len(name)-1]
+}
+
+// ellipsisExemptPath reports whether a bare `...` line is legitimate content
+// in the file at path: in Python, `...` is the idiomatic body of a stub.
+func ellipsisExemptPath(path string) bool {
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(path))) {
+	case ".py", ".pyi":
+		return true
+	}
+	return false
+}
+
 // checkEvidenceShape inspects finalDiff/files for malformed evidence shapes.
 // Returns a non-empty human-readable reason string when a rule fires; empty
 // string when the evidence looks structurally sound. The reason is what
@@ -1061,8 +1193,8 @@ func checkEvidenceShape(finalDiff string, files []FileArg) string {
 				return fmt.Sprintf("final_diff contains truncation marker %q at offset %d", p, idx)
 			}
 		}
-		if loc := evidenceEllipsisLine.FindStringIndex(finalDiff); loc != nil {
-			return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", loc[0])
+		if off := diffEllipsisPlaceholderOffset(finalDiff); off >= 0 {
+			return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", off)
 		}
 	}
 	for i, f := range files {
@@ -1077,8 +1209,10 @@ func checkEvidenceShape(finalDiff string, files []FileArg) string {
 				return fmt.Sprintf("final_files[%d].content (path %q) contains truncation marker %q at offset %d", i, f.Path, p, idx)
 			}
 		}
-		if loc := evidenceEllipsisLine.FindStringIndex(f.Content); loc != nil {
-			return fmt.Sprintf("final_files[%d].content (path %q) contains a placeholder line `...` at offset %d", i, f.Path, loc[0])
+		if !ellipsisExemptPath(f.Path) {
+			if loc := evidenceEllipsisLine.FindStringIndex(f.Content); loc != nil {
+				return fmt.Sprintf("final_files[%d].content (path %q) contains a placeholder line `...` at offset %d", i, f.Path, loc[0])
+			}
 		}
 	}
 	return ""
@@ -1110,10 +1244,8 @@ func (e *completionInputTooLargeError) Unwrap() error { return e.err }
 //
 // Content is resolved ONLY when nil — see CompletionFileArg: an explicit ""
 // means "this file is genuinely empty" (e.g. a deletion) and must NOT
-// trigger a read, unlike pre-0.16.0's string-based Content, whose empty
-// string was indistinguishable from omitted and always triggered one
-// (breaking a deleted-file entry, whose read would fail EvalSymlinks, and
-// any relative path, which would fail the path-must-be-absolute check).
+// trigger a read: a deleted file's read fails EvalSymlinks, and a relative
+// path fails the path-must-be-absolute check.
 //
 // Returns the resolved slice rather than mutating args.FinalFiles in place,
 // since ValidateCompletionArgs.FinalFiles is wire-typed []CompletionFileArg
@@ -1466,8 +1598,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		var tooLarge *completionInputTooLargeError
 		if errors.As(err, &tooLarge) {
 			env := prependClamp(tooLargeEnvelope("validate_completion", args.SessionID, h.deps.Cfg.PostModel, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes,
-				fmt.Sprintf("%s is %d bytes, over the %d-byte cap; shrink it or split the evidence into smaller chunks.",
-					tooLarge.field, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes)), clamp)
+				fmt.Sprintf("%s is %d bytes, over the %d-byte cap. %s",
+					tooLarge.field, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes, completionShrinkAdvice)), clamp)
 			h.recordStat(statParams{
 				tool:         "validate_completion",
 				verdict:      env.Verdict,
@@ -1530,7 +1662,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// empty; otherwise we don't have the session yet, so use args.SessionID.
 	if size := totalCompletionBytes(resolvedFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
 		env := prependClamp(tooLargeEnvelope("validate_completion", args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
-			"Send a unified diff via final_diff, or split the call into smaller chunks."), clamp)
+			"Send a unified diff via final_diff rather than whole files. "+completionShrinkAdvice), clamp)
 		h.recordStat(statParams{
 			tool:         "validate_completion",
 			verdict:      env.Verdict,
@@ -2042,6 +2174,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		// purpose.
 		cachedCall := planCallContext{
 			PlanRuns:         h.deps.PlanRuns,
+			PlanLedger:       h.deps.PlanLedger,
 			Source:           planSrc.String(),
 			ModelUsed:        cachedModelUsed,
 			ReviewMS:         0,
@@ -2104,6 +2237,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// steps. See planCallContext.
 	call := planCallContext{
 		PlanRuns:         h.deps.PlanRuns,
+		PlanLedger:       h.deps.PlanLedger,
 		Source:           planSrc.String(),
 		ModelUsed:        modelUsed,
 		ReviewMS:         ms,
@@ -2743,7 +2877,7 @@ func validateChunkIdentity(parsed verdict.TasksOnly, chunkTasks []planparser.Raw
 
 // PlanRunReportArgs is the input schema for the plan-run report.
 type PlanRunReportArgs struct {
-	PlanRunID string `json:"plan_run_id" jsonschema:"required"`
+	PlanRunID string `json:"plan_run_id" jsonschema:"The plan_run_id returned by the final passing validate_plan call of the run."`
 }
 
 // PlanRunReportResult is what plan_run_report returns. Deterministic: no
@@ -2775,6 +2909,7 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 	// Snapshot, not Get: this walks run.Rows after the lock is released, and
 	// other subagents under the same plan run may be appending concurrently.
 	run, ok := h.deps.PlanRuns.Snapshot(args.PlanRunID)
+	fromLedger := !ok
 	if !ok {
 		// Fall back to the durable ledger (nil-safe: PlanLedger is nil unless
 		// both ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER are set).
@@ -2789,10 +2924,13 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 				Severity:  verdict.SeverityMajor,
 				Category:  verdict.CategorySessionMissing,
 				Criterion: "plan_run_id",
-				Evidence: fmt.Sprintf("No plan run %q is known to this server. Runs expire after %s, "+
-					"and in-memory state is lost on restart.", args.PlanRunID, h.deps.PlanRuns.TTL()),
+				Evidence: fmt.Sprintf("No plan run %q is known to this server. The usual cause is that no validate_task_spec "+
+					"call passed it as plan_run_id: nothing then keeps a run alive, so it expired %s after validate_plan minted it. "+
+					"A run is also unknown to a different or restarted server unless the plan ledger recorded it.",
+					args.PlanRunID, h.deps.PlanRuns.TTL()),
 				Suggestion: "Nothing to recover — report from the per-task DONE envelopes instead. " +
-					"Set ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER=1 to persist future runs.",
+					"Pass plan_run_id on every validate_task_spec call, and set ANTI_TANGENT_STATS_DIR and " +
+					"ANTI_TANGENT_PLAN_LEDGER=1 so a run survives a restart.",
 			}},
 			SummaryBlock: formatUnknownPlanRunSummary(args.PlanRunID),
 		}
@@ -2810,16 +2948,19 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 	if res.Tasks == nil {
 		res.Tasks = []planrun.TaskRow{}
 	}
+	if len(run.Rows) == 0 {
+		res.Findings = append(res.Findings, unattachedPlanRunFinding(run, fromLedger))
+	}
 	return planRunReportResult(res)
 }
 
 // formatUnknownPlanRunSummary renders plan_run_report's summary_block for a
-// plan_run_id this server does not know. planRunID is caller-supplied
-// (jsonschema "required", no other constraint), so it is folded through
-// escapeBlockValue for the same reason every other free-text value in a
-// summary block is: a newline in it would put the next physical line at
-// column 0, where plugin/anti-tangent-guard's line-based transcript scan can
-// read it as block grammar. Hygiene, not a security boundary — see
+// plan_run_id this server does not know. planRunID is caller-supplied and the
+// schema requires it but constrains nothing else about its content, so it is
+// folded through escapeBlockValue for the same reason every other free-text
+// value in a summary block is: a newline in it would put the next physical
+// line at column 0, where plugin/anti-tangent-guard's line-based transcript
+// scan can read it as block grammar. Hygiene, not a security boundary — see
 // blocktext.EscapeContinuationLines.
 //
 // It is a named function rather than an expression inline in PlanRunReport so

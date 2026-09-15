@@ -26,10 +26,10 @@ import (
 const maxBulkReadPaths = 50
 
 type BulkReadArgs struct {
-	Question          string   `json:"question" jsonschema:"required"`
-	Paths             []string `json:"paths"    jsonschema:"required"`
-	Model             string   `json:"model,omitempty"`
-	MaxTokensOverride int      `json:"max_tokens_override,omitempty"`
+	Question          string   `json:"question" jsonschema:"A specific question about the files. Only the answer comes back; the file contents never enter your context."`
+	Paths             []string `json:"paths"    jsonschema:"Absolute paths of the files to read, at most 50. Each file is sent in full to the worker provider. With ANTI_TANGENT_PLAN_ROOTS set they must be under those roots, and together they count toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes."`
+	Model             string   `json:"model,omitempty" jsonschema:"Worker model for this call only, as provider:model. Defaults to ANTI_TANGENT_WORKER_MODEL."`
+	MaxTokensOverride int      `json:"max_tokens_override,omitempty" jsonschema:"Worker output-token budget for this call only. 0 uses ANTI_TANGENT_WORKER_MAX_TOKENS; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped."`
 }
 
 // BulkReadResult is the tool response. Verdict/Findings are populated ONLY on
@@ -160,12 +160,12 @@ func bulkReadTooLarge(size, limit int, model string) BulkReadResult {
 }
 
 type CodeWriteArgs struct {
-	Spec              string `json:"spec"           jsonschema:"required"`
-	ReferencePath     string `json:"reference_path" jsonschema:"required"`
-	TargetPath        string `json:"target_path,omitempty"`
-	Overwrite         bool   `json:"overwrite,omitempty"`
-	Model             string `json:"model,omitempty"`
-	MaxTokensOverride int    `json:"max_tokens_override,omitempty"`
+	Spec              string `json:"spec"           jsonschema:"What to generate. Only boilerplate that follows the reference file's pattern; logic that needs judgement is out of scope."`
+	ReferencePath     string `json:"reference_path" jsonschema:"Absolute path to an existing file whose conventions the generated code follows. Its full content is sent to the worker provider. With ANTI_TANGENT_PLAN_ROOTS set it must be under those roots."`
+	TargetPath        string `json:"target_path,omitempty" jsonschema:"Absolute path to write the generated code to, so it never enters your context. Its parent directory must already exist and, with ANTI_TANGENT_PLAN_ROOTS set, be under those roots. Refused on Windows."`
+	Overwrite         bool   `json:"overwrite,omitempty" jsonschema:"Replace an existing target_path. False, the default, refuses to write over an existing file."`
+	Model             string `json:"model,omitempty" jsonschema:"Worker model for this call only, as provider:model. Defaults to ANTI_TANGENT_WORKER_MODEL."`
+	MaxTokensOverride int    `json:"max_tokens_override,omitempty" jsonschema:"Worker output-token budget for this call only. 0 uses ANTI_TANGENT_WORKER_MAX_TOKENS; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped."`
 }
 
 type CodeWriteResult struct {

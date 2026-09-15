@@ -21,9 +21,9 @@ import (
 // Assertions) in the generated MCP input schema instead of the documented
 // lowercase ones.
 type HarnessShapeAttestation struct {
-	Harness    string   `json:"harness"`
-	Path       string   `json:"path"`
-	Assertions []string `json:"assertions"`
+	Harness    string   `json:"harness" jsonschema:"Name of the test harness or fixture. At most 240 characters."`
+	Path       string   `json:"path" jsonschema:"Path of the harness or fixture file. At most 240 characters."`
+	Assertions []string `json:"assertions" jsonschema:"Facts about the harness's shape that the caller attests to. At most 10 entries of at most 480 characters each."`
 }
 
 type TaskSpec struct {

@@ -233,3 +233,32 @@ func TestConcurrentSnapshotWhileUpdating(t *testing.T) {
 	require.True(t, ok)
 	assert.Len(t, got.Rows, 50)
 }
+
+func TestLatest_MostRecentLiveRun(t *testing.T) {
+	s := NewStore(time.Minute)
+	_, ok := s.Latest()
+	assert.False(t, ok, "empty store")
+
+	older := s.Create("pass", "actionable", 1)
+	newer := s.Create("warn", "rigorous", 2)
+	older.CreatedAt = time.Now().Add(-10 * time.Second)
+
+	got, ok := s.Latest()
+	require.True(t, ok)
+	assert.Equal(t, newer.ID, got.ID)
+
+	newer.LastAccessed = time.Now().Add(-2 * time.Minute)
+	got, ok = s.Latest()
+	require.True(t, ok)
+	assert.Equal(t, older.ID, got.ID, "a run idle past the TTL is skipped")
+
+	before := older.LastAccessed
+	_, _ = s.Latest()
+	assert.Equal(t, before, older.LastAccessed, "Latest must not refresh LastAccessed")
+}
+
+func TestLatest_NilStore(t *testing.T) {
+	var s *Store
+	_, ok := s.Latest()
+	assert.False(t, ok)
+}

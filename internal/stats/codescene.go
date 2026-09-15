@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"encoding/json"
 	"math"
 	"time"
 
@@ -22,6 +23,25 @@ type Verdicts = codescene.Verdicts
 type CodesceneEvent struct {
 	Ts time.Time `json:"ts"`
 	codescene.Digest
+}
+
+// UnmarshalJSON decodes Ts, then delegates the rest to Digest's own
+// UnmarshalJSON. Anonymously embedding Digest promotes its UnmarshalJSON to
+// CodesceneEvent, so without this override the promoted method would run
+// alone and Ts would never be set — see codescene.Digest.UnmarshalJSON's
+// doc comment.
+func (e *CodesceneEvent) UnmarshalJSON(b []byte) error {
+	var ts struct {
+		Ts time.Time `json:"ts"`
+	}
+	if err := json.Unmarshal(b, &ts); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, &e.Digest); err != nil {
+		return err
+	}
+	e.Ts = ts.Ts
+	return nil
 }
 
 // CodesceneRollup is the nested `codescene` block in rollup.json.

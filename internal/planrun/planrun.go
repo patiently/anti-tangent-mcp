@@ -153,6 +153,28 @@ func (s *Store) Snapshot(id string) (*Run, bool) {
 	return &cp, true
 }
 
+// Latest returns the most recently created run that has not been idle past
+// the TTL. It does not refresh LastAccessed: naming a run in an advisory must
+// not keep a stale run alive. Safe on a nil Store.
+func (s *Store) Latest() (*Run, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	var latest *Run
+	for _, r := range s.runs {
+		if now.Sub(r.LastAccessed) > s.ttl {
+			continue
+		}
+		if latest == nil || r.CreatedAt.After(latest.CreatedAt) {
+			latest = r
+		}
+	}
+	return latest, latest != nil
+}
+
 // AppendRow adds a task row, stamping its Index from the current length.
 // Returns false when the run id is unknown or expired.
 func (s *Store) AppendRow(runID string, row TaskRow) bool {
