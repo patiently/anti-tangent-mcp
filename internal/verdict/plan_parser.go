@@ -139,9 +139,10 @@ func validatePlanVerdict(v Verdict, where string) error {
 	return fmt.Errorf("plan: invalid %s %q", where, v)
 }
 
-// validateFinding validates severity and category. It also applies the
-// per-category severity floor in-place so plan-shape parsers behave
-// identically to the per-task parser.
+// validateFinding validates severity, category and the free-text fields. It
+// also applies the per-category severity floor in place, so plan-shape parsers
+// behave identically to the per-task parser, and clears the fields only the
+// server sets, which a plan finding's reviewer never chooses.
 func validateFinding(f *Finding, where string) error {
 	switch f.Severity {
 	case SeverityCritical, SeverityMajor, SeverityMinor:
@@ -152,6 +153,7 @@ func validateFinding(f *Finding, where string) error {
 		return fmt.Errorf("plan: %s.category invalid %q", where, f.Category)
 	}
 	*f = applySeverityFloor(*f)
+	clearServerSetFields(f, false)
 	if err := validateFindingStrings(*f, where); err != nil {
 		return fmt.Errorf("plan: %w", err)
 	}

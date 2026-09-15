@@ -54,17 +54,46 @@ type Checkpoint struct {
 	Findings  []verdict.Finding `json:"findings,omitempty"`
 }
 
+// MaxRulings is how many ruled fingerprints one session keeps. A ruling on a
+// new fingerprint past that is dropped, so a caller cannot grow a session
+// without bound by ruling on every finding it is shown.
+const MaxRulings = 50
+
+// Ruling is a controller's decision on a finding. A session stores it under
+// the finding's fingerprint, and it covers every later finding with that
+// fingerprint. Category and Criterion describe the ruled finding when the
+// session still held it at ruling time, so a reviewer prompt can say what was
+// ruled on; both are empty otherwise.
+type Ruling struct {
+	ID        string
+	Category  verdict.Category
+	Criterion string
+	Text      string
+}
+
 type Session struct {
-	ID            string
-	CreatedAt     time.Time
-	LastAccessed  time.Time
-	Spec          TaskSpec
-	PreFindings   []verdict.Finding
-	Checkpoints   []Checkpoint
+	ID           string
+	CreatedAt    time.Time
+	LastAccessed time.Time
+	Spec         TaskSpec
+	PreFindings  []verdict.Finding
+	Checkpoints  []Checkpoint
+	// PostFindings is the reviewer's own findings from the most recent
+	// validate_completion whose review completed, with the IDs that response
+	// showed and without the findings a ruling waived. The next
+	// validate_completion shows them to the reviewer as prior findings.
 	PostFindings  []verdict.Finding
 	ModelDefaults ModelDefaults
 	// PlanRunID ties this session to a plan_run_id minted by validate_plan, so
 	// check_progress and validate_completion can update the right planrun row
 	// without new arguments. Empty for tasks not dispatched under a plan run.
 	PlanRunID string
+	// IssuedIDs is every finding ID a response on this session carried, from
+	// any of its tools. A controller ruling must name one of them.
+	IssuedIDs map[string]bool
+	// Rulings holds the controller's rulings, keyed by fingerprint.
+	Rulings map[string]Ruling
+	// Escalated is set once any validate_completion on the session escalates,
+	// and never cleared.
+	Escalated bool
 }

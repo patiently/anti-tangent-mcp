@@ -195,11 +195,27 @@ type summaryFormatterCase struct {
 // so no rendered line appears or disappears when a field is later forged.
 func seedFinding() verdict.Finding {
 	return verdict.Finding{
+		ID:         "f_0123abcd",
 		Severity:   verdict.SeverityMajor,
 		Category:   verdict.CategoryQuality,
 		Criterion:  "criterion",
 		Evidence:   "evidence",
 		Suggestion: "suggestion",
+		RepeatOf:   "f_0123abcd",
+		SameAs:     strPtr("f_0123abcd"),
+	}
+}
+
+// seedWaived returns a benign waived finding with every free-text field
+// populated.
+func seedWaived() verdict.WaivedFinding {
+	return verdict.WaivedFinding{
+		ID:        "f_89abcdef",
+		Severity:  verdict.SeverityMajor,
+		Category:  verdict.CategoryScopeDrift,
+		Criterion: "criterion",
+		Evidence:  "evidence",
+		Ruling:    "ruling",
 	}
 }
 
@@ -235,6 +251,9 @@ func summaryFormatterCases() []summaryFormatterCase {
 					SessionTTLRemainingSeconds: &ttl,
 					SummaryBlock:               "summary",
 					SubmissionDefectOnly:       true,
+					Escalate:                   true,
+					WaivedFindings:             []verdict.WaivedFinding{seedWaived()},
+					ControllerRulings:          []AppliedRuling{{FindingID: "f_89abcdef", Ruling: "ruling"}},
 				}
 			},
 			render: func(in any) string { return formatEnvelopeSummary(*in.(*Envelope)) },
@@ -250,15 +269,17 @@ func summaryFormatterCases() []summaryFormatterCase {
 			newIn: func() any {
 				return &planSummaryInput{
 					PR: verdict.PlanResult{
-						PlanVerdict:  verdict.VerdictWarn,
-						PlanQuality:  verdict.PlanQualityActionable,
-						PlanRunID:    "run-1",
-						PlanFindings: []verdict.Finding{seedFinding()},
+						PlanVerdict:    verdict.VerdictWarn,
+						PlanQuality:    verdict.PlanQualityActionable,
+						PlanRunID:      "run-1",
+						PlanFindings:   []verdict.Finding{seedFinding()},
+						WaivedFindings: []verdict.WaivedFinding{seedWaived()},
 						Tasks: []verdict.PlanTaskResult{{
 							TaskIndex:             1,
 							TaskTitle:             "title",
 							Verdict:               verdict.VerdictPass,
 							Findings:              []verdict.Finding{seedFinding()},
+							WaivedFindings:        []verdict.WaivedFinding{seedWaived()},
 							SuggestedHeaderBlock:  "header block",
 							SuggestedHeaderReason: "header reason",
 							LightweightReason:     "lightweight reason",
@@ -384,6 +405,8 @@ func summaryFormatterCases() []summaryFormatterCase {
 							Checkpoints:    1,
 							PostVerdict:    "pass",
 							Severity:       map[string]int{"major": 1},
+							Waived:         2,
+							Escalated:      true,
 							CodesceneState: planrun.StateRan,
 							Codescene: &codescene.Digest{
 								Ran:            true,

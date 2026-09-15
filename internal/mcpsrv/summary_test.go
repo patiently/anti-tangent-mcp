@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -202,4 +203,94 @@ func TestFormatPlanSummary_NoContextFilesOmitsLine(t *testing.T) {
 	pr := verdict.PlanResult{PlanVerdict: verdict.VerdictPass, PlanQuality: verdict.PlanQualityActionable}
 	out := formatPlanSummary(pr, planSummaryMeta{ModelUsed: "anthropic:m"})
 	assert.NotContains(t, out, "context:")
+}
+
+func TestFormatEnvelopeSummary_FindingLineCarriesItsID(t *testing.T) {
+	got := formatEnvelopeSummary(Envelope{
+		Verdict: string(verdict.VerdictWarn),
+		Findings: []verdict.Finding{{
+			ID: "f_0123abcd-2", Severity: verdict.SeverityMajor, Category: verdict.CategoryScopeDrift,
+			Criterion: "AC 1", Evidence: "e",
+		}},
+		NextAction: "n",
+	})
+	assert.Contains(t, got, "    - f_0123abcd-2 [major][scope_drift] AC 1 — e\n")
+}
+
+func TestFormatPlanSummary_FindingLinesCarryIDs(t *testing.T) {
+	got := formatPlanSummary(verdict.PlanResult{
+		PlanVerdict: verdict.VerdictWarn,
+		PlanQuality: verdict.PlanQualityActionable,
+		PlanFindings: []verdict.Finding{{
+			ID: "f_0123abcd", Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality, Criterion: "p", Evidence: "e",
+		}},
+		Tasks: []verdict.PlanTaskResult{{
+			TaskIndex: 1, TaskTitle: "Task 1: one", Verdict: verdict.VerdictPass,
+			Findings: []verdict.Finding{{
+				ID: "f_89abcdef", Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality, Criterion: "t", Evidence: "e",
+			}},
+		}},
+		NextAction: "n",
+	}, planSummaryMeta{})
+	assert.Contains(t, got, "    - f_0123abcd [minor][quality] p — e\n")
+	assert.Contains(t, got, "      - f_89abcdef [minor] t — e\n")
+}
+
+func TestFormatEnvelopeSummary_EscalateAndWaivedLines(t *testing.T) {
+	got := formatEnvelopeSummary(Envelope{
+		Tool: "validate_completion", SessionID: "s", Verdict: string(verdict.VerdictPass), Escalate: true,
+		WaivedFindings: []verdict.WaivedFinding{{
+			ID: "f_0123abcd", Severity: verdict.SeverityMajor, Category: verdict.CategoryScopeDrift,
+			Criterion: "AC 1", Evidence: "handler registers no route", Ruling: "Task 7 owns the dispatcher wiring",
+		}},
+		NextAction: "n",
+	})
+	assert.Contains(t, got, "  escalate:      true\n")
+	assert.Contains(t, got, "  waived: f_0123abcd major/scope_drift ruling: \"Task 7 owns the dispatcher wiring\"\n")
+	assert.Contains(t, got, "    evidence: handler registers no route\n")
+}
+
+func TestFormatEnvelopeSummary_TruncatesAWaivedRuling(t *testing.T) {
+	got := formatEnvelopeSummary(Envelope{
+		Verdict: string(verdict.VerdictPass),
+		WaivedFindings: []verdict.WaivedFinding{{
+			ID: "f_0123abcd", Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
+			Evidence: "e", Ruling: strings.Repeat("r", 300),
+		}},
+		NextAction: "n",
+	})
+	assert.Contains(t, got, strings.Repeat("r", waivedRulingSummaryMax)+"…\"")
+	assert.NotContains(t, got, strings.Repeat("r", waivedRulingSummaryMax+1))
+}
+
+func TestFormatEnvelopeSummary_NoEscalateOrWaivedLinesByDefault(t *testing.T) {
+	got := formatEnvelopeSummary(Envelope{Verdict: string(verdict.VerdictPass), NextAction: "n"})
+	assert.NotContains(t, got, "escalate:")
+	assert.NotContains(t, got, "waived:")
+}
+
+func TestFormatPlanSummary_WaivedLinesAtPlanLevelAndUnderTheirTask(t *testing.T) {
+	got := formatPlanSummary(verdict.PlanResult{
+		PlanVerdict: verdict.VerdictPass,
+		PlanQuality: verdict.PlanQualityActionable,
+		WaivedFindings: []verdict.WaivedFinding{{
+			ID: "f_0123abcd", Severity: verdict.SeverityMajor, Category: verdict.CategoryAmbiguousSpec,
+			Evidence: "plan evidence", Ruling: "plan ruling",
+		}},
+		Tasks: []verdict.PlanTaskResult{{
+			TaskIndex: 1, TaskTitle: "Task 1: one", Verdict: verdict.VerdictPass,
+			WaivedFindings: []verdict.WaivedFinding{{
+				ID: "f_89abcdef", Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
+				Evidence: "task evidence", Ruling: "task ruling",
+			}},
+		}},
+		NextAction: "n",
+	}, planSummaryMeta{})
+	assert.Contains(t, got, "    waived: f_0123abcd major/ambiguous_spec ruling: \"plan ruling\"\n")
+	assert.Contains(t, got, "      evidence: plan evidence\n")
+	taskLine := strings.Index(got, "    Task 1: Task 1: one")
+	taskWaiver := strings.Index(got, "      waived: f_89abcdef minor/quality ruling: \"task ruling\"\n")
+	require.NotEqual(t, -1, taskLine, got)
+	require.NotEqual(t, -1, taskWaiver, got)
+	assert.Greater(t, taskWaiver, taskLine, "a task's waivers render under that task")
 }

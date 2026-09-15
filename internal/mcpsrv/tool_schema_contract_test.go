@@ -17,6 +17,7 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
+	"github.com/patiently/anti-tangent-mcp/internal/session"
 )
 
 // toolInputSchemas lists every tool through a real in-memory MCP client and
@@ -170,7 +171,10 @@ func TestToolInputSchemas_RequiredSetsUnchanged(t *testing.T) {
 		"prime_project_knowledge.kb_index[]":                             {"permalink", "summary", "title", "type"},
 		"validate_completion":                                            {"session_id", "summary"},
 		"validate_completion.codescene.verdicts":                         {"degraded", "improved", "stable"},
+		"validate_completion.controller_rulings[]":                       {"finding_id", "ruling"},
 		"validate_completion.final_files[]":                              {"path"},
+		"validate_completion.finding_responses[]":                        {"finding_id", "response"},
+		"validate_plan.controller_rulings[]":                             {"finding_id", "ruling"},
 		"validate_task_spec":                                             {"goal", "task_title"},
 		"validate_task_spec.harness_shape_attestation[]":                 {"assertions", "harness", "path"},
 	}
@@ -211,6 +215,13 @@ func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 		"validate_plan.plan_path":                                   append([]string{"ANTI_TANGENT_PLAN_ROOTS"}, planPayload...),
 		"validate_plan.project_knowledge":                           planPayload,
 		"validate_completion.codescene":                             {"analyze_change_set", "pre_commit_code_health_safeguard"},
+		"validate_completion.finding_responses":                     {n(maxFindingResponseEntries), n(maxFindingResponseChars)},
+		"validate_completion.finding_responses[].response":          {n(maxFindingResponseChars)},
+		"validate_completion.controller_rulings":                    {n(maxControllerRulingEntries), n(maxControllerRulingChars), n(session.MaxRulings)},
+		"validate_completion.controller_rulings[].ruling":           {n(maxControllerRulingChars)},
+		"validate_plan.controller_rulings":                          {n(maxControllerRulingEntries), n(maxControllerRulingChars)},
+		"validate_plan.controller_rulings[].ruling":                 {n(maxControllerRulingChars)},
+		"validate_plan.controller_verified_references":              bounded,
 	}
 	for path, wants := range cases {
 		desc, ok := descs[path]

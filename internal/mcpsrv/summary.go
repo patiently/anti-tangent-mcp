@@ -15,13 +15,18 @@ import (
 // characters mid-codepoint.
 const summaryEvidenceMax = 120
 
+// waivedRulingSummaryMax caps a ruling's text on its ruling: and waived:
+// lines, in runes.
+const waivedRulingSummaryMax = 200
+
 // formatEnvelopeSummary renders a deterministic, paste-ready text block for a
 // per-task Envelope (validate_task_spec / check_progress / validate_completion).
 // It includes the originating tool name (when set), the session id, verdict,
-// partial flag (when set), model + review timing, optional session TTL line,
-// findings counts plus per-finding lines, and the next_action. Output is
-// plain text and intentionally stable so downstream tooling can
-// substring-assert against it.
+// partial flag (when set), escalate flag (when set), model + review timing,
+// optional session TTL line, findings counts plus per-finding lines, one
+// ruling: line per controller ruling applied, one waived: line per waived
+// finding, and the next_action. Output is plain text and intentionally stable
+// so downstream tooling can substring-assert against it.
 //
 // The `tool:` line exists so a consumer that sees only this pasted text (not
 // which MCP tool produced it) can still tell the three per-task tools apart —
@@ -42,12 +47,17 @@ func formatEnvelopeSummary(env Envelope) string {
 	if env.SubmissionDefectOnly {
 		b.WriteString("  submission_defect_only: true — re-submit with the missing evidence; no code rework implied\n")
 	}
+	if env.Escalate {
+		b.WriteString("  escalate:      true\n")
+	}
 	fmt.Fprintf(&b, "  model_used:    %s\n", escapeBlockValue(env.ModelUsed))
 	fmt.Fprintf(&b, "  review_ms:     %d\n", env.ReviewMS)
 	if env.SessionTTLRemainingSeconds != nil {
 		fmt.Fprintf(&b, "  session_ttl_remaining_seconds: %d\n", *env.SessionTTLRemainingSeconds)
 	}
 	writeFindingsSummary(&b, env.Findings, "  ")
+	writeRulingsSummary(&b, env.ControllerRulings, "  ")
+	writeWaivedSummary(&b, env.WaivedFindings, "  ")
 	// next_action is reviewer-authored free text (schema: minLength 1, no
 	// other constraint — see internal/verdict/schema.json) rendered LAST in
 	// this block, after every finding. Escaping it matters for the same
@@ -139,18 +149,20 @@ func formatPlanSummary(pr verdict.PlanResult, meta planSummaryMeta) string {
 	crit, maj, min := countSeverities(pr.PlanFindings)
 	fmt.Fprintf(&b, "  plan_findings: %d (%d/%d/%d)\n", len(pr.PlanFindings), crit, maj, min)
 	for _, f := range pr.PlanFindings {
-		fmt.Fprintf(&b, "    - [%s][%s] %s — %s\n", f.Severity, f.Category,
+		fmt.Fprintf(&b, "    - %s[%s][%s] %s — %s\n", findingIDPrefix(f.ID, "      "), f.Severity, f.Category,
 			escapeContinuationLines(f.Criterion, "      "), formatFindingEvidence(f.Evidence, "      "))
 	}
+	writeWaivedSummary(&b, pr.WaivedFindings, "    ")
 	fmt.Fprintf(&b, "  tasks: %d\n", len(pr.Tasks))
 	for _, t := range pr.Tasks {
 		tCrit, tMaj, tMin := countSeverities(t.Findings)
 		fmt.Fprintf(&b, "    Task %d: %s  [%s]  findings: %d (%d/%d/%d)\n",
 			t.TaskIndex, escapeContinuationLines(t.TaskTitle, "      "), t.Verdict, len(t.Findings), tCrit, tMaj, tMin)
 		for _, f := range t.Findings {
-			fmt.Fprintf(&b, "      - [%s] %s — %s\n", f.Severity,
+			fmt.Fprintf(&b, "      - %s[%s] %s — %s\n", findingIDPrefix(f.ID, "        "), f.Severity,
 				escapeContinuationLines(f.Criterion, "        "), formatFindingEvidence(f.Evidence, "        "))
 		}
+		writeWaivedSummary(&b, t.WaivedFindings, "      ")
 	}
 	fmt.Fprintf(&b, "  next_action:   %s\n", escapeBlockValue(pr.NextAction))
 	return b.String()
@@ -211,6 +223,45 @@ func formatExtractSummary(r verdict.ExtractResult, modelUsed string, reviewMS in
 	return b.String()
 }
 
+// findingIDPrefix renders a finding's ID ahead of its bullet text, or nothing
+// for a finding without one: prime_project_knowledge and
+// extract_project_knowledge findings carry none, and their blocks stay as
+// they were.
+func findingIDPrefix(id, contIndent string) string {
+	if id == "" {
+		return ""
+	}
+	return escapeContinuationLines(id, contIndent) + " "
+}
+
+// writeRulingsSummary writes a ruling: line for each controller ruling a
+// review applied. A ruling the reviewer obeyed waives nothing and so has no
+// waived: line; this line is what lets the controller check every ruling in
+// force against the rulings it issued. The text is truncated and escaped as
+// on a waived: line.
+func writeRulingsSummary(b *strings.Builder, rulings []AppliedRuling, indent string) {
+	cont := indent + "    "
+	for _, r := range rulings {
+		fmt.Fprintf(b, "%sruling: %s \"%s\"\n", indent,
+			escapeContinuationLines(r.FindingID, cont),
+			escapeContinuationLines(truncate(r.Ruling, waivedRulingSummaryMax), cont))
+	}
+}
+
+// writeWaivedSummary writes, for each waived finding, a waived: line naming
+// the ruling that waived it and an evidence: line under it. The implementer
+// pastes the block into its DONE report, so the controller can check each
+// waiver against a ruling it issued and see what the ruling covered.
+func writeWaivedSummary(b *strings.Builder, waived []verdict.WaivedFinding, indent string) {
+	cont := indent + "    "
+	for _, w := range waived {
+		fmt.Fprintf(b, "%swaived: %s %s/%s ruling: \"%s\"\n", indent,
+			escapeContinuationLines(w.ID, cont), w.Severity, w.Category,
+			escapeContinuationLines(truncate(w.Ruling, waivedRulingSummaryMax), cont))
+		fmt.Fprintf(b, "%s  evidence: %s\n", indent, formatFindingEvidence(w.Evidence, cont))
+	}
+}
+
 // writeFindingsSummary writes the `findings: N total (C critical, M major, m minor)`
 // summary line and one bullet per finding to b, prefixed with the supplied
 // indent. Shared by formatEnvelopeSummary so the layout stays identical.
@@ -224,7 +275,7 @@ func writeFindingsSummary(b *strings.Builder, findings []verdict.Finding, indent
 		// embedded newline in it used to land at true column 0 — a cleaner
 		// forgery vector than Evidence's (whitespace-only, pre-fix) indent.
 		criterion := escapeContinuationLines(f.Criterion, indent+"    ")
-		fmt.Fprintf(b, "%s  - [%s][%s] %s — %s\n", indent, f.Severity, f.Category, criterion, formatFindingEvidence(f.Evidence, indent+"    "))
+		fmt.Fprintf(b, "%s  - %s[%s][%s] %s — %s\n", indent, findingIDPrefix(f.ID, indent+"    "), f.Severity, f.Category, criterion, formatFindingEvidence(f.Evidence, indent+"    "))
 	}
 }
 

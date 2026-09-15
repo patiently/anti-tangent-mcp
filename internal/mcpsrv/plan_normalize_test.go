@@ -12,7 +12,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
-func TestNormalizePlanUnverifiableFindings_LeavesContradictionsAttached(t *testing.T) {
+func TestStripTaskUnverifiableFindings_LeavesContradictionsAttached(t *testing.T) {
 	pr := verdict.PlanResult{Tasks: []verdict.PlanTaskResult{{
 		TaskIndex: 1,
 		Findings: []verdict.Finding{
@@ -22,7 +22,7 @@ func TestNormalizePlanUnverifiableFindings_LeavesContradictionsAttached(t *testi
 				Criterion: "c2", Evidence: "contradiction-evidence", Suggestion: "s"},
 		},
 	}}}
-	normalizePlanUnverifiableFindings(&pr)
+	appendCodebaseReferenceChecklist(&pr, stripTaskUnverifiableFindings(&pr))
 
 	require.Len(t, pr.Tasks[0].Findings, 1)
 	assert.Equal(t, verdict.CategoryContradictedCodebaseClaim, pr.Tasks[0].Findings[0].Category,
@@ -45,7 +45,7 @@ func TestCalibratePlanVerdict_DoesNotForcePassWithAContradiction(t *testing.T) {
 				Criterion: "c2", Evidence: "e", Suggestion: "s"},
 		},
 	}
-	calibratePlanVerdictForUnverifiableOnly(&pr)
+	calibratePlanVerdictForUnverifiableOnly(&pr, false)
 	assert.Equal(t, verdict.VerdictWarn, pr.PlanVerdict, "must not be force-passed")
 }
 
@@ -59,6 +59,20 @@ func TestCalibratePlanVerdict_StillForcePassesUnverifiableOnly(t *testing.T) {
 				Criterion: "c1", Evidence: "e", Suggestion: "s"},
 		},
 	}
-	calibratePlanVerdictForUnverifiableOnly(&pr)
+	calibratePlanVerdictForUnverifiableOnly(&pr, false)
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+}
+
+// A plan whose task-level unverifiable claims were stripped for the checklist
+// has no findings left when the calibration runs; the stripped checklist still
+// counts as the one unverifiable finding.
+func TestCalibratePlanVerdict_CountsAStrippedChecklist(t *testing.T) {
+	pr := verdict.PlanResult{PlanVerdict: verdict.VerdictWarn, PlanQuality: verdict.PlanQualityRough}
+	calibratePlanVerdictForUnverifiableOnly(&pr, true)
+	assert.Equal(t, verdict.PlanQualityActionable, pr.PlanQuality)
+	assert.Contains(t, pr.NextAction, "No blocking plan-quality findings")
+
+	empty := verdict.PlanResult{PlanVerdict: verdict.VerdictWarn, NextAction: "reviewer text"}
+	calibratePlanVerdictForUnverifiableOnly(&empty, false)
+	assert.Equal(t, "reviewer text", empty.NextAction, "nothing to calibrate without a stripped or remaining claim")
 }

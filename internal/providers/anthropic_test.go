@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
 func TestAnthropic_Review_OK(t *testing.T) {
@@ -155,6 +157,67 @@ func TestAnthropic_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
 	assert.Contains(t, err.Error(), "anthropic: request timeout 1ms exceeded")
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_REQUEST_TIMEOUT")
 	assert.True(t, errors.Is(err, context.DeadlineExceeded))
+}
+
+// TestAnthropic_Review_PerTaskSchemaNullableSameAs sends the real per-task
+// reviewer schema (verdict.Schema()) and checks two things end to end: the
+// request the fake server received embeds same_as as a nullable string in
+// its input_schema, and a canned tool_use response carrying same_as "f_…"
+// on one finding and null on another survives verdict.Parse with those exact
+// values. This is the unit-level counterpart to the live call in
+// schema_e2e_test.go's TestPerTaskSchema_E2E_NullableSameAs.
+func TestAnthropic_Review_PerTaskSchemaNullableSameAs(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_x",
+			"model": "claude-sonnet-4-6",
+			"content": [{
+				"type": "tool_use",
+				"id": "tu_1",
+				"name": "submit_review",
+				"input": {
+					"verdict": "warn",
+					"findings": [
+						{"severity":"minor","category":"quality","criterion":"first","evidence":"e","suggestion":"s","same_as":"f_0123abcd"},
+						{"severity":"minor","category":"quality","criterion":"second","evidence":"e","suggestion":"s","same_as":null}
+					],
+					"next_action": "none"
+				}
+			}],
+			"usage": {"input_tokens": 10, "output_tokens": 7}
+		}`))
+	}))
+	defer srv.Close()
+
+	rv := NewAnthropic("test-key", srv.URL, 5*time.Second)
+	resp, err := rv.Review(context.Background(), Request{
+		Model:      "claude-sonnet-4-6",
+		System:     "sys",
+		User:       "usr",
+		MaxTokens:  1024,
+		JSONSchema: verdict.Schema(),
+	})
+	require.NoError(t, err)
+
+	tools, ok := gotBody["tools"].([]any)
+	require.True(t, ok, "tools should be an array")
+	require.NotEmpty(t, tools)
+	inputSchema, ok := tools[0].(map[string]any)["input_schema"].(map[string]any)
+	require.True(t, ok, "tools[0].input_schema should be an object")
+	assert.Equal(t, []any{"string", "null"}, sameAsFindingType(t, inputSchema))
+
+	result, err := verdict.Parse(resp.RawJSON)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 2)
+	require.NotNil(t, result.Findings[0].SameAs)
+	assert.Equal(t, "f_0123abcd", *result.Findings[0].SameAs)
+	assert.Nil(t, result.Findings[1].SameAs)
 }
 
 func TestAnthropicCachePrefix(t *testing.T) {

@@ -2139,7 +2139,7 @@ func TestValidatePlan_ContradictionWithoutAttachmentsIsDemoted(t *testing.T) {
 	assert.Equal(t, "s", planLevel.Suggestion, "the reviewer's suggestion must survive demotion")
 
 	// The per-task twin is rolled up into the plan-level
-	// codebase_reference_checklist (normalizePlanUnverifiableFindings), which
+	// codebase_reference_checklist (stripTaskUnverifiableFindings), which
 	// supplies its own criterion and suggestion — but the reviewer's evidence
 	// text must still reach the human there, verbatim, under its task number.
 	require.Equal(t, "codebase_reference_checklist", checklist.Criterion,

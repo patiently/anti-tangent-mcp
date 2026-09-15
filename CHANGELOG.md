@@ -25,6 +25,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a required field's description was the literal word `required` and every other field had none.
   A contract test over `tools/list` fails when a property is undescribed or a stated limit
   disagrees with the constant that enforces it.
+- Every finding from `validate_task_spec`, `check_progress`, `validate_completion` and
+  `validate_plan` carries an `id`: `f_` and eight hex digits of a hash of its category, task and
+  criterion, with a `-2`, `-3` suffix when an earlier finding in the same response shares it. A
+  `validate_plan` task finding's `id` comes from the plan's own task heading, without its
+  `Task N:` number, so renumbering a plan or a reviewer restating a task's title keeps it. The
+  summary block shows the `id` on every finding line.
+- `validate_completion` takes `finding_responses`: an implementer answers a finding from its last
+  complete review by `id`, and the reviewer sees each prior finding with its answer. When the
+  reviewer raises a critical or major finding again after it was answered, the response sets
+  `escalate: true`, the summary block says so, and `next_action` says to stop resubmitting and
+  ask the controller for a ruling.
+- `validate_completion` takes `controller_rulings`. A ruling covers every later finding with its
+  `id`, ignoring the `-n` suffix, for the rest of the session: matching findings move to
+  `waived_findings`, stop counting toward the verdict, and appear in the summary block as a
+  `waived:` line with their evidence. Server findings such as `codescene_not_run` are never
+  waived. Every ruling the review applied, including one the reviewer obeyed and that therefore
+  waived nothing, is listed in the response's `controller_rulings` and as a `ruling:` line in the
+  summary block, so the controller sees each ruling in force at DONE.
+- `plan_run_report` shows, for each task, how many findings controller rulings waived on its last
+  `validate_completion` and whether any of its calls escalated, with totals for the run. The plan
+  ledger records both.
+- `validate_plan` takes `controller_rulings`, resent every round and matched like
+  `validate_completion`'s, and `controller_verified_references`, applied before the codebase
+  reference checklist is built. Waived findings appear in `waived_findings`, at plan level and per
+  task. A ruling whose id is not shaped like a finding id draws an advisory.
 
 ### Changed
 
@@ -39,6 +64,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
 - `plan_run_report`'s unknown-run evidence leads with the usual cause, a `validate_task_spec`
   call that never passed `plan_run_id`, before idle expiry and a restarted server.
+- The per-task reviewer schema shared by `validate_task_spec`, `check_progress` and
+  `validate_completion` requires a nullable `same_as` on every finding: the reviewer names the
+  earlier finding it raises again, or `null`. Every provider must accept the nullable type. The
+  server reads `same_as` on `validate_completion` and never echoes it; a finding there gains
+  `repeat_of`, the `id` of an answered prior finding it raises again.
+- `check_progress` lists each earlier finding once, from the most recent call that raised it,
+  with its `id`, shows the session's controller rulings, and leaves out findings a ruling covers.
+- `validate_plan`'s rolled-up codebase reference checklist is added after the verdict is decided,
+  so it no longer counts toward the three-minor rule that lifts a plan to `warn`. A plan that the
+  checklist alone had lifted to `warn` can now pass.
+- The protocol describes answering a finding with `finding_responses`, stopping on `escalate`,
+  and ruling on an escalation (`controller.md` §5.9), including checking every `ruling:` and
+  `waived:` line at DONE, and judges `validate_plan` convergence by
+  major findings' IDs. `implementer.md` §4.3 no longer tells implementers to dispute a finding
+  through a `working_on` field `validate_completion` does not have.
 
 ### Fixed
 
@@ -50,6 +90,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An unexpected key in `validate_completion`'s optional `codescene` argument, or in its
   `verdicts`, no longer fails schema validation and loses the whole call. Unknown keys are
   ignored.
+- A `validate_completion` review truncated at the reviewer's output budget skipped every
+  server-side step after the review: the `ANTI_TANGENT_CODESCENE=required` check, the
+  test-evidence check, `submission_defect_only` and the plan-run row update. A truncated review
+  now runs the same steps as a complete one. It still records no `check_progress` checkpoint and
+  creates no `validate_task_spec` session.
 
 ## [0.21.0] - 2026-09-11
 

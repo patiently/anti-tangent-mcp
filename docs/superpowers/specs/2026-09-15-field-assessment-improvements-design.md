@@ -138,62 +138,145 @@ running server.
 Every finding in a `validate_task_spec`, `check_progress`, `validate_completion` or
 `validate_plan` result carries a server-assigned `id`, server-generated findings included.
 
-- `id = "f_" + hex(sha256(category + "\x1f" + task_key + "\x1f" + criterion_key))[0:8]`.
+- The **fingerprint** is `"f_" + hex(sha256(category + "\x1f" + task_key + "\x1f" + criterion_key))[0:8]`.
 - `criterion_key` is the criterion lowercased, with runs of whitespace collapsed to one space,
   trimmed, and trailing `.`, `:`, `;` and `,` removed.
 - `task_key` is empty for session tools. For a `validate_plan` task finding it is the task title
-  with a leading `Task <n>:` removed, normalized the same way. Plans get renumbered between
-  rounds — the assessed plan went from 17 to 18 tasks — and a numbered key would change the ID of
-  every task after the insertion.
-- A second finding with the same ID in one response gets `-2`, a third `-3`, in emitted order.
-- IDs appear in envelope findings and on every finding line of the summary block.
+  passed through `normalizeTaskTitle`, which removes a leading `Task <n>:`, then normalized like
+  `criterion_key`. Plans get renumbered between rounds — the assessed plan went from 17 to 18
+  tasks — and a numbered key would change the ID of every task after the insertion. The title is
+  the plan's own heading for the task the result reports on, not the reviewer's `task_title`,
+  which can drift between rounds. Two tasks whose titles normalize to the same key share
+  fingerprints, so one ruling covers findings on both.
+- The **display ID** is the fingerprint, with `-2`, `-3` appended to later findings that share
+  it, in emitted order: findings first, then waived entries. Display IDs are assigned once per
+  response by one helper, over its final list, server findings and advisories included. Session
+  tools call it in the handler, after the last finding is added and before the session is written
+  (§2.6), so on a session tool the IDs a caller sees are exactly the IDs the server stores.
+  `validate_plan` calls it from `finish` (fresh, recovery and cache-hit paths) and from
+  `finalizePlanResult`, which builds the four early exits (plan too large, context too large,
+  payload too large, no task headings). `validate_plan` stores no IDs; a cache hit derives the
+  same ones again. `envelopeResult` and the plan summary formatter only render.
+- A response without a `session_id` — a truncated `validate_task_spec`, which creates no session,
+  or a `validate_completion` call without one — still carries IDs, but they belong to no issued
+  set, so a later ruling naming one is unknown (§2.5).
+- IDs appear in envelope findings and on every finding line of the summary block. `id` and
+  `repeat_of` are `omitempty` on `verdict.Finding`, so `prime_project_knowledge` and
+  `extract_project_knowledge` results do not change.
+
+A fingerprint is deliberately coarse. On `validate_completion` the criterion is the verbatim AC
+text, so one fingerprint means "this category on this AC", and several findings routinely share
+one: every comment-hygiene finding uses `criterion: comment_hygiene`, and `pre.tmpl` files every
+structural finding under `criterion: spec`. Only the suffix tells them apart, and the suffix
+depends on order, so it is stable only inside one stored response. §2.3 therefore matches display
+IDs, because it refers to a stored response; §2.4 and §2.5 match fingerprints, because they
+refer across rounds.
 
 The per-task reviewer schema (`internal/verdict/schema.json`) gains `same_as`: a required,
-nullable string. Required because OpenAI strict mode demands every property be listed; nullable so
-a finding with no predecessor is `null`. The plan schemas are unchanged. A `same_as` that names no
-known ID is treated as `null`.
+nullable string (`["string", "null"]`). Required because OpenAI strict mode demands every
+property be listed; nullable so a finding with no predecessor is `null`. In Go it is
+`SameAs *string` with `json:"same_as,omitempty"` on `verdict.Finding`, which the full parser and
+the truncation-tolerant parser both decode. The plan schemas do not list it, so no provider emits
+it on a plan finding. The per-task schema is shared by all three session tools; the server reads
+`same_as` only on `validate_completion` and ignores it on `validate_task_spec` and
+`check_progress`. A `same_as` that names no finding rendered in the prompt — a prior finding
+(§2.2) or a major pre-task finding — is treated as `null`. The server reads `same_as` for the
+waiver match (§2.6 step 4) and the repeat match (step 5), then clears it, so the response never
+echoes it. `repeat_of` is not a copy of it: it is set only for a prior finding answered in this
+call (§2.4).
+
+`verdict.Finding` is also part of `extract_project_knowledge`'s input schema
+(`completion_envelopes[].findings[]`), so `id`, `repeat_of` and `same_as` each carry a
+`jsonschema` description, or Part 1's contract test fails.
 
 ### 2.2 `validate_completion` memory
 
 The session stores:
 
-- the findings of the most recent `validate_completion` call that reached the reviewer, after the
-  ruling filter (§2.6) and with IDs — reviewer-parsed findings only, since server findings are not
-  judgement calls to answer. A call that never reaches the reviewer (an argument error,
-  `payload_too_large`, `malformed_evidence`) does not replace them; and
-- the set of every finding ID issued in the session, by any of its tools.
+- the **prior findings**: the reviewer-parsed findings of the most recent `validate_completion`
+  call whose review completed, after the ruling filter (§2.6) and with their display IDs. Server
+  findings are not stored; they are not judgement calls to answer;
+- the **issued-ID set**: every display ID issued in the session, by any of its tools;
+- the **rulings** (§2.5), keyed by fingerprint; and
+- an **escalated** flag, set when any call on the session escalates and never cleared.
 
-"The previous call" below means that stored call.
+"The previous call" below means the call whose findings are the prior findings.
 
-There is no cap on calls. The stored findings are replaced, not accumulated. The ID set holds
-deterministic fingerprints, so a repeat adds nothing, and only a genuinely new finding adds an
-entry. Growth is therefore bounded by the number of distinct findings a reviewer produces, each
-behind a paid call — not by the session TTL, which slides on every access and so never expires an
-active session.
+| `validate_completion` call | Prior findings | Issued IDs, rulings, escalated |
+|---|---|---|
+| review completed | replaced | written |
+| review truncated | kept | written |
+| never reached the reviewer (argument error, `payload_too_large`, `malformed_evidence`, `session_not_found`), or the provider call failed | kept | not written |
+
+A truncated review keeps the prior findings because its recovered list is incomplete: a finding
+lost to truncation would read as new next round. It still writes rulings, issued IDs and the
+escalated flag, because the reviewer saw the rulings and the recovered findings went through the
+filter. The session is written only once the review has returned, so a call that errors before
+the reviewer answers leaves nothing behind; it has to be resent anyway.
+
+A truncated review runs the same tail as a completed one. `handlePerTaskReviewErr` today builds
+and returns the whole response itself, ahead of every handler-specific step; it instead returns
+the recovered result, and each of the three session tools runs its normal tail on it. For
+`validate_completion` that tail is §2.6 steps 3–10, the plan-run row update and stats included.
+A truncated `validate_task_spec` still creates no session, and a truncated `check_progress` still
+records no checkpoint, so neither records its IDs.
+
+The session store returns the live `*Session`, which handlers read without the lock. The rulings
+map and the issued-ID set are read through accessors that return copies, and step 9 of §2.6 is
+one locked update that merges this call's rulings and IDs into the session as it is at that
+moment, not an overwrite with the copy read at step 1, so two concurrent calls on one session do
+not lose each other's writes.
+
+There is no cap on calls. The prior findings are replaced, not accumulated, and the issued-ID set
+only grows when a reviewer produces a display ID it has not produced before, each behind a paid
+call. Growth is bounded by that, not by the session TTL, which slides on every access and so
+never expires an active session.
 
 `post.tmpl` gains the "Prior findings" section the original design specified and never shipped.
-It lists the previous call's findings with their IDs, each followed by this call's response to it
+It lists the prior findings with their display IDs, each followed by this call's response to it
 when one was given. The reviewer is told, per prior finding: omit it if the evidence now satisfies
-it or the response is correct; otherwise re-raise it with `same_as` set and evidence that answers
-the response directly. "The summary on its own is not evidence" still applies — a response is an
-argument the reviewer must engage, not evidence.
+it or the response is correct; otherwise re-raise it with `same_as` set to its ID and evidence
+that answers the response directly. "The summary on its own is not evidence" still applies — a
+response is an argument the reviewer must engage, not evidence. "Major pre-task findings to
+verify" shows each finding's display ID, so `same_as` can name a pre-task finding the reviewer
+re-raises under another category, and omits a pre-task finding whose fingerprint carries a
+ruling.
+
+**`check_progress` shows rulings but does not take or apply them.** `mid.tmpl`'s "Prior
+findings" list today holds every pre-task finding plus every checkpoint's findings, so a finding
+re-raised at each checkpoint is listed once more each time. `priorFindings` changes in three
+ways: each finding shows its display ID; for each fingerprint only the findings from the most
+recent call that produced it are listed; and a finding whose fingerprint carries a ruling is left
+out. `mid.tmpl` also renders the "Controller rulings" section. `check_progress` has no
+`controller_rulings` input and runs no waiver filter: its findings block nothing, and rulings
+come from `validate_completion`. If field runs show `unaddressed_finding` recurring across one
+session's checkpoints, the stats subsystem's per-session category counts will show it, and
+accepting rulings there is an additive change.
 
 ### 2.3 `finding_responses`
 
 New optional input on `validate_completion`: `finding_responses: [{finding_id, response}]`, at
-most 50 entries of at most 2000 characters. Each `finding_id` must name a finding from the
-previous call. An unknown ID is ignored and draws one minor `other` advisory after finalization.
+most 50 entries of at most 2000 characters. Each `finding_id` must be the exact display ID of a
+prior finding; the stored list is fixed, so a suffixed ID is unambiguous here. An ID that names no
+prior finding is dropped and draws one minor `other` advisory after finalization. When one call
+answers the same ID twice, the last entry wins. The prior findings come from the last review
+that completed, so the field description tells the caller to answer IDs from the last response
+without `partial: true`.
 
 ### 2.4 Repeat and escalate
 
 After the ruling filter (§2.6):
 
-- a finding whose `id` or `same_as` matches a prior finding answered in this call's
-  `finding_responses` is marked `repeat_of: <prior id>`;
+- a finding is marked `repeat_of: <prior id>` when a prior finding answered in this call's
+  `finding_responses` shares its fingerprint, or is the finding its `same_as` names;
 - if any critical or major finding is marked `repeat_of`, the envelope sets `escalate: true`, the
   summary block gains an `escalate: true` line, and `next_action` is prefixed with server text:
   "Stop resubmitting: report f_… and your responses to your controller for a ruling, then
-  resubmit with controller_rulings."
+  resubmit with controller_rulings.", where `f_…` lists the `repeat_of` IDs of the critical and
+  major repeats — prior display IDs, which exist before this call's IDs are assigned;
+- when `escalate` is true, `submission_defect_only` and its resubmit prefix are not applied. A
+  repeated `insufficient_evidence` finding is both a submission defect and an escalation — the
+  field loop's exact shape — and "resubmit" is the instruction escalation exists to stop.
 
 Escalation fires on the first rejected answer. The reviewer has read the response and restated
 the finding; another resubmission without a code change or new evidence is the loop. A
@@ -204,93 +287,182 @@ resubmission with no responses is not a repeat — nobody disputed anything.
 New optional input: `controller_rulings: [{finding_id, ruling}]`, at most 50 entries of at most
 2000 characters.
 
-- Each `finding_id` must be in the session's issued-ID set; an unknown ID is ignored with one
-  minor `other` advisory after finalization.
-- Rulings persist on the session. A later call applies them without resending; sending an ID
-  again replaces its ruling text. There is no revocation — a new `validate_task_spec` session
-  starts clean. Persisting avoids the failure class behind the missing `plan_run_id`: a value that
-  has to be carried forward by hand, and gets dropped.
-- `post.tmpl` renders a "Controller rulings" section marked authoritative: do not re-raise a ruled
-  concern under any category. If new evidence shows a ruling does not cover a problem, the
-  reviewer raises a new finding quoting the ruling and the new evidence, with `same_as: null`.
-  That is the deliberate escape hatch for a real regression hiding behind a ruling.
+- Each `finding_id` must be in the session's issued-ID set, whichever of the session's tools
+  issued it; an unknown ID is dropped with one minor `other` advisory after finalization. When one
+  call sends two rulings on the same fingerprint, the last entry wins. A ruling and a response on
+  the same ID in one call are both accepted; the ruling waives the finding at step 4, before the
+  repeat match could use the response.
+- **A ruling covers its fingerprint.** It waives every later finding whose fingerprint, or whose
+  `same_as` finding's fingerprint, equals the ruled ID's — under any suffix, for the rest of the
+  session. A ruling on `f_3a9c01e2-2` covers every `f_3a9c01e2` finding, not only the second;
+  matching the suffixed ID instead would waive whichever finding happens to land second next
+  round.
+- Rulings persist on the session. A later call applies them without resending, and a ruling on a
+  fingerprint that already has one replaces its text. There is no revocation — a new
+  `validate_task_spec` session starts clean. A session holds at most 50 ruled fingerprints; a
+  ruling on a 51st is dropped with one minor `other` advisory. Persisting avoids the failure class
+  behind the missing `plan_run_id`: a value that has to be carried forward by hand, and gets
+  dropped.
+- `post.tmpl` renders a "Controller rulings" section marked authoritative: do not re-raise a
+  ruled concern under any category. If new evidence shows a problem a ruling does not cover, the
+  reviewer raises it and quotes the ruling in `evidence`.
+- **Coarse, final and visible.** A ruling also waives a sibling finding that shares its
+  fingerprint, and a regression raised against the same AC in the same category. That is the
+  price of a loop that always converges, and it is paid in the open: every ruling in force is
+  listed, and every waived entry carries its evidence, in the summary block (§2.7), so the
+  controller reading the DONE report sees each ruling and what it waived. There is no reviewer-side escape hatch; a schema field that let the reviewer
+  contest a ruling would hand the loop back to the reviewer.
+
+On a call without a `session_id`, `finding_responses` and `controller_rulings` are ignored, with
+one minor `other` advisory saying they need a session.
+
+Neither input counts toward `ANTI_TANGENT_MAX_PAYLOAD_BYTES`. That cap and its recovery advice
+are about evidence, and a payload rejection caused by an argument would point the caller at the
+wrong fix. The entry limits bound both inputs instead, and their field descriptions say so.
+
+Advisories about these inputs are produced only on a call that reaches the reviewer. A call
+rejected before review carries none, which is what keeps the evidence-rejection cache correct:
+`evidenceCacheKey` does not include these inputs, so a cached rejection must not depend on them.
+
+The entry objects keep the `additionalProperties: false` that schema inference gives them. A
+misnamed key already fails the required-field check, so opening the object would only tolerate
+extra keys alongside correct ones. Both inputs, and `validate_plan`'s `controller_rulings` and
+`controller_verified_references`, join Part 1's contract test: new rows in the required-set
+table, and each stated limit checked against its Go constant.
 
 ### 2.6 The filter pipeline
 
-In this order, on the findings parsed from the reviewer:
+For a `validate_completion` call whose review completed or was truncated (§2.2), in this order:
 
-1. assign IDs (§2.1);
-2. move every finding whose `id` or `same_as` matches a ruled ID into `waived_findings`, each
-   entry `{id, severity, category, criterion, ruling}`;
-3. mark repeats and set `escalate` (§2.4);
-4. append server-generated findings and finalize the verdict from what remains;
-5. append post-finalization advisories.
+1. merge this call's valid rulings with the session's, in memory;
+2. render the prompt and run the review;
+3. compute a fingerprint for every reviewer-parsed finding;
+4. move every finding whose fingerprint, or whose `same_as` finding's fingerprint, carries a
+   ruling into `waived_findings`, each entry `{id, severity, category, criterion, evidence, ruling}`;
+5. mark repeats and set `escalate` (§2.4);
+6. append server-generated findings and finalize the verdict from what remains;
+7. append post-finalization advisories, then decide `submission_defect_only` (suppressed when
+   `escalate` is set);
+8. assign display IDs (§2.1);
+9. write the session (§2.2) in one locked update;
+10. set the session-TTL fields from the updated session, update the plan-run row, record stats,
+    and render the response; `envelopeResult` only renders.
 
 Only reviewer-parsed findings can be waived. Findings the server creates — `payload_too_large`,
 `malformed_evidence`, `codescene_not_run`, `codescene_skipped`, `session_not_found`, the
-rolled-up reference checklist, and every advisory — are submission or bookkeeping signals that a
-resubmission fixes, not judgement calls, and never reach step 2.
+empty-path `insufficient_evidence`, the `test_evidence` finding, the max-tokens clamp,
+`noise_cluster`, the rolled-up reference checklist, and every advisory — are submission or
+bookkeeping signals that a resubmission fixes, not judgement calls, and never reach step 4.
 
 ### 2.7 Envelope, summary block and guard
 
 - Envelope: `findings[].id`, `findings[].repeat_of` (omitempty), `escalate` (omitempty),
-  `waived_findings` (omitempty).
-- Summary block: each finding line carries its ID; each waived finding gets a line
-  `waived: <id> <severity>/<category> ruling: "<ruling>"`, with the ruling passed through
-  `escapeBlockValue` and truncated to 200 characters.
-- The implementer pastes the block into its DONE report, so every waiver is in front of the
-  controller who supposedly issued it. `anti-tangent-guard` parses only the header's `tool:`,
-  `session_id:` and `verdict:` lines; `summary_contract_test.go` and `summary_forgery_test.go` are
-  extended to prove a ruling or response string cannot forge a header line.
+  `waived_findings` (omitempty), and `controller_rulings` (omitempty): `[{finding_id, ruling}]`,
+  the rulings the call's waiver filter used — the session's merged with this call's valid ones
+  (§2.6 step 1) — sorted by `finding_id`. Only a `validate_completion` call whose review
+  completed or was truncated sets it; a rejected call and a call without a session carry none.
+  Evidence in `waived_findings` and ruling text in `controller_rulings` are not truncated.
+- Summary block: each finding line carries its ID. Each applied ruling gets a line
+  `ruling: <finding_id> "<ruling>"`, whether or not it waived anything. Each waived finding gets
+  a line `waived: <id> <severity>/<category> ruling: "<ruling>"`, followed by an `evidence:` line
+  truncated at `summaryEvidenceMax`. Ruling text on both lines is truncated to 200 characters,
+  and every value passes through the continuation-line escaping. Both kinds of line sit below the
+  header lines, after the finding lines.
+- The implementer pastes the block into its DONE report, so every ruling in force, every waiver,
+  and what it waived, is in front of the controller who supposedly issued it. A ruling the
+  reviewer obeyed waives nothing, so without its `ruling:` line it would leave no trace.
+  `anti-tangent-guard` parses only the header's `tool:`, `session_id:` and `verdict:` lines;
+  `summary_contract_test.go` and `summary_forgery_test.go` are extended to prove a ruling,
+  response or waived-evidence string cannot forge a header line.
 
 ### 2.8 `plan_run_report`
 
-Each task row gains `waived` (count) and `escalated` (whether any call on the session escalated),
-and the report table shows both, so the end-of-plan view names the tasks that closed on rulings.
+Each task row gains `waived`, the count on the session's most recent `validate_completion`, and
+`escalated`, the session's escalated flag. The report table shows both, so the end-of-plan view
+names the tasks that closed on rulings. Both fields are `omitempty` on the ledger row, so ledger
+lines written before them still load. The row is updated on a truncated review too, since that
+review runs the normal tail (§2.2).
+
+Waived findings count only in `waived`. The row's severity counts and the stats event are built
+from the response's `findings`, which no longer holds them.
 
 ### 2.9 `validate_plan`
 
-- **IDs** per §2.1, fingerprint only. No prior findings are rendered, so there is no `same_as`.
+- **IDs** per §2.1, fingerprint and display ID only. No prior findings are rendered, so there is
+  no `same_as`.
 - **`controller_rulings`** (same shape and limits). The tool is stateless and each round mints a
   new `plan_run_id`, so rulings are resent every round; the controller writes and sends them
   itself, with no subagent in between. They are rendered as authoritative in every plan prompt,
-  chunked or not, and matched findings move to `waived_findings` on the plan result (plan-level and per task),
-  with `waived:` lines in the summary. IDs cannot be validated without a session, so a ruling that
-  matches no finding in a round draws one minor `other` advisory after finalization — the signal
-  that the reviewer reworded the finding and it needs a new ruling.
-- **`controller_verified_references`** (same shape and limits as on `validate_task_spec`). Rendered
-  in every plan prompt, chunked or not, and applied by `suppressUnverifiableCodebaseClaim` to each task's findings
-  before `normalizePlanUnverifiableFindings` rolls them up, so references the controller already
-  grepped leave the checklist.
+  chunked or not, and match by fingerprint as in §2.5. IDs cannot be checked against an issued
+  set without a session, so only their shape is checked: a `finding_id` that is not a display ID
+  (`f_` plus 8 hex digits, optionally `-<n>`) draws one minor `other` advisory after
+  finalization. A well-formed ruling that waives nothing in a round draws no advisory — a reviewer
+  that honours the rendered ruling and omits the finding is the ruling working, and flagging it
+  would add noise to every later round. A reworded finding surfaces anyway, as a major finding
+  with a new fingerprint, which is what the controller's round-over-round diff (§2.10) looks for.
+- **`controller_verified_references`** (same shape and limits as on `validate_task_spec`),
+  rendered in every plan prompt, chunked or not.
+- **Caching.** Both inputs are rendered into the prompts `planPassCacheKey` hashes, so they key the
+  cache with no further change. `planPassCacheVersion` is bumped, because a stored result now
+  carries waived findings and the checklist in its new position. `clonePlanResult` copies every
+  slice explicitly, so it gains the plan-level and per-task `waived_findings` slices; otherwise a
+  cache hit shares memory with the stored entry.
+- **Before the verdict ladder** (`applyPreLadder`, shared by the fresh and truncation-recovery
+  paths), in order: the existing `DemoteUnattachedContradictions`; then
+  `suppressUnverifiableCodebaseClaim` with the verified references, over the plan-level findings
+  and every task's findings; then fingerprints, and ruled findings moved to `waived_findings` — on
+  the result for plan-level findings and on `PlanTaskResult` for a task's. Demotion runs first
+  because it turns a `contradicted_codebase_claim` into an `unverifiable_codebase_claim`, which
+  the suppression must then see. All of this runs before the file-consistency finding and the
+  clamp are added, so only reviewer findings can be waived.
 - **The rolled-up checklist** is appended after verdict finalization, so it no longer counts
-  toward the three-minor `noise_cluster` rule that lifts a plan to `warn`. It is server-generated,
-  so it cannot be waived: its ID is constant, and a ruling on it would silently waive every later
-  round's checklist, unverified references included.
+  toward the three-minor `noise_cluster` rule that lifts a plan to `warn`. `finalizePlanVerdict`
+  becomes: strip every per-task `unverifiable_codebase_claim` finding and collect its checklist
+  line; calibrate; `FinalizePlanVerdict`; append the checklist. Calibration's condition becomes
+  "every remaining finding is a minor `unverifiable_codebase_claim`, and at least one such finding
+  existed, stripped or remaining". Its effects — `plan_quality` raised to at least `actionable`,
+  and the rewritten `next_action` — are unchanged; the `pass` it sets is overwritten by the ladder
+  either way. The fresh path mints and stores after this, so a cached entry carries the checklist,
+  and a cache hit, which runs `finish` alone, never strips twice. The checklist is
+  server-generated, so it cannot be waived: its ID is constant, and a ruling on it would silently
+  waive every later round's checklist, unverified references included.
+- **`finish`** (fresh, recovery and cache-hit paths) appends the malformed-ruling advisory,
+  assigns display IDs over the plan-level findings, then each task's findings in order, then the
+  waived entries, and renders `waived:` lines at plan level and under each task.
+  `finalizePlanResult`, which builds the four early exits, calls the same ID helper before it
+  computes the summary block; an early exit has no reviewer findings, so nothing on it is waived.
 
 ### 2.10 Protocol text
 
 The parts are capped at 16,000 bytes each and three are close: `implementer.md` has 335 bytes
-free, `core.md` 706, `controller.md` 824. The escalation `next_action` carries the procedure, so
-the docs describe the path in a sentence or two, and Part 1's `codescene` field description
-lets the digest template at `implementer.md` shrink to a pointer.
+free, `core.md` 362, `controller.md` 824. Each addition below is paid for by a removal in the same
+part.
 
 - **`implementer.md` §4.3** "Address vs. push back": resubmit once with `finding_responses`; on
   `escalate: true`, stop and report the findings, IDs and responses to the controller; resubmit
   with the ruling verbatim in `controller_rulings`; the pasted summary block then shows `waived:`
-  lines. The current text naming a `working_on` field that `validate_completion` does not have,
-  and `F#3`-style IDs the server never issued, is removed.
+  lines. It replaces the current paragraph, which names a `working_on` field that
+  `validate_completion` does not have and `F#3`-style IDs the server never issued.
 - **`implementer.md` §4.2 step 3** gains one clause: an `escalate` result is a stop-and-ask, not
-  DONE.
+  DONE. Step 3b's inline `codescene` digest example shrinks to a pointer at the field description.
 - **`controller.md` new §5.9** "Ruling on an escalation": read the finding and the response,
   decide, reply with `controller_rulings` entries (ID plus a one-line ruling), keep rulings in the
-  progress notes, and at DONE check every `waived:` line against a ruling actually issued — an
-  unrecognized one is a forged waiver.
+  progress notes, and at DONE check every `ruling:` line, and every `waived:` line with its
+  evidence, against a ruling actually issued — an unrecognized one is a forged ruling.
 - **`controller.md` §5.1 and §5.5**: pass `controller_verified_references` for grepped references
   and `controller_rulings` for decided findings; judge round-over-round convergence by diffing
-  major-finding IDs (new versus carried) instead of watching `plan_quality`.
-- **`core.md`**: the envelope reference gains `id`, `repeat_of`, `escalate`, `waived_findings`.
+  the fingerprints of major findings (new versus carried). That replaces §5.5's sentence telling
+  the controller to watch `plan_quality` for convergence; the paragraph's definition of the two
+  axes, and its ship-at guidance, stay.
+- **`core.md`**: one FAQ line naming `id`, `repeat_of`, `escalate` and `waived_findings`, pointing
+  to `implementer.md` §4.3 and `controller.md` §5.9.
 - The plugin bundle is resynced in the same commit. Existing section numbers are unchanged; §5.9
-  is new.
+  is new, and `### 5\.9` joins the tracked section list in `scripts/check-protocol-docs.sh`, which
+  otherwise does not notice a dropped or duplicated section.
+- Budgets, measured: `implementer.md`'s new §4.3 text plus the step 3 clause must fit in the 335
+  free bytes plus the removed `working_on` paragraph (406 bytes) plus what step 3b sheds;
+  `controller.md`'s §5.9, §5.1 and §5.5 changes in 824 plus the removed §5.5 convergence sentence;
+  `core.md`'s FAQ line in 362. CI's cap is strict, under 16,000 bytes.
 
 ---
 
@@ -364,7 +536,7 @@ change in this part; §3.4 decides whether it stays.
 | Result | New field | Part |
 |---|---|---|
 | every finding | `id`, `repeat_of` | 2 |
-| `validate_completion` envelope | `escalate`, `waived_findings` | 2 |
+| `validate_completion` envelope | `escalate`, `waived_findings`, `controller_rulings` | 2 |
 | `validate_plan` result | `waived_findings` (plan-level and per task) | 2 |
 | `plan_run_report` rows | `waived`, `escalated` | 2 |
 
@@ -376,13 +548,30 @@ change in this part; §3.4 decides whether it stays.
   absent without one, and never changing the verdict; ledger header round-trip and the
   header-only report; placeholder guard cases for diff context lines, `+` lines, Python stubs and
   the non-exempt patterns.
-- **Part 2:** ID stability across criterion whitespace and case, task renumbering and
-  in-response duplicates; the filter pipeline order, including an unwaivable server finding with a
-  matching ruling; repeat detection by `id` and by `same_as`; escalation only on a critical or
-  major repeat; ruling persistence and replacement; unknown-ID advisories; summary forgery tests
-  with hostile ruling and response text; `validate_plan` rulings, the unmatched-ruling advisory,
-  verified-reference suppression before rollup, and the checklist no longer lifting the verdict.
-  Prompt changes regenerate golden files, reviewed before commit.
+- **Part 2:** fingerprint stability across criterion whitespace, case and trailing punctuation,
+  and across task renumbering; display-ID suffixes in emitted order over the final list, server
+  findings included; `same_as` in the full and truncation-tolerant parsers; the filter pipeline
+  order, including an unwaivable server finding whose fingerprint carries a ruling; a ruling on a
+  suffixed ID waiving every finding with that fingerprint; repeat detection by fingerprint and by
+  `same_as`; escalation only on a critical or major repeat, and escalation suppressing
+  `submission_defect_only`; every row of the §2.2 write table, including a truncated review
+  keeping the prior findings; ruling persistence, replacement and the 50-fingerprint cap;
+  unknown-ID and no-session advisories; summary forgery tests with hostile ruling, response and
+  waived-evidence text; `controller_rulings` and a `ruling:` line for every ruling applied, a
+  ruling that waived nothing included, and none on a rejected call or a call without a session;
+  `plan_run_report` `waived` and `escalated`, with older ledger lines still loading; `validate_plan` rulings, the malformed-ruling advisory, no advisory for a ruling that
+  waives nothing, verified-reference suppression before the strip, the restated calibration
+  condition, the checklist no longer lifting the verdict, a cache hit reproducing waivers without
+  sharing slices with the stored entry, and IDs on the four early exits; a truncated
+  `validate_completion` review applying the filter, writing rulings and updating the plan-run
+  row; `check_progress` listing each fingerprint once, omitting ruled findings and rendering
+  rulings; `same_as` naming a pre-task finding, a waived prior, and an unknown ID; duplicate IDs
+  within one call's responses and rulings; the escalation `next_action` naming the `repeat_of`
+  IDs; the new summary lines sitting after the header lines the guard parses; the new inputs'
+  rows in the contract test; and concurrent `validate_completion` calls on one session under
+  `-race` keeping both calls' rulings. Prompt changes regenerate golden files, reviewed
+  before commit. One `-tags=e2e` run per provider confirms the nullable `same_as` is accepted, its
+  spend approved before it runs.
 - **Part 3:** scanner unit tests over multi-language diffs (declarations removed, renamed and
   re-declared; short names; hit caps); `repo_root` resolution outside roots, through symlinks, over
   the byte caps and for deleted files; golden files; then the replay gate.
@@ -395,10 +584,11 @@ change in this part; §3.4 decides whether it stays.
   descriptions, errors and advisories, finding IDs, and the checklist change below; nothing it
   already sends changes meaning.
 - New envelope fields are additive. Summary blocks gain IDs on finding lines and optional
-  `waived:` and `escalate:` lines; the guard reads only the header.
+  `ruling:`, `waived:`, `evidence:` and `escalate:` lines; the guard reads only the header.
 - The per-task reviewer schema gains a required, nullable `same_as`, which every provider must
   emit. Providers already receive the schema from `internal/verdict`, so no provider code changes
-  beyond what the schema invariant tests require.
+  beyond what the schema invariant tests require; the per-provider e2e run under Testing confirms
+  each one accepts the nullable type.
 - The rolled-up checklist moving after finalization can lower a plan verdict that the checklist
   alone had lifted to `warn`. That is the intended correction.
 
@@ -412,11 +602,14 @@ plan.
 subject's marker (patch when there is none) and fails when `CHANGELOG.md` has no entry for the
 result. So the mechanics are:
 
-- **One CHANGELOG entry**, `## [0.22.0]`, for the whole release. Each part
+- **One CHANGELOG entry**, `## [0.22.0] - 2026-09-15`, for the whole release. Each part
   adds its own lines to that entry.
 - **Branch.** Each part is developed on `version/0.22.0`, reused in turn (the name is free again
   once the previous part's branch is merged and deleted), so CI's changelog check runs on every
-  part.
+  part. Part 2 is the exception: it is developed on `version/0.22.0-part2`, branched from Part 1's
+  tip, and its pull request targets `version/0.22.0`, reaching `main` through that branch before
+  the release is cut. CI's changelog check matches only `version/X.Y.Z` branch names, so it runs
+  on `version/0.22.0`, not on Part 2's own pull request.
 - **Parts 1 and 2** merge with `[skip ci]` in the PR title, which becomes the squash-merge
   subject. GitHub then skips the push-triggered workflows on `main`, `release.yml` included. The
   pull request's own CI still runs on the branch before merge; `ci.yml`'s push run on `main` is
@@ -439,5 +632,8 @@ this release.
 - Code: `internal/session/session.go` (`PostFindings`), `internal/prompts/templates/post.tmpl`,
   `internal/mcpsrv/plan_normalize.go` (`normalizePlanUnverifiableFindings`),
   `internal/mcpsrv/task_spec_normalize.go` (`suppressUnverifiableCodebaseClaim`),
-  `internal/mcpsrv/review_error.go` (`finish`), `internal/planrun/ledger.go`,
+  `internal/mcpsrv/review_error.go` (`finish`, `applyPreLadder`, `handlePerTaskReviewErr`),
+  `internal/mcpsrv/handlers.go` (`ValidateCompletion`, `finalizePlanVerdict`, `envelopeResult`),
+  `internal/mcpsrv/submission_defect.go`, `internal/mcpsrv/plan_cache.go` (`planPassCacheKey`),
+  `internal/mcpsrv/summary.go`, `internal/verdict/schema.json`, `internal/planrun/ledger.go`,
   `internal/mcpsrv/completion_evidence.go`.

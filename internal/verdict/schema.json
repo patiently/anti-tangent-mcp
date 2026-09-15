@@ -13,7 +13,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["severity", "category", "criterion", "evidence", "suggestion"],
+        "required": ["severity", "category", "criterion", "evidence", "suggestion", "same_as"],
         "additionalProperties": false,
         "properties": {
           "severity": { "type": "string", "enum": ["critical", "major", "minor"] },
@@ -41,7 +41,8 @@
           },
           "criterion":  { "type": "string", "minLength": 1 },
           "evidence":   { "type": "string", "minLength": 1 },
-          "suggestion": { "type": "string", "minLength": 1 }
+          "suggestion": { "type": "string", "minLength": 1 },
+          "same_as":    { "type": ["string", "null"] }
         }
       }
     },

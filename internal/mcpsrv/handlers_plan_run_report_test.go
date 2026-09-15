@@ -148,3 +148,30 @@ func TestPlanRunReport_NoProviderCall(t *testing.T) {
 		require.Len(t, res.Tasks, 1)
 	})
 }
+
+func TestValidateCompletion_PlanRunRowCarriesWaivedAndEscalated(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	run := h.deps.PlanRuns.Create("pass", "actionable", 1)
+	rv.resp = passResp("claude-sonnet-4-6")
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC 1"}, PlanRunID: run.ID,
+	})
+	require.NoError(t, err)
+	sid := pre.SessionID
+
+	id := completeWith(t, h, rv, completionCallArgs(sid), reviewerFindingsResp(driftFinding)).Findings[0].ID
+
+	answered := completionCallArgs(sid)
+	answered.FindingResponses = []FindingResponseArg{{FindingID: id, Response: "Task 7 owns it"}}
+	require.True(t, completeWith(t, h, rv, answered, reviewerFindingsResp(driftFinding)).Escalate)
+
+	ruled := completionCallArgs(sid)
+	ruled.ControllerRulings = []ControllerRulingArg{{FindingID: id, Ruling: "Task 7 owns it"}}
+	require.Len(t, completeWith(t, h, rv, ruled, reviewerFindingsResp(driftFinding)).WaivedFindings, 1)
+
+	snap, ok := h.deps.PlanRuns.Snapshot(run.ID)
+	require.True(t, ok)
+	require.Len(t, snap.Rows, 1)
+	assert.Equal(t, 1, snap.Rows[0].Waived)
+	assert.True(t, snap.Rows[0].Escalated, "escalation stays recorded after a later call that did not escalate")
+}
