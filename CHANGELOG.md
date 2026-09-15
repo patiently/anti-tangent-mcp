@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With the plan ledger enabled, `validate_plan` records a header for each run it mints, so
   `plan_run_report` recognises a run no task was attached to — including after a restart — and
   says no `validate_task_spec` call passed its `plan_run_id`.
+- Every tool input property carries a real description in the MCP schema, including its limits:
+  entry and character caps on the bounded lists, the payload cap and its env var, the
+  `ANTI_TANGENT_PLAN_ROOTS` rule on path inputs, and the accepted `codescene` shapes. Before this,
+  a required field's description was the literal word `required` and every other field had none.
+  A contract test over `tools/list` fails when a property is undescribed or a stated limit
+  disagrees with the constant that enforces it.
 
 ### Changed
 

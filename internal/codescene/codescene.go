@@ -18,9 +18,9 @@ import (
 
 // Verdicts is the per-file verdict tally from an analyze_change_set run.
 type Verdicts struct {
-	Improved int `json:"improved"`
-	Degraded int `json:"degraded"`
-	Stable   int `json:"stable"`
+	Improved int `json:"improved" jsonschema:"Files whose Code Health improved."`
+	Degraded int `json:"degraded" jsonschema:"Files whose Code Health degraded."`
+	Stable   int `json:"stable" jsonschema:"Files whose Code Health did not change."`
 }
 
 // Digest is one analyze_change_set result reduced to counts and metadata.
@@ -32,16 +32,16 @@ type Verdicts struct {
 // with Ran=false and is distinguished from a caller-declared skip by
 // SkipReason being empty too.
 type Digest struct {
-	Ran            bool           `json:"ran,omitempty"`
-	SkipReason     string         `json:"skip_reason,omitempty"`
-	SkipEvidence   string         `json:"skip_evidence,omitempty"`
-	Tool           string         `json:"tool,omitempty"`
-	QualityGate    string         `json:"quality_gate,omitempty"` // passed|failed
-	FilesAnalyzed  int            `json:"files_analyzed,omitempty"`
-	Verdicts       *Verdicts      `json:"verdicts,omitempty"`
-	Trend          string         `json:"trend,omitempty"` // improvement|regression|neutral
-	NetPP          float64        `json:"net_pp,omitempty"`
-	CategoryCounts map[string]int `json:"category_counts,omitempty"`
+	Ran            bool           `json:"ran,omitempty" jsonschema:"True when a CodeScene analysis of the task's changes actually ran."`
+	SkipReason     string         `json:"skip_reason,omitempty" jsonschema:"Why the analysis did not run, when ran is false. The first 300 characters are kept."`
+	SkipEvidence   string         `json:"skip_evidence,omitempty" jsonschema:"The failing tool's own error text, when ran is false. Without it a skip is graded like no analysis at all. The first 2000 characters are kept."`
+	Tool           string         `json:"tool,omitempty" jsonschema:"The CodeScene tool that produced the result, normally analyze_change_set."`
+	QualityGate    string         `json:"quality_gate,omitempty" jsonschema:"passed or failed; analyze_change_set reports it as quality_gates."` // passed|failed
+	FilesAnalyzed  int            `json:"files_analyzed,omitempty" jsonschema:"Number of files analysed: the length of analyze_change_set's results."`
+	Verdicts       *Verdicts      `json:"verdicts,omitempty" jsonschema:"Per-file verdict counts."`
+	Trend          string         `json:"trend,omitempty" jsonschema:"Ignored on input; the server derives it from net_pp."` // improvement|regression|neutral
+	NetPP          float64        `json:"net_pp,omitempty" jsonschema:"Net change in problem points: the sum of new-pp minus old-pp over every finding. Positive means worse."`
+	CategoryCounts map[string]int `json:"category_counts,omitempty" jsonschema:"Number of findings per CodeScene category, such as Complex Method. The 20 largest are kept."`
 }
 
 // Trend values.

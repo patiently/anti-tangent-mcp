@@ -102,6 +102,10 @@ func ParseModelRef(s string) (ModelRef, error) {
 	return ModelRef{Provider: provider, Model: model}, nil
 }
 
+// DefaultMaxPayloadBytes is the ANTI_TANGENT_MAX_PAYLOAD_BYTES default. Tool
+// input descriptions state it, and a contract test holds them to this value.
+const DefaultMaxPayloadBytes = 204800
+
 // Load reads configuration from the given env lookup function.
 // Pass os.Getenv in production; pass a map-backed function in tests.
 func Load(env func(string) string) (Config, error) {
@@ -110,7 +114,7 @@ func Load(env func(string) string) (Config, error) {
 		OpenAIKey:              env("OPENAI_API_KEY"),
 		GoogleKey:              env("GOOGLE_API_KEY"),
 		SessionTTL:             4 * time.Hour,
-		MaxPayloadBytes:        204800,
+		MaxPayloadBytes:        DefaultMaxPayloadBytes,
 		RequestTimeout:         180 * time.Second,
 		LogLevel:               slog.LevelInfo,
 		PerTaskMaxTokens:       4096,

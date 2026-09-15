@@ -28,11 +28,11 @@ const (
 // handler boundary so the wire-level JSON contract is decoupled from the
 // internal prompt-rendering type.
 type KBIndexEntryArg struct {
-	Permalink string   `json:"permalink"`
-	Type      string   `json:"type"`
-	Title     string   `json:"title"`
-	Summary   string   `json:"summary"`
-	Tags      []string `json:"tags,omitempty"`
+	Permalink string   `json:"permalink" jsonschema:"The note's permalink."`
+	Type      string   `json:"type" jsonschema:"The note's type, such as decision, module or gotcha."`
+	Title     string   `json:"title" jsonschema:"The note's title."`
+	Summary   string   `json:"summary" jsonschema:"One or two sentences on what the note covers."`
+	Tags      []string `json:"tags,omitempty" jsonschema:"The note's tags."`
 }
 
 // PrimeProjectKnowledgeArgs is the input schema for prime_project_knowledge.
@@ -40,16 +40,16 @@ type KBIndexEntryArg struct {
 // `omitempty` so absent inputs marshal as the JSON-equivalent zero value
 // (empty slice / empty string).
 type PrimeProjectKnowledgeArgs struct {
-	TaskTitle          string            `json:"task_title"          jsonschema:"required"`
-	Goal               string            `json:"goal"                jsonschema:"required"`
-	AcceptanceCriteria []string          `json:"acceptance_criteria" jsonschema:"required"`
-	NonGoals           []string          `json:"non_goals,omitempty"`
-	Context            string            `json:"context,omitempty"`
-	KBIndex            []KBIndexEntryArg `json:"kb_index,omitempty"`
-	EpicPermalink      string            `json:"epic_permalink,omitempty"`
-	MaxPicks           int               `json:"max_picks,omitempty"`
-	ModelOverride      string            `json:"model_override,omitempty"`
-	MaxTokensOverride  int               `json:"max_tokens_override,omitempty"`
+	TaskTitle          string            `json:"task_title"          jsonschema:"The task's title, verbatim."`
+	Goal               string            `json:"goal"                jsonschema:"The task's Goal line, verbatim."`
+	AcceptanceCriteria []string          `json:"acceptance_criteria" jsonschema:"The task's acceptance criteria, one entry per bullet."`
+	NonGoals           []string          `json:"non_goals,omitempty" jsonschema:"The task's Non-goals bullets, when the task has them."`
+	Context            string            `json:"context,omitempty" jsonschema:"The task's Context section, when it has one."`
+	KBIndex            []KBIndexEntryArg `json:"kb_index,omitempty" jsonschema:"The knowledge-base notes available to pick from, one entry per note."`
+	EpicPermalink      string            `json:"epic_permalink,omitempty" jsonschema:"Permalink of the epic note in flight, when there is one; picks lean toward that epic."`
+	MaxPicks           int               `json:"max_picks,omitempty" jsonschema:"The most picks to return. 0 or a negative value uses 10; a value above 25 is capped at 25."`
+	ModelOverride      string            `json:"model_override,omitempty" jsonschema:"Model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
+	MaxTokensOverride  int               `json:"max_tokens_override,omitempty" jsonschema:"Output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
 }
 
 func primeProjectKnowledgeTool() *mcp.Tool {
