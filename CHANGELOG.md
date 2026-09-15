@@ -95,19 +95,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test-evidence check, `submission_defect_only` and the plan-run row update. A truncated review
   now runs the same steps as a complete one. It still records no `check_progress` checkpoint and
   creates no `validate_task_spec` session.
-- A chunked `validate_plan` review recovering from truncation could re-key every task finding in
-  the response to the wrong task. Alignment between a reviewer's `task_index` and the plan's own
-  task headings is now decided per result instead of for the whole response, so one result with a
-  drifted title (the truncation-recovered tail) no longer forces every other result onto a
-  chunk-local index.
-- A `finding_id` with no length cap could be echoed verbatim into an ignored-argument advisory's
-  evidence on `validate_completion`'s `finding_responses`/`controller_rulings` and on
-  `validate_plan`'s malformed-ruling advisory. An id this long is now truncated to 32 characters
-  before it is echoed back; which ids are accepted is unchanged.
-- A `validate_completion` `controller_rulings` entry naming a waived finding's id rendered on the
-  next call's prompt with an empty category and criterion, since a waived finding leaves the
-  session's known findings. It now falls back to the existing ruling on the same fingerprint,
-  which always has both, since a ruling is what waived the finding.
 
 ## [0.21.0] - 2026-09-11
 
