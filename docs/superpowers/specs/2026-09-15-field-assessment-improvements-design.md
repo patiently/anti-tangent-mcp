@@ -410,10 +410,9 @@ plan.
 subject's marker (patch when there is none) and fails when `CHANGELOG.md` has no entry for the
 result. So the mechanics are:
 
-- **One CHANGELOG entry**, `## [X.Y.0]`, for the whole release. `X.Y.0` is the next minor version
-  after the latest release on `main` when Part 1 merges. Each part adds its own lines to that
-  entry.
-- **Branch.** Each part is developed on `version/X.Y.0`, reused in turn (the name is free again
+- **One CHANGELOG entry**, `## [0.22.0]`, for the whole release. Each part
+  adds its own lines to that entry.
+- **Branch.** Each part is developed on `version/0.22.0`, reused in turn (the name is free again
   once the previous part's branch is merged and deleted), so CI's changelog check runs on every
   part.
 - **Parts 1 and 2** merge with `[skip ci]` in the PR title, which becomes the squash-merge
@@ -421,14 +420,14 @@ result. So the mechanics are:
   pull request's own CI still runs on the branch before merge; `ci.yml`'s push run on `main` is
   skipped for these two merges.
 - **Part 3** merges with `[minor]` and without `[skip ci]`. `release.yml` bumps `VERSION` to
-  `X.Y.0`, validates the entry, tags, and publishes.
+  `0.22.0`, validates the entry, tags, and publishes.
 
 **Hazard: another release in between.** While Part 1 or Part 2 sits unreleased on `main`, any other
 merge that triggers `release.yml` publishes them early, under that merge's version and without
 their release notes. Until Part 3 lands, every other merge to `main` either waits, or carries
-`[skip ci]` and adds its notes to the same `## [X.Y.0]` entry. Work that must ship first — the
-0.22.0 release currently in flight — lands and releases before Part 1 merges, and `X.Y.0` is then
-the minor after it.
+`[skip ci]` and adds its notes to the same `## [0.22.0]` entry. That includes the separate
+ponytail-plugin work that had planned to be 0.22.0 itself: it waits for Part 3, or ships inside
+this release.
 
 ## References
 
