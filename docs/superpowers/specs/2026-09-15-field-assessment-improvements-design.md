@@ -8,27 +8,28 @@ tool names, categories, env vars and model IDs are kept verbatim.
 
 ## Summary
 
-The run surfaced three kinds of cost, and they need three different fixes, so this design ships as
-three releases.
+The run surfaced three kinds of cost, and they need three different fixes, so this design is split
+into three parts. Each part merges to `main` when it is finished; all three ship together as one
+minor release.
 
 1. **Calls that never reached the reviewer.** 8 of the 34 calls failed on the caller's own
    arguments: a diff path outside `ANTI_TANGENT_PLAN_ROOTS` (twice), `payload_too_large` (twice),
    the `codescene` argument's shape (three different wrong guesses), and a 500-character reference
    cap. None of these constraints is described in the tool schema. Every field description today
    is either empty or the literal word `required`, because a `jsonschema:"required"` tag is read as
-   the description. **Release 1** makes the schema and the responses self-describing.
+   the description. **Part 1** makes the schema and the responses self-describing.
 2. **Review loops that did not converge.** One task spent 12 `validate_completion` calls — 8 of
    them reviewed, all `fail` — re-raising the same two findings about code a later task owns. The
    controller had ruled on both, and the implementer's summary cited the rulings. Every call is
    judged from scratch: prior findings are stored and never read, no input carries a ruling, and
    the protocol has no path to DONE while a wrong finding repeats. The implementer finally
    reported done without a passing call. Plan review showed the same shape: a rolled-up reference
-   checklist recurred in 6 of 8 rounds. **Release 2** gives findings stable IDs, lets an
+   checklist recurred in 6 of 8 rounds. **Part 2** gives findings stable IDs, lets an
    implementer answer a finding once, escalates a rejected answer to the controller, and lets a
    controller ruling settle the finding deterministically.
 3. **Real issues the reviewer missed.** About nine existing comments still naming symbols the diff
    deleted, a task whose Non-goals contradicted its own verification gate, and a state-set guard
-   that no longer covered two retired states. **Release 3** changes the prompts and adds a
+   that no longer covered two retired states. **Part 3** changes the prompts and adds a
    deterministic removed-symbol hint, gated on a replay that shows each change helps.
 
 ## Verification of the assessment
@@ -39,9 +40,9 @@ it was accepted. Four did not hold, and one of those changed the design.
 | Assessment claim | What verification found |
 |---|---|
 | `plan_run_report` is unusable because the 4h TTL is too short | Wrong. The TTL slides on every access, and the durable ledger was enabled. None of the run's 4 `validate_task_spec` calls passed `plan_run_id`, so no task was ever attached, and the ledger only persists attached rows. The not-found message ("Runs expire after 4h0m0s…") pointed at the wrong cause. |
-| Why `plan_run_id` was missing | The agents worked from a months-old copy of the protocol imported into the host's user-scope `CLAUDE.md`, which predates `plan_run_id` and `plan_path`. The current protocol plugin was installed but never loaded. That also explains the `codescene` shape guesses. It is an environment fault, fixed outside this repo — and it is why Release 1 moves everything a caller needs into the schema and the responses, which are always current. |
+| Why `plan_run_id` was missing | The agents worked from a months-old copy of the protocol imported into the host's user-scope `CLAUDE.md`, which predates `plan_run_id` and `plan_path`. The current protocol plugin was installed but never loaded. That also explains the `codescene` shape guesses. It is an environment fault, fixed outside this repo — and it is why Part 1 moves everything a caller needs into the schema and the responses, which are always current. |
 | Raise the 200 KB `validate_completion` payload cap | The cap is deliberate (CHANGELOG) and operator-tunable through `ANTI_TANGENT_MAX_PAYLOAD_BYTES`. The defect is the error's advice to "split into smaller chunks": each call is reviewed alone, and following that advice produced the `insufficient_evidence` loop. |
-| Pass `controller_verified_references` to `validate_plan` | That input does not exist on `validate_plan`. Release 2 adds it. |
+| Pass `controller_verified_references` to `validate_plan` | That input does not exist on `validate_plan`. Part 2 adds it. |
 | The reviewer's output budget truncated large reviews | No. None of the 16 calls that reached the reviewer in the first two tasks returned `partial`. |
 
 ## Non-goals
@@ -59,7 +60,7 @@ it was accepted. Four did not hold, and one of those changed the design.
 
 ---
 
-## Release 1 — a self-describing tool surface
+## Part 1 — a self-describing tool surface
 
 **Principle:** everything an agent needs to make a valid call is in the tool schema or in the
 response the call returns. Protocol copies go stale; the schema and the responses come from the
@@ -128,7 +129,7 @@ running server.
 
 ---
 
-## Release 2 — converging review loops
+## Part 2 — converging review loops
 
 ### 2.1 Finding identity
 
@@ -268,7 +269,7 @@ and the report table shows both, so the end-of-plan view names the tasks that cl
 
 The parts are capped at 16,000 bytes each and three are close: `implementer.md` has 335 bytes
 free, `core.md` 706, `controller.md` 824. The escalation `next_action` carries the procedure, so
-the docs describe the path in a sentence or two, and Release 1's `codescene` field description
+the docs describe the path in a sentence or two, and Part 1's `codescene` field description
 lets the digest template at `implementer.md` shrink to a pointer.
 
 - **`implementer.md` §4.3** "Address vs. push back": resubmit once with `finding_responses`; on
@@ -291,7 +292,7 @@ lets the digest template at `implementer.md` shrink to a pointer.
 
 ---
 
-## Release 3 — reviewer recall
+## Part 3 — reviewer recall
 
 ### 3.1 Stale comments naming removed symbols
 
@@ -352,13 +353,13 @@ change in the release; §3.4 decides whether it stays.
 
 ## Input and envelope changes
 
-| Tool | New input | Release |
+| Tool | New input | Part |
 |---|---|---|
 | `validate_task_spec` | `verification` | 3 |
 | `validate_completion` | `finding_responses`, `controller_rulings`, `repo_root` | 2, 2, 3 |
 | `validate_plan` | `controller_rulings`, `controller_verified_references` | 2 |
 
-| Result | New field | Release |
+| Result | New field | Part |
 |---|---|---|
 | every finding | `id`, `repeat_of` | 2 |
 | `validate_completion` envelope | `escalate`, `waived_findings` | 2 |
@@ -368,19 +369,19 @@ change in the release; §3.4 decides whether it stays.
 ## Testing
 
 - `go test -race ./...` for every change; unit tests never touch the network.
-- **Release 1:** the `tools/list` contract test; codescene decoding of the digest shape, the raw
+- **Part 1:** the `tools/list` contract test; codescene decoding of the digest shape, the raw
   `analyze_change_set` shape and unknown keys; the `plan_run_id` advisory present with a live run,
   absent without one, and never changing the verdict; ledger header round-trip and the
   header-only report; placeholder guard cases for diff context lines, `+` lines, Python stubs and
   the non-exempt patterns.
-- **Release 2:** ID stability across criterion whitespace and case, task renumbering and
+- **Part 2:** ID stability across criterion whitespace and case, task renumbering and
   in-response duplicates; the filter pipeline order, including an unwaivable server finding with a
   matching ruling; repeat detection by `id` and by `same_as`; escalation only on a critical or
   major repeat; ruling persistence and replacement; unknown-ID advisories; summary forgery tests
   with hostile ruling and response text; `validate_plan` rulings, the unmatched-ruling advisory,
   verified-reference suppression before rollup, and the checklist no longer lifting the verdict.
   Prompt changes regenerate golden files, reviewed before commit.
-- **Release 3:** scanner unit tests over multi-language diffs (declarations removed, renamed and
+- **Part 3:** scanner unit tests over multi-language diffs (declarations removed, renamed and
   re-declared; short names; hit caps); `repo_root` resolution outside roots, through symlinks, over
   the byte caps and for deleted files; golden files; then the replay gate.
 - Protocol parts stay under 16,000 bytes, `INTEGRATION.md` under 2,000, and the plugin bundle
@@ -388,7 +389,7 @@ change in the release; §3.4 decides whether it stays.
 
 ## Compatibility
 
-- Every new input is optional. A caller that sends none of them still sees Release 1's
+- Every new input is optional. A caller that sends none of them still sees Part 1's
   descriptions, errors and advisories, finding IDs, and the checklist change below; nothing it
   already sends changes meaning.
 - New envelope fields are additive. Summary blocks gain IDs on finding lines and optional
@@ -401,9 +402,33 @@ change in the release; §3.4 decides whether it stays.
 
 ## Release
 
-Three minor releases in order, each on its own `version/X.Y.Z` branch with a matching CHANGELOG
-entry. Another release is in flight at 0.22.0, so version numbers are fixed at plan time from
-what has merged by then. Each release gets its own implementation plan.
+All three parts ship as **one** minor release. Each part merges to `main` as soon as it is
+finished, and no release is cut until Part 3 is on `main`. Each part gets its own implementation
+plan.
+
+`release.yml` publishes a release on every push to `main`: it bumps `VERSION` by the merge
+subject's marker (patch when there is none) and fails when `CHANGELOG.md` has no entry for the
+result. So the mechanics are:
+
+- **One CHANGELOG entry**, `## [X.Y.0]`, for the whole release. `X.Y.0` is the next minor version
+  after the latest release on `main` when Part 1 merges. Each part adds its own lines to that
+  entry.
+- **Branch.** Each part is developed on `version/X.Y.0`, reused in turn (the name is free again
+  once the previous part's branch is merged and deleted), so CI's changelog check runs on every
+  part.
+- **Parts 1 and 2** merge with `[skip ci]` in the PR title, which becomes the squash-merge
+  subject. GitHub then skips the push-triggered workflows on `main`, `release.yml` included. The
+  pull request's own CI still runs on the branch before merge; `ci.yml`'s push run on `main` is
+  skipped for these two merges.
+- **Part 3** merges with `[minor]` and without `[skip ci]`. `release.yml` bumps `VERSION` to
+  `X.Y.0`, validates the entry, tags, and publishes.
+
+**Hazard: another release in between.** While Part 1 or Part 2 sits unreleased on `main`, any other
+merge that triggers `release.yml` publishes them early, under that merge's version and without
+their release notes. Until Part 3 lands, every other merge to `main` either waits, or carries
+`[skip ci]` and adds its notes to the same `## [X.Y.0]` entry. Work that must ship first — the
+0.22.0 release currently in flight — lands and releases before Part 1 merges, and `X.Y.0` is then
+the minor after it.
 
 ## References
 
