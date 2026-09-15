@@ -259,7 +259,7 @@ git commit -m "fix(mcpsrv): say how to recover from a roots refusal and an overs
 **Acceptance Criteria:**
 - [ ] In a `final_diff` with hunk headers, a bare `...` on an unchanged (leading space) or removed (leading `-`) line is not flagged, and on an added line (leading `+`) it is
 - [ ] A `final_diff` without hunk headers is still checked line by line
-- [ ] A bare `...` line is exempt in a `.py`/`.pyi` file, both in `final_files` and as an added line under that file's `+++` header; other truncation markers are still rejected there
+- [ ] A bare `...` line is exempt in a `.py`/`.pyi` file, both in `final_files` and as an added line under that file's `+++` header (git's `+++ b/path` form, or `diff -u`'s `+++ path` followed by a tab and a timestamp); every entry of `evidenceTruncationPatterns` is still rejected there
 - [ ] `core.md` no longer advises passing a complete `final_diff` as a workaround; the plugin copy is identical and under 16,000 bytes
 
 **Non-goals:**
@@ -295,6 +295,7 @@ func TestCheckEvidenceShape_EllipsisPlaceholderLine(t *testing.T) {
 		{name: "added stub line in a python diff", diff: pyHunk + "+    ...\n"},
 		{name: "added line in a go file after a python file", diff: pyHunk + "+    ...\n" + goHunk + "+...\n", reject: true},
 		{name: "other marker added in a python diff", diff: pyHunk + "+# (truncated)\n", reject: true},
+		{name: "added stub under a diff -u header with a timestamp", diff: "--- s.py\t2026-09-15 10:00:00\n+++ s.py\t2026-09-15 10:05:00\n@@ -1,1 +1,2 @@\n def f():\n+    ...\n"},
 		{name: "plain text evidence", diff: "header\n...\nmore", reject: true},
 		{name: "python file stub", files: []FileArg{{Path: "pkg/stub.py", Content: "def f():\n    ...\n"}}},
 		{name: "python interface stub", files: []FileArg{{Path: "pkg/stub.pyi", Content: "class C:\n    ...\n"}}},
@@ -314,10 +315,26 @@ func TestCheckEvidenceShape_EllipsisPlaceholderLine(t *testing.T) {
 }
 ```
 
+Add, directly after it, a test that pins every existing truncation marker as still rejected in Python evidence:
+
+```go
+func TestCheckEvidenceShape_PythonExemptionCoversOnlyTheEllipsis(t *testing.T) {
+	pyHunk := "diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n@@ -1,1 +1,2 @@\n def f():\n"
+	for _, marker := range evidenceTruncationPatterns {
+		t.Run("final_diff:"+marker, func(t *testing.T) {
+			assert.NotEmpty(t, checkEvidenceShape(pyHunk+"+    "+marker+"\n", nil))
+		})
+		t.Run("final_files:"+marker, func(t *testing.T) {
+			assert.NotEmpty(t, checkEvidenceShape("", []FileArg{{Path: "s.py", Content: "def f():\n    " + marker + "\n"}}))
+		})
+	}
+}
+```
+
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `go test -race ./internal/mcpsrv/ -run TestCheckEvidenceShape_EllipsisPlaceholderLine -v`
-Expected: FAIL on `unchanged line in a diff`, `added line in a diff`, `added indented line in a diff`, `added line in a go file after a python file`, `python file stub`, `python interface stub`.
+Expected: FAIL on `unchanged line in a diff`, `added line in a diff`, `added indented line in a diff`, `added line in a go file after a python file`, `python file stub`, `python interface stub`. (`TestCheckEvidenceShape_PythonExemptionCoversOnlyTheEllipsis` already passes; it guards Step 3 against widening the exemption.)
 
 - [ ] **Step 3: Implement**
 
@@ -345,7 +362,11 @@ func diffEllipsisPlaceholderOffset(finalDiff string) int {
 		body := strings.TrimRight(line, "\r\n")
 		switch {
 		case strings.HasPrefix(body, "+++ "):
-			exempt = ellipsisExemptPath(strings.TrimPrefix(strings.TrimPrefix(body, "+++ "), "b/"))
+			name := strings.TrimPrefix(body, "+++ ")
+			if tab := strings.IndexByte(name, '\t'); tab >= 0 {
+				name = name[:tab]
+			}
+			exempt = ellipsisExemptPath(strings.TrimPrefix(name, "b/"))
 		case strings.HasPrefix(body, " "), strings.HasPrefix(body, "-"):
 		case strings.HasPrefix(body, "+"):
 			if !exempt && strings.TrimSpace(body[1:]) == "..." {
@@ -439,7 +460,7 @@ git commit -m "fix(mcpsrv): flag an added ... placeholder line, not an unchanged
 ```
 
 ```json:metadata
-{"files": ["internal/mcpsrv/handlers.go", "internal/mcpsrv/handlers_test.go", "docs/protocol/core.md", "plugin/anti-tangent-protocol/protocol/core.md", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/mcpsrv/ -run 'TestCheckEvidenceShape' -v && diff -r docs/protocol plugin/anti-tangent-protocol/protocol", "acceptanceCriteria": ["unchanged and removed diff lines skipped, added lines checked", "non-diff text checked line by line", "python stubs exempt in files and diffs, other markers still rejected", "core.md advice fixed, bundle identical, under 16000 bytes"], "modelTier": "mechanical"}
+{"files": ["internal/mcpsrv/handlers.go", "internal/mcpsrv/handlers_test.go", "docs/protocol/core.md", "plugin/anti-tangent-protocol/protocol/core.md", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/mcpsrv/ -run 'TestCheckEvidenceShape' -v && diff -r docs/protocol plugin/anti-tangent-protocol/protocol", "acceptanceCriteria": ["unchanged and removed diff lines skipped, added lines checked", "non-diff text checked line by line", "python stubs exempt in files and diffs (git and diff -u headers), every evidenceTruncationPatterns entry still rejected", "core.md advice fixed, bundle identical, under 16000 bytes"], "modelTier": "mechanical"}
 ```
 
 ---
@@ -458,7 +479,7 @@ git commit -m "fix(mcpsrv): flag an added ... placeholder line, not an unchanged
 - Modify: `README.md` (CodeScene "In-band attribution" paragraph), `CHANGELOG.md`
 
 **Acceptance Criteria:**
-- [ ] A `validate_completion` call whose `codescene` object, or its `verdicts`, carries keys outside the digest shape is accepted over MCP instead of failing schema validation
+- [ ] A `validate_completion` call whose `codescene` object, or its `verdicts`, carries keys outside the digest shape is accepted over MCP instead of failing schema validation; the required keys of both objects stay as inferred (`verdicts` still requires `improved`, `degraded` and `stable`)
 - [ ] Raw `analyze_change_set` output (`quality_gates`, `results[]`) passed as `codescene` yields `ran=true`, `tool=analyze_change_set`, `quality_gate`, `files_analyzed = len(results)`, per-verdict counts, `net_pp = Σ(new-pp − old-pp)` and per-category counts
 - [ ] A digest field that is present wins over the value derived from raw keys; a raw key of the wrong type is ignored on its own, without failing the call or stopping the reduction of the other raw key
 - [ ] Under `ANTI_TANGENT_CODESCENE=required`, both shapes above draw no `codescene_not_run` or `codescene_skipped` finding
@@ -466,6 +487,7 @@ git commit -m "fix(mcpsrv): flag an added ... placeholder line, not an unchanged
 **Non-goals:**
 - Do not invoke CodeScene or change which CodeScene command analyzes a task.
 - Do not reject the optional `codescene` object solely because it contains unknown or mistyped raw side fields.
+- Do not relax which keys are required in `codescene` or `verdicts`; only unknown keys become acceptable.
 
 **Context:**
 - The MCP input schema must admit both the existing digest and raw `analyze_change_set` JSON.
@@ -755,8 +777,9 @@ import (
 // to unknown keys. Inference closes every struct with additionalProperties:
 // false, and the SDK validates arguments against the schema before the
 // handler runs, so a single unexpected key in this optional field would
-// reject the whole call. codescene.Digest's UnmarshalJSON decides what the
-// extra keys mean.
+// reject the whole call. Only additionalProperties is relaxed; which keys are
+// required stays as inferred. codescene.Digest's UnmarshalJSON decides what
+// the extra keys mean.
 func validateCompletionInputSchema() *jsonschema.Schema {
 	s, err := jsonschema.For[ValidateCompletionArgs](nil)
 	if err != nil {
@@ -767,10 +790,8 @@ func validateCompletionInputSchema() *jsonschema.Schema {
 		panic("validate_completion input schema has no codescene property")
 	}
 	cs.AdditionalProperties = nil
-	cs.Required = nil
 	if v, ok := cs.Properties["verdicts"]; ok {
 		v.AdditionalProperties = nil
-		v.Required = nil
 	}
 	return s
 }
@@ -832,7 +853,7 @@ git commit -m "feat(codescene): accept raw analyze_change_set output and unknown
 ```
 
 ```json:metadata
-{"files": ["internal/codescene/codescene.go", "internal/codescene/codescene_test.go", "internal/mcpsrv/completion_schema.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/integration_test.go", "go.mod", "go.sum", "README.md", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys' -v", "acceptanceCriteria": ["unknown keys in codescene and verdicts accepted over MCP", "raw analyze_change_set output reduced to the digest", "present digest fields win; a mistyped raw key is ignored without stopping the other's reduction", "required mode draws no codescene_not_run or codescene_skipped for either shape"], "modelTier": "standard"}
+{"files": ["internal/codescene/codescene.go", "internal/codescene/codescene_test.go", "internal/mcpsrv/completion_schema.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/integration_test.go", "go.mod", "go.sum", "README.md", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys' -v", "acceptanceCriteria": ["unknown keys in codescene and verdicts accepted over MCP, required keys unchanged", "raw analyze_change_set output reduced to the digest", "present digest fields win; a mistyped raw key is ignored without stopping the other's reduction", "required mode draws no codescene_not_run or codescene_skipped for either shape"], "modelTier": "standard"}
 ```
 
 ---
@@ -1597,8 +1618,7 @@ func requiredSets(schema map[string]any, path string, into map[string][]string) 
 // TestToolInputSchemas_RequiredSetsUnchanged pins every object's required set.
 // Descriptions live in jsonschema tags and cannot change required-ness, but a
 // json tag edited alongside one can; update this table only for an intended
-// change to a tool's contract. validate_completion.codescene.verdicts is
-// absent on purpose: its keys are optional so a partial digest is accepted.
+// change to a tool's contract.
 func TestToolInputSchemas_RequiredSetsUnchanged(t *testing.T) {
 	want := map[string][]string{
 		"bulk_read":                        {"paths", "question"},
@@ -1614,6 +1634,7 @@ func TestToolInputSchemas_RequiredSetsUnchanged(t *testing.T) {
 		"prime_project_knowledge":                                        {"acceptance_criteria", "goal", "task_title"},
 		"prime_project_knowledge.kb_index[]":                             {"permalink", "summary", "title", "type"},
 		"validate_completion":                                            {"session_id", "summary"},
+		"validate_completion.codescene.verdicts":                         {"degraded", "improved", "stable"},
 		"validate_completion.final_files[]":                              {"path"},
 		"validate_task_spec":                                             {"goal", "task_title"},
 		"validate_task_spec.harness_shape_attestation[]":                 {"assertions", "harness", "path"},
