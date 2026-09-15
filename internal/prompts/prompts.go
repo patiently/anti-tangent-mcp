@@ -174,6 +174,22 @@ func fenceFiles(files []File) string {
 	return fence(parts...)
 }
 
+// newlineRun matches one or more consecutive CR/LF characters, collapsed to a
+// single space by oneLine.
+var newlineRun = regexp.MustCompile(`[\r\n]+`)
+
+// oneLine collapses a reviewer-generated free-text field — a finding's
+// Criterion, Evidence, or Suggestion, or a ruling's Criterion — to a single
+// line. These fields are rendered raw (not behind a fence) alongside prompt
+// structure such as "Criterion: " labels and "## " headings, so a value
+// carrying its own newlines could open a fake heading or code fence and have
+// the rest of its own text read as prompt rather than as quoted reviewer
+// output. Collapsing every run of newlines to one space removes that
+// capability regardless of where in the value it appears.
+func oneLine(s string) string {
+	return strings.TrimSpace(newlineRun.ReplaceAllString(s, " "))
+}
+
 type PostInput struct {
 	Spec                           session.TaskSpec
 	Summary                        string
@@ -648,6 +664,7 @@ func RenderExtract(in ExtractInput) (Output, error) {
 var templateFuncs = template.FuncMap{
 	"fence":      fence,
 	"fenceFiles": fenceFiles,
+	"oneLine":    oneLine,
 }
 
 func render(name string, data any) (string, error) {
