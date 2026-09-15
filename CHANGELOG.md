@@ -104,6 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `validate_completion`'s review walks each branch, case or state the diff removes and checks the
   guards, sets and dispatches in the evidence that enumerate those states: a gap is a minor
   finding, and a regression the evidence shows is major.
+- `implementer.md`'s dispatch clause lists `verification` among the `validate_task_spec` fields
+  and tells implementers to pass `repo_root` to `validate_completion`.
 
 ### Fixed
 
