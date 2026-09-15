@@ -75,7 +75,7 @@ func TestRunReplayFixture_TalliesEachExpectationAcrossRuns(t *testing.T) {
 		},
 	}
 
-	report := runReplayFixture(context.Background(), cfg, providers.Registry{"anthropic": sr}, fx, 2)
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 2)
 
 	require.Equal(t, 4, sr.calls)
 	assert.Contains(t, sr.requests[1].User, "Title: T", "validate_completion runs on the session validate_task_spec opened")
@@ -99,7 +99,7 @@ func TestRunReplayFixture_SkipsTheCompletionWhenTheTaskSpecOpensNoSession(t *tes
 		ValidateCompletion: &ValidateCompletionArgs{Summary: "s", FinalDiff: replayTestDiff},
 	}
 
-	report := runReplayFixture(context.Background(), cfg, providers.Registry{"anthropic": sr}, fx, 1)
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 1)
 
 	assert.Equal(t, 0, sr.calls)
 	assert.Equal(t, []string{"task_title and goal are required"}, report.Calls[replayCallTaskSpec].Errors)
@@ -114,7 +114,7 @@ func TestRunReplayFixture_ADryRunMeasuresPromptsWithoutFindings(t *testing.T) {
 		Expectations:     []replayExpectation{{Call: replayCallTaskSpec, AnyOfKeywords: []string{"non-goal"}}},
 	}
 
-	report := runReplayFixture(context.Background(), cfg, providers.Registry{"anthropic": replayDryRunReviewer{name: "anthropic"}}, fx, 3)
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": replayDryRunReviewer{name: "anthropic"}}), fx, 3)
 
 	assert.Equal(t, 0, report.Expectations[0].Matched)
 	assert.Equal(t, map[string]int{"pass": 3}, report.Calls[replayCallTaskSpec].Verdicts)

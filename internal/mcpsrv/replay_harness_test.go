@@ -87,15 +87,25 @@ func (fx replayFixture) validate() error {
 		return fmt.Errorf("fixture %q records neither validate_task_spec nor validate_completion", fx.Name)
 	}
 	for i, e := range fx.Expectations {
-		switch {
-		case e.Call != replayCallTaskSpec && e.Call != replayCallCompletion:
-			return fmt.Errorf("expectations[%d].call must be %s or %s, got %q", i, replayCallTaskSpec, replayCallCompletion, e.Call)
-		case e.Call == replayCallTaskSpec && fx.ValidateTaskSpec == nil,
-			e.Call == replayCallCompletion && fx.ValidateCompletion == nil:
-			return fmt.Errorf("expectations[%d] names %s, which fixture %q does not record", i, e.Call, fx.Name)
-		case len(e.AnyOfKeywords) == 0:
-			return fmt.Errorf("expectations[%d] has no any_of_keywords", i)
+		if err := fx.validateExpectation(i, e); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// validateExpectation checks that expectations[i] names a call this fixture
+// records, that the call is one of the two replay supports, and that it
+// carries at least one keyword to match findings against.
+func (fx replayFixture) validateExpectation(i int, e replayExpectation) error {
+	switch {
+	case e.Call != replayCallTaskSpec && e.Call != replayCallCompletion:
+		return fmt.Errorf("expectations[%d].call must be %s or %s, got %q", i, replayCallTaskSpec, replayCallCompletion, e.Call)
+	case e.Call == replayCallTaskSpec && fx.ValidateTaskSpec == nil,
+		e.Call == replayCallCompletion && fx.ValidateCompletion == nil:
+		return fmt.Errorf("expectations[%d] names %s, which fixture %q does not record", i, e.Call, fx.Name)
+	case len(e.AnyOfKeywords) == 0:
+		return fmt.Errorf("expectations[%d] has no any_of_keywords", i)
 	}
 	return nil
 }
@@ -104,12 +114,7 @@ func (fx replayFixture) validate() error {
 // list, in their loaded order. An empty list keeps every fixture; a name no
 // fixture has is an error, so a typo cannot silently skip a paid run's target.
 func filterReplayFixtures(fixtures []replayFixture, only string) ([]replayFixture, error) {
-	want := map[string]bool{}
-	for _, name := range strings.Split(only, ",") {
-		if name = strings.TrimSpace(name); name != "" {
-			want[name] = true
-		}
-	}
+	want := parseReplayOnly(only)
 	if len(want) == 0 {
 		return fixtures, nil
 	}
@@ -121,14 +126,32 @@ func filterReplayFixtures(fixtures []replayFixture, only string) ([]replayFixtur
 		}
 	}
 	if len(want) > 0 {
-		unknown := make([]string, 0, len(want))
-		for name := range want {
-			unknown = append(unknown, name)
-		}
-		sort.Strings(unknown)
-		return nil, fmt.Errorf("ANTI_TANGENT_REPLAY_ONLY names fixtures that do not exist: %s", strings.Join(unknown, ", "))
+		return nil, unknownReplayNamesError(want)
 	}
 	return kept, nil
+}
+
+// parseReplayOnly splits only into the set of names it requests, trimming
+// space and dropping blanks. An empty or all-blank only requests every fixture.
+func parseReplayOnly(only string) map[string]bool {
+	want := map[string]bool{}
+	for _, name := range strings.Split(only, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			want[name] = true
+		}
+	}
+	return want
+}
+
+// unknownReplayNamesError reports the names in want that no fixture matched,
+// sorted for a stable message.
+func unknownReplayNamesError(want map[string]bool) error {
+	unknown := make([]string, 0, len(want))
+	for name := range want {
+		unknown = append(unknown, name)
+	}
+	sort.Strings(unknown)
+	return fmt.Errorf("ANTI_TANGENT_REPLAY_ONLY names fixtures that do not exist: %s", strings.Join(unknown, ", "))
 }
 
 // replayReport is what one fixture's runs raised.
@@ -170,6 +193,33 @@ func (m *replayMeter) Review(ctx context.Context, req providers.Request) (provid
 	return m.Reviewer.Review(ctx, req)
 }
 
+// replayMeters wraps a providers.Registry so every reviewer's calls record
+// their prompt size, and reports the largest one seen since the last read.
+type replayMeters struct {
+	list []*replayMeter
+}
+
+// wrap returns reviewers wrapped in meters, and remembers them for largest.
+func (m *replayMeters) wrap(reviewers providers.Registry) providers.Registry {
+	registry := providers.Registry{}
+	for name, rv := range reviewers {
+		meter := &replayMeter{Reviewer: rv}
+		m.list = append(m.list, meter)
+		registry[name] = meter
+	}
+	return registry
+}
+
+// largest reads, and resets, the largest prompt sent since the previous read.
+func (m *replayMeters) largest() int {
+	n := 0
+	for _, meter := range m.list {
+		n = max(n, meter.lastPromptBytes)
+		meter.lastPromptBytes = 0
+	}
+	return n
+}
+
 // replayDryRunReviewer answers every review with an empty pass, so a dry run
 // checks fixtures and measures prompts without a paid call.
 type replayDryRunReviewer struct{ name string }
@@ -180,68 +230,80 @@ func (d replayDryRunReviewer) Review(context.Context, providers.Request) (provid
 	return providers.Response{RawJSON: []byte(`{"verdict":"pass","findings":[],"next_action":"dry run"}`), Model: "dry-run"}, nil
 }
 
+// replayEnv is what every run of every fixture shares: the server config and
+// a reviewer registry wrapped in meters that measure each call's prompt.
+type replayEnv struct {
+	cfg      config.Config
+	registry providers.Registry
+	meters   *replayMeters
+}
+
+func newReplayEnv(cfg config.Config, reviewers providers.Registry) replayEnv {
+	meters := &replayMeters{}
+	return replayEnv{cfg: cfg, registry: meters.wrap(reviewers), meters: meters}
+}
+
 // runReplayFixture replays fx runs times, one call at a time, each run on
 // fresh session and plan-run stores, and reports what the runs raised.
-func runReplayFixture(ctx context.Context, cfg config.Config, reviewers providers.Registry, fx replayFixture, runs int) replayReport {
-	meters := make([]*replayMeter, 0, len(reviewers))
-	registry := providers.Registry{}
-	for name, rv := range reviewers {
-		m := &replayMeter{Reviewer: rv}
-		meters = append(meters, m)
-		registry[name] = m
-	}
-	// lastPromptBytes reads, and resets, the largest prompt sent since the
-	// previous read.
-	lastPromptBytes := func() int {
-		n := 0
-		for _, m := range meters {
-			n = max(n, m.lastPromptBytes)
-			m.lastPromptBytes = 0
-		}
-		return n
-	}
-
+func runReplayFixture(ctx context.Context, re replayEnv, fx replayFixture, runs int) replayReport {
 	report := replayReport{Fixture: fx.Name, Runs: runs, Calls: map[string]*replayCallStats{}}
 	for _, e := range fx.Expectations {
 		report.Expectations = append(report.Expectations, replayTally{replayExpectation: e})
 	}
 	for run := 1; run <= runs; run++ {
-		h := &handlers{deps: Deps{
-			Cfg:      cfg,
-			Sessions: session.NewStore(cfg.SessionTTL),
-			Reviews:  registry,
-			PlanRuns: planrun.NewStore(cfg.SessionTTL),
-		}}
-		findings := map[string][]verdict.Finding{}
-		sessionID := ""
-		if fx.ValidateTaskSpec != nil {
-			_, env, err := h.ValidateTaskSpec(ctx, nil, *fx.ValidateTaskSpec)
-			report.record(replayCallTaskSpec, env, err, lastPromptBytes())
-			findings[replayCallTaskSpec] = env.Findings
-			sessionID = env.SessionID
-		}
-		if fx.ValidateCompletion != nil {
-			if fx.ValidateTaskSpec != nil && sessionID == "" {
-				report.record(replayCallCompletion, Envelope{}, errors.New("skipped: validate_task_spec opened no session"), 0)
-			} else {
-				args := *fx.ValidateCompletion
-				if fx.ValidateTaskSpec != nil {
-					args.SessionID = sessionID
-				}
-				_, env, err := h.ValidateCompletion(ctx, nil, args)
-				report.record(replayCallCompletion, env, err, lastPromptBytes())
-				findings[replayCallCompletion] = env.Findings
-			}
-		}
-		for i := range report.Expectations {
-			tally := &report.Expectations[i]
-			if f, ok := firstMatchingFinding(findings[tally.Call], tally.AnyOfKeywords); ok {
-				tally.Matched++
-				tally.Matches = append(tally.Matches, fmt.Sprintf("run %d: %s %s: %s", run, f.Category, f.Criterion, truncate(f.Evidence, 200)))
-			}
-		}
+		findings := replayOneRun(ctx, re, fx, &report)
+		tallyExpectations(&report, run, findings)
 	}
 	return report
+}
+
+// replayOneRun runs fx's calls once, on fresh session and plan-run stores,
+// records each call's outcome onto report, and returns the findings each
+// call raised, keyed by call name, for the expectation tally.
+func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, report *replayReport) map[string][]verdict.Finding {
+	h := &handlers{deps: Deps{
+		Cfg:      re.cfg,
+		Sessions: session.NewStore(re.cfg.SessionTTL),
+		Reviews:  re.registry,
+		PlanRuns: planrun.NewStore(re.cfg.SessionTTL),
+	}}
+	findings := map[string][]verdict.Finding{}
+	sessionID := ""
+	if fx.ValidateTaskSpec != nil {
+		_, taskEnv, err := h.ValidateTaskSpec(ctx, nil, *fx.ValidateTaskSpec)
+		report.record(replayCallTaskSpec, taskEnv, err, re.meters.largest())
+		findings[replayCallTaskSpec] = taskEnv.Findings
+		sessionID = taskEnv.SessionID
+	}
+	if fx.ValidateCompletion == nil {
+		return findings
+	}
+	if fx.ValidateTaskSpec != nil && sessionID == "" {
+		report.record(replayCallCompletion, Envelope{}, errors.New("skipped: validate_task_spec opened no session"), 0)
+		return findings
+	}
+	args := *fx.ValidateCompletion
+	if fx.ValidateTaskSpec != nil {
+		args.SessionID = sessionID
+	}
+	_, completionEnv, err := h.ValidateCompletion(ctx, nil, args)
+	report.record(replayCallCompletion, completionEnv, err, re.meters.largest())
+	findings[replayCallCompletion] = completionEnv.Findings
+	return findings
+}
+
+// tallyExpectations records, for run, which of report's expectations the
+// findings from that run met.
+func tallyExpectations(report *replayReport, run int, findings map[string][]verdict.Finding) {
+	for i := range report.Expectations {
+		tally := &report.Expectations[i]
+		f, ok := firstMatchingFinding(findings[tally.Call], tally.AnyOfKeywords)
+		if !ok {
+			continue
+		}
+		tally.Matched++
+		tally.Matches = append(tally.Matches, fmt.Sprintf("run %d: %s %s: %s", run, f.Category, f.Criterion, truncate(f.Evidence, 200)))
+	}
 }
 
 func (r *replayReport) record(call string, env Envelope, err error, promptBytes int) {

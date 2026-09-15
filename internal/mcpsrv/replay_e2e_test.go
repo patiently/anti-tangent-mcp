@@ -16,6 +16,57 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 )
 
+// replayRunsFromEnv reads ANTI_TANGENT_REPLAY_RUNS, defaulting to 5.
+func replayRunsFromEnv(t *testing.T) int {
+	t.Helper()
+	v := os.Getenv("ANTI_TANGENT_REPLAY_RUNS")
+	if v == "" {
+		return 5
+	}
+	n, err := strconv.Atoi(v)
+	require.NoError(t, err, "ANTI_TANGENT_REPLAY_RUNS")
+	require.Positive(t, n, "ANTI_TANGENT_REPLAY_RUNS")
+	return n
+}
+
+// replayConfigForDryRun loads the server config for a replay run. A dry run
+// calls no provider and needs no key, but config.Load refuses to start
+// without one.
+func replayConfigForDryRun(dryRun bool) (config.Config, error) {
+	getenv := os.Getenv
+	if dryRun {
+		getenv = func(k string) string {
+			if v := os.Getenv(k); v != "" || k != "ANTHROPIC_API_KEY" {
+				return v
+			}
+			return "dry-run"
+		}
+	}
+	return config.Load(getenv)
+}
+
+// replayReviewers builds the reviewer registry for a replay run: local
+// empty-pass reviewers for a dry run, or one live reviewer per configured key.
+func replayReviewers(cfg config.Config, dryRun bool) providers.Registry {
+	reviewers := providers.Registry{}
+	if dryRun {
+		for _, name := range []string{"anthropic", "openai", "google"} {
+			reviewers[name] = replayDryRunReviewer{name: name}
+		}
+		return reviewers
+	}
+	if cfg.AnthropicKey != "" {
+		reviewers["anthropic"] = providers.NewAnthropic(cfg.AnthropicKey, "", cfg.RequestTimeout)
+	}
+	if cfg.OpenAIKey != "" {
+		reviewers["openai"] = providers.NewOpenAI(cfg.OpenAIKey, "", cfg.RequestTimeout)
+	}
+	if cfg.GoogleKey != "" {
+		reviewers["google"] = providers.NewGoogle(cfg.GoogleKey, "", cfg.RequestTimeout)
+	}
+	return reviewers
+}
+
 // TestReplay_E2E replays recorded task fixtures against the configured
 // reviewers and reports, per expectation, how many runs raised the issue. The
 // fixtures hold a consumer project's code, so they live outside this
@@ -37,13 +88,8 @@ func TestReplay_E2E(t *testing.T) {
 	if dir == "" {
 		t.Skip("set ANTI_TANGENT_REPLAY_DIR to a fixture directory to enable; every run makes paid reviewer calls unless ANTI_TANGENT_REPLAY_DRY_RUN=1")
 	}
-	runs := 5
-	if v := os.Getenv("ANTI_TANGENT_REPLAY_RUNS"); v != "" {
-		n, err := strconv.Atoi(v)
-		require.NoError(t, err, "ANTI_TANGENT_REPLAY_RUNS")
-		require.Positive(t, n, "ANTI_TANGENT_REPLAY_RUNS")
-		runs = n
-	}
+	runs := replayRunsFromEnv(t)
+
 	fixtures, err := loadReplayFixtures(dir)
 	require.NoError(t, err)
 	fixtures, err = filterReplayFixtures(fixtures, os.Getenv("ANTI_TANGENT_REPLAY_ONLY"))
@@ -51,41 +97,14 @@ func TestReplay_E2E(t *testing.T) {
 	require.NotEmpty(t, fixtures, "no fixtures to run in %s", dir)
 
 	dryRun := os.Getenv("ANTI_TANGENT_REPLAY_DRY_RUN") == "1"
-	getenv := os.Getenv
-	if dryRun {
-		// A dry run calls no provider and needs no key, but config.Load refuses
-		// to start without one.
-		getenv = func(k string) string {
-			if v := os.Getenv(k); v != "" || k != "ANTHROPIC_API_KEY" {
-				return v
-			}
-			return "dry-run"
-		}
-	}
-	cfg, err := config.Load(getenv)
+	cfg, err := replayConfigForDryRun(dryRun)
 	require.NoError(t, err)
-
-	reviewers := providers.Registry{}
-	if dryRun {
-		for _, name := range []string{"anthropic", "openai", "google"} {
-			reviewers[name] = replayDryRunReviewer{name: name}
-		}
-	} else {
-		if cfg.AnthropicKey != "" {
-			reviewers["anthropic"] = providers.NewAnthropic(cfg.AnthropicKey, "", cfg.RequestTimeout)
-		}
-		if cfg.OpenAIKey != "" {
-			reviewers["openai"] = providers.NewOpenAI(cfg.OpenAIKey, "", cfg.RequestTimeout)
-		}
-		if cfg.GoogleKey != "" {
-			reviewers["google"] = providers.NewGoogle(cfg.GoogleKey, "", cfg.RequestTimeout)
-		}
-	}
+	re := newReplayEnv(cfg, replayReviewers(cfg, dryRun))
 
 	reports := make([]replayReport, 0, len(fixtures))
 	for _, fx := range fixtures {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(runs)*15*time.Minute)
-		report := runReplayFixture(ctx, cfg, reviewers, fx, runs)
+		report := runReplayFixture(ctx, re, fx, runs)
 		cancel()
 		t.Log("\n" + report.String())
 		reports = append(reports, report)
