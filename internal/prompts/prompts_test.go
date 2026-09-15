@@ -2325,3 +2325,12 @@ func TestRenderPost_PreFindingsToVerifyExplainsMinorAmbiguities(t *testing.T) {
 	assert.Contains(t, out.User, "A minor `ambiguous_spec` finding is listed so you can recognise a spec ambiguity already on record")
 	assert.Contains(t, out.User, "- ID: f_0123abcd\n  Severity: minor")
 }
+
+func TestRenderPost_WalksTheDeletionsAgainstGuards(t *testing.T) {
+	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", FinalDiff: "d"})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "Then walk the deletions.")
+	assert.Contains(t, out.User, "Report one finding per guard, set or dispatch, not one per removed state.")
+	assert.Contains(t, out.User, "`criterion: removed_state_coverage`, `severity: minor`, unless the evidence shows a regression")
+	assert.Contains(t, out.User, "which is `severity: major`")
+}
