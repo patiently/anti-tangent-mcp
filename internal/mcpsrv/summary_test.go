@@ -203,3 +203,34 @@ func TestFormatPlanSummary_NoContextFilesOmitsLine(t *testing.T) {
 	out := formatPlanSummary(pr, planSummaryMeta{ModelUsed: "anthropic:m"})
 	assert.NotContains(t, out, "context:")
 }
+
+func TestFormatEnvelopeSummary_FindingLineCarriesItsID(t *testing.T) {
+	got := formatEnvelopeSummary(Envelope{
+		Verdict: string(verdict.VerdictWarn),
+		Findings: []verdict.Finding{{
+			ID: "f_0123abcd-2", Severity: verdict.SeverityMajor, Category: verdict.CategoryScopeDrift,
+			Criterion: "AC 1", Evidence: "e",
+		}},
+		NextAction: "n",
+	})
+	assert.Contains(t, got, "    - f_0123abcd-2 [major][scope_drift] AC 1 — e\n")
+}
+
+func TestFormatPlanSummary_FindingLinesCarryIDs(t *testing.T) {
+	got := formatPlanSummary(verdict.PlanResult{
+		PlanVerdict: verdict.VerdictWarn,
+		PlanQuality: verdict.PlanQualityActionable,
+		PlanFindings: []verdict.Finding{{
+			ID: "f_0123abcd", Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality, Criterion: "p", Evidence: "e",
+		}},
+		Tasks: []verdict.PlanTaskResult{{
+			TaskIndex: 1, TaskTitle: "Task 1: one", Verdict: verdict.VerdictPass,
+			Findings: []verdict.Finding{{
+				ID: "f_89abcdef", Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality, Criterion: "t", Evidence: "e",
+			}},
+		}},
+		NextAction: "n",
+	}, planSummaryMeta{})
+	assert.Contains(t, got, "    - f_0123abcd [minor][quality] p — e\n")
+	assert.Contains(t, got, "      - f_89abcdef [minor] t — e\n")
+}

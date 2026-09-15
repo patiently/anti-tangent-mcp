@@ -139,7 +139,7 @@ func formatPlanSummary(pr verdict.PlanResult, meta planSummaryMeta) string {
 	crit, maj, min := countSeverities(pr.PlanFindings)
 	fmt.Fprintf(&b, "  plan_findings: %d (%d/%d/%d)\n", len(pr.PlanFindings), crit, maj, min)
 	for _, f := range pr.PlanFindings {
-		fmt.Fprintf(&b, "    - [%s][%s] %s — %s\n", f.Severity, f.Category,
+		fmt.Fprintf(&b, "    - %s[%s][%s] %s — %s\n", findingIDPrefix(f.ID, "      "), f.Severity, f.Category,
 			escapeContinuationLines(f.Criterion, "      "), formatFindingEvidence(f.Evidence, "      "))
 	}
 	fmt.Fprintf(&b, "  tasks: %d\n", len(pr.Tasks))
@@ -148,7 +148,7 @@ func formatPlanSummary(pr verdict.PlanResult, meta planSummaryMeta) string {
 		fmt.Fprintf(&b, "    Task %d: %s  [%s]  findings: %d (%d/%d/%d)\n",
 			t.TaskIndex, escapeContinuationLines(t.TaskTitle, "      "), t.Verdict, len(t.Findings), tCrit, tMaj, tMin)
 		for _, f := range t.Findings {
-			fmt.Fprintf(&b, "      - [%s] %s — %s\n", f.Severity,
+			fmt.Fprintf(&b, "      - %s[%s] %s — %s\n", findingIDPrefix(f.ID, "        "), f.Severity,
 				escapeContinuationLines(f.Criterion, "        "), formatFindingEvidence(f.Evidence, "        "))
 		}
 	}
@@ -211,6 +211,17 @@ func formatExtractSummary(r verdict.ExtractResult, modelUsed string, reviewMS in
 	return b.String()
 }
 
+// findingIDPrefix renders a finding's ID ahead of its bullet text, or nothing
+// for a finding without one: prime_project_knowledge and
+// extract_project_knowledge findings carry none, and their blocks stay as
+// they were.
+func findingIDPrefix(id, contIndent string) string {
+	if id == "" {
+		return ""
+	}
+	return escapeContinuationLines(id, contIndent) + " "
+}
+
 // writeFindingsSummary writes the `findings: N total (C critical, M major, m minor)`
 // summary line and one bullet per finding to b, prefixed with the supplied
 // indent. Shared by formatEnvelopeSummary so the layout stays identical.
@@ -224,7 +235,7 @@ func writeFindingsSummary(b *strings.Builder, findings []verdict.Finding, indent
 		// embedded newline in it used to land at true column 0 — a cleaner
 		// forgery vector than Evidence's (whitespace-only, pre-fix) indent.
 		criterion := escapeContinuationLines(f.Criterion, indent+"    ")
-		fmt.Fprintf(b, "%s  - [%s][%s] %s — %s\n", indent, f.Severity, f.Category, criterion, formatFindingEvidence(f.Evidence, indent+"    "))
+		fmt.Fprintf(b, "%s  - %s[%s][%s] %s — %s\n", indent, findingIDPrefix(f.ID, indent+"    "), f.Severity, f.Category, criterion, formatFindingEvidence(f.Evidence, indent+"    "))
 	}
 }
 

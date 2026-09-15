@@ -64,25 +64,13 @@ func (s *Store) AppendCheckpoint(id string, cp Checkpoint) bool {
 }
 
 func (s *Store) SetPreFindings(id string, findings []verdict.Finding) bool {
-	return s.setFindings(id, findings, true)
-}
-
-func (s *Store) SetPostFindings(id string, findings []verdict.Finding) bool {
-	return s.setFindings(id, findings, false)
-}
-
-func (s *Store) setFindings(id string, findings []verdict.Finding, pre bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[id]
 	if !ok {
 		return false
 	}
-	if pre {
-		sess.PreFindings = findings
-	} else {
-		sess.PostFindings = findings
-	}
+	sess.PreFindings = findings
 	sess.LastAccessed = time.Now()
 	return true
 }

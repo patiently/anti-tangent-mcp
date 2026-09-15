@@ -52,6 +52,12 @@ type Envelope struct {
 	// The implementer should attach what is missing and re-submit; no rework
 	// is implied. Server-computed; see submission_defect.go.
 	SubmissionDefectOnly bool `json:"submission_defect_only,omitempty"`
+	// Escalate is set on validate_completion when the reviewer raised a
+	// critical or major finding again after the implementer answered it.
+	Escalate bool `json:"escalate,omitempty"`
+	// WaivedFindings holds the reviewer findings a controller ruling covered.
+	// They do not count toward Verdict.
+	WaivedFindings []verdict.WaivedFinding `json:"waived_findings,omitempty"`
 }
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
@@ -161,6 +167,12 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		ReviewMS:   out.ReviewMS,
 		Partial:    result.Partial,
 	}
+	if args.PlanRunID == "" {
+		if run, ok := h.deps.PlanRuns.Latest(); ok {
+			env.Findings = append(env.Findings, planRunIDAdvisory(run.ID))
+		}
+	}
+	assignEnvelopeIDs(&env)
 
 	// A truncated review creates no session: the spec was not reviewed in full,
 	// so there is no pre-task review for the rest of the task to build on. A
@@ -168,19 +180,16 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	// waiting for TTL eviction either.
 	if !out.Truncated {
 		sess := h.deps.Sessions.Create(spec, args.PlanRunID)
-		h.deps.Sessions.SetPreFindings(sess.ID, result.Findings)
-		// Re-fetch after SetPreFindings so LastAccessed reflects the final mutation.
+		// The plan_run_id advisory describes this call's arguments, not the
+		// spec, so later prompts must not show it as a pre-task finding.
+		h.deps.Sessions.SetPreFindings(sess.ID, append([]verdict.Finding(nil), env.Findings[:len(result.Findings)]...))
+		h.deps.Sessions.RecordIssuedIDs(sess.ID, envelopeIDs(env))
+		// Re-fetch so LastAccessed reflects the final mutation.
 		if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
 			sess = refreshed
 		}
 		env.SessionID = sess.ID
 		env = h.withSessionTTL(env, sess)
-	}
-
-	if args.PlanRunID == "" {
-		if run, ok := h.deps.PlanRuns.Latest(); ok {
-			env.Findings = append(env.Findings, planRunIDAdvisory(run.ID))
-		}
 	}
 
 	if args.PlanRunID != "" && env.SessionID != "" {
@@ -276,16 +285,18 @@ func (h *handlers) resolveModel(override string, fallback config.ModelRef) (conf
 	return mr, nil
 }
 
-// withSessionTTL populates the session expiry fields on env using the session's
-// LastAccessed time and the store's configured idle TTL. Call this AFTER all
-// store mutations that refresh LastAccessed (e.g. Get, AppendCheckpoint,
-// SetPostFindings) so the surfaced expiry reflects the post-operation state.
-// Returns env unchanged if sess is nil (e.g. not-found / truncation paths).
+// withSessionTTL populates the session expiry fields on env from the store's
+// own record of the session. Call it after the call's last store mutation so
+// the surfaced expiry reflects it. Returns env unchanged if sess is nil or the
+// session is gone.
 func (h *handlers) withSessionTTL(env Envelope, sess *session.Session) Envelope {
 	if sess == nil || h.deps.Sessions == nil {
 		return env
 	}
-	expiresAt := sess.LastAccessed.Add(h.deps.Sessions.TTL())
+	expiresAt, ok := h.deps.Sessions.ExpiresAt(sess.ID)
+	if !ok {
+		return env
+	}
 	remaining := int(time.Until(expiresAt).Seconds())
 	if remaining < 0 {
 		remaining = 0
@@ -431,7 +442,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 			modelUsed: env.ModelUsed,
 			sessionID: env.SessionID,
 		})
-		return envelopeResult(env)
+		return rejectionEnvelopeResult(env)
 	}
 
 	if size := totalBytes(args.ChangedFiles); size > h.deps.Cfg.MaxPayloadBytes {
@@ -445,7 +456,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 			sessionID:    env.SessionID,
 			payloadBytes: size,
 		})
-		return envelopeResult(env)
+		return rejectionEnvelopeResult(env)
 	}
 
 	model, rendered, err := h.resolveModelAndRender(
@@ -474,6 +485,18 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 	result.Findings = withServerFindings(clamp, result.Findings, out.Server)
 	result = verdict.FinalizeVerdict(result)
 
+	env := Envelope{
+		Tool:       "check_progress",
+		SessionID:  sess.ID,
+		Verdict:    string(result.Verdict),
+		Findings:   result.Findings,
+		NextAction: result.NextAction,
+		ModelUsed:  out.ModelUsed,
+		ReviewMS:   out.ReviewMS,
+		Partial:    result.Partial,
+	}
+	assignEnvelopeIDs(&env)
+
 	// A truncated review records no checkpoint: its findings are incomplete,
 	// and a later check_progress would list them as the task's prior findings.
 	if !out.Truncated {
@@ -482,8 +505,9 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 			WorkingOn: args.WorkingOn,
 			FileCount: len(args.ChangedFiles),
 			Verdict:   result.Verdict,
-			Findings:  result.Findings,
+			Findings:  env.Findings,
 		})
+		h.deps.Sessions.RecordIssuedIDs(sess.ID, envelopeIDs(env))
 
 		if sess.PlanRunID != "" {
 			if !h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
@@ -498,17 +522,6 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 	// Re-fetch so LastAccessed reflects the final access.
 	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
 		sess = refreshed
-	}
-
-	env := Envelope{
-		Tool:       "check_progress",
-		SessionID:  sess.ID,
-		Verdict:    string(result.Verdict),
-		Findings:   result.Findings,
-		NextAction: result.NextAction,
-		ModelUsed:  out.ModelUsed,
-		ReviewMS:   out.ReviewMS,
-		Partial:    result.Partial,
 	}
 	env = h.withSessionTTL(env, sess)
 	h.recordStat(statParams{
@@ -1562,7 +1575,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				sessionID:    env.SessionID,
 				payloadBytes: tooLarge.bytes,
 			})
-			return envelopeResult(env)
+			return rejectionEnvelopeResult(env)
 		}
 		return nil, Envelope{}, err
 	}
@@ -1586,7 +1599,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				sessionID:    clamped.SessionID,
 				payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 			})
-			return envelopeResult(clamped)
+			return rejectionEnvelopeResult(clamped)
 		}
 		// Other real evidence exists (non-empty test_evidence, or another
 		// non-empty file): FIX 2 — do not reject the call, but don't let
@@ -1625,7 +1638,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			sessionID:    env.SessionID,
 			payloadBytes: size,
 		})
-		return envelopeResult(env)
+		return rejectionEnvelopeResult(env)
 	}
 
 	// 5b. exit_contracts normalization. Runs after the payload-cap check
@@ -1651,7 +1664,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			cached:       true,
 			payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 		})
-		return envelopeResult(c)
+		return rejectionEnvelopeResult(c)
 	}
 	if reason := checkEvidenceShape(args.FinalDiff, resolvedFiles); reason != "" {
 		env := malformedEvidenceEnvelope("validate_completion", args.SessionID, reason, h.deps.Cfg.PostModel.String())
@@ -1665,13 +1678,12 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			sessionID:    clamped.SessionID,
 			payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 		})
-		return envelopeResult(clamped)
+		return rejectionEnvelopeResult(clamped)
 	}
 
 	// 7/8. session lookup + spec selection.
 	var sess *session.Session
 	var spec session.TaskSpec
-	var sessID string
 	var majorPreFindings []verdict.Finding
 	if lightweight {
 		// Synthesize a minimal spec for the reviewer. No session is created.
@@ -1692,10 +1704,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				sessionID:    env.SessionID,
 				payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
 			})
-			return envelopeResult(env)
+			return rejectionEnvelopeResult(env)
 		}
 		spec = sess.Spec
-		sessID = sess.ID
 		majorPreFindings = majorFindings(sess.PreFindings)
 	}
 
@@ -1726,40 +1737,32 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if err != nil {
 		return nil, Envelope{}, err
 	}
-	result := out.Result
-	result.Findings = withServerFindings(clamp, result.Findings, out.Server)
-	if len(emptyPathFindings) > 0 {
-		// Server-computed, so merged here rather than sent to the reviewer, and
-		// independent of what the reviewer says.
-		result.Findings = append(emptyPathFindings, result.Findings...)
-	}
-	result = verdict.FinalizeVerdict(result)
 
-	if !lightweight {
-		// A truncated review leaves the stored findings of the last complete
-		// one in place: its own list is incomplete.
-		if !out.Truncated {
-			h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
-		}
-		// Re-fetch so LastAccessed reflects the final access.
-		if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
-			sess = refreshed
-		}
-		sessID = sess.ID
+	// The server's own findings surround the reviewer's: test evidence,
+	// CodeScene, empty paths and the clamp come first, and a truncation marker
+	// or notice last. The list is assembled once, so the reviewer's findings
+	// are the block [len(head), len(head)+len(reviewer)) of the final list —
+	// the block the session keeps as this call's prior findings.
+	var head []verdict.Finding
+	head = append(head, testEvidenceFindings(args.TestEvidence)...)
+	head = append(head, codesceneFindings(h.deps.Cfg.Codescene, args.Codescene)...)
+	head = append(head, emptyPathFindings...)
+	if clamp.Severity != "" {
+		head = append(head, clamp)
 	}
-
-	if cs := codesceneFindings(h.deps.Cfg.Codescene, args.Codescene); len(cs) > 0 {
-		result.Findings = append(cs, result.Findings...)
-		result = verdict.FinalizeVerdict(result)
-	}
-	if te := testEvidenceFindings(args.TestEvidence); len(te) > 0 {
-		result.Findings = append(te, result.Findings...)
-		result = verdict.FinalizeVerdict(result)
-	}
+	reviewer := out.Result.Findings
+	findings := make([]verdict.Finding, 0, len(head)+len(reviewer)+len(out.Server))
+	findings = append(findings, head...)
+	findings = append(findings, reviewer...)
+	findings = append(findings, out.Server...)
+	result := verdict.FinalizeVerdict(verdict.Result{
+		Findings:   findings,
+		NextAction: out.Result.NextAction,
+		Partial:    out.Result.Partial,
+	})
 
 	env := Envelope{
 		Tool:       "validate_completion",
-		SessionID:  sessID,
 		Verdict:    string(result.Verdict),
 		Findings:   result.Findings,
 		NextAction: result.NextAction,
@@ -1767,12 +1770,28 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		ReviewMS:   out.ReviewMS,
 		Partial:    result.Partial,
 	}
-	if !lightweight {
-		env = h.withSessionTTL(env, sess)
-	}
 	if isSubmissionDefectOnly(env.Findings) {
 		env.SubmissionDefectOnly = true
 		env.NextAction = resubmitNextAction + env.NextAction
+	}
+	assignEnvelopeIDs(&env)
+
+	if !lightweight {
+		update := session.ReviewUpdate{IssuedIDs: envelopeIDs(env)}
+		// A truncated review keeps the prior findings of the last complete one:
+		// its own list is incomplete, and a finding lost to truncation would
+		// read as new on the next call.
+		if !out.Truncated {
+			update.ReplacePrior = true
+			update.PriorFindings = env.Findings[len(head) : len(head)+len(reviewer)]
+		}
+		h.deps.Sessions.ApplyReview(sess.ID, update)
+		// Re-fetch after ApplyReview so LastAccessed reflects the final mutation.
+		if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
+			sess = refreshed
+		}
+		env.SessionID = sess.ID
+		env = h.withSessionTTL(env, sess)
 	}
 
 	if !lightweight && sess.PlanRunID != "" {
@@ -2544,6 +2563,7 @@ func finalizePlanVerdict(pr *verdict.PlanResult) {
 
 func finalizePlanResult(pr verdict.PlanResult, meta planSummaryMeta) verdict.PlanResult {
 	finalizePlanVerdict(&pr)
+	assignPlanIDs(&pr)
 	pr.SummaryBlock = formatPlanSummary(pr, meta)
 	return pr
 }

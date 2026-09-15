@@ -238,6 +238,7 @@ func (c planCallContext) finish(pr *verdict.PlanResult) {
 	c.mintPlanRunID(pr)
 	*pr = prependRepoRootUnusable(*pr, c.RepoRootUnusable)
 	*pr = prependPlanDeprecation(*pr, c.UsedPlanText)
+	assignPlanIDs(pr)
 	pr.SummaryBlock = formatPlanSummary(*pr, c.meta())
 }
 
