@@ -120,10 +120,12 @@ running server.
 
 - `evidenceEllipsisLine` (`(?m)^\s*\.\.\.\s*$`) matches an unchanged ` ...` line inside a unified
   diff, because `\s*` consumes the context-line space, and matches a Python stub body in
-  `final_files`. In `final_diff`, a line that begins with a space or `-` (an unchanged or removed
-  line) is not checked; every other line is. In `final_files`, a bare `...` line in a `.py` or
-  `.pyi` file is exempt. Every other placeholder
-  pattern still applies to both.
+  `final_files` — while an added `+...` line, the one that actually signals elided evidence, never
+  matches, because of the leading `+`. In a `final_diff` that has hunk headers, an unchanged
+  (leading space) or removed (leading `-`) line is not checked, and an added line is checked with
+  its `+` stripped. A `final_diff` without hunk headers is checked line by line as before. A bare
+  `...` line in a `.py` or `.pyi` file is exempt, whether it arrives in `final_files` or as an added
+  line under that file's `+++` header. Every other placeholder pattern still applies everywhere.
 - `core.md` advises sending a complete `final_diff` when a file genuinely contains the pattern;
   the diff is scanned too, so that advice is removed.
 
