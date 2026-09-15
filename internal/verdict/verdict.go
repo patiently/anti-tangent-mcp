@@ -108,8 +108,8 @@ type Finding struct {
 	SameAs *string `json:"same_as,omitempty" jsonschema:"Reviewer-set: the id of an earlier finding shown in the prompt that this finding raises again, or null."`
 }
 
-// WaivedFinding is a reviewer finding a controller ruling covered. It no longer
-// counts toward the verdict and is reported with the ruling that waived it, so
+// WaivedFinding is a reviewer finding a controller ruling covered. It does not
+// count toward the verdict and is reported with the ruling that waived it, so
 // the controller reading the summary block sees what each ruling covered.
 type WaivedFinding struct {
 	ID        string   `json:"id"`

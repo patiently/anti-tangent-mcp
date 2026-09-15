@@ -84,15 +84,13 @@ func (h *handlers) resolveModelAndRender(
 // the fresh-review path, the truncation-recovery path, and the cache-hit
 // path — need to assemble the SAME post-review tail.
 //
-// It exists because that tail was hand-assembled at all three sites and the
-// recovery site kept missing steps: across three review rounds it was found
-// to be missing prependRepoRootUnusable, populateNormativeTestBodies, and
-// the PlanRunID mint. The last of those is functional, not cosmetic —
-// controller.md §5.1 tells the controller to capture plan_run_id from a
-// passing validate_plan response, a truncated-but-recovered review CAN
-// return pass, and plan_run_report hard-requires the id. Most of the fields
-// below used to live on planReviewErrInputs solely to feed the duplicated
-// tail, one field added per review round; that growth WAS the failure mode.
+// A tail assembled by hand at each site drifts: a step added to one path is
+// easily missed on another. Such a miss can be functional, not cosmetic — the
+// PlanRunID mint, for one: controller.md §5.1 tells the controller to capture
+// plan_run_id from a passing validate_plan response, a truncated-but-recovered
+// review CAN return pass, and plan_run_report hard-requires the id. A step
+// every path needs therefore goes on this type, and a value it needs becomes
+// a field here rather than a parameter threaded to one site.
 //
 // The verdict ladder (finalizePlanVerdict) is deliberately NOT a method
 // here. The cache-hit path must never re-run it on an already-finalized
@@ -106,10 +104,10 @@ func (h *handlers) resolveModelAndRender(
 //
 // The fresh-review path hoists the mint above store() so the cached entry
 // carries the plan_run_id: a cache hit must reuse the original call's run
-// rather than mint a second one (design §, and
-// TestValidatePlan_CachePassingResult). finish()'s own mint is guarded on
-// PlanRunID == "" and is therefore a no-op both there and on the cache-hit
-// path, which reads an entry that already carries one.
+// rather than mint a second one (TestValidatePlan_CachePassingResult).
+// finish()'s own mint is guarded on PlanRunID == "" and is therefore a no-op
+// both there and on the cache-hit path, which reads an entry that already
+// carries one.
 //
 // Two divergences on the cache-hit path are DELIBERATE, not omissions, and
 // must not be "fixed" into parity:
@@ -153,21 +151,19 @@ type planCallContext struct {
 	// clamp is already baked into the stored entry (max_tokens_override is
 	// part of the cache key).
 	Clamp verdict.Finding
-	// ContextFiles is THIS call's attached set. Without it a truncated
-	// review's summary block omitted the `context:` provenance list entirely
-	// while the same call's stats counted every attached byte — the human
-	// reading the envelope could not see what the reviewer had been given. It
+	// ContextFiles is THIS call's attached set. Every path renders it as the
+	// summary block's `context:` provenance list, so the human reading a
+	// truncated review's envelope still sees what the reviewer was given. It
 	// is also the attached set DemoteUnattachedContradictions tests against,
-	// and both paths MUST pass the same one: a divergence there is exactly how
-	// the demotion would go all-or-nothing again on one path only.
+	// and both paths MUST pass the same one, or the demotion would differ
+	// between a fresh and a recovered review of the same plan.
 	ContextFiles []fileSource
 	// FileConsistency is the deterministic, reviewer-free Create/Modify
 	// finding for this plan, or nil. It is computed by the CALLER and carried
 	// here because it must survive truncation: the check needs no reviewer and
-	// cannot itself be truncated, so a truncated reviewer response silently
-	// dropping it was the one failure mode that lost a finding the server
-	// already knew for certain. Nil on the cache-hit path by design — see the
-	// type comment.
+	// cannot itself be truncated, so a truncated reviewer response must not
+	// lose a finding the server already knows for certain. Nil on the
+	// cache-hit path by design — see the type comment.
 	FileConsistency *verdict.Finding
 	// Tasks is the parsed plan. applyPreLadder re-attaches normative test
 	// bodies from it (populateNormativeTestBodies), and applyPreLadder's
@@ -287,9 +283,11 @@ type planReviewErrInputs struct {
 	Call planCallContext
 }
 
-// handlePlanReviewErr is the ValidatePlan analog of runReview.
-// Collapses the truncation-recovery + error-propagation pattern after the
-// plan reviewer call (either reviewPlanSingle or reviewPlanChunked).
+// handlePlanReviewErr handles the error from ValidatePlan's reviewer call
+// (reviewPlanSingle or reviewPlanChunked). On a truncated response it
+// recovers what it can and runs the whole post-review tail itself —
+// applyPreLadder, the verdict ladder and finish, but never store() — so a
+// truncated validate_plan response is complete when it returns.
 //
 // Returns (result, planResult, handled, err):
 //   - in.Err == nil               → handled=false; caller proceeds normally.

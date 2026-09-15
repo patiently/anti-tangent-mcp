@@ -1507,47 +1507,60 @@ func hasNonEmptyEvidence(args *ValidateCompletionArgs, resolvedFiles []FileArg) 
 	return false
 }
 
-// ValidateCompletion runs the post-implementation reviewer call. Eight-step
-// ordering (preserved here to keep the AC-mapping legible):
+// ValidateCompletion runs the post-implementation review. The numbered steps
+// match the labels in the body.
 //
-//  1. summary required check
-//  2. final_diff / final_diff_path mutual-exclusivity check
-//     2b. at-least-one-evidence check (final_diff_path counts, pre-resolution)
-//     2c. effectiveMaxTokens + clampFinding — computed here (moved ahead of its
-//     old step-4 slot) so a too-large PATH input, detected next, can render
-//     through the same clamped tooLargeEnvelope shape as the inline
-//     payload-cap check below. Independent of evidence, so reordering it
-//     changes nothing else.
-//     2d. resolveCompletionInputs — materializes final_diff_path and any
-//     final_files[].path entries BEFORE the payload cap, evidence-shape
-//     guard, and evidence cache key see them. An oversized path input
-//     returns the SAME tooLargeEnvelope an oversized inline payload would;
-//     every other resolve failure (missing file, non-regular file, outside
-//     ANTI_TANGENT_PLAN_ROOTS) stays a plain transport error, matching how
-//     validate_plan's plan_path treats those cases.
-//     2e. resolved-empty-path check — 2b only sees path STRINGS, so a
-//     final_diff_path or final_files[i].path that resolves to an empty file
-//     on disk sails past it. A path input resolving to 0 bytes is always a
-//     caller mistake worth surfacing (they plainly intended to send that
-//     file). When it is the ONLY evidence, this is a hard structured
-//     malformed_evidence rejection, same as before — no paid reviewer call
-//     with nothing to review. When other real evidence exists (non-empty
-//     test_evidence, or another non-empty file), the call proceeds and
-//     carries an insufficient_evidence finding naming the empty path
-//     instead, so the gap is visible rather than silently reviewed around.
-//     test_evidence alone with no path inputs supplied is unaffected either
-//     way — see resolvedEmptyPathInputs / hasNonEmptyEvidence.
-//  3. lightweight marker (empty session_id + non-empty evidence)
-//  5. payload-cap check
-//  6. evidence-shape guard (with rejection cache) — runs BEFORE session lookup
-//  7. session lookup (skipped in lightweight mode)
-//  8. spec selection — synthesized in lightweight mode, sess.Spec otherwise
+//  1. summary is required.
+//  2. final_diff and final_diff_path are mutually exclusive.
+//     2b. At least one evidence input is non-empty; final_diff_path counts
+//     before it is resolved.
+//     2c. effectiveMaxTokens and the clamp finding are computed before path
+//     resolution, so an oversized path input renders through the same
+//     clamped tooLargeEnvelope as an oversized inline payload.
+//     2d. resolveCompletionInputs materializes final_diff_path and every
+//     final_files[].path before the payload cap, the evidence-shape guard and
+//     the evidence cache key see them. An oversized path input returns that
+//     tooLargeEnvelope; every other resolve failure (missing file, non-regular
+//     file, outside ANTI_TANGENT_PLAN_ROOTS) is a plain transport error, as
+//     for validate_plan's plan_path.
+//     2e. A path input that resolved to an empty file is a caller mistake.
+//     When it is the only evidence the call is rejected with
+//     malformed_evidence and no reviewer call is made; otherwise the review
+//     proceeds and carries an insufficient_evidence finding naming the path.
+//     See resolvedEmptyPathInputs and hasNonEmptyEvidence.
+//  3. An empty session_id selects lightweight mode.
+//  5. The payload cap.
+//     5b. exit_contracts normalization.
+//     5c. finding_responses and controller_rulings normalization; their
+//     limits are argument errors.
+//  6. The evidence-shape guard, with its rejection cache, before the session
+//     lookup.
+//  7. The session lookup, skipped in lightweight mode.
+//  8. Spec selection: synthesized in lightweight mode, the session's
+//     otherwise. On a session, buildCompletionReview matches this call's
+//     finding_responses to the stored prior findings and its
+//     controller_rulings to the IDs the session issued.
 //
-// In lightweight mode the handler synthesizes a minimal TaskSpec and does NOT
-// create or update any session in the store. The returned envelope's
-// SessionID/SessionExpiresAt/SessionTTLRemainingSeconds fields stay zero.
+// A call rejected at any of these steps writes nothing to the session and
+// carries no advisory about finding_responses or controller_rulings. Once the
+// reviewer answers (runReview folds a truncated answer into an ordinary one):
+//
+//   - the reviewer's findings alone go through the ruling waiver and repeat
+//     marking; the server's own findings join them, and the verdict is
+//     finalized once over the assembled list;
+//   - advisories about this call's arguments are appended, then an
+//     escalation, or failing that submission_defect_only, rewrites
+//     next_action;
+//   - display IDs are assigned, and one locked session update records the
+//     issued IDs, this call's new rulings and the escalated flag, and replaces
+//     the prior findings unless the review was truncated;
+//   - the session TTL fields, the plan-run row and stats are updated, and the
+//     response is rendered.
+//
+// In lightweight mode no session is created or updated, and SessionID,
+// SessionExpiresAt and SessionTTLRemainingSeconds stay zero.
 func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolRequest, args ValidateCompletionArgs) (*mcp.CallToolResult, Envelope, error) {
-	// 1. summary required (session_id is no longer required — see step 3).
+	// 1. summary required. session_id is optional; see step 3.
 	if args.Summary == "" {
 		return nil, Envelope{}, errors.New("summary is required")
 	}
@@ -1612,8 +1625,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if emptyPathReasons := resolvedEmptyPathInputs(&args, resolvedFiles); len(emptyPathReasons) > 0 {
 		if !hasNonEmptyEvidence(&args, resolvedFiles) {
 			// The empty-resolved path is the ONLY evidence on the call:
-			// hard reject, exactly as before FIX 2 — no paid reviewer call
-			// with nothing to review.
+			// hard reject, with no paid reviewer call when there is nothing
+			// to review.
 			env := malformedEvidenceEnvelope("validate_completion", args.SessionID, emptyPathReasons[0], h.deps.Cfg.PostModel.String())
 			clamped := prependClamp(env, clamp)
 			h.recordStat(statParams{
@@ -1627,11 +1640,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			return rejectionEnvelopeResult(clamped)
 		}
 		// Other real evidence exists (non-empty test_evidence, or another
-		// non-empty file): FIX 2 — do not reject the call, but don't let
-		// the gap go unremarked either. Merged into result.Findings once
-		// the reviewer call returns (alongside clamp/codescene findings
-		// below), so both the caller and whoever reads the envelope see
-		// exactly which path came back empty.
+		// non-empty file): do not reject the call, but do not let the gap go
+		// unremarked either. These findings join the server findings placed
+		// ahead of the reviewer's once the review returns, so both the caller
+		// and whoever reads the envelope see exactly which path came back
+		// empty.
 		for _, reason := range emptyPathReasons {
 			emptyPathFindings = append(emptyPathFindings, verdict.Finding{
 				Severity:   verdict.SeverityMajor,

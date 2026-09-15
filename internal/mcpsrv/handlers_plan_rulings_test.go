@@ -33,7 +33,7 @@ func planJSON(planFindings, taskTitle, taskFindings string) []byte {
 		`],"suggested_header_block":"","suggested_header_reason":""}],"next_action":"n"}`)
 }
 
-func TestValidatePlan_ChecklistNoLongerLiftsTheVerdict(t *testing.T) {
+func TestValidatePlan_ChecklistDoesNotLiftTheVerdict(t *testing.T) {
 	raw := planJSON(
 		`{"severity":"minor","category":"quality","criterion":"a","evidence":"e","suggestion":"s"},{"severity":"minor","category":"quality","criterion":"b","evidence":"e","suggestion":"s"}`,
 		"Task 1: t1",
