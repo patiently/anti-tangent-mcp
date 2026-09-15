@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attached. It is added after the verdict is decided and never changes it.
 - With the plan ledger enabled, `validate_plan` records a header for each run it mints, so
   `plan_run_report` recognises a run no task was attached to — including after a restart — and
-  says no `validate_task_spec` call passed its `plan_run_id`.
+  says why no task is attached to it.
 - Every tool input property carries a real description in the MCP schema, including its limits:
   entry and character caps on the bounded lists, the payload cap and its env var, the
   `ANTI_TANGENT_PLAN_ROOTS` rule on path inputs, and the accepted `codescene` shapes. Before this,
@@ -28,10 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- A file path outside `ANTI_TANGENT_PLAN_ROOTS` is refused with a way to recover: pass a file in
-  the repository's git directory (`git rev-parse --absolute-git-dir`), which git never tracks. A
-  per-session scratch directory under `/tmp` is usually outside the roots, which is where a
-  generated diff most often lands.
+- A file path outside `ANTI_TANGENT_PLAN_ROOTS` is refused naming a recovery that no commit picks
+  up: the repository's git directory (`git rev-parse --absolute-git-dir`) when a root contains it,
+  otherwise a file in the repository deleted after the call. A per-session scratch directory under
+  `/tmp` is usually outside the roots, which is where a generated diff most often lands.
 - `validate_completion`'s `payload_too_large` suggestion no longer advises splitting the
   evidence into smaller chunks. Each call is reviewed on its own, so evidence spread over several
   calls is never seen together. It now names a `-U1` diff, leaving out generated, lockfile and

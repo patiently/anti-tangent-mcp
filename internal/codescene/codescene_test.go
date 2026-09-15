@@ -257,6 +257,13 @@ func TestDigest_UnmarshalJSON_MistypedRawKeyLeavesTheOtherReduced(t *testing.T) 
 	assert.Nil(t, badResults.Verdicts)
 }
 
+func TestDigest_UnmarshalJSON_NullQualityGatesIsAbsent(t *testing.T) {
+	var d Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"quality_gates": null}`), &d))
+	assert.False(t, d.Ran)
+	assert.Equal(t, "", d.QualityGate)
+}
+
 func TestDigest_UnmarshalJSON_DigestShapeRoundTrips(t *testing.T) {
 	want := Digest{Ran: true, Tool: "analyze_change_set", QualityGate: "passed", FilesAnalyzed: 2,
 		Verdicts: &Verdicts{Improved: 1, Stable: 1}, Trend: TrendImprovement, NetPP: -1,

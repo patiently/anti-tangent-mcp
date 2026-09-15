@@ -90,6 +90,16 @@ func reduceChangeSetResults(results []rawChangeSetResult) (verdicts Verdicts, ne
 	return verdicts, netPP, categoryCounts
 }
 
+// hasNonNull reports whether present carries key with a value other than
+// JSON null. json.Unmarshal of null into a string or slice succeeds as a
+// no-op, so a caller-sent null for quality_gates or results must not be
+// treated the same as a real value: that would mark the digest as run with
+// an empty gate.
+func hasNonNull(present map[string]json.RawMessage, key string) bool {
+	raw, ok := present[key]
+	return ok && strings.TrimSpace(string(raw)) != "null"
+}
+
 // UnmarshalJSON accepts both the digest shape and CodeScene's raw
 // analyze_change_set output, reducing quality_gates and results[] the way
 // examples/hooks/codescene-log.sh does. A digest field present in the input
@@ -116,9 +126,9 @@ func (d *Digest) UnmarshalJSON(b []byte) error {
 	has := func(key string) bool { _, ok := present[key]; return ok }
 
 	var gate string
-	gateOK := has("quality_gates") && json.Unmarshal(present["quality_gates"], &gate) == nil
+	gateOK := hasNonNull(present, "quality_gates") && json.Unmarshal(present["quality_gates"], &gate) == nil
 	var results []rawChangeSetResult
-	resultsOK := has("results") && json.Unmarshal(present["results"], &results) == nil && results != nil
+	resultsOK := hasNonNull(present, "results") && json.Unmarshal(present["results"], &results) == nil && results != nil
 	if !gateOK && !resultsOK {
 		return nil
 	}

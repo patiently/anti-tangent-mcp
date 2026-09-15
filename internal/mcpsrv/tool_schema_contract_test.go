@@ -186,6 +186,7 @@ func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 	n := strconv.Itoa
 	bounded := []string{n(maxPinnedByEntries), n(maxPinnedByChars)}
 	payload := []string{n(config.DefaultMaxPayloadBytes), "ANTI_TANGENT_MAX_PAYLOAD_BYTES"}
+	planPayload := []string{n(config.DefaultPlanMaxPayloadBytes), "ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES"}
 	cases := map[string][]string{
 		"validate_task_spec.pinned_by":                              bounded,
 		"validate_task_spec.controller_verified_references":         bounded,
@@ -206,7 +207,9 @@ func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 		"validate_plan.context_paths":                               {n(maxContextFiles)},
 		"prime_project_knowledge.max_picks":                         {n(defaultMaxPicks), n(maxMaxPicks)},
 		"validate_completion.final_diff_path":                       {"ANTI_TANGENT_PLAN_ROOTS"},
-		"validate_plan.plan_path":                                   {"ANTI_TANGENT_PLAN_ROOTS"},
+		"validate_plan.plan_text":                                   planPayload,
+		"validate_plan.plan_path":                                   append([]string{"ANTI_TANGENT_PLAN_ROOTS"}, planPayload...),
+		"validate_plan.project_knowledge":                           planPayload,
 		"validate_completion.codescene":                             {"analyze_change_set", "pre_commit_code_health_safeguard"},
 	}
 	for path, wants := range cases {
