@@ -33,8 +33,12 @@ func envelopeIDs(env Envelope) []string {
 
 // rejectionEnvelopeResult renders a response that never reached the reviewer.
 // Such a response writes nothing to the session, so its IDs are assigned here
-// rather than before a session write.
+// rather than before a session write. The findings are copied first: a
+// malformed-evidence rejection shares its slices with the evidence-rejection
+// cache entry, which concurrent calls read and render outside the cache lock.
 func rejectionEnvelopeResult(env Envelope) (*mcp.CallToolResult, Envelope, error) {
+	env.Findings = append([]verdict.Finding(nil), env.Findings...)
+	env.WaivedFindings = append([]verdict.WaivedFinding(nil), env.WaivedFindings...)
 	assignEnvelopeIDs(&env)
 	return envelopeResult(env)
 }

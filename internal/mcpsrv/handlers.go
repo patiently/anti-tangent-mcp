@@ -660,8 +660,8 @@ func notFoundEnvelope(tool, id string, model config.ModelRef) Envelope {
 // truncatedResult is the no-recovery fallback for per-task truncation. It
 // returns a Result (not an Envelope) so the caller can fold any clamp into
 // Findings, run FinalizeVerdict, and assemble the envelope. The synthetic
-// finding is SeverityMajor (was minor pre-0.5.2) so the ladder derives warn
-// consistently with the previously-explicit Verdict assignment.
+// finding is SeverityMajor so the ladder derives warn, matching the Verdict
+// set here.
 func truncatedResult() verdict.Result {
 	return verdict.Result{
 		Verdict: verdict.VerdictWarn,
@@ -670,7 +670,7 @@ func truncatedResult() verdict.Result {
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
-			Suggestion: "Raise ANTI_TANGENT_PER_TASK_MAX_TOKENS or pass max_tokens_override and retry.",
+			Suggestion: "Raise " + perTaskMaxTokensEnvVar + " or pass max_tokens_override and retry.",
 		}},
 		NextAction: "Retry with a higher max_tokens_override (or raise the configured max-tokens cap).",
 	}

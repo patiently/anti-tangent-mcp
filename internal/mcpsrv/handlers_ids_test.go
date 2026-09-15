@@ -2,6 +2,7 @@ package mcpsrv
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -103,6 +104,42 @@ func TestValidateCompletion_RejectedCallsCarryIDs(t *testing.T) {
 	require.NotEmpty(t, env.Findings)
 	assert.Equal(t, verdict.Fingerprint(verdict.CategorySessionMissing, "", "session"), env.Findings[0].ID)
 	assert.Contains(t, env.SummaryBlock, env.Findings[0].ID)
+}
+
+// TestValidateCompletion_ConcurrentMalformedEvidenceRejectionsDoNotRace runs
+// identical malformed-evidence calls on one session at once. Calls that reach
+// the evidence-shape guard store the rejection and the rest read it back from
+// the rejection cache; every response must assign its IDs to findings of its
+// own, not to the cached entry's, so this passes under -race.
+func TestValidateCompletion_ConcurrentMalformedEvidenceRejectionsDoNotRace(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	args := ValidateCompletionArgs{
+		SessionID: sid,
+		Summary:   "done",
+		FinalDiff: "diff --git a/x b/x\n@@ -1 +1 @@\n(truncated)\n",
+	}
+	want := verdict.Fingerprint(verdict.CategoryMalformedEvidence, "", "evidence_shape")
+
+	const calls = 8
+	var wg sync.WaitGroup
+	for i := 0; i < calls; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out, env, err := h.ValidateCompletion(context.Background(), nil, args)
+			if !assert.NoError(t, err) || !assert.NotEmpty(t, env.Findings) {
+				return
+			}
+			assert.Equal(t, want, env.Findings[0].ID)
+			assert.Contains(t, out.Content[0].(*mcp.TextContent).Text, want)
+		}()
+	}
+	wg.Wait()
+
+	cached, ok := lookupCachedRejection(evidenceCacheKey(sid, args.FinalDiff, nil, ""))
+	require.True(t, ok)
+	assert.Empty(t, cached.Findings[0].ID, "the cached rejection carries no IDs of its own")
 }
 
 func TestCheckProgress_RejectedCallCarriesIDs(t *testing.T) {
