@@ -473,6 +473,7 @@ git commit -m "fix(mcpsrv): flag an added ... placeholder line, not an unchanged
 - Modify: `internal/codescene/codescene.go` (new `rawChangeSetResult` type and `(*Digest).UnmarshalJSON`)
 - Test: `internal/codescene/codescene_test.go`
 - Create: `internal/mcpsrv/completion_schema.go` (`validateCompletionInputSchema`)
+- Create: `internal/mcpsrv/completion_schema_test.go`
 - Modify: `internal/mcpsrv/handlers.go` (`validateCompletionTool` sets `InputSchema`)
 - Test: `internal/mcpsrv/integration_test.go`
 - Modify: `go.mod`, `go.sum` (jsonschema-go becomes a direct dependency)
@@ -493,7 +494,7 @@ git commit -m "fix(mcpsrv): flag an added ... placeholder line, not an unchanged
 - The MCP input schema must admit both the existing digest and raw `analyze_change_set` JSON.
 - `codescene.Digest` performs server-side reduction, while explicitly present digest keys take precedence over derived values.
 
-**Verify:** `go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys' -v` → PASS
+**Verify:** `go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys|TestValidateCompletionInputSchema' -v` → PASS
 
 **Steps:**
 
@@ -754,10 +755,38 @@ func TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys(t *testing.T) {
 }
 ```
 
-- [ ] **Step 6: Run it to verify it fails**
+Create `internal/mcpsrv/completion_schema_test.go`:
 
-Run: `go test -race ./internal/mcpsrv/ -run TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys -v`
-Expected: FAIL in `callTool`'s `require.NoError` with a schema error such as `unexpected additional properties ["base_ref"]`.
+```go
+package mcpsrv
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestValidateCompletionInputSchema_OpensUnknownKeysAndKeepsRequired(t *testing.T) {
+	s := validateCompletionInputSchema()
+	assert.ElementsMatch(t, []string{"session_id", "summary"}, s.Required)
+
+	cs, ok := s.Properties["codescene"]
+	require.True(t, ok)
+	assert.Nil(t, cs.AdditionalProperties, "codescene must accept unknown keys")
+	assert.Empty(t, cs.Required, "every digest field is optional")
+
+	v, ok := cs.Properties["verdicts"]
+	require.True(t, ok)
+	assert.Nil(t, v.AdditionalProperties, "verdicts must accept unknown keys")
+	assert.ElementsMatch(t, []string{"improved", "degraded", "stable"}, v.Required)
+}
+```
+
+- [ ] **Step 6: Run them to verify they fail**
+
+Run: `go test -race ./internal/mcpsrv/ -run 'TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys|TestValidateCompletionInputSchema' -v`
+Expected: FAIL — `callTool`'s `require.NoError` reports a schema error such as `unexpected additional properties ["base_ref"]`, and the schema test does not compile (`undefined: validateCompletionInputSchema`).
 
 - [ ] **Step 7: Open the schema**
 
@@ -813,7 +842,7 @@ Expected: `github.com/google/jsonschema-go` moves from the indirect block to a d
 
 - [ ] **Step 8: Run the tests to verify they pass**
 
-Run: `go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_' -v`
+Run: `go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_|TestValidateCompletionInputSchema' -v`
 Expected: PASS
 
 Run: `go test -race ./...`
@@ -848,12 +877,12 @@ and to `### Fixed`:
 
 ```bash
 gofmt -l internal/ && go vet ./internal/...
-git add go.mod go.sum internal/codescene/codescene.go internal/codescene/codescene_test.go internal/mcpsrv/completion_schema.go internal/mcpsrv/handlers.go internal/mcpsrv/integration_test.go README.md CHANGELOG.md
+git add go.mod go.sum internal/codescene/codescene.go internal/codescene/codescene_test.go internal/mcpsrv/completion_schema.go internal/mcpsrv/completion_schema_test.go internal/mcpsrv/handlers.go internal/mcpsrv/integration_test.go README.md CHANGELOG.md
 git commit -m "feat(codescene): accept raw analyze_change_set output and unknown keys"
 ```
 
 ```json:metadata
-{"files": ["internal/codescene/codescene.go", "internal/codescene/codescene_test.go", "internal/mcpsrv/completion_schema.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/integration_test.go", "go.mod", "go.sum", "README.md", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys' -v", "acceptanceCriteria": ["unknown keys in codescene and verdicts accepted over MCP, required keys unchanged", "raw analyze_change_set output reduced to the digest", "present digest fields win; a mistyped raw key is ignored without stopping the other's reduction", "required mode draws no codescene_not_run or codescene_skipped for either shape"], "modelTier": "standard"}
+{"files": ["internal/codescene/codescene.go", "internal/codescene/codescene_test.go", "internal/mcpsrv/completion_schema.go", "internal/mcpsrv/completion_schema_test.go", "internal/mcpsrv/handlers.go", "internal/mcpsrv/integration_test.go", "go.mod", "go.sum", "README.md", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/codescene/ ./internal/mcpsrv/ -run 'TestDigest_UnmarshalJSON|TestIntegration_CodesceneArgumentAcceptsUnknownAndRawKeys|TestValidateCompletionInputSchema' -v", "acceptanceCriteria": ["unknown keys in codescene and verdicts accepted over MCP, required keys unchanged", "raw analyze_change_set output reduced to the digest", "present digest fields win; a mistyped raw key is ignored without stopping the other's reduction", "required mode draws no codescene_not_run or codescene_skipped for either shape"], "modelTier": "standard"}
 ```
 
 ---
