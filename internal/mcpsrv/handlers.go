@@ -141,56 +141,41 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, err
 	}
 
-	result, modelUsed, ms, partialRaw, err := h.review(ctx, cc.Model, cc.Rendered, cc.MaxTokens)
-	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
-		Err:        err,
-		Tool:       "validate_task_spec",
-		Model:      cc.Model,
-		PartialRaw: partialRaw,
-		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
-		Clamp:      cc.Clamp,
-	}); handled {
-		if retErr == nil {
-			h.recordStat(statParams{
-				tool:      "validate_task_spec",
-				verdict:   env.Verdict,
-				findings:  env.Findings,
-				modelUsed: env.ModelUsed,
-				reviewMS:  env.ReviewMS,
-				partial:   env.Partial,
-				sessionID: env.SessionID,
-			})
-		}
-		return r, env, retErr
+	out, err := h.runReview(ctx, cc.Model, cc.Rendered, cc.MaxTokens)
+	if err != nil {
+		return nil, Envelope{}, err
 	}
+	result := out.Result
 	result.Findings = suppressTestabilityExtractionScopeDrift(result.Findings, inputs.TestabilityExtractions)
 	result.Findings = suppressUnverifiableCodebaseClaim(result.Findings, inputs.ControllerVerifiedReferences)
 	result.Findings = normalizeTaskSpecUnverifiableFindings(result.Findings)
-	if cc.Clamp.Severity != "" {
-		result.Findings = append([]verdict.Finding{cc.Clamp}, result.Findings...)
-	}
+	result.Findings = withServerFindings(cc.Clamp, result.Findings, out.Server)
 	result = verdict.FinalizeVerdict(result)
-
-	// Create the session only after the review succeeds so failed reviews
-	// don't leave orphan sessions in the store waiting for TTL eviction.
-	sess := h.deps.Sessions.Create(spec, args.PlanRunID)
-	h.deps.Sessions.SetPreFindings(sess.ID, result.Findings)
-	// Re-fetch after SetPreFindings so LastAccessed reflects the final mutation.
-	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
-		sess = refreshed
-	}
 
 	env := Envelope{
 		Tool:       "validate_task_spec",
-		SessionID:  sess.ID,
 		Verdict:    string(result.Verdict),
 		Findings:   result.Findings,
 		NextAction: result.NextAction,
-		ModelUsed:  modelUsed,
-		ReviewMS:   ms,
+		ModelUsed:  out.ModelUsed,
+		ReviewMS:   out.ReviewMS,
 		Partial:    result.Partial,
 	}
-	env = h.withSessionTTL(env, sess)
+
+	// A truncated review creates no session: the spec was not reviewed in full,
+	// so there is no pre-task review for the rest of the task to build on. A
+	// failed review has already returned above, so it leaves no orphan session
+	// waiting for TTL eviction either.
+	if !out.Truncated {
+		sess := h.deps.Sessions.Create(spec, args.PlanRunID)
+		h.deps.Sessions.SetPreFindings(sess.ID, result.Findings)
+		// Re-fetch after SetPreFindings so LastAccessed reflects the final mutation.
+		if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
+			sess = refreshed
+		}
+		env.SessionID = sess.ID
+		env = h.withSessionTTL(env, sess)
+	}
 
 	if args.PlanRunID == "" {
 		if run, ok := h.deps.PlanRuns.Latest(); ok {
@@ -198,16 +183,16 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		}
 	}
 
-	if args.PlanRunID != "" {
+	if args.PlanRunID != "" && env.SessionID != "" {
 		// Best-effort: an unknown or expired run must not fail the review.
 		if !h.deps.PlanRuns.AppendRow(args.PlanRunID, planrun.TaskRow{
-			SessionID:      sess.ID,
+			SessionID:      env.SessionID,
 			TaskTitle:      args.TaskTitle,
 			PreVerdict:     env.Verdict,
 			CodesceneState: planrun.StateMissing,
 		}) {
 			slog.Warn("plan run row append failed; run unknown or expired",
-				"plan_run_id", args.PlanRunID, "session_id", sess.ID)
+				"plan_run_id", args.PlanRunID, "session_id", env.SessionID)
 		}
 	}
 
@@ -481,55 +466,36 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		return nil, Envelope{}, err
 	}
 
-	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
-	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
-		Err:        err,
-		Tool:       "check_progress",
-		SessionID:  sess.ID,
-		Model:      model,
-		PartialRaw: partialRaw,
-		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
-		Clamp:      clamp,
-		Sess:       sess,
-	}); handled {
-		if retErr == nil {
-			h.recordStat(statParams{
-				tool:         "check_progress",
-				verdict:      env.Verdict,
-				findings:     env.Findings,
-				modelUsed:    env.ModelUsed,
-				reviewMS:     env.ReviewMS,
-				partial:      env.Partial,
-				sessionID:    env.SessionID,
-				payloadBytes: totalBytes(args.ChangedFiles),
-			})
-		}
-		return r, env, retErr
+	out, err := h.runReview(ctx, model, rendered, maxTokens)
+	if err != nil {
+		return nil, Envelope{}, err
 	}
-
-	if clamp.Severity != "" {
-		result.Findings = append([]verdict.Finding{clamp}, result.Findings...)
-	}
+	result := out.Result
+	result.Findings = withServerFindings(clamp, result.Findings, out.Server)
 	result = verdict.FinalizeVerdict(result)
 
-	h.deps.Sessions.AppendCheckpoint(sess.ID, session.Checkpoint{
-		At:        time.Now(),
-		WorkingOn: args.WorkingOn,
-		FileCount: len(args.ChangedFiles),
-		Verdict:   result.Verdict,
-		Findings:  result.Findings,
-	})
+	// A truncated review records no checkpoint: its findings are incomplete,
+	// and a later check_progress would list them as the task's prior findings.
+	if !out.Truncated {
+		h.deps.Sessions.AppendCheckpoint(sess.ID, session.Checkpoint{
+			At:        time.Now(),
+			WorkingOn: args.WorkingOn,
+			FileCount: len(args.ChangedFiles),
+			Verdict:   result.Verdict,
+			Findings:  result.Findings,
+		})
 
-	if sess.PlanRunID != "" {
-		if !h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
-			row.Checkpoints++
-		}) {
-			slog.Warn("plan run row update failed; run or row unknown",
-				"plan_run_id", sess.PlanRunID, "session_id", sess.ID)
+		if sess.PlanRunID != "" {
+			if !h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
+				row.Checkpoints++
+			}) {
+				slog.Warn("plan run row update failed; run or row unknown",
+					"plan_run_id", sess.PlanRunID, "session_id", sess.ID)
+			}
 		}
 	}
 
-	// Re-fetch after AppendCheckpoint so LastAccessed reflects the final mutation.
+	// Re-fetch so LastAccessed reflects the final access.
 	if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
 		sess = refreshed
 	}
@@ -540,8 +506,8 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		Verdict:    string(result.Verdict),
 		Findings:   result.Findings,
 		NextAction: result.NextAction,
-		ModelUsed:  modelUsed,
-		ReviewMS:   ms,
+		ModelUsed:  out.ModelUsed,
+		ReviewMS:   out.ReviewMS,
 		Partial:    result.Partial,
 	}
 	env = h.withSessionTTL(env, sess)
@@ -829,22 +795,22 @@ func prependRepoRootUnusable(pr verdict.PlanResult, reason string) verdict.PlanR
 }
 
 // recoverPartialFindings attempts to extract complete findings from a
-// truncated reviewer response. Returns (result, true) when at least one
-// finding was recovered; (zero, false) when the caller should fall back to
-// truncatedResult.
+// truncated reviewer response. It returns (result, marker, true) when at least
+// one finding was recovered, and (zero, zero, false) when the caller should
+// fall back to truncatedResult.
 //
-// The returned Result has Verdict="warn", Findings = recovered list plus a
-// single minor "truncation marker" finding noting the count and referencing
-// both envVar and max_tokens_override mitigations, Partial=true, and
-// NextAction = the parsed result's next_action when non-empty, otherwise a
-// generic fallback that points the caller at max_tokens_override.
-func recoverPartialFindings(rawJSON []byte, envVar string) (verdict.Result, bool) {
+// result holds only the recovered reviewer findings, with Partial=true and a
+// NextAction that mentions max_tokens_override. marker is the server's minor
+// truncation finding, noting the count and both mitigations. It is returned
+// apart from result so a step that must see only reviewer findings never sees
+// it; the caller places it after them.
+func recoverPartialFindings(rawJSON []byte, envVar string) (verdict.Result, verdict.Finding, bool) {
 	if len(rawJSON) == 0 {
-		return verdict.Result{}, false
+		return verdict.Result{}, verdict.Finding{}, false
 	}
 	r, ok := verdict.ParseResultPartial(rawJSON)
 	if !ok || len(r.Findings) == 0 {
-		return verdict.Result{}, false
+		return verdict.Result{}, verdict.Finding{}, false
 	}
 	marker := verdict.Finding{
 		Severity:   verdict.SeverityMinor,
@@ -853,10 +819,9 @@ func recoverPartialFindings(rawJSON []byte, envVar string) (verdict.Result, bool
 		Evidence:   fmt.Sprintf("reviewer output truncated at the max_tokens cap; %d complete findings recovered", len(r.Findings)),
 		Suggestion: "Raise " + envVar + " or pass max_tokens_override on the next call to capture more.",
 	}
-	r.Findings = append(r.Findings, marker)
-	// AC: next_action MUST mention re-running with max_tokens_override. If the
-	// reviewer returned a NextAction that already mentions it, preserve it;
-	// otherwise append the mitigation hint (or supply a fallback if empty).
+	// next_action MUST mention re-running with max_tokens_override: keep a
+	// reviewer-supplied value that already does, append the hint to one that
+	// does not, and supply a fallback when it is empty.
 	switch {
 	case r.NextAction == "":
 		r.NextAction = "Address recovered findings; reviewer output was truncated. Re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
@@ -864,7 +829,7 @@ func recoverPartialFindings(rawJSON []byte, envVar string) (verdict.Result, bool
 		r.NextAction = r.NextAction + " Reviewer output was truncated; re-call with a higher max_tokens_override (or raise " + envVar + ") to capture the full review."
 	}
 	r.Partial = true
-	return r, true
+	return r, marker, true
 }
 
 // truncatedPlanResult builds the synthetic PlanResult returned when a
@@ -1757,49 +1722,26 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, err
 	}
 
-	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, rendered, maxTokens)
-	// In lightweight mode sess is nil so the helper skips TTL application;
-	// otherwise sess carries the resolved session and TTL fields are filled in.
-	if r, env, handled, retErr := h.handlePerTaskReviewErr(perTaskReviewErrInputs{
-		Err:        err,
-		Tool:       "validate_completion",
-		SessionID:  sessID,
-		Model:      model,
-		PartialRaw: partialRaw,
-		EnvVar:     "ANTI_TANGENT_PER_TASK_MAX_TOKENS",
-		Clamp:      clamp,
-		Sess:       sess,
-	}); handled {
-		if retErr == nil {
-			h.recordStat(statParams{
-				tool:         "validate_completion",
-				verdict:      env.Verdict,
-				findings:     env.Findings,
-				modelUsed:    env.ModelUsed,
-				reviewMS:     env.ReviewMS,
-				partial:      env.Partial,
-				sessionID:    env.SessionID,
-				payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
-			})
-		}
-		return r, env, retErr
+	out, err := h.runReview(ctx, model, rendered, maxTokens)
+	if err != nil {
+		return nil, Envelope{}, err
 	}
-
-	if clamp.Severity != "" {
-		result.Findings = append([]verdict.Finding{clamp}, result.Findings...)
-	}
+	result := out.Result
+	result.Findings = withServerFindings(clamp, result.Findings, out.Server)
 	if len(emptyPathFindings) > 0 {
-		// FIX 2's soft case: merged in here (same pattern as clamp/
-		// codescene below) rather than sent through to the reviewer
-		// prompt, so this stays a server-computed finding independent of
-		// what the reviewer LLM says.
+		// Server-computed, so merged here rather than sent to the reviewer, and
+		// independent of what the reviewer says.
 		result.Findings = append(emptyPathFindings, result.Findings...)
 	}
 	result = verdict.FinalizeVerdict(result)
 
 	if !lightweight {
-		h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
-		// Re-fetch after SetPostFindings so LastAccessed reflects the final mutation.
+		// A truncated review leaves the stored findings of the last complete
+		// one in place: its own list is incomplete.
+		if !out.Truncated {
+			h.deps.Sessions.SetPostFindings(sess.ID, result.Findings)
+		}
+		// Re-fetch so LastAccessed reflects the final access.
 		if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
 			sess = refreshed
 		}
@@ -1821,8 +1763,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		Verdict:    string(result.Verdict),
 		Findings:   result.Findings,
 		NextAction: result.NextAction,
-		ModelUsed:  modelUsed,
-		ReviewMS:   ms,
+		ModelUsed:  out.ModelUsed,
+		ReviewMS:   out.ReviewMS,
 		Partial:    result.Partial,
 	}
 	if !lightweight {

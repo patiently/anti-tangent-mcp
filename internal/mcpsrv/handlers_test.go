@@ -592,8 +592,7 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarn(t *testing.T) {
 	// No session should be created on truncation.
 	assert.Empty(t, env.SessionID)
 
-	// Pins handlePerTaskReviewErr's Tool: in.Tool assignment (review_error.go)
-	// for the truncation-recovery envelope, shared by all three per-task tools.
+	// Pins the tool name on this tool's truncated-review envelope.
 	require.Equal(t, "validate_task_spec", env.Tool)
 }
 
@@ -624,7 +623,7 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 
-	// Pins handlePerTaskReviewErr's Tool: in.Tool assignment for this tool.
+	// Pins the tool name on this tool's truncated-review envelope.
 	require.Equal(t, "check_progress", env.Tool)
 }
 
@@ -654,7 +653,7 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 
-	// Pins handlePerTaskReviewErr's Tool: in.Tool assignment for this tool.
+	// Pins the tool name on this tool's truncated-review envelope.
 	require.Equal(t, "validate_completion", env.Tool)
 }
 
@@ -715,7 +714,7 @@ func TestRecoverPartialFindings_PreservesReviewerNextActionWithOverrideHint(t *t
 		`{"severity":"major","category":"other","criterion":"ac1","evidence":"e1","suggestion":"s1"}` +
 		`],"next_action":"Tighten AC1 wording."}`)
 
-	r, ok := recoverPartialFindings(raw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	r, _, ok := recoverPartialFindings(raw, perTaskMaxTokensEnvVar)
 	require.True(t, ok)
 	assert.True(t, r.Partial)
 	assert.Contains(t, r.NextAction, "Tighten AC1 wording.")

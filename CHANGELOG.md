@@ -50,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An unexpected key in `validate_completion`'s optional `codescene` argument, or in its
   `verdicts`, no longer fails schema validation and loses the whole call. Unknown keys are
   ignored.
+- A `validate_completion` review truncated at the reviewer's output budget skipped every
+  server-side step after the review: the `ANTI_TANGENT_CODESCENE=required` check, the
+  test-evidence check, `submission_defect_only` and the plan-run row update. A truncated review
+  now runs the same steps as a complete one. It still records no `check_progress` checkpoint and
+  creates no `validate_task_spec` session.
 
 ## [0.21.0] - 2026-09-11
 

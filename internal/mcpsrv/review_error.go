@@ -1,6 +1,7 @@
 package mcpsrv
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,7 +13,6 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
-	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -259,7 +259,7 @@ type planReviewErrInputs struct {
 	Call planCallContext
 }
 
-// handlePlanReviewErr is the ValidatePlan analog of handlePerTaskReviewErr.
+// handlePlanReviewErr is the ValidatePlan analog of runReview.
 // Collapses the truncation-recovery + error-propagation pattern after the
 // plan reviewer call (either reviewPlanSingle or reviewPlanChunked).
 //
@@ -297,67 +297,56 @@ func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolRes
 	return r, p, true, err
 }
 
-// perTaskReviewErrInputs bundles the inputs to handlePerTaskReviewErr.
-// Carrying these on a struct keeps the helper signature narrow (1 arg vs. 7)
-// and matches CodeScene's "max arguments = 4" code-health threshold.
-type perTaskReviewErrInputs struct {
-	Err error
-	// Tool is the calling handler's MCP tool name ("validate_task_spec",
-	// "check_progress", or "validate_completion"), copied onto the returned
-	// envelope's Tool field since this helper is shared by all three.
-	Tool       string
-	SessionID  string
-	Model      config.ModelRef
-	PartialRaw []byte
-	EnvVar     string
-	Clamp      verdict.Finding
-	// Sess is nil for pre-session flows (ValidateTaskSpec, lightweight
-	// ValidateCompletion); otherwise the resolved *session.Session so the
-	// envelope carries SessionExpiresAt / SessionTTLRemainingSeconds.
-	Sess *session.Session
+// perTaskMaxTokensEnvVar names the output budget a truncated per-task review
+// tells the caller to raise.
+const perTaskMaxTokensEnvVar = "ANTI_TANGENT_PER_TASK_MAX_TOKENS"
+
+// reviewOutcome is one per-task reviewer call as a session tool's tail
+// consumes it. Result holds only the findings the reviewer produced. Server
+// holds the findings the server adds for a truncated response, which the tail
+// places after the reviewer's own.
+type reviewOutcome struct {
+	Result    verdict.Result
+	Server    []verdict.Finding
+	ModelUsed string
+	ReviewMS  int64
+	Truncated bool
 }
 
-// handlePerTaskReviewErr collapses the truncation-recovery + error-propagation
-// pattern shared by ValidateTaskSpec, CheckProgress, and ValidateCompletion
-// after h.review(...).
-//
-// Returns (result, env, handled, err):
-//   - in.Err == nil               → handled=false; caller proceeds normally.
-//   - in.Err is a truncation err  → handled=true; result/env carry the
-//     partial-recovery or truncated envelope with clamp and (when in.Sess is
-//     non-nil) session-TTL fields applied.
-//   - in.Err is anything else     → handled=true; result/env are zero
-//     values and err is the propagated in.Err.
-//
-// Always returning handled=true on non-nil in.Err lets the call site drop
-// the residual `if err != nil` branch — just `if handled { return ... }`.
-func (h *handlers) handlePerTaskReviewErr(in perTaskReviewErrInputs) (*mcp.CallToolResult, Envelope, bool, error) {
-	if in.Err == nil {
-		return nil, Envelope{}, false, nil
+// runReview runs the reviewer call and folds a truncated response into an
+// ordinary outcome, so each session tool runs one tail for both. A response
+// truncated after some complete findings yields those findings, marked
+// partial, and a minor marker; one truncated before any yields no reviewer
+// findings and the server's major truncation notice. Any other error is
+// returned.
+func (h *handlers) runReview(ctx context.Context, model config.ModelRef, p prompts.Output, maxTokens int) (reviewOutcome, error) {
+	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, p, maxTokens)
+	if err == nil {
+		return reviewOutcome{Result: result, ModelUsed: modelUsed, ReviewMS: ms}, nil
 	}
-	if !errors.Is(in.Err, providers.ErrResponseTruncated) {
-		return nil, Envelope{}, true, in.Err
+	if !errors.Is(err, providers.ErrResponseTruncated) {
+		return reviewOutcome{}, err
 	}
-	r, ok := recoverPartialFindings(in.PartialRaw, in.EnvVar)
-	if !ok {
-		r = truncatedResult()
+	out := reviewOutcome{ModelUsed: model.String(), Truncated: true}
+	if recovered, marker, ok := recoverPartialFindings(partialRaw, perTaskMaxTokensEnvVar); ok {
+		out.Result = recovered
+		out.Server = []verdict.Finding{marker}
+		return out, nil
 	}
-	if in.Clamp.Severity != "" {
-		r.Findings = append([]verdict.Finding{in.Clamp}, r.Findings...)
+	notice := truncatedResult()
+	out.Server = notice.Findings
+	notice.Findings = nil
+	out.Result = notice
+	return out, nil
+}
+
+// withServerFindings places the max-tokens clamp before the reviewer's
+// findings and the truncation findings after them.
+func withServerFindings(clamp verdict.Finding, reviewer, server []verdict.Finding) []verdict.Finding {
+	out := make([]verdict.Finding, 0, len(reviewer)+len(server)+1)
+	if clamp.Severity != "" {
+		out = append(out, clamp)
 	}
-	r = verdict.FinalizeVerdict(r)
-	env := Envelope{
-		Tool:       in.Tool,
-		SessionID:  in.SessionID,
-		Verdict:    string(r.Verdict),
-		Findings:   r.Findings,
-		NextAction: r.NextAction,
-		ModelUsed:  in.Model.String(),
-		Partial:    r.Partial,
-	}
-	if in.Sess != nil {
-		env = h.withSessionTTL(env, in.Sess)
-	}
-	res, e, err := envelopeResult(env)
-	return res, e, true, err
+	out = append(out, reviewer...)
+	return append(out, server...)
 }
