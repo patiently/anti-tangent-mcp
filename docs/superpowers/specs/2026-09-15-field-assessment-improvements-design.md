@@ -602,7 +602,7 @@ plan.
 subject's marker (patch when there is none) and fails when `CHANGELOG.md` has no entry for the
 result. So the mechanics are:
 
-- **One CHANGELOG entry**, `## [0.22.0]`, for the whole release. Each part
+- **One CHANGELOG entry**, `## [0.22.0] - 2026-09-15`, for the whole release. Each part
   adds its own lines to that entry.
 - **Branch.** Each part is developed on `version/0.22.0`, reused in turn (the name is free again
   once the previous part's branch is merged and deleted), so CI's changelog check runs on every
