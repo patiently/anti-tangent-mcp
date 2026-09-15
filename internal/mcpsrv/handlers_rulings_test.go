@@ -193,6 +193,30 @@ func TestValidateCompletion_RulingWaivesByFingerprintAndPersists(t *testing.T) {
 	assert.Contains(t, rv.LastRequest.User, "- "+id+" (scope_drift on \"AC 1\"):\n````text\nTask 7 owns the dispatcher wiring\n````\n")
 }
 
+// TestValidateCompletion_ARulingOnAWaivedEntrysIDShowsItsCategoryAndCriterion
+// covers ruling on an ID that names a waived entry: a waived finding is not
+// part of PriorFindings, so knownSessionFindings does not carry it, and the
+// category and criterion must come from the existing ruling on the same
+// fingerprint instead — the one that waived the entry in the first place.
+func TestValidateCompletion_ARulingOnAWaivedEntrysIDShowsItsCategoryAndCriterion(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	id := completeWith(t, h, rv, completionCallArgs(sid), reviewerFindingsResp(driftFinding)).Findings[0].ID
+
+	args := completionCallArgs(sid)
+	args.ControllerRulings = []ControllerRulingArg{{FindingID: id, Ruling: "Task 7 owns the dispatcher wiring"}}
+	env := completeWith(t, h, rv, args, reviewerFindingsResp(driftFinding))
+	require.Len(t, env.WaivedFindings, 1)
+	waivedID := env.WaivedFindings[0].ID
+
+	args2 := completionCallArgs(sid)
+	args2.ControllerRulings = []ControllerRulingArg{{FindingID: waivedID, Ruling: "Confirmed non-issue"}}
+	completeWith(t, h, rv, args2, passResp("claude-opus-4-7"))
+
+	assert.Contains(t, rv.LastRequest.User,
+		"- "+waivedID+" (scope_drift on \"AC 1\"):\n````text\nConfirmed non-issue\n````\n")
+}
+
 func TestValidateCompletion_RulingOnASuffixedIDCoversEveryFindingWithItsFingerprint(t *testing.T) {
 	h, rv := newRulingsHandlers(t)
 	sid := startTask(t, h, rv)

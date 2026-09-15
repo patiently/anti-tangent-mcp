@@ -104,6 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   evidence on `validate_completion`'s `finding_responses`/`controller_rulings` and on
   `validate_plan`'s malformed-ruling advisory. An id this long is now truncated to 32 characters
   before it is echoed back; which ids are accepted is unchanged.
+- A `validate_completion` `controller_rulings` entry naming a waived finding's id rendered on the
+  next call's prompt with an empty category and criterion, since a waived finding leaves the
+  session's known findings. It now falls back to the existing ruling on the same fingerprint,
+  which always has both, since a ruling is what waived the finding.
 
 ## [0.21.0] - 2026-09-11
 

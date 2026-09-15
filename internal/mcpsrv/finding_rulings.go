@@ -202,10 +202,21 @@ func buildCompletionReview(state session.ReviewState, preFindings, known []verdi
 			continue
 		}
 		r := session.Ruling{ID: e.FindingID, Text: e.Ruling}
+		found := false
 		for _, f := range known {
 			if f.ID == e.FindingID {
 				r.Category, r.Criterion = f.Category, f.Criterion
+				found = true
 				break
+			}
+		}
+		// An issued ID not among known findings names a finding a prior ruling
+		// already waived off of known: fall back to the existing ruling on the
+		// same fingerprint, which always carries the category and criterion,
+		// since a ruling waived it.
+		if !found {
+			if existing, ok := cr.rulings[fp]; ok {
+				r.Category, r.Criterion = existing.Category, existing.Criterion
 			}
 		}
 		cr.rulings[fp] = r
