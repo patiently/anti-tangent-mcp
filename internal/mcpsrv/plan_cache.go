@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	planPassCacheVersion    = "plan-pass-cache-v4"
+	planPassCacheVersion    = "plan-pass-cache-v5"
 	planPassCacheTTL        = 3 * time.Minute
 	planPassCacheMaxEntries = 128
 )
@@ -173,9 +173,11 @@ func (c *planPassCache) expireForTest() {
 
 func clonePlanResult(pr verdict.PlanResult) verdict.PlanResult {
 	pr.PlanFindings = append([]verdict.Finding(nil), pr.PlanFindings...)
+	pr.WaivedFindings = append([]verdict.WaivedFinding(nil), pr.WaivedFindings...)
 	pr.Tasks = append([]verdict.PlanTaskResult(nil), pr.Tasks...)
 	for i := range pr.Tasks {
 		pr.Tasks[i].Findings = append([]verdict.Finding(nil), pr.Tasks[i].Findings...)
+		pr.Tasks[i].WaivedFindings = append([]verdict.WaivedFinding(nil), pr.Tasks[i].WaivedFindings...)
 		pr.Tasks[i].ExitContracts = append([]string(nil), pr.Tasks[i].ExitContracts...)
 		pr.Tasks[i].NormativeTestBodies = append([]string(nil), pr.Tasks[i].NormativeTestBodies...)
 	}

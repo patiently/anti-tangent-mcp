@@ -174,6 +174,7 @@ func TestToolInputSchemas_RequiredSetsUnchanged(t *testing.T) {
 		"validate_completion.controller_rulings[]":                       {"finding_id", "ruling"},
 		"validate_completion.final_files[]":                              {"path"},
 		"validate_completion.finding_responses[]":                        {"finding_id", "response"},
+		"validate_plan.controller_rulings[]":                             {"finding_id", "ruling"},
 		"validate_task_spec":                                             {"goal", "task_title"},
 		"validate_task_spec.harness_shape_attestation[]":                 {"assertions", "harness", "path"},
 	}
@@ -215,6 +216,9 @@ func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 		"validate_completion.finding_responses[].response":          {n(maxFindingResponseChars)},
 		"validate_completion.controller_rulings":                    {n(maxControllerRulingEntries), n(maxControllerRulingChars), n(session.MaxRulings)},
 		"validate_completion.controller_rulings[].ruling":           {n(maxControllerRulingChars)},
+		"validate_plan.controller_rulings":                          {n(maxControllerRulingEntries), n(maxControllerRulingChars)},
+		"validate_plan.controller_rulings[].ruling":                 {n(maxControllerRulingChars)},
+		"validate_plan.controller_verified_references":              bounded,
 	}
 	for path, wants := range cases {
 		desc, ok := descs[path]

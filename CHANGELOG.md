@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `plan_run_report` shows, for each task, how many findings controller rulings waived on its last
   `validate_completion` and whether any of its calls escalated, with totals for the run. The plan
   ledger records both.
+- `validate_plan` takes `controller_rulings`, resent every round and matched like
+  `validate_completion`'s, and `controller_verified_references`, applied before the codebase
+  reference checklist is built. Waived findings appear in `waived_findings`, at plan level and per
+  task. A ruling whose id is not shaped like a finding id draws an advisory.
 
 ### Changed
 
@@ -59,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call that never passed `plan_run_id`, before idle expiry and a restarted server.
 - `check_progress` lists each earlier finding once, from the most recent call that raised it,
   with its `id`, shows the session's controller rulings, and leaves out findings a ruling covers.
+- `validate_plan`'s rolled-up codebase reference checklist is added after the verdict is decided,
+  so it no longer counts toward the three-minor rule that lifts a plan to `warn`. A plan that the
+  checklist alone had lifted to `warn` can now pass.
 
 ### Fixed
 

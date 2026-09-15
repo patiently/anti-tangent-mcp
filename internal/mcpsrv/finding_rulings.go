@@ -320,3 +320,30 @@ func appendUnique(list []string, s string) []string {
 	}
 	return append(list, s)
 }
+
+// planRulings keys validate_plan's rulings by fingerprint. The tool keeps no
+// session, so there is no issued-ID set to check an ID against: only its shape
+// is checked, and a malformed ID is returned for the advisory. When one call
+// rules twice on a fingerprint, the last entry wins.
+func planRulings(in []ControllerRulingArg) (map[string]session.Ruling, []string) {
+	out := map[string]session.Ruling{}
+	var malformed []string
+	for _, e := range in {
+		if !verdict.ValidDisplayID(e.FindingID) {
+			malformed = appendUnique(malformed, e.FindingID)
+			continue
+		}
+		out[verdict.BaseID(e.FindingID)] = session.Ruling{ID: e.FindingID, Text: e.Ruling}
+	}
+	return out, malformed
+}
+
+// malformedPlanRulingsAdvisory reports validate_plan rulings whose ID is not a
+// finding id. A well-formed ruling that waives nothing draws no advisory: a
+// reviewer that honours the rendered ruling and leaves the finding out is the
+// ruling working.
+func malformedPlanRulingsAdvisory(ids []string) verdict.Finding {
+	return ignoredArgumentAdvisory("controller_rulings",
+		"These controller_rulings ids are not finding ids, so they were ignored: "+strings.Join(ids, ", ")+".",
+		"Copy each id exactly as a validate_plan response showed it: f_ and eight hex digits, with an optional -n suffix.")
+}

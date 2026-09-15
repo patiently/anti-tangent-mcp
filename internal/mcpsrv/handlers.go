@@ -1043,14 +1043,16 @@ type ValidateCompletionArgs struct {
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
 type ValidatePlanArgs struct {
-	PlanText          string   `json:"plan_text,omitempty" jsonschema:"Deprecated and removed in 1.0.0: the plan markdown inline. Pass plan_path instead; exactly one of plan_text and plan_path must be set."`
-	PlanPath          string   `json:"plan_path,omitempty" jsonschema:"Absolute path to the plan markdown file, which the server reads. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots. Exactly one of plan_text and plan_path must be set."`
-	ProjectKnowledge  string   `json:"project_knowledge,omitempty" jsonschema:"Markdown excerpts from the project knowledge base that the controller selected for this plan. The reviewer treats them as authoritative."`
-	ModelOverride     string   `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
-	MaxTokensOverride int      `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default scaled by task count; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
-	Mode              string   `json:"mode,omitempty" jsonschema:"thorough, the default, or quick, which surfaces only the most severe findings, at most 3 per scope."`
-	ContextPaths      []string `json:"context_paths,omitempty" jsonschema:"Absolute paths to source files the plan makes claims about, at most 50. Each file is sent in full to the reviewer vendor on every reviewer call of the round, so attach only files the plan touches and never secrets. With ANTI_TANGENT_PLAN_ROOTS set they must be under those roots."`
-	RepoRoot          string   `json:"repo_root,omitempty" jsonschema:"Absolute path to the repository root; enables the disk tier of the Create/Modify consistency check. With ANTI_TANGENT_PLAN_ROOTS set it must be under those roots."`
+	PlanText                     string                `json:"plan_text,omitempty" jsonschema:"Deprecated and removed in 1.0.0: the plan markdown inline. Pass plan_path instead; exactly one of plan_text and plan_path must be set."`
+	PlanPath                     string                `json:"plan_path,omitempty" jsonschema:"Absolute path to the plan markdown file, which the server reads. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots. Exactly one of plan_text and plan_path must be set."`
+	ProjectKnowledge             string                `json:"project_knowledge,omitempty" jsonschema:"Markdown excerpts from the project knowledge base that the controller selected for this plan. The reviewer treats them as authoritative."`
+	ModelOverride                string                `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
+	MaxTokensOverride            int                   `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default scaled by task count; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
+	Mode                         string                `json:"mode,omitempty" jsonschema:"thorough, the default, or quick, which surfaces only the most severe findings, at most 3 per scope."`
+	ContextPaths                 []string              `json:"context_paths,omitempty" jsonschema:"Absolute paths to source files the plan makes claims about, at most 50. Each file is sent in full to the reviewer vendor on every reviewer call of the round, so attach only files the plan touches and never secrets. With ANTI_TANGENT_PLAN_ROOTS set they must be under those roots."`
+	RepoRoot                     string                `json:"repo_root,omitempty" jsonschema:"Absolute path to the repository root; enables the disk tier of the Create/Modify consistency check. With ANTI_TANGENT_PLAN_ROOTS set it must be under those roots."`
+	ControllerRulings            []ControllerRulingArg `json:"controller_rulings,omitempty" jsonschema:"Rulings you made on findings from earlier rounds, resent every round. Each waives every finding with the same id, ignoring any -n suffix; only an id's shape is checked. At most 50 entries of at most 2000 characters each."`
+	ControllerVerifiedReferences []string              `json:"controller_verified_references,omitempty" jsonschema:"Paths, symbols, line anchors or commands you already verified; a matching unverifiable_codebase_claim finding is suppressed by substring match before the rolled-up checklist is built. At most 50 entries of at most 500 characters each."`
 }
 
 func validatePlanTool() *mcp.Tool {
@@ -1982,6 +1984,17 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		logOutcome = "validation_error"
 		return nil, verdict.PlanResult{}, errors.New(`mode must be "quick" or "thorough"`)
 	}
+	rulingArgs, err := normalizeControllerRulings(args.ControllerRulings)
+	if err != nil {
+		logOutcome = "validation_error"
+		return nil, verdict.PlanResult{}, err
+	}
+	verifiedRefs, err := normalizeBoundedStringList("controller_verified_references", args.ControllerVerifiedReferences, maxPinnedByEntries, maxPinnedByChars)
+	if err != nil {
+		logOutcome = "validation_error"
+		return nil, verdict.PlanResult{}, err
+	}
+	rulings, malformedRulingIDs := planRulings(rulingArgs)
 
 	maxTokens, clamp, err := effectiveMaxTokens(args.MaxTokensOverride, h.deps.Cfg.PlanMaxTokens, h.deps.Cfg.MaxTokensCeiling)
 	if err != nil {
@@ -2120,12 +2133,14 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		return nil, verdict.PlanResult{}, err
 	}
 	rendered, err := renderPlanReview(renderPlanReviewInputs{
-		PlanText:         planText,
-		ProjectKnowledge: projectKnowledge,
-		Tasks:            tasks,
-		ChunkSize:        h.deps.Cfg.PlanTasksPerChunk,
-		Mode:             args.Mode,
-		ContextFiles:     toPromptContextFiles(contextFiles),
+		PlanText:                     planText,
+		ProjectKnowledge:             projectKnowledge,
+		Tasks:                        tasks,
+		ChunkSize:                    h.deps.Cfg.PlanTasksPerChunk,
+		Mode:                         args.Mode,
+		ContextFiles:                 toPromptContextFiles(contextFiles),
+		ControllerRulings:            rulingsForPrompt(rulings),
+		ControllerVerifiedReferences: verifiedRefs,
 	})
 	if err != nil {
 		logOutcome = "render_error"
@@ -2171,21 +2186,22 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		// produces — so the entry really can be shared between the two.
 		//
 		// finish() ONLY — no applyPreLadder, and above all no verdict ladder:
-		// the entry was finalized before it was stored, and
-		// normalizePlanUnverifiableFindings is not proven idempotent, so
-		// re-running the ladder on a cached entry is not a no-op. See
+		// the entry was finalized before it was stored, with its checklist
+		// already appended, so re-running the ladder on a cached entry would
+		// count that checklist toward noise_cluster. See
 		// planCallContext for the three call orders and for the two
 		// divergences (no checkFileConsistency, no store) this path keeps on
 		// purpose.
 		cachedCall := planCallContext{
-			PlanRuns:         h.deps.PlanRuns,
-			PlanLedger:       h.deps.PlanLedger,
-			Source:           planSrc.String(),
-			ModelUsed:        cachedModelUsed,
-			ReviewMS:         0,
-			UsedPlanText:     args.PlanText != "",
-			RepoRootUnusable: repoRootUnusable,
-			ContextFiles:     contextSources(contextFiles),
+			PlanRuns:           h.deps.PlanRuns,
+			PlanLedger:         h.deps.PlanLedger,
+			Source:             planSrc.String(),
+			ModelUsed:          cachedModelUsed,
+			ReviewMS:           0,
+			UsedPlanText:       args.PlanText != "",
+			RepoRootUnusable:   repoRootUnusable,
+			ContextFiles:       contextSources(contextFiles),
+			MalformedRulingIDs: malformedRulingIDs,
 		}
 		cachedCall.finish(&cached)
 		cachedMeta := cachedCall.meta()
@@ -2241,17 +2257,20 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// hand-assemble its own tail and silently lacked three of this one's
 	// steps. See planCallContext.
 	call := planCallContext{
-		PlanRuns:         h.deps.PlanRuns,
-		PlanLedger:       h.deps.PlanLedger,
-		Source:           planSrc.String(),
-		ModelUsed:        modelUsed,
-		ReviewMS:         ms,
-		UsedPlanText:     args.PlanText != "",
-		RepoRootUnusable: repoRootUnusable,
-		Clamp:            clamp,
-		ContextFiles:     contextSources(contextFiles),
-		FileConsistency:  fileConsistency,
-		Tasks:            tasks,
+		PlanRuns:           h.deps.PlanRuns,
+		PlanLedger:         h.deps.PlanLedger,
+		Source:             planSrc.String(),
+		ModelUsed:          modelUsed,
+		ReviewMS:           ms,
+		UsedPlanText:       args.PlanText != "",
+		RepoRootUnusable:   repoRootUnusable,
+		Clamp:              clamp,
+		ContextFiles:       contextSources(contextFiles),
+		FileConsistency:    fileConsistency,
+		Tasks:              tasks,
+		Rulings:            rulings,
+		VerifiedReferences: verifiedRefs,
+		MalformedRulingIDs: malformedRulingIDs,
 	}
 	if r, p, handled, herr := h.handlePlanReviewErr(planReviewErrInputs{
 		Err:        err,
@@ -2366,12 +2385,14 @@ func (r renderedPlanReview) cachePrompts() []planCachePrompt {
 // matches CodeScene's "max arguments = 4" code-health threshold; mirrors
 // the planReviewErrInputs pattern at review_error.go.
 type renderPlanReviewInputs struct {
-	PlanText         string
-	ProjectKnowledge string
-	Tasks            []planparser.RawTask
-	ChunkSize        int
-	Mode             string
-	ContextFiles     []prompts.ContextFile
+	PlanText                     string
+	ProjectKnowledge             string
+	Tasks                        []planparser.RawTask
+	ChunkSize                    int
+	Mode                         string
+	ContextFiles                 []prompts.ContextFile
+	ControllerRulings            []session.Ruling
+	ControllerVerifiedReferences []string
 }
 
 func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
@@ -2398,11 +2419,13 @@ func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
 	}
 	if len(in.Tasks) <= in.ChunkSize {
 		rendered, err := prompts.RenderPlan(prompts.PlanInput{
-			PlanText:          in.PlanText,
-			ProjectKnowledge:  in.ProjectKnowledge,
-			Mode:              in.Mode,
-			ContextFiles:      in.ContextFiles,
-			ContextFilesNonce: contextFilesNonce,
+			PlanText:                     in.PlanText,
+			ProjectKnowledge:             in.ProjectKnowledge,
+			Mode:                         in.Mode,
+			ContextFiles:                 in.ContextFiles,
+			ContextFilesNonce:            contextFilesNonce,
+			ControllerRulings:            in.ControllerRulings,
+			ControllerVerifiedReferences: in.ControllerVerifiedReferences,
 		})
 		if err != nil {
 			return renderedPlanReview{}, fmt.Errorf("render plan prompt: %w", err)
@@ -2413,11 +2436,13 @@ func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
 		return renderedPlanReview{}, fmt.Errorf("renderPlanReview: chunkSize must be positive, got %d", in.ChunkSize)
 	}
 	findingsOnly, err := prompts.RenderPlanFindingsOnly(prompts.PlanInput{
-		PlanText:          in.PlanText,
-		ProjectKnowledge:  in.ProjectKnowledge,
-		Mode:              in.Mode,
-		ContextFiles:      in.ContextFiles,
-		ContextFilesNonce: contextFilesNonce,
+		PlanText:                     in.PlanText,
+		ProjectKnowledge:             in.ProjectKnowledge,
+		Mode:                         in.Mode,
+		ContextFiles:                 in.ContextFiles,
+		ContextFilesNonce:            contextFilesNonce,
+		ControllerRulings:            in.ControllerRulings,
+		ControllerVerifiedReferences: in.ControllerVerifiedReferences,
 	})
 	if err != nil {
 		return renderedPlanReview{}, fmt.Errorf("render plan_findings_only: %w", err)
@@ -2430,12 +2455,14 @@ func renderPlanReview(in renderPlanReviewInputs) (renderedPlanReview, error) {
 		}
 		chunkTasks := in.Tasks[i:end]
 		chunkPrompt, err := prompts.RenderPlanTasksChunk(prompts.PlanChunkInput{
-			PlanText:          in.PlanText,
-			ProjectKnowledge:  in.ProjectKnowledge,
-			ChunkTasks:        chunkTasks,
-			Mode:              in.Mode,
-			ContextFiles:      in.ContextFiles,
-			ContextFilesNonce: contextFilesNonce,
+			PlanText:                     in.PlanText,
+			ProjectKnowledge:             in.ProjectKnowledge,
+			ChunkTasks:                   chunkTasks,
+			Mode:                         in.Mode,
+			ContextFiles:                 in.ContextFiles,
+			ContextFilesNonce:            contextFilesNonce,
+			ControllerRulings:            in.ControllerRulings,
+			ControllerVerifiedReferences: in.ControllerVerifiedReferences,
 		})
 		if err != nil {
 			return renderedPlanReview{}, fmt.Errorf("render plan_tasks_chunk: %w", err)
@@ -2592,28 +2619,24 @@ func planEnvelopeResult(pr verdict.PlanResult, meta planSummaryMeta) (*mcp.CallT
 	return planEnvelopeResultFinalized(finalizePlanResult(pr, meta), meta)
 }
 
-// finalizePlanVerdict runs the shared normalize/calibrate/FinalizePlanVerdict
-// ladder without touching SummaryBlock. Split out of finalizePlanResult so
-// ValidatePlan's fresh-review happy path can run the ladder before the final
-// PlanRunID / deprecation-finding state is known, then compute
-// formatPlanSummary exactly once after those are settled, instead of the
-// three redundant computations this used to produce.
+// finalizePlanVerdict runs the plan verdict ladder without touching
+// SummaryBlock, so ValidatePlan's fresh-review path can settle PlanRunID and
+// the per-call advisories before computing formatPlanSummary once.
 //
 // Order is load-bearing:
-//  1. rollup unverifiable-codebase-claim findings (else calibration sees
-//     noise);
-//  2. calibrate verdict for the unverifiable-only case (preserves the
-//     v0.4.0 verdict→quality mapping for plans whose only findings are
-//     unverifiable claims);
-//  3. FinalizePlanVerdict (per-task + plan-level severity ladder +
-//     noise_cluster + ApplyPlanQualitySanity rerun).
-//
-// FinalizePlanVerdict's ApplyPlanQualitySanity rerun replaces the
-// stand-alone call this function previously made.
+//  1. strip task-level unverifiable_codebase_claim findings, keeping their
+//     checklist lines;
+//  2. calibrate for the unverifiable-only case, told whether anything was
+//     stripped;
+//  3. FinalizePlanVerdict (per-task and plan-level severity ladder,
+//     noise_cluster, ApplyPlanQualitySanity);
+//  4. append the rolled-up checklist, after the ladder, so it never counts
+//     toward noise_cluster.
 func finalizePlanVerdict(pr *verdict.PlanResult) {
-	normalizePlanUnverifiableFindings(pr)
-	calibratePlanVerdictForUnverifiableOnly(pr)
+	lines := stripTaskUnverifiableFindings(pr)
+	calibratePlanVerdictForUnverifiableOnly(pr, len(lines) > 0)
 	verdict.FinalizePlanVerdict(pr)
+	appendCodebaseReferenceChecklist(pr, lines)
 }
 
 func finalizePlanResult(pr verdict.PlanResult, meta planSummaryMeta) verdict.PlanResult {

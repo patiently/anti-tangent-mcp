@@ -13,6 +13,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
+	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -95,9 +96,9 @@ func (h *handlers) resolveModelAndRender(
 //
 // The verdict ladder (finalizePlanVerdict) is deliberately NOT a method
 // here. The cache-hit path must never re-run it on an already-finalized
-// entry — normalizePlanUnverifiableFindings is not proven idempotent — so
-// the ladder stays at the call sites, which is exactly where the three
-// orders differ:
+// entry — its checklist is already appended, and a second ladder would count
+// it toward noise_cluster — so the ladder stays at the call sites, which is
+// exactly where the three orders differ:
 //
 //	fresh review = applyPreLadder -> ladder -> mintPlanRunID -> store -> finish
 //	recovery     = applyPreLadder -> ladder ->                            finish
@@ -171,6 +172,18 @@ type planCallContext struct {
 	// Tasks is the parsed plan, used to re-attach normative test bodies to the
 	// reviewer's per-task results (populateNormativeTestBodies).
 	Tasks []planparser.RawTask
+	// Rulings are this call's controller rulings by fingerprint, which
+	// applyPreLadder waives findings against. Unset on the cache-hit path: the
+	// rulings are rendered into the prompts the cache key hashes, so a stored
+	// entry already carries its waivers.
+	Rulings map[string]session.Ruling
+	// VerifiedReferences are this call's controller_verified_references, which
+	// applyPreLadder suppresses unverifiable claims with.
+	VerifiedReferences []string
+	// MalformedRulingIDs are this call's ruling IDs without a display ID's
+	// shape. Per call, like the deprecation notice, and never stored on a
+	// cache entry.
+	MalformedRulingIDs []string
 }
 
 // meta projects the context down to the summary inputs. One place, so the
@@ -200,6 +213,13 @@ func (c planCallContext) applyPreLadder(pr *verdict.PlanResult) {
 	// unfloored severity. The prompt already forbids both shapes; this is the
 	// enforcement point.
 	verdict.DemoteUnattachedContradictions(pr, fileSourcePaths(c.ContextFiles))
+	// After demotion, which can turn a contradiction into the unverifiable
+	// claim a verified reference suppresses; before the ladder's rollup
+	// collects what remains into the checklist.
+	suppressPlanVerifiedReferences(pr, c.VerifiedReferences)
+	// Before the file-consistency finding and the clamp join the list, so only
+	// reviewer findings are waived.
+	waivePlanFindings(pr, c.Rulings)
 	if c.FileConsistency != nil {
 		pr.PlanFindings = append(pr.PlanFindings, *c.FileConsistency)
 	}
@@ -224,18 +244,22 @@ func (c planCallContext) mintPlanRunID(pr *verdict.PlanResult) {
 }
 
 // finish runs the post-ladder tail every validate_plan exit path shares:
-// mint the plan_run_id if none exists, add the two per-call advisories, then
-// compute SummaryBlock exactly once with both of those already in place.
+// mint the plan_run_id if none exists, add the per-call advisories, assign
+// display IDs, then compute SummaryBlock exactly once with all of that in
+// place.
 //
-// The advisories land AFTER the ladder and after store() on purpose. Both are
-// minor CategoryOther findings, and verdict.FinalizeVerdict treats a 3rd minor
-// finding as a noise_cluster trigger that lifts the verdict to warn — running
-// either through the ladder would let an advisory about THIS call's arguments
-// flip a plan's verdict. Both also describe this call, not the plan content,
-// so neither may be stored on a cache entry. Order puts deprecation first
+// The advisories land AFTER the ladder and after store() on purpose. Each is
+// a minor CategoryOther finding, and verdict.FinalizeVerdict treats a 3rd
+// minor finding as a noise_cluster trigger that lifts the verdict to warn —
+// running one through the ladder would let an advisory about THIS call's
+// arguments flip a plan's verdict. Each also describes this call, not the plan
+// content, so none may be stored on a cache entry. Deprecation goes first
 // because it has been PlanFindings[0] since it existed.
 func (c planCallContext) finish(pr *verdict.PlanResult) {
 	c.mintPlanRunID(pr)
+	if len(c.MalformedRulingIDs) > 0 {
+		pr.PlanFindings = append(pr.PlanFindings, malformedPlanRulingsAdvisory(c.MalformedRulingIDs))
+	}
 	*pr = prependRepoRootUnusable(*pr, c.RepoRootUnusable)
 	*pr = prependPlanDeprecation(*pr, c.UsedPlanText)
 	assignPlanIDs(pr)
