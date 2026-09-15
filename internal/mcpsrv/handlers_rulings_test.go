@@ -169,6 +169,31 @@ func TestValidateCompletion_EscalationReplacesTheResubmitInstruction(t *testing.
 	assert.NotContains(t, env.NextAction, "Re-submit with the missing evidence")
 }
 
+// TestValidateCompletion_ARulingAndAnAnswerOnTheSameIDWaivesRatherThanEscalates
+// covers spec §2.5: a ruling and a response on the same finding id in one
+// call are both accepted. The reviewer re-raises the finding under another
+// category, matched to the ruling only through same_as — the path that
+// depends on waiveRuled reading same_as at step 4 before markRepeats clears
+// it at step 5. Running markRepeats first nils same_as before waiveRuled can
+// read it, so the re-raise would stay in Findings and never reach
+// WaivedFindings.
+func TestValidateCompletion_ARulingAndAnAnswerOnTheSameIDWaivesRatherThanEscalates(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	id := completeWith(t, h, rv, completionCallArgs(sid), reviewerFindingsResp(driftFinding)).Findings[0].ID
+
+	args := completionCallArgs(sid)
+	args.FindingResponses = []FindingResponseArg{{FindingID: id, Response: "Task 7 owns it"}}
+	args.ControllerRulings = []ControllerRulingArg{{FindingID: id, Ruling: "Confirmed non-issue"}}
+	env := completeWith(t, h, rv, args,
+		reviewerFindingsResp(findingObj("major", "missing_acceptance_criterion", "AC 1 is not met", "no route", id)))
+
+	assert.Empty(t, env.Findings)
+	require.Len(t, env.WaivedFindings, 1)
+	assert.Equal(t, verdict.CategoryMissingAC, env.WaivedFindings[0].Category)
+	assert.False(t, env.Escalate)
+}
+
 func TestValidateCompletion_RulingWaivesByFingerprintAndPersists(t *testing.T) {
 	h, rv := newRulingsHandlers(t)
 	sid := startTask(t, h, rv)
