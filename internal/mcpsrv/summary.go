@@ -15,11 +15,14 @@ import (
 // characters mid-codepoint.
 const summaryEvidenceMax = 120
 
+// waivedRulingSummaryMax caps a ruling's text on its waived: line, in runes.
+const waivedRulingSummaryMax = 200
+
 // formatEnvelopeSummary renders a deterministic, paste-ready text block for a
 // per-task Envelope (validate_task_spec / check_progress / validate_completion).
 // It includes the originating tool name (when set), the session id, verdict,
 // partial flag (when set), model + review timing, optional session TTL line,
-// findings counts plus per-finding lines, and the next_action. Output is
+// findings counts plus per-finding lines, an escalate line and one waived line per waived finding when set, and the next_action. Output is
 // plain text and intentionally stable so downstream tooling can
 // substring-assert against it.
 //
@@ -42,12 +45,16 @@ func formatEnvelopeSummary(env Envelope) string {
 	if env.SubmissionDefectOnly {
 		b.WriteString("  submission_defect_only: true — re-submit with the missing evidence; no code rework implied\n")
 	}
+	if env.Escalate {
+		b.WriteString("  escalate:      true\n")
+	}
 	fmt.Fprintf(&b, "  model_used:    %s\n", escapeBlockValue(env.ModelUsed))
 	fmt.Fprintf(&b, "  review_ms:     %d\n", env.ReviewMS)
 	if env.SessionTTLRemainingSeconds != nil {
 		fmt.Fprintf(&b, "  session_ttl_remaining_seconds: %d\n", *env.SessionTTLRemainingSeconds)
 	}
 	writeFindingsSummary(&b, env.Findings, "  ")
+	writeWaivedSummary(&b, env.WaivedFindings, "  ")
 	// next_action is reviewer-authored free text (schema: minLength 1, no
 	// other constraint — see internal/verdict/schema.json) rendered LAST in
 	// this block, after every finding. Escaping it matters for the same
@@ -142,6 +149,7 @@ func formatPlanSummary(pr verdict.PlanResult, meta planSummaryMeta) string {
 		fmt.Fprintf(&b, "    - %s[%s][%s] %s — %s\n", findingIDPrefix(f.ID, "      "), f.Severity, f.Category,
 			escapeContinuationLines(f.Criterion, "      "), formatFindingEvidence(f.Evidence, "      "))
 	}
+	writeWaivedSummary(&b, pr.WaivedFindings, "    ")
 	fmt.Fprintf(&b, "  tasks: %d\n", len(pr.Tasks))
 	for _, t := range pr.Tasks {
 		tCrit, tMaj, tMin := countSeverities(t.Findings)
@@ -151,6 +159,7 @@ func formatPlanSummary(pr verdict.PlanResult, meta planSummaryMeta) string {
 			fmt.Fprintf(&b, "      - %s[%s] %s — %s\n", findingIDPrefix(f.ID, "        "), f.Severity,
 				escapeContinuationLines(f.Criterion, "        "), formatFindingEvidence(f.Evidence, "        "))
 		}
+		writeWaivedSummary(&b, t.WaivedFindings, "      ")
 	}
 	fmt.Fprintf(&b, "  next_action:   %s\n", escapeBlockValue(pr.NextAction))
 	return b.String()
@@ -220,6 +229,20 @@ func findingIDPrefix(id, contIndent string) string {
 		return ""
 	}
 	return escapeContinuationLines(id, contIndent) + " "
+}
+
+// writeWaivedSummary writes, for each waived finding, a waived: line naming
+// the ruling that waived it and an evidence: line under it. The implementer
+// pastes the block into its DONE report, so the controller can check each
+// waiver against a ruling it issued and see what the ruling covered.
+func writeWaivedSummary(b *strings.Builder, waived []verdict.WaivedFinding, indent string) {
+	cont := indent + "    "
+	for _, w := range waived {
+		fmt.Fprintf(b, "%swaived: %s %s/%s ruling: \"%s\"\n", indent,
+			escapeContinuationLines(w.ID, cont), w.Severity, w.Category,
+			escapeContinuationLines(truncate(w.Ruling, waivedRulingSummaryMax), cont))
+		fmt.Fprintf(b, "%s  evidence: %s\n", indent, formatFindingEvidence(w.Evidence, cont))
+	}
 }
 
 // writeFindingsSummary writes the `findings: N total (C critical, M major, m minor)`
