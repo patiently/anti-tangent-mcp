@@ -111,11 +111,19 @@ type PreInput struct {
 }
 
 type MidInput struct {
-	Spec          session.TaskSpec
-	PriorFindings []verdict.Finding
-	WorkingOn     string
-	Files         []File
-	Questions     []string
+	Spec              session.TaskSpec
+	PriorFindings     []verdict.Finding
+	ControllerRulings []session.Ruling
+	WorkingOn         string
+	Files             []File
+	Questions         []string
+}
+
+// PriorFinding is a finding from the task's previous validate_completion
+// review, with the implementer's answer to it on this call, if any.
+type PriorFinding struct {
+	verdict.Finding
+	Response string
 }
 
 // fenceMinRun is the shortest backtick fence a prompt block may use. Four
@@ -177,6 +185,8 @@ type PostInput struct {
 	ExitContracts                  []string
 	ExitContractsInferred          bool
 	Codescene                      *codescene.Digest
+	PriorFindings                  []PriorFinding
+	ControllerRulings              []session.Ruling
 }
 
 type PlanInput struct {
@@ -197,6 +207,12 @@ type PlanInput struct {
 	// stable golden or exercise a nonce that deliberately does not match
 	// content (see NewContextFilesNonce).
 	ContextFilesNonce string
+	// ControllerRulings are rendered as authoritative in every plan prompt,
+	// inside the shared prefix.
+	ControllerRulings []session.Ruling
+	// ControllerVerifiedReferences name references the controller already
+	// checked against the codebase.
+	ControllerVerifiedReferences []string
 }
 
 type KBIndexEntry struct {
@@ -491,6 +507,12 @@ type PlanChunkInput struct {
 	// the derivation per chunk and to keep the byte-identical-UserPrefix
 	// invariant obvious rather than incidental.
 	ContextFilesNonce string
+	// ControllerRulings are rendered as authoritative in every plan prompt,
+	// inside the shared prefix.
+	ControllerRulings []session.Ruling
+	// ControllerVerifiedReferences name references the controller already
+	// checked against the codebase.
+	ControllerVerifiedReferences []string
 }
 
 // RenderPlanTasksChunk produces a per-chunk prompt for the chunked validate_plan

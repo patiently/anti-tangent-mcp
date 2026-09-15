@@ -86,4 +86,6 @@ Judge only comments this change ADDS, and only when the evidence shows which com
 
 Emit these as `category: quality`, `criterion: comment_hygiene`, and `severity: minor` — always `minor`, never `major` or `critical`, however many you find. Quote the offending comment in `evidence`, and give the rewritten comment or an explicit removal in `suggestion`.
 
+Every finding carries `same_as`: the ID of the prior finding or major pre-task finding it raises again, or null when it raises none of them.
+
 Respond with the verdict JSON only.

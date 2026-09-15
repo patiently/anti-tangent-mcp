@@ -38,4 +38,18 @@ When you cite a code symbol's signature, an example sibling key, or an adjacent 
 
 When the plan asserts something about the codebase that you cannot verify from the plan text alone{{if .ContextFiles}} or from an attached file{{end}} — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim from the plan. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase.
 
+{{if .ControllerVerifiedReferences -}}
+Controller-verified references: the controller has already checked each of these against the codebase. Do not emit `unverifiable_codebase_claim` for a claim about one of them.
+{{range .ControllerVerifiedReferences}}- {{.}}
+{{end}}
+{{end -}}
+{{if .ControllerRulings -}}
+## Controller rulings (authoritative)
+
+The controller has ruled on the findings below, by ID. A ruling is final for this plan: do not raise the concern it rules on again, under any category. If the plan contains a problem a ruling does not cover, raise that problem and quote the ruling in `evidence`.
+{{range .ControllerRulings}}
+- {{.ID}}: {{.Text}}
+{{end}}
+{{end -}}
+
 {{end}}

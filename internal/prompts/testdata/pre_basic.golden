@@ -65,4 +65,6 @@ If the task's plan text or context contains `.trimIndent()`, `.trimMargin()`, `t
   - evidence: "<quoted trim construct and the multi-line literal>"
   - suggestion: "Pin example strings the implementation will compare against to a single source line, OR phrase the AC against the rendered string (e.g. 'output contains <phrase>') rather than against source layout."
 
+Set `same_as` to null on every finding.
+
 Respond with the verdict JSON only.
