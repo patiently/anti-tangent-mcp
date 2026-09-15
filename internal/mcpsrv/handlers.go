@@ -410,8 +410,7 @@ type FileArg struct {
 // transport error instead of a structured envelope.
 //
 // If both Path and a non-nil Content are supplied, Content wins and Path is
-// never read — inline content always wins, and a caller sending both is not
-// treated as an error.
+// never read; a caller sending both is not treated as an error.
 type CompletionFileArg struct {
 	Path    string  `json:"path" jsonschema:"Path of the file. When content is omitted it must be absolute and the server reads the file itself; with ANTI_TANGENT_PLAN_ROOTS set, it must be under one of those roots."`
 	Content *string `json:"content,omitempty" jsonschema:"The file's full content. Omit it to have the server read path from disk; send an empty string for a deleted or genuinely empty file."`
