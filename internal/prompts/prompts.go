@@ -174,11 +174,6 @@ func fenceFiles(files []File) string {
 	return fence(parts...)
 }
 
-// fenceLines returns one delimiter safe for a block quoting every line.
-func fenceLines(lines []string) string {
-	return fence(lines...)
-}
-
 // newlineRun matches one or more consecutive CR/LF characters, collapsed to a
 // single space by oneLine.
 var newlineRun = regexp.MustCompile(`[\r\n]+`)
@@ -202,6 +197,11 @@ func oneLine(s string) string {
 type StaleCommentHint struct {
 	Names []string
 	Hits  []string
+}
+
+// Fence returns one delimiter safe for a block quoting every hit line.
+func (h *StaleCommentHint) Fence() string {
+	return fence(h.Hits...)
 }
 
 type PostInput struct {
@@ -679,7 +679,6 @@ func RenderExtract(in ExtractInput) (Output, error) {
 var templateFuncs = template.FuncMap{
 	"fence":      fence,
 	"fenceFiles": fenceFiles,
-	"fenceLines": fenceLines,
 	"oneLine":    oneLine,
 }
 
