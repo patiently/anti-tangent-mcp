@@ -2984,7 +2984,8 @@ type PlanRunReportResult struct {
 func planRunReportTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name: "plan_run_report",
-		Description: "Report the per-task outcome of a finished multi-task plan run: the anti-tangent verdict and the CodeScene result for each task. " +
+		Description: "Report the per-task outcome of a finished multi-task plan run: the anti-tangent verdict and the CodeScene result for each task, " +
+			"how many findings controller rulings waived, and which tasks escalated. " +
 			"Call once after the last task reports DONE, with the plan_run_id returned by validate_plan. " +
 			"Deterministic and free — no reviewer model is called.",
 	}
