@@ -15,6 +15,12 @@ const (
 	maxFindingResponseChars    = 2000
 	maxControllerRulingEntries = 50
 	maxControllerRulingChars   = 2000
+	// maxEchoedIDRunes caps a caller-supplied finding_id at the length a
+	// legitimate display ID could ever reach before it is echoed into an
+	// advisory's evidence. Unlike response/ruling text, finding_id has no
+	// length cap of its own — an unknown or malformed id is still accepted so
+	// its advisory can name it — so this bounds only what gets echoed back.
+	maxEchoedIDRunes = 32
 )
 
 // FindingResponseArg is one finding_responses entry on validate_completion.
@@ -187,12 +193,12 @@ func buildCompletionReview(state session.ReviewState, preFindings, known []verdi
 	var unknownRulings, overCap []string
 	for _, e := range rulings {
 		if !state.IssuedIDs[e.FindingID] {
-			unknownRulings = appendUnique(unknownRulings, e.FindingID)
+			unknownRulings = appendUnique(unknownRulings, truncate(e.FindingID, maxEchoedIDRunes))
 			continue
 		}
 		fp := verdict.BaseID(e.FindingID)
 		if _, exists := cr.rulings[fp]; !exists && len(cr.rulings) >= session.MaxRulings {
-			overCap = appendUnique(overCap, e.FindingID)
+			overCap = appendUnique(overCap, truncate(e.FindingID, maxEchoedIDRunes))
 			continue
 		}
 		r := session.Ruling{ID: e.FindingID, Text: e.Ruling}
@@ -225,7 +231,7 @@ func buildCompletionReview(state session.ReviewState, preFindings, known []verdi
 	var unknownResponses []string
 	for _, e := range responses {
 		if !priorIDs[e.FindingID] {
-			unknownResponses = appendUnique(unknownResponses, e.FindingID)
+			unknownResponses = appendUnique(unknownResponses, truncate(e.FindingID, maxEchoedIDRunes))
 		}
 	}
 
@@ -352,7 +358,7 @@ func planRulings(in []ControllerRulingArg) (map[string]session.Ruling, []string)
 	var malformed []string
 	for _, e := range in {
 		if !verdict.ValidDisplayID(e.FindingID) {
-			malformed = appendUnique(malformed, e.FindingID)
+			malformed = appendUnique(malformed, truncate(e.FindingID, maxEchoedIDRunes))
 			continue
 		}
 		out[verdict.BaseID(e.FindingID)] = session.Ruling{ID: e.FindingID, Text: e.Ruling}

@@ -276,6 +276,31 @@ func TestValidateCompletion_UnknownIDsDrawOneAdvisoryEachAndKeepTheVerdict(t *te
 	assert.Empty(t, st.Rulings)
 }
 
+// TestValidateCompletion_AHugeFindingIDIsTruncatedInTheAdvisory covers a
+// caller sending a pathologically long finding_id: neither normalizer caps
+// its length (only response/ruling text is capped), so an unknown id this
+// long must still be truncated before an advisory echoes it back.
+func TestValidateCompletion_AHugeFindingIDIsTruncatedInTheAdvisory(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+
+	huge := strings.Repeat("x", 10000)
+	args := completionCallArgs(sid)
+	args.FindingResponses = []FindingResponseArg{{FindingID: huge, Response: "a"}}
+	args.ControllerRulings = []ControllerRulingArg{{FindingID: huge, Ruling: "r"}}
+	env := completeWith(t, h, rv, args, passResp("claude-opus-4-7"))
+
+	var advised int
+	for _, f := range env.Findings {
+		if f.Criterion == "finding_responses" || f.Criterion == "controller_rulings" {
+			advised++
+			assert.Less(t, len(f.Evidence), 1000, "criterion %s evidence must not echo the full id (%d bytes)", f.Criterion, len(f.Evidence))
+			assert.NotContains(t, f.Evidence, huge)
+		}
+	}
+	assert.Equal(t, 2, advised)
+}
+
 func TestValidateCompletion_RulingsPastTheSessionCapAreIgnoredWithAnAdvisory(t *testing.T) {
 	h, rv := newRulingsHandlers(t)
 	sid := startTask(t, h, rv)

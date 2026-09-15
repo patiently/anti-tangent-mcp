@@ -2,6 +2,7 @@ package mcpsrv
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -228,6 +229,27 @@ func TestValidatePlan_OnlyAMalformedRulingIDDrawsAnAdvisory(t *testing.T) {
 	assert.Contains(t, advisories[0].Evidence, "F#3")
 	assert.NotContains(t, advisories[0].Evidence, "f_0123abcd")
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+}
+
+// TestValidatePlan_AHugeControllerRulingIDIsTruncatedInTheAdvisory covers a
+// pathologically long finding_id on a malformed validate_plan ruling: it is
+// never a valid display ID, so it draws the malformed-ID advisory, whose
+// evidence must not echo the id verbatim.
+func TestValidatePlan_AHugeControllerRulingIDIsTruncatedInTheAdvisory(t *testing.T) {
+	huge := strings.Repeat("y", 10000)
+	pr, _, _ := runPlanWithArgs(t, passPlanResp("go").RawJSON, ValidatePlanArgs{
+		PlanText:          buildPlanWithNTasks(1),
+		ControllerRulings: []ControllerRulingArg{{FindingID: huge, Ruling: "malformed"}},
+	})
+	var advisories []verdict.Finding
+	for _, f := range pr.PlanFindings {
+		if f.Criterion == "controller_rulings" {
+			advisories = append(advisories, f)
+		}
+	}
+	require.Len(t, advisories, 1)
+	assert.Less(t, len(advisories[0].Evidence), 1000)
+	assert.NotContains(t, advisories[0].Evidence, huge)
 }
 
 func TestValidatePlan_TheChecklistCannotBeWaived(t *testing.T) {

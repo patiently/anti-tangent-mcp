@@ -100,6 +100,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   task headings is now decided per result instead of for the whole response, so one result with a
   drifted title (the truncation-recovered tail) no longer forces every other result onto a
   chunk-local index.
+- A `finding_id` with no length cap could be echoed verbatim into an ignored-argument advisory's
+  evidence on `validate_completion`'s `finding_responses`/`controller_rulings` and on
+  `validate_plan`'s malformed-ruling advisory. An id this long is now truncated to 32 characters
+  before it is echoed back; which ids are accepted is unchanged.
 
 ## [0.21.0] - 2026-09-11
 
