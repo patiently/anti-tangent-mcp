@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot files, not sending a file in both `final_diff` and `final_files`, and
   `ANTI_TANGENT_MAX_PAYLOAD_BYTES`.
 
+### Fixed
+
+- The evidence-shape guard's bare `...` placeholder check read a unified diff backwards: it
+  flagged an unchanged ` ...` line and never an added `+...` line, which is the one that signals
+  elided evidence. In a diff with hunk headers it now skips unchanged and removed lines and checks
+  added lines with the `+` stripped. A bare `...` line in a `.py` or `.pyi` file, where it is the
+  idiomatic stub body, is no longer flagged in either `final_files` or a diff.
+
 ## [0.21.0] - 2026-09-11
 
 ### Security

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -1047,6 +1048,57 @@ var evidenceTruncationPatterns = []string{
 // surrounding whitespace). The (?m) flag anchors ^/$ to line boundaries.
 var evidenceEllipsisLine = regexp.MustCompile(`(?m)^\s*\.\.\.\s*$`)
 
+// diffEllipsisPlaceholderOffset returns the byte offset of the first bare `...`
+// line in finalDiff, or -1. In a unified diff (one with hunk headers) an
+// unchanged or removed line carries no new evidence and is skipped, and an
+// added line is checked with its `+` stripped; a bare `...` on an unchanged
+// line is ordinary code, while on an added line it is elided evidence. Text
+// with no hunk header is not a unified diff and is checked line by line as it
+// stands. Lines under a `+++` header for a file ellipsisExemptPath accepts are
+// not checked.
+func diffEllipsisPlaceholderOffset(finalDiff string) int {
+	if !strings.HasPrefix(finalDiff, "@@ ") && !strings.Contains(finalDiff, "\n@@ ") {
+		if loc := evidenceEllipsisLine.FindStringIndex(finalDiff); loc != nil {
+			return loc[0]
+		}
+		return -1
+	}
+	offset := 0
+	exempt := false
+	for _, line := range strings.SplitAfter(finalDiff, "\n") {
+		body := strings.TrimRight(line, "\r\n")
+		switch {
+		case strings.HasPrefix(body, "+++ "):
+			name := strings.TrimPrefix(body, "+++ ")
+			if tab := strings.IndexByte(name, '\t'); tab >= 0 {
+				name = name[:tab]
+			}
+			exempt = ellipsisExemptPath(strings.TrimPrefix(name, "b/"))
+		case strings.HasPrefix(body, " "), strings.HasPrefix(body, "-"):
+		case strings.HasPrefix(body, "+"):
+			if !exempt && strings.TrimSpace(body[1:]) == "..." {
+				return offset
+			}
+		default:
+			if !exempt && strings.TrimSpace(body) == "..." {
+				return offset
+			}
+		}
+		offset += len(line)
+	}
+	return -1
+}
+
+// ellipsisExemptPath reports whether a bare `...` line is legitimate content
+// in the file at path: in Python, `...` is the idiomatic body of a stub.
+func ellipsisExemptPath(path string) bool {
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(path))) {
+	case ".py", ".pyi":
+		return true
+	}
+	return false
+}
+
 // checkEvidenceShape inspects finalDiff/files for malformed evidence shapes.
 // Returns a non-empty human-readable reason string when a rule fires; empty
 // string when the evidence looks structurally sound. The reason is what
@@ -1071,8 +1123,8 @@ func checkEvidenceShape(finalDiff string, files []FileArg) string {
 				return fmt.Sprintf("final_diff contains truncation marker %q at offset %d", p, idx)
 			}
 		}
-		if loc := evidenceEllipsisLine.FindStringIndex(finalDiff); loc != nil {
-			return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", loc[0])
+		if off := diffEllipsisPlaceholderOffset(finalDiff); off >= 0 {
+			return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", off)
 		}
 	}
 	for i, f := range files {
@@ -1087,8 +1139,10 @@ func checkEvidenceShape(finalDiff string, files []FileArg) string {
 				return fmt.Sprintf("final_files[%d].content (path %q) contains truncation marker %q at offset %d", i, f.Path, p, idx)
 			}
 		}
-		if loc := evidenceEllipsisLine.FindStringIndex(f.Content); loc != nil {
-			return fmt.Sprintf("final_files[%d].content (path %q) contains a placeholder line `...` at offset %d", i, f.Path, loc[0])
+		if !ellipsisExemptPath(f.Path) {
+			if loc := evidenceEllipsisLine.FindStringIndex(f.Content); loc != nil {
+				return fmt.Sprintf("final_files[%d].content (path %q) contains a placeholder line `...` at offset %d", i, f.Path, loc[0])
+			}
 		}
 	}
 	return ""
