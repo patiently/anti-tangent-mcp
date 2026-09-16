@@ -19,15 +19,18 @@ const (
 	barWidth = 5
 )
 
-// humanUntil renders a duration as a compact "in …" reset label.
+// humanUntil renders a duration as a compact "in …" reset label: hours and
+// minutes below 2.5 days, whole days from there. Days round up, so a day label
+// never reads shorter than the actual wait, and the smallest one is "in 3d".
 func humanUntil(d time.Duration) string {
+	const day = 24 * time.Hour
 	if d <= 0 {
 		return "now"
 	}
 	if d < time.Hour {
 		return fmt.Sprintf("in %dm", int(d.Minutes()))
 	}
-	if d < 24*time.Hour {
+	if d < 60*time.Hour {
 		h := int(d.Hours())
 		m := int(d.Minutes()) % 60
 		if m == 0 {
@@ -35,17 +38,17 @@ func humanUntil(d time.Duration) string {
 		}
 		return fmt.Sprintf("in %dh%dm", h, m)
 	}
-	return fmt.Sprintf("in %dd", int(d.Hours())/24)
+	return fmt.Sprintf("in %dd", int((d+day-1)/day))
 }
 
 // claudeClock renders an absolute reset time in local time: a clock for resets
-// under 24h out, else a date.
+// under 24h out, else a date and clock.
 func claudeClock(t, now time.Time) string {
 	lt := t.Local()
 	if t.Sub(now) < 24*time.Hour {
 		return lt.Format("15:04")
 	}
-	return lt.Format("Jan 2")
+	return lt.Format("Jan 2 15:04")
 }
 
 func usd(f float64) string { return fmt.Sprintf("$%.2f", f) }
