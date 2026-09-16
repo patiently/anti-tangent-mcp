@@ -153,6 +153,11 @@ func (p *diffParser) headerLine(line string) {
 // classified by the counts in the hunk header, so a removed line whose body
 // starts with -- or ++ is not mistaken for a file header. Text with no hunk
 // header yields sections with no lines.
+//
+// Known limitation: a hunk header whose counts overrun its actual body — only
+// possible in a hand-edited or truncated diff, since git always emits counts
+// that match — makes the next file's --- / +++ headers get consumed as hunk
+// body lines instead, attributing that file's hunk to the previous path.
 func ParseDiff(diff string) []File {
 	p := &diffParser{}
 	for _, raw := range strings.Split(diff, "\n") {
@@ -373,16 +378,37 @@ func blankRange(b []byte, i, j int) {
 	}
 }
 
+// trailingCommentMarkers open a trailing comment on an otherwise-code line: a
+// slash-slash or hash line comment, or a spaced SQL-style "--" comment (the
+// surrounding spaces keep a decrement or a flag like "--force" mid-line from
+// being mistaken for one).
+var trailingCommentMarkers = []string{"//", "#", " -- "}
+
+// stripTrailingComment cuts line at the earliest trailing comment marker, so
+// prose after the code — "x := 1 // see handleFooBar below" — is not read
+// for declared names. The caller blanks quoted literals first, so a marker
+// inside a string cannot trigger this.
+func stripTrailingComment(line string) string {
+	cut := len(line)
+	for _, m := range trailingCommentMarkers {
+		if i := strings.Index(line, m); i >= 0 && i < cut {
+			cut = i
+		}
+	}
+	return line[:cut]
+}
+
 // declaredOnCodeLines returns all names declared by non-comment lines, with
-// duplicates. Quoted string literals are blanked first, so a literal's words
-// are never mistaken for a declared name.
+// duplicates. Quoted string literals are blanked and a trailing comment is
+// cut first, so a literal's words and a trailing remark are never mistaken
+// for a declared name.
 func declaredOnCodeLines(lines []string) []string {
 	var names []string
 	for _, text := range lines {
 		if IsComment(text) {
 			continue
 		}
-		names = append(names, declaredNames(blankQuotedLiterals(text))...)
+		names = append(names, declaredNames(stripTrailingComment(blankQuotedLiterals(text)))...)
 	}
 	return names
 }
@@ -500,7 +526,7 @@ func Scan(names []string, sources []Source) []Hit {
 				continue
 			}
 			seen[key] = true
-			hits = append(hits, Hit{Path: src.Path, Line: l.Number, Name: name, Text: clip(strings.TrimSpace(l.Text))})
+			hits = append(hits, Hit{Path: clip(src.Path), Line: l.Number, Name: name, Text: clip(strings.TrimSpace(l.Text))})
 			if len(hits) == MaxHits {
 				return hits
 			}
@@ -509,6 +535,9 @@ func Scan(names []string, sources []Source) []Hit {
 	return hits
 }
 
+// clip truncates s to MaxLineRunes. Scan applies it to both a hit's path and
+// its text, since a +++ header path is arbitrary text and left unclipped
+// could make one hit's rendered line grow unbounded.
 func clip(s string) string {
 	if utf8.RuneCountInString(s) <= MaxLineRunes {
 		return s

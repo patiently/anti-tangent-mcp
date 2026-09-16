@@ -154,6 +154,23 @@ func TestRemovedNames_DropsLowercaseLocalsAfterValVarLetConst(t *testing.T) {
 	assert.Equal(t, []string{"MAX_RETRIES"}, RemovedNames(ParseDiff(diff)))
 }
 
+func TestRemovedNames_IgnoresATrailingCommentOnACodeLine(t *testing.T) {
+	// "function handleFooBar" after the // is prose, not a declaration: the
+	// code before it is what should be read for declared names.
+	diff := "--- a/a.go\n+++ b/a.go\n@@ -1 +0,0 @@\n-\tx := 1 // see function handleFooBar below\n"
+	assert.Empty(t, RemovedNames(ParseDiff(diff)))
+}
+
+func TestRemovedNames_StillDeclaresANameWithNoTrailingComment(t *testing.T) {
+	diff := "--- a/a.go\n+++ b/a.go\n@@ -1 +0,0 @@\n-func handleFooBar() {\n"
+	assert.Equal(t, []string{"handleFooBar"}, RemovedNames(ParseDiff(diff)))
+}
+
+func TestRemovedNames_ACodeOnlyLineKeepsEveryDeclaredName(t *testing.T) {
+	diff := "--- a/a.go\n+++ b/a.go\n@@ -1 +0,0 @@\n-\tcase StateRetired, StateArchived:\n"
+	assert.Equal(t, []string{"StateRetired", "StateArchived"}, RemovedNames(ParseDiff(diff)))
+}
+
 func TestIsComment(t *testing.T) {
 	for _, s := range []string{"// a", "  # a", " * a", "/* a", "<!-- a", "-- a", "\t//a"} {
 		assert.True(t, IsComment(s), "%q", s)
@@ -200,6 +217,16 @@ func TestScan_DeduplicatesAndCaps(t *testing.T) {
 	assert.Equal(t, 2, hits[1].Line)
 	assert.Equal(t, MaxLineRunes, len([]rune(hits[0].Text)))
 	assert.Empty(t, Scan(nil, sources))
+}
+
+func TestScan_ClipsAnOverlongPath(t *testing.T) {
+	// A +++ header path is arbitrary text; without a cap here, one repeated
+	// long path across many hits could put hundreds of KB into the prompt.
+	longPath := strings.Repeat("p", 10000)
+	sources := []Source{{Path: longPath, Lines: []Line{{Number: 1, Text: "// legacySweep is gone"}}}}
+	hits := Scan([]string{"legacySweep"}, sources)
+	require.Len(t, hits, 1)
+	assert.Equal(t, MaxLineRunes, len([]rune(hits[0].Path)))
 }
 
 func TestFileLines(t *testing.T) {
