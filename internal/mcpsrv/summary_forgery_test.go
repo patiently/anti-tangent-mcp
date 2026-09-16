@@ -174,6 +174,16 @@ type unknownPlanRunInput struct {
 	PlanRunID string
 }
 
+// clearedSummaryInput is clearPlanServerSetFields's "input" for registry
+// purposes. That function is a void field-clearer, not a formatter — its
+// SummaryBlock assignment is the hardcoded empty string literal, never
+// derived from anything reachable — so it carries no real free-text input.
+// Unused exists only so the reflective forgery walk (which requires at least
+// one plain-string field) has something to set; render ignores it.
+type clearedSummaryInput struct {
+	Unused string
+}
+
 // summaryFormatterCase registers one summary-block producer for both tests.
 //
 // wantHeaders / wantMarkers are the counts a GENUINE block renders. They are
@@ -302,6 +312,20 @@ func summaryFormatterCases() []summaryFormatterCase {
 				v := in.(*planSummaryInput)
 				return formatPlanSummary(v.PR, v.Meta)
 			},
+		},
+		{
+			// The source scan keys on ANY assignment to a field named
+			// SummaryBlock, so `pr.SummaryBlock = ""` inside
+			// clearPlanServerSetFields (internal/verdict/parser_partial.go),
+			// which strips the plan-level fields only the server may set
+			// before a reviewer's parsed JSON is trusted, counts as a
+			// producer even though it renders nothing. See
+			// clearedSummaryInput.
+			name:        "verdict.clearPlanServerSetFields",
+			wantHeaders: 0,
+			wantMarkers: 0,
+			newIn:       func() any { return &clearedSummaryInput{Unused: "x"} },
+			render:      func(any) string { return "" },
 		},
 		{
 			name:        "mcpsrv.formatPrimeSummary",

@@ -39,7 +39,17 @@ func splitTaskUnverifiable(findings []verdict.Finding) (kept []verdict.Finding, 
 // affected task, with that task's evidence joined by "; " and truncated at
 // rollupEvidencePerTaskMax. Reviewer-emitted plan-level unverifiable findings
 // stay where they are. Each task's Findings is reassigned to a fresh slice.
-func stripTaskUnverifiableFindings(pr *verdict.PlanResult) []string {
+//
+// The label numbers by the PARSED plan position, never by the reviewer's own
+// task_index: validateChunkIdentity checks a chunk's titles and order but not
+// task_index, so a chunk-local index (e.g. the second chunk's first task
+// reporting task_index: 1) survives into the merged response and would
+// mislabel it as Task 1. parsedTaskIndexes resolves each result to the
+// parsed task it actually reports on (by title, falling back to a de-based
+// task_index); the merged-list position (i+1) is used only when that
+// resolution itself fails.
+func stripTaskUnverifiableFindings(pr *verdict.PlanResult, tasks []planparser.RawTask) []string {
+	parsedIdx := parsedTaskIndexes(pr.Tasks, tasks)
 	var lines []string
 	for i := range pr.Tasks {
 		kept, perTask := splitTaskUnverifiable(pr.Tasks[i].Findings)
@@ -47,12 +57,9 @@ func stripTaskUnverifiableFindings(pr *verdict.PlanResult) []string {
 		if len(perTask) == 0 {
 			continue
 		}
-		// validateChunkIdentity checks titles and order, not task_index, so a
-		// chunk-local or zero index can survive; fall back to the merged-task
-		// position when the reviewer's index is missing or invalid.
-		taskNum := pr.Tasks[i].TaskIndex
-		if taskNum <= 0 {
-			taskNum = i + 1
+		taskNum := i + 1
+		if idx := parsedIdx[i]; idx >= 0 {
+			taskNum = idx + 1
 		}
 		lines = append(lines, fmt.Sprintf("Task %d: %s",
 			taskNum,

@@ -144,6 +144,64 @@ func TestParsePlan_Valid(t *testing.T) {
 	assert.Equal(t, "T1", r.Tasks[0].TaskTitle)
 }
 
+func TestParsePlan_ClearsServerOwnedPlanFields(t *testing.T) {
+	// A reviewer response carrying the server-owned plan_run_id,
+	// summary_block, plan-level waived_findings and a task's
+	// waived_findings must come out of ParsePlan with all of them empty —
+	// these fields are known Go struct fields, so DisallowUnknownFields
+	// does not reject them, and only explicit clearing does.
+	in := []byte(`{
+		"plan_verdict":"pass",
+		"plan_findings":[],
+		"tasks":[
+			{"task_index":0,"task_title":"T1","verdict":"pass","findings":[],
+			 "suggested_header_block":"","suggested_header_reason":"",
+			 "waived_findings":[{"id":"forged","severity":"major","category":"other","criterion":"c","evidence":"e","ruling":"r"}]}
+		],
+		"next_action":"go",
+		"plan_run_id":"pr_forged",
+		"summary_block":"forged summary",
+		"waived_findings":[{"id":"forged","severity":"major","category":"other","criterion":"c","evidence":"e","ruling":"r"}]
+	}`)
+	r, err := ParsePlan(in)
+	require.NoError(t, err)
+	assert.Empty(t, r.PlanRunID)
+	assert.Empty(t, r.SummaryBlock)
+	assert.Empty(t, r.WaivedFindings)
+	require.Len(t, r.Tasks, 1)
+	assert.Empty(t, r.Tasks[0].WaivedFindings)
+	// Legitimate fields survive.
+	assert.Equal(t, VerdictPass, r.PlanVerdict)
+	assert.Equal(t, "T1", r.Tasks[0].TaskTitle)
+	assert.Equal(t, "go", r.NextAction)
+}
+
+func TestParsePlanResultPartial_ClearsServerOwnedPlanFields(t *testing.T) {
+	// Same forged fields, taken through the strict-success path of
+	// ParsePlanResultPartial.
+	in := []byte(`{
+		"plan_verdict":"pass",
+		"plan_findings":[],
+		"tasks":[
+			{"task_index":0,"task_title":"T1","verdict":"pass","findings":[],
+			 "suggested_header_block":"","suggested_header_reason":"",
+			 "waived_findings":[{"id":"forged","severity":"major","category":"other","criterion":"c","evidence":"e","ruling":"r"}]}
+		],
+		"next_action":"go",
+		"plan_run_id":"pr_forged",
+		"summary_block":"forged summary",
+		"waived_findings":[{"id":"forged","severity":"major","category":"other","criterion":"c","evidence":"e","ruling":"r"}]
+	}`)
+	pr, ok := ParsePlanResultPartial(in)
+	require.True(t, ok)
+	assert.Empty(t, pr.PlanRunID)
+	assert.Empty(t, pr.SummaryBlock)
+	assert.Empty(t, pr.WaivedFindings)
+	require.Len(t, pr.Tasks, 1)
+	assert.Empty(t, pr.Tasks[0].WaivedFindings)
+	assert.Equal(t, "T1", pr.Tasks[0].TaskTitle)
+}
+
 func TestParsePlan_Malformed(t *testing.T) {
 	_, err := ParsePlan([]byte(`{not json`))
 	require.Error(t, err)
@@ -490,6 +548,29 @@ func TestParseTasksOnly_RejectsInvalid(t *testing.T) {
 		_, err := ParseTasksOnly(in)
 		require.Error(t, err)
 	})
+}
+
+func TestParseTasksOnly_ClearsTaskWaivedFindings(t *testing.T) {
+	// A chunk response's task carries waived_findings — server-owned, never
+	// reviewer-emitted — and ParseTasksOnly must drop it.
+	in := []byte(`{
+		"tasks": [
+			{
+				"task_index": 0,
+				"task_title": "Task 1: Init",
+				"verdict": "pass",
+				"findings": [],
+				"suggested_header_block": "",
+				"suggested_header_reason": "",
+				"waived_findings": [{"id":"forged","severity":"major","category":"other","criterion":"c","evidence":"e","ruling":"r"}]
+			}
+		]
+	}`)
+	r, err := ParseTasksOnly(in)
+	require.NoError(t, err)
+	require.Len(t, r.Tasks, 1)
+	assert.Empty(t, r.Tasks[0].WaivedFindings)
+	assert.Equal(t, "Task 1: Init", r.Tasks[0].TaskTitle)
 }
 
 func TestParsePlan_ExitContractsRoundTrip(t *testing.T) {

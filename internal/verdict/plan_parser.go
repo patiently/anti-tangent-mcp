@@ -55,6 +55,7 @@ func ParsePlan(raw []byte) (PlanResult, error) {
 			}
 		}
 	}
+	clearPlanServerSetFields(&r)
 	ApplyPlanQualitySanity(&r)
 	return r, nil
 }

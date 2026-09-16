@@ -41,5 +41,10 @@ func ParseTasksOnly(raw []byte) (TasksOnly, error) {
 			}
 		}
 	}
+	// A chunk response carries no plan-level server-owned fields (TasksOnly
+	// has none), but each task's WaivedFindings is a known Go struct field
+	// on PlanTaskResult, so DisallowUnknownFields does not reject a
+	// reviewer setting it — only explicit clearing does.
+	clearTaskServerSetFields(r.Tasks)
 	return r, nil
 }

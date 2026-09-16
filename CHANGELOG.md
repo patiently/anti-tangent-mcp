@@ -119,6 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test-evidence check, `submission_defect_only` and the plan-run row update. A truncated review
   now runs the same steps as a complete one. It still records no `check_progress` checkpoint and
   creates no `validate_task_spec` session.
+- `validate_plan`'s parsers now clear `plan_run_id`, `summary_block` and `waived_findings` — at
+  plan level and on every task — from reviewer output, the same way finding-level server-owned
+  fields were already cleared. These are known fields of the response struct, so
+  `DisallowUnknownFields` accepted a reviewer that set them; a forged `plan_run_id` in particular
+  suppressed the server's own run-ledger entry and was published to the controller as if genuine.
 
 ## [0.21.0] - 2026-09-11
 

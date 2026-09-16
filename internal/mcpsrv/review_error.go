@@ -317,7 +317,7 @@ func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolRes
 	// Same tail, same order, as ValidatePlan's fresh-review path — minus the
 	// store(), because a truncated result is never cached. See planCallContext.
 	call.applyPreLadder(&pr)
-	finalizePlanVerdict(&pr)
+	finalizePlanVerdict(&pr, call.Tasks)
 	call.finish(&pr)
 	r, p, err := planEnvelopeResultFinalized(pr, call.meta())
 	return r, p, true, err

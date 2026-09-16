@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -22,7 +23,7 @@ func TestStripTaskUnverifiableFindings_LeavesContradictionsAttached(t *testing.T
 				Criterion: "c2", Evidence: "contradiction-evidence", Suggestion: "s"},
 		},
 	}}}
-	appendCodebaseReferenceChecklist(&pr, stripTaskUnverifiableFindings(&pr))
+	appendCodebaseReferenceChecklist(&pr, stripTaskUnverifiableFindings(&pr, nil))
 
 	require.Len(t, pr.Tasks[0].Findings, 1)
 	assert.Equal(t, verdict.CategoryContradictedCodebaseClaim, pr.Tasks[0].Findings[0].Category,
@@ -33,6 +34,32 @@ func TestStripTaskUnverifiableFindings_LeavesContradictionsAttached(t *testing.T
 	assert.Contains(t, pr.PlanFindings[0].Evidence, "unverifiable-evidence")
 	assert.NotContains(t, pr.PlanFindings[0].Evidence, "contradiction-evidence",
 		"a hard contradiction must never be rolled into the go-grep-it-yourself checklist")
+}
+
+// TestStripTaskUnverifiableFindings_LabelsByParsedPositionNotReviewerIndex
+// covers a chunked plan review: validateChunkIdentity checks a chunk's
+// titles and order but not task_index, so a chunk-local index survives into
+// the merged response. The checklist label must come from the parsed
+// position (parsedTaskIndexes), not from the reviewer's task_index directly.
+func TestStripTaskUnverifiableFindings_LabelsByParsedPositionNotReviewerIndex(t *testing.T) {
+	tasks := []planparser.RawTask{
+		{Title: "Task 1: A"},
+		{Title: "Task 2: B"},
+		{Title: "Task 3: C"},
+	}
+	pr := verdict.PlanResult{Tasks: []verdict.PlanTaskResult{
+		{TaskIndex: 1, TaskTitle: "Task 1: A"},
+		{TaskIndex: 2, TaskTitle: "Task 2: B"},
+		// Second chunk's first task: a chunk-local task_index of 1, but its
+		// title names the third parsed task.
+		{TaskIndex: 1, TaskTitle: "Task 3: C", Findings: []verdict.Finding{
+			{Severity: verdict.SeverityMinor, Category: verdict.CategoryUnverifiableCodebaseClaim,
+				Criterion: "c", Evidence: "e", Suggestion: "s"},
+		}},
+	}}
+	lines := stripTaskUnverifiableFindings(&pr, tasks)
+	require.Len(t, lines, 1)
+	assert.Equal(t, "Task 3: e", lines[0], "label must come from the parsed position, not the reviewer's chunk-local task_index")
 }
 
 func TestCalibratePlanVerdict_DoesNotForcePassWithAContradiction(t *testing.T) {

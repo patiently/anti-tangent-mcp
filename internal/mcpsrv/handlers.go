@@ -2062,7 +2062,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 				payloadBytes: total,
 			})
 			logOutcome, logVerdict = "plan_too_large", pr.PlanVerdict
-			return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
+			return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()}, nil)
 		}
 		if rerr != nil {
 			logOutcome = "plan_path_error"
@@ -2118,7 +2118,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 				payloadBytes: len(planText) + pkBytes,
 			})
 			logOutcome, logVerdict = "context_too_large", pr.PlanVerdict
-			return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()})
+			return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String()}, nil)
 		}
 		logOutcome = "context_paths_error"
 		return nil, verdict.PlanResult{}, cerr
@@ -2137,7 +2137,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			payloadBytes: total + contextBytes,
 		})
 		logOutcome, logVerdict = "payload_too_large", pr.PlanVerdict
-		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String(), ContextFiles: contextSources(contextFiles)})
+		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String(), ContextFiles: contextSources(contextFiles)}, nil)
 	}
 	tasks, _ := planparser.SplitTasks(planText)
 	tasksTotal := len(tasks)
@@ -2160,7 +2160,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 			tasksWithHeader: tasksWithHeader,
 		})
 		logOutcome, logVerdict = "no_headings", pr.PlanVerdict
-		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String(), ContextFiles: contextSources(contextFiles)})
+		return planEnvelopeResult(pr, planSummaryMeta{ModelUsed: h.deps.Cfg.PlanModel.String(), Source: planSrc.String(), ContextFiles: contextSources(contextFiles)}, nil)
 	}
 
 	// Adaptive plan budget: apply only when no override was supplied. The
@@ -2350,7 +2350,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	// authoritatively — rather than three times across this path. The ladder
 	// stays at the call site rather than inside a planCallContext method
 	// because the cache-hit path must NOT run it; see planCallContext.
-	finalizePlanVerdict(&pr)
+	finalizePlanVerdict(&pr, tasks)
 	// Mint BEFORE store, so the cached entry carries the plan_run_id and a
 	// later cache hit reuses this run instead of minting a second one for the
 	// same plan. finish()'s own mint below is guarded on PlanRunID == "" and
@@ -2690,13 +2690,17 @@ func contextTooLargePlanResult(err *contextTooLargeError) verdict.PlanResult {
 //     unverifiable-only calibration, and FinalizePlanVerdict (per-task +
 //     plan-level severity ladder + noise_cluster + plan-quality sanity).
 //  2. SummaryBlock is populated with the rendered paste-ready text block.
-func planEnvelopeResult(pr verdict.PlanResult, meta planSummaryMeta) (*mcp.CallToolResult, verdict.PlanResult, error) {
-	return planEnvelopeResultFinalized(finalizePlanResult(pr, meta), meta)
+func planEnvelopeResult(pr verdict.PlanResult, meta planSummaryMeta, tasks []planparser.RawTask) (*mcp.CallToolResult, verdict.PlanResult, error) {
+	return planEnvelopeResultFinalized(finalizePlanResult(pr, meta, tasks), meta)
 }
 
 // finalizePlanVerdict runs the plan verdict ladder without touching
 // SummaryBlock, so ValidatePlan's fresh-review path can settle PlanRunID and
-// the per-call advisories before computing formatPlanSummary once.
+// the per-call advisories before computing formatPlanSummary once. tasks is
+// the parsed plan the reviewer was shown, used to resolve each result to its
+// real position for the checklist label (see stripTaskUnverifiableFindings);
+// pass nil when there is no parsed plan (a synthetic error result, e.g.
+// too-large or no-headings), which falls back to the merged-list position.
 //
 // Order is load-bearing:
 //  1. strip task-level unverifiable_codebase_claim findings, keeping their
@@ -2707,15 +2711,15 @@ func planEnvelopeResult(pr verdict.PlanResult, meta planSummaryMeta) (*mcp.CallT
 //     noise_cluster, ApplyPlanQualitySanity);
 //  4. append the rolled-up checklist, after the ladder, so it never counts
 //     toward noise_cluster.
-func finalizePlanVerdict(pr *verdict.PlanResult) {
-	lines := stripTaskUnverifiableFindings(pr)
+func finalizePlanVerdict(pr *verdict.PlanResult, tasks []planparser.RawTask) {
+	lines := stripTaskUnverifiableFindings(pr, tasks)
 	calibratePlanVerdictForUnverifiableOnly(pr, len(lines) > 0)
 	verdict.FinalizePlanVerdict(pr)
 	appendCodebaseReferenceChecklist(pr, lines)
 }
 
-func finalizePlanResult(pr verdict.PlanResult, meta planSummaryMeta) verdict.PlanResult {
-	finalizePlanVerdict(&pr)
+func finalizePlanResult(pr verdict.PlanResult, meta planSummaryMeta, tasks []planparser.RawTask) verdict.PlanResult {
+	finalizePlanVerdict(&pr, tasks)
 	assignPlanIDs(&pr, nil)
 	pr.SummaryBlock = formatPlanSummary(pr, meta)
 	return pr

@@ -41,12 +41,31 @@ func clearAllServerSetFields(fs []Finding, keepSameAs bool) {
 	}
 }
 
-// clearPlanServerSetFields clears server-set fields on every plan-level and
-// task finding, keeping no same_as: the plan schemas have none.
+// clearPlanServerSetFields clears every field only the server sets: the
+// finding-level fields on every plan-level and task finding (keeping no
+// same_as: the plan schemas have none), plus the plan-level PlanRunID,
+// SummaryBlock and WaivedFindings, and each task's WaivedFindings. Those
+// four are known Go struct fields, so DisallowUnknownFields does not reject
+// a reviewer response that sets them — only explicit clearing does. Left
+// uncleared, a reviewer-forged plan_run_id stands in for a real run:
+// planCallContext.mintPlanRunID skips minting a new one whenever PlanRunID
+// is already non-empty, so the forged id would suppress the server's own
+// ledger entry and still get published to the controller as if genuine.
 func clearPlanServerSetFields(pr *PlanResult) {
 	clearAllServerSetFields(pr.PlanFindings, false)
-	for i := range pr.Tasks {
-		clearAllServerSetFields(pr.Tasks[i].Findings, false)
+	clearTaskServerSetFields(pr.Tasks)
+	pr.PlanRunID = ""
+	pr.SummaryBlock = ""
+	pr.WaivedFindings = nil
+}
+
+// clearTaskServerSetFields clears the server-owned fields on each task: its
+// findings (via clearAllServerSetFields) and its own WaivedFindings, which
+// only a controller ruling populates — never the reviewer, chunked or not.
+func clearTaskServerSetFields(tasks []PlanTaskResult) {
+	for i := range tasks {
+		clearAllServerSetFields(tasks[i].Findings, false)
+		tasks[i].WaivedFindings = nil
 	}
 }
 
