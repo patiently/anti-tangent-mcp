@@ -99,7 +99,9 @@ func TestReplay_E2E(t *testing.T) {
 	dryRun := os.Getenv("ANTI_TANGENT_REPLAY_DRY_RUN") == "1"
 	cfg, err := replayConfigForDryRun(dryRun)
 	require.NoError(t, err)
-	re := newReplayEnv(cfg, replayReviewers(cfg, dryRun))
+	reviewers := replayReviewers(cfg, dryRun)
+	require.NotEmpty(t, reviewers, "no provider key is set, so every fixture would record a handler error: set one, or set ANTI_TANGENT_REPLAY_DRY_RUN=1")
+	re := newReplayEnv(cfg, reviewers)
 
 	reports := make([]replayReport, 0, len(fixtures))
 	for _, fx := range fixtures {

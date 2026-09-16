@@ -2719,6 +2719,18 @@ Report the counts per change, and any new blocking finding. If every change pass
 
 Close with a note carrying counts and anonymized descriptions only, and confirm `git status` shows no fixture or report inside the repository.
 
+**Outcome (2026-09-16).** The assessed run's transcripts were not on the machine that executed this plan, so the fixtures were built from this repository instead, with the maintainer's agreement: a real commit that deleted a function, with comments naming it planted in a changed file outside the diff hunks; a task whose verification gate forces the golden regeneration its Non-goals defer; a synthetic removal of two severity cases from a counter whose callers still enumerate them; and a real passing diff as the control. Each ran 5 times at the commit before its change and at the commit after, on `openai:gpt-5.6-sol`.
+
+| Change | Before | After | Decision |
+|---|---|---|---|
+| §3.1 stale comments | 0/5 | 5/5 | ships |
+| §3.2 gate vs Non-goal, pre-task | 0/5 | 5/5 | ships |
+| §3.2 forced violation, final review | `scope_drift` 4/5 | `ambiguous_spec` 5/5, `scope_drift` 0/5 | ships |
+| §3.3 deletions walk | 5/5 | 5/5 | reverted |
+| control: passing diff | 1/5 runs with a blocking finding | 0/5 | no new blocking finding |
+
+§3.3 met no part of the criterion and was reverted, and `CHANGELOG.md` carries no line for it; its fixture removed states an acceptance criterion covered, which the acceptance-criterion walk already catches, so a future attempt needs a fixture whose removed state no acceptance criterion names. The pre-task tally first read 5/5 before the change as well, until the per-run match text showed those hits were `unverifiable_codebase_claim` findings quoting a keyword: a tally is not evidence on its own. Spec §3.3 and §3.4 carry the same record.
+
 ```json:metadata
 {"files": [], "verifyCommand": "ANTI_TANGENT_REPLAY_DIR=<fixtures> ANTI_TANGENT_REPLAY_ONLY=<fixture> ANTI_TANGENT_REPLAY_OUT=<reports>/<boundary>-<fixture>.json go test -tags=e2e -count=1 -timeout 4h -run TestReplay_E2E ./internal/mcpsrv/ -v", "acceptanceCriteria": ["Fixture dir outside the repo holds stale-comments (with repo_root), gate-vs-non-goal (with verification), state-set-guard, and final-pass", "Expectation keywords identify the issue at B0 as well as B3, not only criterion strings this plan introduces", "Dry run loads every fixture with no errors; the spend estimate from its prompt sizes is approved before any paid run", "Paid 5-run JSON reports exist for stale-comments B0/B1, gate-vs-non-goal B1/B2, state-set-guard B2/B3, final-pass B0/B3 (B1/B2 only on a new blocking finding)", "Close note states before/after match counts per change and whether each met >=3/5 after and fewer before", "Close note lists final-pass blocking findings present at B3 and absent at B0, or none", "Each failing change is reverted, kept or reworked as the user decides, and CHANGELOG matches", "Nothing from fixtures or reports is committed; close note has counts and anonymized descriptions only"], "modelTier": "frontier", "userGate": true, "tags": ["user-gate"], "requireEvidenceTokens": [["before", "B0"], ["after", "B3"]]}
 ```
