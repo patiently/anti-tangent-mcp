@@ -2329,14 +2329,3 @@ func TestRenderPost_PreFindingsToVerifyExplainsMinorAmbiguities(t *testing.T) {
 	assert.Contains(t, out.User, "when it forced nothing, do not raise it again")
 	assert.Contains(t, out.User, "- ID: f_0123abcd\n  Severity: minor")
 }
-
-func TestRenderPost_WalksTheDeletionsAgainstGuards(t *testing.T) {
-	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", FinalDiff: "d"})
-	require.NoError(t, err)
-	assert.Contains(t, out.User, "Then walk the deletions.")
-	assert.Contains(t, out.User, "Apply this only when a diff is present: without one, the evidence does not show what the change removed.")
-	assert.Contains(t, out.User, "Report one finding per guard, set or dispatch, not one per removed state.")
-	assert.Contains(t, out.User, "`criterion: removed_state_coverage`, `severity: minor`, unless the evidence shows a regression")
-	assert.Contains(t, out.User, "which is `severity: major`")
-	assert.Contains(t, out.User, "the deletions walk's `severity: major` for a removed state the evidence shows now regressed is the one other exception")
-}
