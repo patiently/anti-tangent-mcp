@@ -40,6 +40,10 @@ func TestClaudeClock(t *testing.T) {
 	if got, want := claudeClock(soon, now), soon.Local().Format("15:04"); got != want {
 		t.Errorf("claudeClock(soon) = %q, want %q", got, want)
 	}
+	boundary := now.Add(24 * time.Hour) // exactly 24h → date and clock
+	if got, want := claudeClock(boundary, now), boundary.Local().Format("Jan 2 15:04"); got != want {
+		t.Errorf("claudeClock(boundary) = %q, want %q", got, want)
+	}
 	later := time.Date(2026, 6, 8, 20, 0, 0, 0, time.UTC) // >24h → date and clock
 	if got, want := claudeClock(later, now), later.Local().Format("Jan 2 15:04"); got != want {
 		t.Errorf("claudeClock(later) = %q, want %q", got, want)
