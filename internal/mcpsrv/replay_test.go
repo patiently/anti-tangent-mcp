@@ -175,3 +175,23 @@ func TestRunReplayFixture_ADryRunMeasuresPromptsWithoutFindings(t *testing.T) {
 	assert.Equal(t, map[string]int{"pass": 3}, report.Calls[replayCallTaskSpec].Verdicts)
 	assert.Greater(t, report.Calls[replayCallTaskSpec].PromptBytes, 1000)
 }
+
+func TestLoadReplayFixtures_RejectsADuplicateName(t *testing.T) {
+	dir := t.TempDir()
+	writeReplayFixture(t, dir, "a.json", `{"name":"same","validate_task_spec":{"task_title":"T","goal":"G"}}`)
+	writeReplayFixture(t, dir, "b.json", `{"name":"same","validate_task_spec":{"task_title":"T","goal":"G"}}`)
+
+	_, err := loadReplayFixtures(dir)
+
+	require.ErrorContains(t, err, `fixture name "same" is already used by`)
+}
+
+func TestLoadReplayFixtures_RejectsBlankKeywords(t *testing.T) {
+	dir := t.TempDir()
+	writeReplayFixture(t, dir, "x.json", `{"validate_completion":{"summary":"s","final_diff":"d"},
+		"expectations":[{"call":"validate_completion","any_of_keywords":["", "  "]}]}`)
+
+	_, err := loadReplayFixtures(dir)
+
+	require.ErrorContains(t, err, "expectations[0] has no any_of_keywords that are not blank")
+}

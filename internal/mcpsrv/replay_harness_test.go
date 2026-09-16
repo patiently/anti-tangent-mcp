@@ -69,6 +69,9 @@ func loadReplayFixtures(dir string) ([]replayFixture, error) {
 	}
 	sort.Strings(paths)
 	fixtures := make([]replayFixture, 0, len(paths))
+	// Names address fixtures in ANTI_TANGENT_REPLAY_ONLY, which matches each
+	// name once, so two fixtures sharing one name would silently run once.
+	named := make(map[string]string, len(paths))
 	for _, p := range paths {
 		raw, err := os.ReadFile(p)
 		if err != nil {
@@ -81,6 +84,10 @@ func loadReplayFixtures(dir string) ([]replayFixture, error) {
 		if fx.Name == "" {
 			fx.Name = strings.TrimSuffix(filepath.Base(p), ".json")
 		}
+		if first, dup := named[fx.Name]; dup {
+			return nil, fmt.Errorf("%s: fixture name %q is already used by %s", p, fx.Name, first)
+		}
+		named[fx.Name] = p
 		if err := fx.validate(); err != nil {
 			return nil, fmt.Errorf("%s: %w", p, err)
 		}
@@ -114,7 +121,14 @@ func (fx replayFixture) validateExpectation(i int, e replayExpectation) error {
 	case len(e.AnyOfKeywords) == 0:
 		return fmt.Errorf("expectations[%d] has no any_of_keywords", i)
 	}
-	return nil
+	// A blank keyword matches nothing, so an expectation carrying only blanks
+	// would report 0 of N runs and read as a change that did not help.
+	for _, keyword := range e.AnyOfKeywords {
+		if strings.TrimSpace(keyword) != "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("expectations[%d] has no any_of_keywords that are not blank", i)
 }
 
 // filterReplayFixtures keeps the fixtures named in only, a comma-separated

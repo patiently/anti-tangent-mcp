@@ -92,7 +92,7 @@ A comment is stale when the evidence shows it refers to a symbol, branch or case
 
 Like comment hygiene, apply this ONLY when a diff is present: without one, the evidence does not show what the change removed.
 
-Report every stale comment in ONE finding, however many there are: `category: quality`, `criterion: stale_comments`, `severity: minor`. Quote each stale comment with its path and line in `evidence`, and give its rewrite or removal in `suggestion`.
+Report every stale comment in ONE finding, however many there are: `category: quality`, `criterion: stale_comments`, `severity: minor`. Quote each stale comment in `evidence` with its path, and with its line when the evidence gives you one — the server hint and a diff's hunk headers do, whole `final_files` contents do not. Never invent a line number, and never leave a stale comment out for want of one. Give each comment's rewrite or removal in `suggestion`.
 
 Every finding carries `same_as`: the ID of the prior finding or pre-task finding it raises again, or null when it raises none of them.
 
