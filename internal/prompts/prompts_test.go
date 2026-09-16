@@ -2255,7 +2255,7 @@ func TestRenderPost_StaleCommentsAreOneMinorFinding(t *testing.T) {
 	assert.Contains(t, out.User, "### Stale comments")
 	assert.Contains(t, out.User, "not only the ones it adds")
 	assert.Contains(t, out.User, "inside and outside the diff hunks")
-	assert.Contains(t, out.User, "Comment hygiene still applies to it: a comment recording a removal narrates change history.")
+	assert.Contains(t, out.User, "When this change ADDS such a comment, comment hygiene applies to it as well.")
 	assert.Contains(t, out.User, "Report every stale comment in ONE finding, however many there are: `category: quality`, `criterion: stale_comments`, `severity: minor`.")
 }
 

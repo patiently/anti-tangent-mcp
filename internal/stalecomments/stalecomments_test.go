@@ -76,6 +76,41 @@ func TestParseDiff_SeparatesFilesAndDecodesGitPathQuoting(t *testing.T) {
 	assert.Equal(t, "café.go", files[2].Path)
 }
 
+func TestParseDiff_DecodesAnEscapedQuoteInsideAQuotedPath(t *testing.T) {
+	// Git escapes a literal double quote in a quoted path the same way a Go
+	// string literal does: \" inside the surrounding quotes.
+	diff := "--- \"a/weird\\\"name.go\"\n+++ \"b/weird\\\"name.go\"\n@@ -1 +1 @@\n-func old() {}\n+func new() {}\n"
+	files := ParseDiff(diff)
+	require.Len(t, files, 1)
+	assert.Equal(t, `weird"name.go`, files[0].Path)
+}
+
+func TestParseDiff_NoNewlineMarkerDoesNotShiftLineNumbers(t *testing.T) {
+	diff := "--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n"
+	files := ParseDiff(diff)
+	require.Len(t, files, 1)
+	assert.Equal(t, []Line{{Number: 1, Text: "new"}}, files[0].Post)
+}
+
+func TestParseDiff_RenameOnlyAndBinarySectionsYieldNoLinesAndDoNotPanic(t *testing.T) {
+	diff := "diff --git a/old.go b/new.go\n" +
+		"similarity index 100%\n" +
+		"rename from old.go\n" +
+		"rename to new.go\n" +
+		"diff --git a/img.png b/img.png\n" +
+		"index 1111111..2222222 100644\n" +
+		"Binary files a/img.png and b/img.png differ\n"
+	var files []File
+	assert.NotPanics(t, func() { files = ParseDiff(diff) })
+	require.Len(t, files, 2)
+	for _, f := range files {
+		assert.Empty(t, f.Path)
+		assert.Empty(t, f.Removed)
+		assert.Empty(t, f.Added)
+		assert.Empty(t, f.Post)
+	}
+}
+
 func TestRemovedNames_AcrossLanguages(t *testing.T) {
 	diff := `--- a/a.go
 +++ b/a.go

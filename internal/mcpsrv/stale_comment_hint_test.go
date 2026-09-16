@@ -242,7 +242,12 @@ func TestValidateCompletion_StaleCommentHintReachesThePromptWithoutTheFile(t *te
 func TestValidateCompletion_AnUnusableRepoRootIsAnAdvisoryThatKeepsTheVerdict(t *testing.T) {
 	h, rv := newRulingsHandlers(t)
 
-	env := completeWith(t, h, rv, ValidateCompletionArgs{Summary: "Removed handleRetired.", FinalDiff: sweepDiff, RepoRoot: "relative/checkout"}, passResp("claude-opus-4-7"))
+	// Two reviewer minors, one short of the noise_cluster threshold: if the
+	// repo_root advisory were folded in before FinalizeVerdict instead of
+	// after, this would become three minors, lifting the verdict to warn and
+	// adding a noise_cluster finding. With passResp's zero findings this test
+	// could not tell the two orderings apart.
+	env := completeWith(t, h, rv, ValidateCompletionArgs{Summary: "Removed handleRetired.", FinalDiff: sweepDiff, RepoRoot: "relative/checkout"}, twoMinorsResp())
 
 	assert.Equal(t, "pass", env.Verdict)
 	require.NotEmpty(t, env.Findings)
@@ -250,6 +255,9 @@ func TestValidateCompletion_AnUnusableRepoRootIsAnAdvisoryThatKeepsTheVerdict(t 
 	assert.Equal(t, "repo_root", last.Criterion)
 	assert.Contains(t, last.Evidence, "must be absolute")
 	assert.Contains(t, rv.LastRequest.User, sweepHunkHit)
+	for _, f := range env.Findings {
+		assert.NotEqual(t, "noise_cluster", f.Criterion)
+	}
 }
 
 func TestValidateCompletion_ARejectedCallCarriesNoRepoRootAdvisory(t *testing.T) {
