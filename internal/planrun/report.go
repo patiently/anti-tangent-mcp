@@ -45,6 +45,8 @@ type RunTotals struct {
 	CodesceneSkipped int     `json:"codescene_skipped"`
 	CodesceneMissing int     `json:"codescene_missing"`
 	NetPP            float64 `json:"net_pp"`
+	Waived           int     `json:"waived"`
+	Escalated        int     `json:"escalated"`
 }
 
 // Totals aggregates a run's rows. Incomplete counts rows the plan created a
@@ -76,6 +78,10 @@ func Totals(r *Run) RunTotals {
 		}
 		if row.Codescene != nil && row.Codescene.Ran {
 			t.NetPP += row.Codescene.NetPP
+		}
+		t.Waived += row.Waived
+		if row.Escalated {
+			t.Escalated++
 		}
 	}
 	return t
@@ -111,6 +117,22 @@ func codesceneCell(row TaskRow) string {
 		return flattenReportCell("skipped (" + reason + ")")
 	default:
 		return "not run"
+	}
+}
+
+// rulingsCell renders how controller rulings shaped a task: how many findings
+// they waived on its last validate_completion, and whether any of its calls
+// escalated.
+func rulingsCell(row TaskRow) string {
+	switch {
+	case row.Waived > 0 && row.Escalated:
+		return fmt.Sprintf("%d waived, escalated", row.Waived)
+	case row.Waived > 0:
+		return fmt.Sprintf("%d waived", row.Waived)
+	case row.Escalated:
+		return "escalated"
+	default:
+		return "-"
 	}
 }
 
@@ -251,7 +273,7 @@ func Render(r *Run) string {
 		width = 40
 	}
 
-	fmt.Fprintf(&b, "  #  %-*s  %-10s %s\n", width, "Task", "AT", "CodeScene")
+	fmt.Fprintf(&b, "  #  %-*s  %-10s %-20s %s\n", width, "Task", "AT", "Rulings", "CodeScene")
 	for _, row := range r.Rows {
 		title := row.TaskTitle
 		if n := utf8.RuneCountInString(title); n > width {
@@ -266,12 +288,13 @@ func Render(r *Run) string {
 		// rather than its inputs: one call then covers every free-text field
 		// that can reach the cell — SkipReason, QualityGate, and the
 		// CategoryCounts map's keys — including any added later.
-		fmt.Fprintf(&b, "  %-2d %-*s  %-10s %s\n", row.Index, width,
-			escapeReportCell(title), escapeReportCell(at), escapeReportCell(codesceneCell(row)))
+		fmt.Fprintf(&b, "  %-2d %-*s  %-10s %-20s %s\n", row.Index, width,
+			escapeReportCell(title), escapeReportCell(at), rulingsCell(row), escapeReportCell(codesceneCell(row)))
 	}
 
 	fmt.Fprintf(&b, "\n  codescene: %d run, %d skipped, %d missing\n",
 		t.CodesceneRan, t.CodesceneSkipped, t.CodesceneMissing)
+	fmt.Fprintf(&b, "  rulings: %d findings waived, %d tasks escalated\n", t.Waived, t.Escalated)
 	fmt.Fprintf(&b, "  net problem points across run: %+.1f\n", t.NetPP)
 	if n := r.TaskCount - len(r.Rows); n > 0 {
 		fmt.Fprintf(&b, "  %d task(s) in the plan were never dispatched\n", n)

@@ -34,6 +34,41 @@ func applySeverityFloorAll(fs []Finding) {
 	}
 }
 
+// clearAllServerSetFields applies clearServerSetFields to every element of fs.
+func clearAllServerSetFields(fs []Finding, keepSameAs bool) {
+	for i := range fs {
+		clearServerSetFields(&fs[i], keepSameAs)
+	}
+}
+
+// clearPlanServerSetFields clears every field only the server sets: the
+// finding-level fields on every plan-level and task finding (keeping no
+// same_as: the plan schemas have none), plus the plan-level PlanRunID,
+// SummaryBlock and WaivedFindings, and each task's WaivedFindings. Those
+// four are known Go struct fields, so DisallowUnknownFields does not reject
+// a reviewer response that sets them — only explicit clearing does. Left
+// uncleared, a reviewer-forged plan_run_id stands in for a real run:
+// planCallContext.mintPlanRunID skips minting a new one whenever PlanRunID
+// is already non-empty, so the forged id would suppress the server's own
+// ledger entry and still get published to the controller as if genuine.
+func clearPlanServerSetFields(pr *PlanResult) {
+	clearAllServerSetFields(pr.PlanFindings, false)
+	clearTaskServerSetFields(pr.Tasks)
+	pr.PlanRunID = ""
+	pr.SummaryBlock = ""
+	pr.WaivedFindings = nil
+}
+
+// clearTaskServerSetFields clears the server-owned fields on each task: its
+// findings (via clearAllServerSetFields) and its own WaivedFindings, which
+// only a controller ruling populates — never the reviewer, chunked or not.
+func clearTaskServerSetFields(tasks []PlanTaskResult) {
+	for i := range tasks {
+		clearAllServerSetFields(tasks[i].Findings, false)
+		tasks[i].WaivedFindings = nil
+	}
+}
+
 // ParseResultPartial parses a possibly-truncated reviewer response into a
 // Result. It first attempts a strict json.Unmarshal; on failure, it walks
 // the raw bytes to recover any complete Finding objects inside the
@@ -51,6 +86,7 @@ func ParseResultPartial(raw []byte) (Result, bool) {
 	var r Result
 	if err := json.Unmarshal(trimmed, &r); err == nil {
 		applySeverityFloorAll(r.Findings)
+		clearAllServerSetFields(r.Findings, true)
 		return r, true
 	}
 
@@ -67,6 +103,7 @@ func ParseResultPartial(raw []byte) (Result, bool) {
 		return Result{}, false
 	}
 	applySeverityFloorAll(r.Findings)
+	clearAllServerSetFields(r.Findings, true)
 	r.Partial = true
 	return r, true
 }
@@ -83,6 +120,7 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 	var pr PlanResult
 	if err := json.Unmarshal(trimmed, &pr); err == nil {
 		applyPlanSeverityFloor(&pr)
+		clearPlanServerSetFields(&pr)
 		ApplyPlanQualitySanity(&pr)
 		return pr, true
 	}
@@ -95,6 +133,7 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 		return PlanResult{}, false
 	}
 	applyPlanSeverityFloor(&pr)
+	clearPlanServerSetFields(&pr)
 	ApplyPlanQualitySanity(&pr)
 	pr.Partial = true
 	return pr, true

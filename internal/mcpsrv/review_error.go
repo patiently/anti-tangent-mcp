@@ -1,8 +1,10 @@
 package mcpsrv
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -82,21 +84,19 @@ func (h *handlers) resolveModelAndRender(
 // the fresh-review path, the truncation-recovery path, and the cache-hit
 // path — need to assemble the SAME post-review tail.
 //
-// It exists because that tail was hand-assembled at all three sites and the
-// recovery site kept missing steps: across three review rounds it was found
-// to be missing prependRepoRootUnusable, populateNormativeTestBodies, and
-// the PlanRunID mint. The last of those is functional, not cosmetic —
-// controller.md §5.1 tells the controller to capture plan_run_id from a
-// passing validate_plan response, a truncated-but-recovered review CAN
-// return pass, and plan_run_report hard-requires the id. Most of the fields
-// below used to live on planReviewErrInputs solely to feed the duplicated
-// tail, one field added per review round; that growth WAS the failure mode.
+// A tail assembled by hand at each site drifts: a step added to one path is
+// easily missed on another. Such a miss can be functional, not cosmetic — the
+// PlanRunID mint, for one: controller.md §5.1 tells the controller to capture
+// plan_run_id from a passing validate_plan response, a truncated-but-recovered
+// review CAN return pass, and plan_run_report hard-requires the id. A step
+// every path needs therefore goes on this type, and a value it needs becomes
+// a field here rather than a parameter threaded to one site.
 //
 // The verdict ladder (finalizePlanVerdict) is deliberately NOT a method
 // here. The cache-hit path must never re-run it on an already-finalized
-// entry — normalizePlanUnverifiableFindings is not proven idempotent — so
-// the ladder stays at the call sites, which is exactly where the three
-// orders differ:
+// entry — its checklist is already appended, and a second ladder would count
+// it toward noise_cluster — so the ladder stays at the call sites, which is
+// exactly where the three orders differ:
 //
 //	fresh review = applyPreLadder -> ladder -> mintPlanRunID -> store -> finish
 //	recovery     = applyPreLadder -> ladder ->                            finish
@@ -104,10 +104,10 @@ func (h *handlers) resolveModelAndRender(
 //
 // The fresh-review path hoists the mint above store() so the cached entry
 // carries the plan_run_id: a cache hit must reuse the original call's run
-// rather than mint a second one (design §, and
-// TestValidatePlan_CachePassingResult). finish()'s own mint is guarded on
-// PlanRunID == "" and is therefore a no-op both there and on the cache-hit
-// path, which reads an entry that already carries one.
+// rather than mint a second one (TestValidatePlan_CachePassingResult).
+// finish()'s own mint is guarded on PlanRunID == "" and is therefore a no-op
+// both there and on the cache-hit path, which reads an entry that already
+// carries one.
 //
 // Two divergences on the cache-hit path are DELIBERATE, not omissions, and
 // must not be "fixed" into parity:
@@ -123,6 +123,9 @@ type planCallContext struct {
 	// context rather than reached through *handlers so finish() stays a method
 	// on the context and all three sites construct one identical thing.
 	PlanRuns *planrun.Store
+	// PlanLedger receives a header line for every freshly minted run. Nil-safe:
+	// nil unless ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER are set.
+	PlanLedger *planrun.Ledger
 	// Source is the caller's pre-rendered provenance string (planSrc.String()),
 	// empty when plan_text was used. Threaded through so every envelope —
 	// recovery and cache hit included — carries the same source line a
@@ -148,25 +151,38 @@ type planCallContext struct {
 	// clamp is already baked into the stored entry (max_tokens_override is
 	// part of the cache key).
 	Clamp verdict.Finding
-	// ContextFiles is THIS call's attached set. Without it a truncated
-	// review's summary block omitted the `context:` provenance list entirely
-	// while the same call's stats counted every attached byte — the human
-	// reading the envelope could not see what the reviewer had been given. It
+	// ContextFiles is THIS call's attached set. Every path renders it as the
+	// summary block's `context:` provenance list, so the human reading a
+	// truncated review's envelope still sees what the reviewer was given. It
 	// is also the attached set DemoteUnattachedContradictions tests against,
-	// and both paths MUST pass the same one: a divergence there is exactly how
-	// the demotion would go all-or-nothing again on one path only.
+	// and both paths MUST pass the same one, or the demotion would differ
+	// between a fresh and a recovered review of the same plan.
 	ContextFiles []fileSource
 	// FileConsistency is the deterministic, reviewer-free Create/Modify
 	// finding for this plan, or nil. It is computed by the CALLER and carried
 	// here because it must survive truncation: the check needs no reviewer and
-	// cannot itself be truncated, so a truncated reviewer response silently
-	// dropping it was the one failure mode that lost a finding the server
-	// already knew for certain. Nil on the cache-hit path by design — see the
-	// type comment.
+	// cannot itself be truncated, so a truncated reviewer response must not
+	// lose a finding the server already knows for certain. Nil on the
+	// cache-hit path by design — see the type comment.
 	FileConsistency *verdict.Finding
-	// Tasks is the parsed plan, used to re-attach normative test bodies to the
-	// reviewer's per-task results (populateNormativeTestBodies).
+	// Tasks is the parsed plan. applyPreLadder re-attaches normative test
+	// bodies from it (populateNormativeTestBodies), and applyPreLadder's
+	// waivers and finish's display IDs both key task findings on its headings
+	// (planTaskKeys). Every path sets it, the cache hit included, so a task
+	// finding's ID is the same whichever path produced the response.
 	Tasks []planparser.RawTask
+	// Rulings are this call's controller rulings by fingerprint, which
+	// applyPreLadder waives findings against. Unset on the cache-hit path: the
+	// rulings are rendered into the prompts the cache key hashes, so a stored
+	// entry already carries its waivers.
+	Rulings map[string]session.Ruling
+	// VerifiedReferences are this call's controller_verified_references, which
+	// applyPreLadder suppresses unverifiable claims with.
+	VerifiedReferences []string
+	// MalformedRulingIDs are this call's ruling IDs without a display ID's
+	// shape. Per call, like the deprecation notice, and never stored on a
+	// cache entry.
+	MalformedRulingIDs []string
 }
 
 // meta projects the context down to the summary inputs. One place, so the
@@ -196,6 +212,13 @@ func (c planCallContext) applyPreLadder(pr *verdict.PlanResult) {
 	// unfloored severity. The prompt already forbids both shapes; this is the
 	// enforcement point.
 	verdict.DemoteUnattachedContradictions(pr, fileSourcePaths(c.ContextFiles))
+	// After demotion, which can turn a contradiction into the unverifiable
+	// claim a verified reference suppresses; before the ladder's rollup
+	// collects what remains into the checklist.
+	suppressPlanVerifiedReferences(pr, c.VerifiedReferences)
+	// Before the file-consistency finding and the clamp join the list, so only
+	// reviewer findings are waived.
+	waivePlanFindings(pr, c.Rulings, c.Tasks)
 	if c.FileConsistency != nil {
 		pr.PlanFindings = append(pr.PlanFindings, *c.FileConsistency)
 	}
@@ -204,30 +227,41 @@ func (c planCallContext) applyPreLadder(pr *verdict.PlanResult) {
 
 // mintPlanRunID assigns a plan_run_id when pr does not already carry one.
 // Idempotent by that guard, which is what lets finish() call it
-// unconditionally while the fresh-review path hoists it above store().
+// unconditionally while the fresh-review path hoists it above store(). On a
+// freshly minted run it also appends a best-effort ledger header (no task
+// title, just the run id, verdict, quality and task count); the early return
+// on an existing id is what keeps a cache hit from writing a second header.
 func (c planCallContext) mintPlanRunID(pr *verdict.PlanResult) {
 	if pr.PlanRunID != "" {
 		return
 	}
 	run := c.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
 	pr.PlanRunID = run.ID
+	if err := c.PlanLedger.AppendHeader(run); err != nil {
+		slog.Warn("plan ledger header append failed", "plan_run_id", run.ID, "err", err)
+	}
 }
 
 // finish runs the post-ladder tail every validate_plan exit path shares:
-// mint the plan_run_id if none exists, add the two per-call advisories, then
-// compute SummaryBlock exactly once with both of those already in place.
+// mint the plan_run_id if none exists, add the per-call advisories, assign
+// display IDs, then compute SummaryBlock exactly once with all of that in
+// place.
 //
-// The advisories land AFTER the ladder and after store() on purpose. Both are
-// minor CategoryOther findings, and verdict.FinalizeVerdict treats a 3rd minor
-// finding as a noise_cluster trigger that lifts the verdict to warn — running
-// either through the ladder would let an advisory about THIS call's arguments
-// flip a plan's verdict. Both also describe this call, not the plan content,
-// so neither may be stored on a cache entry. Order puts deprecation first
+// The advisories land AFTER the ladder and after store() on purpose. Each is
+// a minor CategoryOther finding, and verdict.FinalizeVerdict treats a 3rd
+// minor finding as a noise_cluster trigger that lifts the verdict to warn —
+// running one through the ladder would let an advisory about THIS call's
+// arguments flip a plan's verdict. Each also describes this call, not the plan
+// content, so none may be stored on a cache entry. Deprecation goes first
 // because it has been PlanFindings[0] since it existed.
 func (c planCallContext) finish(pr *verdict.PlanResult) {
 	c.mintPlanRunID(pr)
+	if len(c.MalformedRulingIDs) > 0 {
+		pr.PlanFindings = append(pr.PlanFindings, malformedPlanRulingsAdvisory(c.MalformedRulingIDs))
+	}
 	*pr = prependRepoRootUnusable(*pr, c.RepoRootUnusable)
 	*pr = prependPlanDeprecation(*pr, c.UsedPlanText)
+	assignPlanIDs(pr, c.Tasks)
 	pr.SummaryBlock = formatPlanSummary(*pr, c.meta())
 }
 
@@ -249,9 +283,11 @@ type planReviewErrInputs struct {
 	Call planCallContext
 }
 
-// handlePlanReviewErr is the ValidatePlan analog of handlePerTaskReviewErr.
-// Collapses the truncation-recovery + error-propagation pattern after the
-// plan reviewer call (either reviewPlanSingle or reviewPlanChunked).
+// handlePlanReviewErr handles the error from ValidatePlan's reviewer call
+// (reviewPlanSingle or reviewPlanChunked). On a truncated response it
+// recovers what it can and runs the whole post-review tail itself —
+// applyPreLadder, the verdict ladder and finish, but never store() — so a
+// truncated validate_plan response is complete when it returns.
 //
 // Returns (result, planResult, handled, err):
 //   - in.Err == nil               → handled=false; caller proceeds normally.
@@ -281,73 +317,62 @@ func (h *handlers) handlePlanReviewErr(in planReviewErrInputs) (*mcp.CallToolRes
 	// Same tail, same order, as ValidatePlan's fresh-review path — minus the
 	// store(), because a truncated result is never cached. See planCallContext.
 	call.applyPreLadder(&pr)
-	finalizePlanVerdict(&pr)
+	finalizePlanVerdict(&pr, call.Tasks)
 	call.finish(&pr)
 	r, p, err := planEnvelopeResultFinalized(pr, call.meta())
 	return r, p, true, err
 }
 
-// perTaskReviewErrInputs bundles the inputs to handlePerTaskReviewErr.
-// Carrying these on a struct keeps the helper signature narrow (1 arg vs. 7)
-// and matches CodeScene's "max arguments = 4" code-health threshold.
-type perTaskReviewErrInputs struct {
-	Err error
-	// Tool is the calling handler's MCP tool name ("validate_task_spec",
-	// "check_progress", or "validate_completion"), copied onto the returned
-	// envelope's Tool field since this helper is shared by all three.
-	Tool       string
-	SessionID  string
-	Model      config.ModelRef
-	PartialRaw []byte
-	EnvVar     string
-	Clamp      verdict.Finding
-	// Sess is nil for pre-session flows (ValidateTaskSpec, lightweight
-	// ValidateCompletion); otherwise the resolved *session.Session so the
-	// envelope carries SessionExpiresAt / SessionTTLRemainingSeconds.
-	Sess *session.Session
+// perTaskMaxTokensEnvVar names the output budget a truncated per-task review
+// tells the caller to raise.
+const perTaskMaxTokensEnvVar = "ANTI_TANGENT_PER_TASK_MAX_TOKENS"
+
+// reviewOutcome is one per-task reviewer call as a session tool's tail
+// consumes it. Result holds only the findings the reviewer produced. Server
+// holds the findings the server adds for a truncated response, which the tail
+// places after the reviewer's own.
+type reviewOutcome struct {
+	Result    verdict.Result
+	Server    []verdict.Finding
+	ModelUsed string
+	ReviewMS  int64
+	Truncated bool
 }
 
-// handlePerTaskReviewErr collapses the truncation-recovery + error-propagation
-// pattern shared by ValidateTaskSpec, CheckProgress, and ValidateCompletion
-// after h.review(...).
-//
-// Returns (result, env, handled, err):
-//   - in.Err == nil               → handled=false; caller proceeds normally.
-//   - in.Err is a truncation err  → handled=true; result/env carry the
-//     partial-recovery or truncated envelope with clamp and (when in.Sess is
-//     non-nil) session-TTL fields applied.
-//   - in.Err is anything else     → handled=true; result/env are zero
-//     values and err is the propagated in.Err.
-//
-// Always returning handled=true on non-nil in.Err lets the call site drop
-// the residual `if err != nil` branch — just `if handled { return ... }`.
-func (h *handlers) handlePerTaskReviewErr(in perTaskReviewErrInputs) (*mcp.CallToolResult, Envelope, bool, error) {
-	if in.Err == nil {
-		return nil, Envelope{}, false, nil
+// runReview runs the reviewer call and folds a truncated response into an
+// ordinary outcome, so each session tool runs one tail for both. A response
+// truncated after some complete findings yields those findings, marked
+// partial, and a minor marker; one truncated before any yields no reviewer
+// findings and the server's major truncation notice. Any other error is
+// returned.
+func (h *handlers) runReview(ctx context.Context, model config.ModelRef, p prompts.Output, maxTokens int) (reviewOutcome, error) {
+	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, p, maxTokens)
+	if err == nil {
+		return reviewOutcome{Result: result, ModelUsed: modelUsed, ReviewMS: ms}, nil
 	}
-	if !errors.Is(in.Err, providers.ErrResponseTruncated) {
-		return nil, Envelope{}, true, in.Err
+	if !errors.Is(err, providers.ErrResponseTruncated) {
+		return reviewOutcome{}, err
 	}
-	r, ok := recoverPartialFindings(in.PartialRaw, in.EnvVar)
-	if !ok {
-		r = truncatedResult()
+	out := reviewOutcome{ModelUsed: model.String(), Truncated: true}
+	if recovered, marker, ok := recoverPartialFindings(partialRaw, perTaskMaxTokensEnvVar); ok {
+		out.Result = recovered
+		out.Server = []verdict.Finding{marker}
+		return out, nil
 	}
-	if in.Clamp.Severity != "" {
-		r.Findings = append([]verdict.Finding{in.Clamp}, r.Findings...)
+	notice := truncatedResult()
+	out.Server = notice.Findings
+	notice.Findings = nil
+	out.Result = notice
+	return out, nil
+}
+
+// withServerFindings places the max-tokens clamp before the reviewer's
+// findings and the truncation findings after them.
+func withServerFindings(clamp verdict.Finding, reviewer, server []verdict.Finding) []verdict.Finding {
+	out := make([]verdict.Finding, 0, len(reviewer)+len(server)+1)
+	if clamp.Severity != "" {
+		out = append(out, clamp)
 	}
-	r = verdict.FinalizeVerdict(r)
-	env := Envelope{
-		Tool:       in.Tool,
-		SessionID:  in.SessionID,
-		Verdict:    string(r.Verdict),
-		Findings:   r.Findings,
-		NextAction: r.NextAction,
-		ModelUsed:  in.Model.String(),
-		Partial:    r.Partial,
-	}
-	if in.Sess != nil {
-		env = h.withSessionTTL(env, in.Sess)
-	}
-	res, e, err := envelopeResult(env)
-	return res, e, true, err
+	out = append(out, reviewer...)
+	return append(out, server...)
 }

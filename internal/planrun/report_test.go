@@ -286,3 +286,32 @@ func TestRenderKeepsOneRowPerTask(t *testing.T) {
 	assert.Equal(t, before, strings.Count(Render(r), "\n"),
 		"evidence carrying line breaks must not add rows to the report")
 }
+
+func TestRender_RulingsColumnAndTotals(t *testing.T) {
+	r := &Run{
+		ID: "pr_rulings", CreatedAt: time.Unix(0, 0).UTC(),
+		PlanVerdict: "pass", PlanQuality: "actionable", TaskCount: 4,
+		Rows: []TaskRow{
+			{Index: 1, TaskTitle: "both", PostVerdict: "pass", Waived: 2, Escalated: true},
+			{Index: 2, TaskTitle: "waived", PostVerdict: "pass", Waived: 1},
+			{Index: 3, TaskTitle: "escalated", PostVerdict: "warn", Escalated: true},
+			{Index: 4, TaskTitle: "neither", PostVerdict: "pass"},
+		},
+	}
+	got := Render(r)
+	assert.Contains(t, got, "Rulings")
+	assert.Contains(t, got, "2 waived, escalated")
+	assert.Contains(t, got, "1 waived ")
+	assert.Contains(t, got, "  rulings: 3 findings waived, 2 tasks escalated\n")
+
+	tot := Totals(r)
+	assert.Equal(t, 3, tot.Waived)
+	assert.Equal(t, 2, tot.Escalated)
+}
+
+func TestRulingsCell(t *testing.T) {
+	assert.Equal(t, "2 waived, escalated", rulingsCell(TaskRow{Waived: 2, Escalated: true}))
+	assert.Equal(t, "1 waived", rulingsCell(TaskRow{Waived: 1}))
+	assert.Equal(t, "escalated", rulingsCell(TaskRow{Escalated: true}))
+	assert.Equal(t, "-", rulingsCell(TaskRow{}))
+}

@@ -36,6 +36,11 @@ type TaskRow struct {
 	Codescene      *codescene.Digest `json:"codescene,omitempty"`
 	CodesceneState string            `json:"codescene_state,omitempty"`
 	CompletedAt    time.Time         `json:"completed_at,omitempty"`
+	// Waived is how many findings controller rulings waived on the task's most
+	// recent validate_completion.
+	Waived int `json:"waived,omitempty"`
+	// Escalated is set once any validate_completion on the task escalated.
+	Escalated bool `json:"escalated,omitempty"`
 }
 
 // Run is one plan execution.
@@ -151,6 +156,28 @@ func (s *Store) Snapshot(id string) (*Run, bool) {
 		cp.Rows[i] = row
 	}
 	return &cp, true
+}
+
+// Latest returns the most recently created run that has not been idle past
+// the TTL. It does not refresh LastAccessed: naming a run in an advisory must
+// not keep a stale run alive. Safe on a nil Store.
+func (s *Store) Latest() (*Run, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	var latest *Run
+	for _, r := range s.runs {
+		if now.Sub(r.LastAccessed) > s.ttl {
+			continue
+		}
+		if latest == nil || r.CreatedAt.After(latest.CreatedAt) {
+			latest = r
+		}
+	}
+	return latest, latest != nil
 }
 
 // AppendRow adds a task row, stamping its Index from the current length.

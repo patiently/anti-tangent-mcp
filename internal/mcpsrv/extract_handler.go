@@ -21,26 +21,26 @@ import (
 // handler boundary so the wire-level JSON contract is decoupled from the
 // internal prompt-rendering type.
 type CompletionEnvelopeArg struct {
-	TaskTitle    string            `json:"task_title,omitempty"`
-	Summary      string            `json:"summary"`
-	Verdict      string            `json:"verdict"`
-	Findings     []verdict.Finding `json:"findings,omitempty"`
-	FinalDiff    string            `json:"final_diff,omitempty"`
-	FinalFiles   []FileArg         `json:"final_files,omitempty"`
-	TestEvidence string            `json:"test_evidence,omitempty"`
+	TaskTitle    string            `json:"task_title,omitempty" jsonschema:"The task's title."`
+	Summary      string            `json:"summary" jsonschema:"The summary the implementer sent to validate_completion."`
+	Verdict      string            `json:"verdict" jsonschema:"The envelope's verdict: pass, warn or fail."`
+	Findings     []verdict.Finding `json:"findings,omitempty" jsonschema:"The envelope's findings, as returned."`
+	FinalDiff    string            `json:"final_diff,omitempty" jsonschema:"The unified diff the implementer submitted."`
+	FinalFiles   []FileArg         `json:"final_files,omitempty" jsonschema:"The files the implementer submitted, with full content."`
+	TestEvidence string            `json:"test_evidence,omitempty" jsonschema:"The test output the implementer submitted."`
 }
 
 // ExtractProjectKnowledgeArgs is the input schema for extract_project_knowledge.
 // CompletionEnvelopes is required and must be non-empty; optional fields use
 // `omitempty` so absent inputs marshal as the JSON-equivalent zero value.
 type ExtractProjectKnowledgeArgs struct {
-	CompletionEnvelopes []CompletionEnvelopeArg `json:"completion_envelopes" jsonschema:"required"`
-	PlanText            string                  `json:"plan_text,omitempty"`
-	KBIndex             []KBIndexEntryArg       `json:"kb_index,omitempty"`
-	CurrentKBExcerpts   map[string]string       `json:"current_kb_excerpts,omitempty"`
-	EpicPermalink       string                  `json:"epic_permalink,omitempty"`
-	ModelOverride       string                  `json:"model_override,omitempty"`
-	MaxTokensOverride   int                     `json:"max_tokens_override,omitempty"`
+	CompletionEnvelopes []CompletionEnvelopeArg `json:"completion_envelopes" jsonschema:"One or more validate_completion envelopes from the finished tasks, as returned. Must not be empty."`
+	PlanText            string                  `json:"plan_text,omitempty" jsonschema:"The plan markdown, for context on what the tasks set out to do."`
+	KBIndex             []KBIndexEntryArg       `json:"kb_index,omitempty" jsonschema:"The knowledge-base notes that already exist, so proposals update them instead of duplicating them."`
+	CurrentKBExcerpts   map[string]string       `json:"current_kb_excerpts,omitempty" jsonschema:"Current bodies of notes a proposal may update or supersede, keyed by permalink."`
+	EpicPermalink       string                  `json:"epic_permalink,omitempty" jsonschema:"Permalink of the epic note in flight; new decision proposals record it as their origin and add a progress-ledger entry to it."`
+	ModelOverride       string                  `json:"model_override,omitempty" jsonschema:"Model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
+	MaxTokensOverride   int                     `json:"max_tokens_override,omitempty" jsonschema:"Output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
 }
 
 func extractProjectKnowledgeTool() *mcp.Tool {

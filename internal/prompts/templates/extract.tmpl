@@ -9,7 +9,7 @@ Summary:
 {{$e.Summary}}
 {{if $e.Findings}}
 Findings:
-{{range $e.Findings}}- [{{.Severity}}][{{.Category}}] {{.Criterion}} — {{.Evidence}}{{if .Suggestion}} (suggestion: {{.Suggestion}}){{end}}
+{{range $e.Findings}}- [{{.Severity}}][{{.Category}}] {{oneLine .Criterion}} — {{oneLine .Evidence}}{{if .Suggestion}} (suggestion: {{oneLine .Suggestion}}){{end}}
 {{end}}{{end}}{{if $e.FinalDiff}}
 Final diff:
 ```

@@ -254,9 +254,11 @@ ANTI_TANGENT_TICKET_PATTERN=             # optional regex for your tracker's key
 #   codescene-events.jsonl — agent-appended CodeScene Code Health records;
 #                            read + aggregated by the server into rollup.json's
 #                            `codescene` block (NOT written by the server)
-#   plan-runs.jsonl        — one row per completed task, server-written, ONLY
-#                            when ANTI_TANGENT_PLAN_LEDGER=1 is also set; the
-#                            one file in this list that carries task titles
+#   plan-runs.jsonl        — one row per completed task plus one header line
+#                            per run validate_plan mints (no task title),
+#                            server-written, ONLY when ANTI_TANGENT_PLAN_LEDGER=1
+#                            is also set; the one file in this list that
+#                            carries task titles
 ANTI_TANGENT_STATS_DIR=
 ANTI_TANGENT_STATS_MODEL=            # summarizer model; defaults to ANTI_TANGENT_MID_MODEL
 ANTI_TANGENT_STATS_SUMMARY_INTERVAL=24h
@@ -312,6 +314,7 @@ In addition to the existing `task_title` / `goal` / `acceptance_criteria` / `non
 
 - `pinned_by` (optional, v0.3.3+): existing tests, docs, commands, or static checks that pin referenced behavior. The reviewer treats these as caller-supplied anchors, not independently verified codebase facts.
 - `controller_verified_references` (optional, v0.4.0+): paths, symbols, line anchors, commands, or adjacent patterns that the controller already verified before dispatch. The reviewer treats these as caller-supplied attestations and suppresses matching `unverifiable_codebase_claim` findings only by deterministic substring match; contradictions, missing acceptance criteria, and ambiguity still surface.
+- `verification` (optional, v0.22.0+): the task's steps and verify commands, at most 50 entries of at most 500 characters. The pre-task review checks each gate against the task's Non-goals, and the final `validate_completion` review uses them to tell a Non-goal violation a gate forced from ordinary scope drift.
 - `harness_shape_attestation` (optional, v0.5.2+): list of `{harness, path, assertions[]}` objects declaring caller-attested shape facts about test harnesses or fixtures. Pairs with the new `attestation_contradiction` finding category, which the reviewer emits only when an acceptance criterion explicitly contradicts an attested assertion.
 - `phase` (optional, v0.3.3+): `pre` (default) or `post`. Use `post` only for post-hoc/session-recovery reviews; normal protocol still calls this at task start.
 
@@ -330,7 +333,7 @@ When CodeScene MCP is configured in your host alongside anti-tangent, these call
 - `pre_commit_code_health_safeguard` mid-task — deterministic Code Health check on uncommitted/staged files. Fast, cheap, and complementary to anti-tangent's optional `check_progress`.
 - `analyze_change_set` before reporting DONE — full branch-vs-base Code Health analysis. Cite the delta (e.g. `CodeScene: Code Health 9.1 → 9.1, no regression`) and any findings in the DONE summary alongside anti-tangent's `summary_block`.
 
-**In-band attribution (v0.15.0+).** Pass the `analyze_change_set` result to `validate_completion` as a structured `codescene` argument instead of (or alongside) the hook below: `{ran, skip_reason, tool, quality_gate, files_analyzed, verdicts: {improved, degraded, stable}, trend, net_pp, category_counts}`, plus `skip_evidence` (v0.20.0+). Anti-tangent attributes it to the task in `plan_run_report`, rather than only the content-free aggregate the hook writes to `codescene-events.jsonl`.
+**In-band attribution (v0.15.0+).** Pass the `analyze_change_set` result to `validate_completion` as a structured `codescene` argument instead of (or alongside) the hook below: `{ran, skip_reason, tool, quality_gate, files_analyzed, verdicts: {improved, degraded, stable}, trend, net_pp, category_counts}`, plus `skip_evidence` (v0.20.0+). Anti-tangent attributes it to the task in `plan_run_report`, rather than only the content-free aggregate the hook writes to `codescene-events.jsonl`. Since v0.22.0 the argument also accepts `analyze_change_set`'s raw JSON (`quality_gates`, `results[]`) and reduces it server-side, and unknown keys are ignored instead of rejecting the call. `pre_commit_code_health_safeguard` sees only uncommitted changes, so after a commit it reports zero files and is not a CodeScene run of the task.
 
 **The `required` adoption check (v0.15.0+).** Set `ANTI_TANGENT_CODESCENE=required` to make the check observable server-side: a `validate_completion` call with no `codescene` argument emits a `major codescene_not_run` finding; `{"ran": false}` with no `skip_reason` also emits `codescene_not_run`; `{"ran": true, ...}` emits nothing from the adoption check. Left unset (the default), the adoption check never fires.
 
@@ -344,7 +347,10 @@ The requirement is prompt-level: the pairing stays **advisory** on the anti-tang
 
 `validate_plan` accepts `plan_path`, and `validate_completion` accepts `final_diff_path` plus
 `final_files` entries with no `content`. The server reads those files itself, so a large plan or
-diff costs the calling agent no output tokens.
+diff costs the calling agent no output tokens. `validate_completion` also accepts `repo_root`: the
+server reads the post-change version of each file the diff names beneath it, within the
+`context_paths` byte caps, and sends the reviewer only the comment lines that still name a symbol
+the diff removes.
 
 This means the server reads files on your filesystem and sends their contents to the reviewer
 provider. It is stdio-only — the host spawns it as a child process, so it shares your container,

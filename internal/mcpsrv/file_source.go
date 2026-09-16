@@ -114,7 +114,11 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 	}
 	if !withinRoots(resolved, roots) {
 		return "", fileSource{}, fmt.Errorf(
-			"%q is outside ANTI_TANGENT_PLAN_ROOTS (%s)", resolved, strings.Join(roots, string(os.PathListSeparator)))
+			"%q is outside ANTI_TANGENT_PLAN_ROOTS (%s); pass a path under one of those roots that no "+
+				"commit will pick up: the repository's git directory (git rev-parse --absolute-git-dir) "+
+				"when a root contains it, otherwise a file inside the repository that you delete after "+
+				"the call; a per-session scratch directory under /tmp is usually outside them",
+			resolved, strings.Join(roots, string(os.PathListSeparator)))
 	}
 
 	f, err := openNoFollow(resolved)

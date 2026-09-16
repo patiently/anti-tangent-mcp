@@ -67,3 +67,25 @@ func TestValidateModel_UnknownProviderListsSupportedProviders(t *testing.T) {
 	assert.Contains(t, err.Error(), `unknown provider "openrouter"`)
 	assert.Contains(t, err.Error(), "supported: anthropic, google, openai")
 }
+
+// sameAsFindingType walks a decoded verdict.Schema() (or the copy of it a
+// provider embedded in its own request shape) down to
+// findings.items.properties.same_as.type and returns it as decoded JSON — a
+// []any of the type-array's strings for a nullable property. Callers of this
+// helper assert against the decoded value rather than substring-matching the
+// raw schema bytes, so an unrelated schema text change cannot spuriously
+// pass or fail the check.
+func sameAsFindingType(t *testing.T, schema map[string]any) any {
+	t.Helper()
+	props, ok := schema["properties"].(map[string]any)
+	require.True(t, ok, "schema.properties should be an object")
+	findings, ok := props["findings"].(map[string]any)
+	require.True(t, ok, "schema.properties.findings should be an object")
+	items, ok := findings["items"].(map[string]any)
+	require.True(t, ok, "schema.properties.findings.items should be an object")
+	itemProps, ok := items["properties"].(map[string]any)
+	require.True(t, ok, "schema.properties.findings.items.properties should be an object")
+	sameAs, ok := itemProps["same_as"].(map[string]any)
+	require.True(t, ok, "schema.properties.findings.items.properties.same_as should be an object")
+	return sameAs["type"]
+}

@@ -174,6 +174,16 @@ type unknownPlanRunInput struct {
 	PlanRunID string
 }
 
+// clearedSummaryInput is clearPlanServerSetFields's "input" for registry
+// purposes. That function is a void field-clearer, not a formatter — its
+// SummaryBlock assignment is the hardcoded empty string literal, never
+// derived from anything reachable — so it carries no real free-text input.
+// Unused exists only so the reflective forgery walk (which requires at least
+// one plain-string field) has something to set; render ignores it.
+type clearedSummaryInput struct {
+	Unused string
+}
+
 // summaryFormatterCase registers one summary-block producer for both tests.
 //
 // wantHeaders / wantMarkers are the counts a GENUINE block renders. They are
@@ -195,11 +205,27 @@ type summaryFormatterCase struct {
 // so no rendered line appears or disappears when a field is later forged.
 func seedFinding() verdict.Finding {
 	return verdict.Finding{
+		ID:         "f_0123abcd",
 		Severity:   verdict.SeverityMajor,
 		Category:   verdict.CategoryQuality,
 		Criterion:  "criterion",
 		Evidence:   "evidence",
 		Suggestion: "suggestion",
+		RepeatOf:   "f_0123abcd",
+		SameAs:     strPtr("f_0123abcd"),
+	}
+}
+
+// seedWaived returns a benign waived finding with every free-text field
+// populated.
+func seedWaived() verdict.WaivedFinding {
+	return verdict.WaivedFinding{
+		ID:        "f_89abcdef",
+		Severity:  verdict.SeverityMajor,
+		Category:  verdict.CategoryScopeDrift,
+		Criterion: "criterion",
+		Evidence:  "evidence",
+		Ruling:    "ruling",
 	}
 }
 
@@ -235,6 +261,9 @@ func summaryFormatterCases() []summaryFormatterCase {
 					SessionTTLRemainingSeconds: &ttl,
 					SummaryBlock:               "summary",
 					SubmissionDefectOnly:       true,
+					Escalate:                   true,
+					WaivedFindings:             []verdict.WaivedFinding{seedWaived()},
+					ControllerRulings:          []AppliedRuling{{FindingID: "f_89abcdef", Ruling: "ruling"}},
 				}
 			},
 			render: func(in any) string { return formatEnvelopeSummary(*in.(*Envelope)) },
@@ -250,15 +279,17 @@ func summaryFormatterCases() []summaryFormatterCase {
 			newIn: func() any {
 				return &planSummaryInput{
 					PR: verdict.PlanResult{
-						PlanVerdict:  verdict.VerdictWarn,
-						PlanQuality:  verdict.PlanQualityActionable,
-						PlanRunID:    "run-1",
-						PlanFindings: []verdict.Finding{seedFinding()},
+						PlanVerdict:    verdict.VerdictWarn,
+						PlanQuality:    verdict.PlanQualityActionable,
+						PlanRunID:      "run-1",
+						PlanFindings:   []verdict.Finding{seedFinding()},
+						WaivedFindings: []verdict.WaivedFinding{seedWaived()},
 						Tasks: []verdict.PlanTaskResult{{
 							TaskIndex:             1,
 							TaskTitle:             "title",
 							Verdict:               verdict.VerdictPass,
 							Findings:              []verdict.Finding{seedFinding()},
+							WaivedFindings:        []verdict.WaivedFinding{seedWaived()},
 							SuggestedHeaderBlock:  "header block",
 							SuggestedHeaderReason: "header reason",
 							LightweightReason:     "lightweight reason",
@@ -281,6 +312,20 @@ func summaryFormatterCases() []summaryFormatterCase {
 				v := in.(*planSummaryInput)
 				return formatPlanSummary(v.PR, v.Meta)
 			},
+		},
+		{
+			// The source scan keys on ANY assignment to a field named
+			// SummaryBlock, so `pr.SummaryBlock = ""` inside
+			// clearPlanServerSetFields (internal/verdict/parser_partial.go),
+			// which strips the plan-level fields only the server may set
+			// before a reviewer's parsed JSON is trusted, counts as a
+			// producer even though it renders nothing. See
+			// clearedSummaryInput.
+			name:        "verdict.clearPlanServerSetFields",
+			wantHeaders: 0,
+			wantMarkers: 0,
+			newIn:       func() any { return &clearedSummaryInput{Unused: "x"} },
+			render:      func(any) string { return "" },
 		},
 		{
 			name:        "mcpsrv.formatPrimeSummary",
@@ -384,6 +429,8 @@ func summaryFormatterCases() []summaryFormatterCase {
 							Checkpoints:    1,
 							PostVerdict:    "pass",
 							Severity:       map[string]int{"major": 1},
+							Waived:         2,
+							Escalated:      true,
 							CodesceneState: planrun.StateRan,
 							Codescene: &codescene.Digest{
 								Ran:            true,

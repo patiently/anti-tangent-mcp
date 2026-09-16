@@ -94,6 +94,20 @@ func TestCodesceneEvent_UnmarshalsHookWrittenRecord(t *testing.T) {
 	assert.NotContains(t, string(out), `"ran"`)
 }
 
+// TestCodesceneEvent_UnmarshalJSON_DecodesTsAlongsideDigestFields pins
+// CodesceneEvent's UnmarshalJSON override. codescene.Digest's own
+// UnmarshalJSON is promoted onto CodesceneEvent through the anonymous
+// embed; without CodesceneEvent's override, that promoted method runs
+// alone, decodes the Digest fields, and never touches Ts, which is why this
+// test checks both in one decode.
+func TestCodesceneEvent_UnmarshalJSON_DecodesTsAlongsideDigestFields(t *testing.T) {
+	line := `{"ts":"2026-07-07T13:11:28Z","quality_gate":"failed"}`
+	var ev CodesceneEvent
+	require.NoError(t, json.Unmarshal([]byte(line), &ev))
+	assert.True(t, ev.Ts.Equal(time.Date(2026, 7, 7, 13, 11, 28, 0, time.UTC)), "Ts = %v", ev.Ts)
+	assert.Equal(t, "failed", ev.QualityGate)
+}
+
 func TestPruneCodescene(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Unix(1700000000, 0).UTC()

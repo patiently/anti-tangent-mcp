@@ -14,8 +14,18 @@ import (
 
 const ledgerFile = "plan-runs.jsonl"
 
-// ledgerLine is one completed task row, denormalized with its run's header so
-// the file can be replayed without a separate index.
+// ledgerLine is one line of the ledger file, either a completed task row or a
+// run header: Header is true for a header line, written once when
+// validate_plan mints a run before any task attaches to it, and false for a
+// task row. Both kinds carry the run's PlanVerdict, PlanQuality, and
+// TaskCount, denormalized so the file can be replayed without a separate
+// index; a task row carries the task itself in Row and its run id under
+// PlanRunID, while a header carries no row, only its own CreatedAt and its
+// run id under HeaderPlanRunID — a distinct key, because a reader that
+// matches task rows on plan_run_id must never see a header line as one. A
+// reader that prunes only on a task row's completion time finds no such
+// stamp on a header line's zero-valued Row, so it keeps header lines instead
+// of pruning them.
 //
 // PRIVACY: unlike events.jsonl and codescene-events.jsonl, which are
 // deliberately content-free, this record carries TaskTitle. That is why it
@@ -34,10 +44,36 @@ type ledgerLine struct {
 	PlanQuality string  `json:"plan_quality,omitempty"`
 	TaskCount   int     `json:"task_count,omitempty"`
 	Row         TaskRow `json:"row"`
+	// Header marks the line validate_plan writes when it mints a run, before any
+	// task is attached. It has no row, so Load must not turn it into one.
+	Header bool `json:"header,omitempty"`
+	// HeaderPlanRunID carries a header line's run id. It is a separate key
+	// from PlanRunID so a reader that matches task rows on plan_run_id (this
+	// one, or an older binary sharing the same ledger file) never mistakes a
+	// header line for a row.
+	HeaderPlanRunID string `json:"header_plan_run_id,omitempty"`
+	// CreatedAt is set on header lines only. Prune keys task rows on
+	// Row.CompletedAt, and a header has no row to key on.
+	CreatedAt time.Time `json:"created_at,omitzero"`
 }
 
-// Ledger appends completed task rows to plan-runs.jsonl. A nil *Ledger is a
-// no-op, so the disabled path is a single nil check.
+// ledgerHeaderLine is the on-disk shape of a header. It is marshalled from its
+// own type rather than from ledgerLine so the line carries no zero-valued row,
+// and its run id field is keyed header_plan_run_id, not plan_run_id, so a
+// reader that matches task rows on plan_run_id never mistakes this line for
+// one.
+type ledgerHeaderLine struct {
+	HeaderPlanRunID string    `json:"header_plan_run_id"`
+	PlanVerdict     string    `json:"plan_verdict,omitempty"`
+	PlanQuality     string    `json:"plan_quality,omitempty"`
+	TaskCount       int       `json:"task_count,omitempty"`
+	Header          bool      `json:"header"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// Ledger appends completed task rows to plan-runs.jsonl, plus one header
+// line per run validate_plan mints. A nil *Ledger is a no-op, so the disabled
+// path is a single nil check.
 //
 // mu serializes Append against Prune. Append does a raw O_APPEND write;
 // Prune reads the whole file, filters, and atomically replaces it via a
@@ -85,6 +121,26 @@ func (l *Ledger) Append(run *Run, row TaskRow) error {
 	if err != nil {
 		return err
 	}
+	return l.appendLine(b)
+}
+
+// AppendHeader records a run when validate_plan mints it, so a run that no
+// task was ever attached to is still known to Load. It carries no task title.
+func (l *Ledger) AppendHeader(run *Run) error {
+	if l == nil || l.Dir == "" {
+		return nil
+	}
+	b, err := json.Marshal(ledgerHeaderLine{
+		HeaderPlanRunID: run.ID, PlanVerdict: run.PlanVerdict, PlanQuality: run.PlanQuality,
+		TaskCount: run.TaskCount, Header: true, CreatedAt: run.CreatedAt.UTC(),
+	})
+	if err != nil {
+		return err
+	}
+	return l.appendLine(b)
+}
+
+func (l *Ledger) appendLine(b []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.afterAppendLock != nil {
@@ -95,18 +151,30 @@ func (l *Ledger) Append(run *Run, row TaskRow) error {
 		return err
 	}
 	defer f.Close()
-	// OpenFile's mode argument only applies at creation, so a file left behind
-	// by a pre-fix binary (0o644) would otherwise never get tightened by a
-	// plain append. Chmod is best-effort and its error is intentionally
-	// swallowed: ledger writes are advisory, and a chmod failure must never
-	// turn into a failed append.
+	// OpenFile's mode argument only applies at creation, so a file created with
+	// a wider mode would otherwise never get tightened by a plain append. Chmod
+	// is best-effort and its error is intentionally swallowed: ledger writes
+	// are advisory, and a chmod failure must never turn into a failed append.
 	_ = f.Chmod(0o600)
 	_, err = f.Write(append(b, '\n'))
 	return err
 }
 
+// ledgerLineMatch resolves the run id ln carries and whether it belongs to
+// planRunID. A header line's id lives under HeaderPlanRunID; a task row's
+// under PlanRunID — see ledgerLine's doc comment for why the two are kept
+// apart.
+func ledgerLineMatch(ln ledgerLine, planRunID string) (id string, matches bool) {
+	if ln.Header {
+		return ln.HeaderPlanRunID, ln.HeaderPlanRunID == planRunID
+	}
+	return ln.PlanRunID, ln.PlanRunID == planRunID
+}
+
 // Load reconstructs a run from the ledger. Returns false when the ledger is
-// disabled, unreadable, or holds no rows for the id.
+// disabled, unreadable, or holds no line for the id. A run recorded by only
+// a header line — one that no task has attached to yet — comes back with ok
+// true and Rows empty, not as not-found.
 //
 // validate_completion may legitimately run more than once for the same
 // session — that is exactly the submission-defect re-submit loop
@@ -140,14 +208,21 @@ func (l *Ledger) Load(planRunID string) (*Run, bool) {
 		if err := json.Unmarshal(sc.Bytes(), &ln); err != nil {
 			continue // tolerate a torn trailing line
 		}
-		if ln.PlanRunID != planRunID {
+		id, matches := ledgerLineMatch(ln, planRunID)
+		if !matches {
 			continue
 		}
 		if run == nil {
 			run = &Run{
-				ID: ln.PlanRunID, PlanVerdict: ln.PlanVerdict,
+				ID: id, PlanVerdict: ln.PlanVerdict,
 				PlanQuality: ln.PlanQuality, TaskCount: ln.TaskCount,
 			}
+		}
+		if ln.Header {
+			if run.CreatedAt.IsZero() {
+				run.CreatedAt = ln.CreatedAt
+			}
+			continue
 		}
 		byIndex[ln.Row.Index] = ln.Row // last-seen wins: a resubmission overwrites its own index
 	}
@@ -162,9 +237,10 @@ func (l *Ledger) Load(planRunID string) (*Run, bool) {
 	return run, true
 }
 
-// Prune rewrites plan-runs.jsonl, keeping only rows at or after cutoff. It
-// keys on Row.CompletedAt, since a ledger line carries no timestamp of its
-// own outside the embedded row (see ledgerLine).
+// Prune rewrites plan-runs.jsonl, keeping only lines at or after cutoff. A
+// task row is keyed on Row.CompletedAt; a header line carries its own
+// CreatedAt (see ledgerLine) and is keyed on that instead, since it has no
+// embedded row to draw a timestamp from.
 //
 // A row whose CompletedAt is the zero value is always retained, never
 // treated as "at or after" nor "before" cutoff by a literal comparison. Zero
@@ -213,8 +289,12 @@ func (l *Ledger) Prune(cutoff time.Time) error {
 		if err := json.Unmarshal(line, &ln); err != nil {
 			continue // tolerate (drop) a torn trailing line, same as Load
 		}
-		if !ln.Row.CompletedAt.IsZero() && ln.Row.CompletedAt.Before(cutoff) {
-			continue // has a real completion time and it is stale: drop
+		stamp := ln.Row.CompletedAt
+		if ln.Header {
+			stamp = ln.CreatedAt
+		}
+		if !stamp.IsZero() && stamp.Before(cutoff) {
+			continue // has a real timestamp and it is stale: drop
 		}
 		kept = append(kept, append([]byte(nil), line...)) // copy: sc.Bytes() is reused by the next Scan
 	}

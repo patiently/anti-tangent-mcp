@@ -122,9 +122,9 @@ If unsure, look for the structured task block. No block → no protocol. Don't f
 
 **How do I know my session expired?** A `category: session_not_found` finding. Default TTL 4h; re-call `validate_task_spec` for a fresh session.
 
-**My payload is too big.** A `category: payload_too_large` finding. Default cap 200 KB across `changed_files`, `final_files` and `final_diff`, set by `ANTI_TANGENT_MAX_PAYLOAD_BYTES`. For `validate_completion`, pass `final_diff` instead of or alongside `final_files`; for `check_progress`, reduce `changed_files` or split the call. `validate_plan` uses `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES`, and `context_paths` adds two of its own — `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` per file, `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` for the attached set — plus a fixed 50-file count cap. `evidence` names which one was breached.
+**My payload is too big.** A `category: payload_too_large` finding. Default cap 200 KB across `changed_files`, `final_files` and `final_diff`, set by `ANTI_TANGENT_MAX_PAYLOAD_BYTES`. For `validate_completion`, send a unified diff (`-U1` when large) instead of whole files, never the same file in both `final_diff` and `final_files`, and leave out generated, lockfile and snapshot files; for `check_progress`, reduce `changed_files` or split the call. `validate_plan` uses `ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES`, and `context_paths` adds two of its own — `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` per file, `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES` for the attached set — plus a fixed 50-file count cap. `evidence` names which one was breached.
 
-**A `validate_completion` call returned `category: malformed_evidence`.** The server's evidence-shape guard rejected your submission pre-review. `evidence` names the offending pattern — a truncation marker (`(truncated)`, `[truncated]`, `// ... unchanged`), a `...`-only placeholder line, or empty `Path` entries in `final_files`. Re-submit with full file contents or a complete unified diff. Rejection is cached for 5 minutes by canonical content hash. If a file legitimately contains one of these strings (a fixture or doc), pass a complete `final_diff` instead.
+**A `validate_completion` call returned `category: malformed_evidence`.** The server's evidence-shape guard rejected your submission pre-review. `evidence` names the offending pattern — a truncation marker (`(truncated)`, `[truncated]`, `// ... unchanged`), a `...`-only placeholder line, or empty `Path` entries in `final_files`. Re-submit with full file contents or a complete unified diff. Rejection is cached for 5 minutes by canonical content hash. A bare `...` line is not flagged on a diff's unchanged or removed lines, or in a `.py`/`.pyi` file. The other markers are checked everywhere, `final_diff` included.
 
 **A `validate_completion` call returned `category: codescene_not_run` or `category: codescene_skipped`.** Only fires when `ANTI_TANGENT_CODESCENE=required`. Four cases:
 
@@ -141,6 +141,8 @@ Fix: pass the `codescene` argument (see [`implementer.md`](implementer.md) §4.2
 response is about what you submitted — absent evidence, malformed evidence, or a CodeScene run
 that did not happen — not about your code. Attach what is missing and call again. No rework is
 implied; the reviewer has not yet seen your code.
+
+**What are `id`, `repeat_of`, `escalate` and `waived_findings`?** Every finding carries an `id`. Implementers answer one with `finding_responses` and controllers rule on one with `controller_rulings`; see [`implementer.md`](implementer.md) §4.3 and [`controller.md`](controller.md) §5.9.
 
 **A hook returned `category: other` with `criterion: reviewer_response`.** Reviewer output was cut off at the token budget. The server parses truncated responses tolerantly and surfaces any complete findings before the cap (look for `"partial": true` and a `severity: minor` truncation marker). For the full response next call, raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` / `ANTI_TANGENT_PLAN_MAX_TOKENS` globally, or pass `max_tokens_override`.
 
@@ -166,5 +168,7 @@ Defaults shown; [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob
   `codescene` argument or an unevidenced skip — see the ladder above. A lone CodeScene major
   yields `warn`; combined with another major it can tip a verdict to `fail`.
 - `ANTI_TANGENT_PLAN_LEDGER` — `0` (off). With `ANTI_TANGENT_STATS_DIR` set, `1` persists each
-  completed task row to `plan-runs.jsonl` so `plan_run_report` survives a restart. Unlike every
-  other stats artifact it carries task titles, hence its own opt-in.
+  completed task row to `plan-runs.jsonl` so `plan_run_report` survives a restart. It also holds
+  one header line per run minted by `validate_plan` (run id, verdict, quality, task count, creation
+  time — no task title), pruned by its creation time. Unlike every other stats artifact it carries
+  task titles, hence its own opt-in.

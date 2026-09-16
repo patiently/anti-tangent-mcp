@@ -24,11 +24,12 @@ Module mcpsrv invariant: stdout is reserved for MCP stdio traffic.
 
 You are evaluating the SPEC ITSELF, not any code. The implementer has not started yet.
 
-Check three things:
+Check four things:
 
 1. Structural completeness — is the goal clear? Are there acceptance criteria? Are non-goals declared where they help bound scope?
 2. Acceptance-criterion quality — is each AC testable, specific, and unambiguous? For any vague AC, propose a concrete rewrite in the suggestion.
 3. Implicit assumptions — list any assumptions a fresh implementer would have to make. Consolidate related assumptions into one finding rather than emitting one finding per assumption. Emit each at `severity: minor` unless a competent implementer could plausibly resolve the assumption the wrong way, in which case it is `major`.
+4. Gates against Non-goals — a step or verification gate (for example "no new warnings", "compiles", "lint clean") in the Verification list, an acceptance criterion or `Context:` that can pass only once work a Non-goal defers is done contradicts that Non-goal. Emit it as `ambiguous_spec` at `severity: major`, quoting the gate and the Non-goal. A gate the spec scopes to exclude that work, in its own wording or in `Context:`, is not a contradiction.
 
 For explicitly test-only tasks, treat `null`, `unchanged`, or similar assertions as acceptable when the spec names the initial state, fixture setup, or existing test harness assumption. Still flag missing invocation counts when call-count behavior matters, missing negative assertions when a no-change or no-call invariant is intended, unclear scenario setup, or unclear path through the system. When the same ambiguity repeats across multiple scenarios, prefer one consolidated finding instead of one finding per scenario.
 
@@ -71,5 +72,7 @@ If the task's plan text or context contains `.trimIndent()`, `.trimMargin()`, `t
   - criterion: "raw-string trimming caveat — see anti-tangent-protocol authoring.md §3.7"
   - evidence: "<quoted trim construct and the multi-line literal>"
   - suggestion: "Pin example strings the implementation will compare against to a single source line, OR phrase the AC against the rendered string (e.g. 'output contains <phrase>') rather than against source layout."
+
+Set `same_as` to null on every finding.
 
 Respond with the verdict JSON only.

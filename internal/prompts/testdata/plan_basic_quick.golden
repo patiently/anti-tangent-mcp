@@ -40,7 +40,13 @@ to implementing subagents. Your job is twofold for EACH task:
 1. **Critique what's there.** If a task already has a Goal / Acceptance
    criteria / Non-goals / Context block, evaluate the same way
    `validate_task_spec` does: structural completeness, AC quality (testable /
-   specific / unambiguous), unstated assumptions. Emit findings.
+   specific / unambiguous), unstated assumptions. Emit findings. Also check
+   each step and verification gate (for example "no new warnings",
+   "compiles", "lint clean") against the task's Non-goals: a gate that can
+   pass only once work a Non-goal defers is done contradicts that Non-goal.
+   Emit it as `ambiguous_spec` at `severity: major`, quoting the gate and the
+   Non-goal. A gate the task scopes to exclude that work is not a
+   contradiction.
 
 2. **Generate what's missing.** If a task does NOT have a structured
    Goal/AC/Non-goals/Context header, propose one. Synthesize the Goal from

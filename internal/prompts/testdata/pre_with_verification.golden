@@ -1,0 +1,76 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
+## Task spec
+
+Title: Add /healthz endpoint
+Goal: Liveness probe for the HTTP server
+
+Acceptance criteria:
+- Returns 200 OK with body "ok"
+- Responds in under 50ms p95
+
+Non-goals:
+- Database health (covered separately)
+- Fixing existing lint warnings
+
+Context:
+Service is a Gin app on port 8080.
+
+Verification (the task's steps and verify commands):
+- go vet ./... reports no new warnings
+- go test ./handlers/...
+
+## What to evaluate
+
+You are evaluating the SPEC ITSELF, not any code. The implementer has not started yet.
+
+Check four things:
+
+1. Structural completeness — is the goal clear? Are there acceptance criteria? Are non-goals declared where they help bound scope?
+2. Acceptance-criterion quality — is each AC testable, specific, and unambiguous? For any vague AC, propose a concrete rewrite in the suggestion.
+3. Implicit assumptions — list any assumptions a fresh implementer would have to make. Consolidate related assumptions into one finding rather than emitting one finding per assumption. Emit each at `severity: minor` unless a competent implementer could plausibly resolve the assumption the wrong way, in which case it is `major`.
+4. Gates against Non-goals — a step or verification gate (for example "no new warnings", "compiles", "lint clean") in the Verification list, an acceptance criterion or `Context:` that can pass only once work a Non-goal defers is done contradicts that Non-goal. Emit it as `ambiguous_spec` at `severity: major`, quoting the gate and the Non-goal. A gate the spec scopes to exclude that work, in its own wording or in `Context:`, is not a contradiction.
+
+For explicitly test-only tasks, treat `null`, `unchanged`, or similar assertions as acceptable when the spec names the initial state, fixture setup, or existing test harness assumption. Still flag missing invocation counts when call-count behavior matters, missing negative assertions when a no-change or no-call invariant is intended, unclear scenario setup, or unclear path through the system. When the same ambiguity repeats across multiple scenarios, prefer one consolidated finding instead of one finding per scenario.
+
+If a pinned_by section is present, treat those entries as caller-supplied anchors for existing behavior. They are not codebase facts you can independently verify. Do not emit `unverifiable_codebase_claim` merely because a pinned_by entry names a file, class, method, command, or document. For ACs like "existing behavior remains unchanged," prefer a minor `quality` suggestion to enumerate the behavior only when pinned_by is empty or unrelated.
+
+If a Controller-verified references section is present, treat those entries as caller-supplied attestations that the controller grep-verified specific codebase references before dispatch. Suppress an `unverifiable_codebase_claim` for claim C when some entry in controller_verified_references is a substring of C, or C is a substring of some entry. Suppression is per-claim: a single matching substring suppresses the entire claim even if the claim mentions other symbols not in the CVR list.
+
+Example: claim "XService.findFoo at path/to/file.kt:L42 returns a sorted slice" with CVR `["path/to/file.kt"]` → suppress (the path matches one of the claim's substrings).
+
+Do not suppress logical contradictions, missing acceptance criteria, or ambiguity findings.
+
+If a Test strategy notes section is present, treat each entry as authoritative caller context about why test coverage is split. Do not emit `missing_acceptance_criterion` for joint-coverage gaps when an entry explains the split that covers the gap. Continue to emit `missing_acceptance_criterion` when the gap is unrelated (e.g. an AC bullet with zero tests at all, or an invocation-count assertion that is genuinely missing).
+
+If a Codebase conventions section is present, treat each entry as a convention the implementation must follow. When the task spec or surrounding context shows positive evidence of deviation, emit a finding with `category: convention_deviation`, `criterion: codebase_convention`, severity `minor`, evidence quoting the spec text that suggests deviation, and a suggestion that re-states the convention and asks the implementer to confirm or document an exception. Do not emit `convention_deviation` when the spec is silent on the convention — only when there is positive evidence of deviation.
+
+If a Testability extractions section is present, treat each entry as a helper that exists in production code purely so tests can call it directly. When a `scope_drift` finding would name one of these helpers, suppress that specific finding. Continue to emit `scope_drift` for unrelated additions.
+
+If a Normative test bodies section is present, treat each entry as binding test scope — equivalent in authority to a bullet under Acceptance criteria. Do not emit `ambiguous_spec` for "test scope unclear" findings about coverage that one of these bodies already pins. An entry that begins with `// excerpt:` (or an analogous comment marker) is partial — flag invocation-count or assertion-shape gaps only when the excerpt itself reveals them, not when the gap might exist in the omitted portion. Continue to flag invocation-count gaps, missing negative assertions, or unrelated coverage holes when the entry is a complete body.
+
+The `Context:` block in the task spec above resolves under-specification. Do not emit `ambiguous_spec` or `missing_acceptance_criterion` for an ambiguity that `Context:` already answers — including when it answers it in code rather than prose.
+
+This applies only where an acceptance criterion is SILENT or VAGUE and `Context:` fills the gap. Where an acceptance criterion and `Context:` state incompatible requirements, separate two cases. If `Context:` explicitly anticipates or approves the deviation from the AC's literal wording (for example, by naming a framework constraint, an upstream design decision, or an in-flight refactor), the spec is coherent, not defective: an implementer reading both builds the right thing. Emit no finding for that. An explicit approval is sufficient on its own — a stated rationale makes it easier to follow but is not required for the spec to be coherent. Reserve the major for the irreconcilable case, where the two state opposing requirements and nothing in the spec indicates which governs: that is a contradiction, not an ambiguity, so emit it as `ambiguous_spec` at `severity: major`, quoting both sides. `Context:` clarifies acceptance criteria; it does not silently overrule them.
+
+Severity: critical = spec is unimplementable as written; major = a competent implementer would still misimplement it; minor = nit.
+
+When the goal is clear and each acceptance criterion is individually testable, prefer `verdict: pass` with `severity: minor` `category: quality` findings for nit-level concerns over a failing verdict. Reserve `severity: major` for ambiguity that would cause a competent implementer to build the wrong thing, and `severity: critical` for a spec that cannot be implemented as written. Wanting an acceptance criterion stated more explicitly is not, on its own, a major finding.
+
+If you would emit a finding with `category: ambiguous_spec` AND `severity: major`, but a normative test body (provided in the `Normative test bodies` section above) explicitly pins the value or assertion that the AC's prose leaves ambiguous, downgrade the severity to `minor` and append `(resolved-by-normative-body: <short citation of which body resolves it, max 80 chars>)` to the `suggestion` field. The `criterion` and `evidence` fields stay as you would have written them.
+
+### Unverifiable codebase claims
+
+When the task spec asserts something about the codebase that you cannot verify from the text alone — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase.
+
+Use criterion = "spec" for structural findings, or quote the verbatim AC text for AC-quality findings.
+
+RAW-STRING TRIMMING CAVEAT (§3.7 heuristic):
+If the task's plan text or context contains `.trimIndent()`, `.trimMargin()`, `textwrap.dedent`, or a tagged-template `dedent`, AND any acceptance criterion compares the implementation's output against a multi-line string literal in the same plan block, emit a `minor` `ambiguous_spec` finding with:
+  - criterion: "raw-string trimming caveat — see anti-tangent-protocol authoring.md §3.7"
+  - evidence: "<quoted trim construct and the multi-line literal>"
+  - suggestion: "Pin example strings the implementation will compare against to a single source line, OR phrase the AC against the rendered string (e.g. 'output contains <phrase>') rather than against source layout."
+
+Set `same_as` to null on every finding.
+
+Respond with the verdict JSON only.
