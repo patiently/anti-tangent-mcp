@@ -2461,6 +2461,8 @@ The controller records this commit as **B2**.
 
 ### Task 7: Deletions walk in the final review
 
+> **Built, then reverted (2026-09-16).** Task 9's replay named the target in 5 of 5 runs both before and after this change, so it met no part of the ship criterion and was reverted along with its follow-up fix; `CHANGELOG.md` carries no line for it and the branch ships without it. The task below is the record of what was built and measured, not of shipped behaviour. See Task 9's outcome.
+
 **Goal:** `post.tmpl` asks the reviewer to walk every branch, case or state the diff removes against the guards, sets and dispatches that enumerate those states.
 
 **Files:**
