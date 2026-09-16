@@ -92,11 +92,32 @@ const (
 )
 
 type Finding struct {
+	// ID is server-assigned: the finding's fingerprint, with a "-n" suffix when
+	// an earlier finding in the same response shares it. See Fingerprint.
+	ID         string   `json:"id,omitempty" jsonschema:"Server-assigned identifier: f_ and eight hex digits, with a -n suffix when an earlier finding in the same response shares them."`
 	Severity   Severity `json:"severity" jsonschema:"critical, major or minor."`
 	Category   Category `json:"category" jsonschema:"The finding's category, such as missing_acceptance_criterion or scope_drift."`
 	Criterion  string   `json:"criterion" jsonschema:"The acceptance criterion or spec field the finding is about."`
 	Evidence   string   `json:"evidence" jsonschema:"What the reviewer saw that supports the finding."`
 	Suggestion string   `json:"suggestion" jsonschema:"The concrete next action that would resolve the finding."`
+	// RepeatOf is server-set on validate_completion: the ID of a prior finding
+	// the implementer answered and the reviewer raised again.
+	RepeatOf string `json:"repeat_of,omitempty" jsonschema:"Server-set: the id of an earlier finding the implementer answered that this finding raises again."`
+	// SameAs is the reviewer's claim that this finding raises again one its
+	// prompt showed. The server reads it and clears it before responding.
+	SameAs *string `json:"same_as,omitempty" jsonschema:"Reviewer-set: the id of an earlier finding shown in the prompt that this finding raises again, or null."`
+}
+
+// WaivedFinding is a reviewer finding a controller ruling covered. It does not
+// count toward the verdict and is reported with the ruling that waived it, so
+// the controller reading the summary block sees what each ruling covered.
+type WaivedFinding struct {
+	ID        string   `json:"id"`
+	Severity  Severity `json:"severity"`
+	Category  Category `json:"category"`
+	Criterion string   `json:"criterion"`
+	Evidence  string   `json:"evidence"`
+	Ruling    string   `json:"ruling"`
 }
 
 type Result struct {

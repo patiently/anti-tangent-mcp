@@ -46,6 +46,7 @@ func Parse(raw []byte) (Result, error) {
 		if err := validateFindingStrings(r.Findings[i], fmt.Sprintf("finding[%d]", i)); err != nil {
 			return Result{}, err
 		}
+		clearServerSetFields(&r.Findings[i], true)
 	}
 	return r, nil
 }

@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
 func TestGoogle_Review_OK(t *testing.T) {
@@ -130,6 +132,53 @@ func TestGoogle_Review_TimeoutIncludesDurationAndEnv(t *testing.T) {
 	assert.Contains(t, err.Error(), "google: request timeout 1ms exceeded")
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_REQUEST_TIMEOUT")
 	assert.True(t, errors.Is(err, context.DeadlineExceeded))
+}
+
+// TestGoogle_Review_PerTaskSchemaNullableSameAs mirrors
+// TestAnthropic_Review_PerTaskSchemaNullableSameAs for Google's wire shape:
+// the schema travels under generationConfig.responseJsonSchema, and the
+// canned response's candidate part text is a JSON-ENCODED STRING (not a
+// nested object) carrying the Result.
+func TestGoogle_Review_PerTaskSchemaNullableSameAs(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"candidates": [{
+				"content": {"parts": [{"text": "{\"verdict\":\"warn\",\"findings\":[{\"severity\":\"minor\",\"category\":\"quality\",\"criterion\":\"first\",\"evidence\":\"e\",\"suggestion\":\"s\",\"same_as\":\"f_0123abcd\"},{\"severity\":\"minor\",\"category\":\"quality\",\"criterion\":\"second\",\"evidence\":\"e\",\"suggestion\":\"s\",\"same_as\":null}],\"next_action\":\"none\"}"}]}
+			}],
+			"usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 4},
+			"modelVersion": "gemini-2.5-pro"
+		}`))
+	}))
+	defer srv.Close()
+
+	rv := NewGoogle("test-key", srv.URL, 5*time.Second)
+	resp, err := rv.Review(context.Background(), Request{
+		Model:      "gemini-2.5-pro",
+		System:     "sys",
+		User:       "usr",
+		MaxTokens:  1024,
+		JSONSchema: verdict.Schema(),
+	})
+	require.NoError(t, err)
+
+	genCfg, ok := gotBody["generationConfig"].(map[string]any)
+	require.True(t, ok, "generationConfig should be an object")
+	schema, ok := genCfg["responseJsonSchema"].(map[string]any)
+	require.True(t, ok, "generationConfig.responseJsonSchema should be an object")
+	assert.Equal(t, []any{"string", "null"}, sameAsFindingType(t, schema))
+
+	result, err := verdict.Parse(resp.RawJSON)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 2)
+	require.NotNil(t, result.Findings[0].SameAs)
+	assert.Equal(t, "f_0123abcd", *result.Findings[0].SameAs)
+	assert.Nil(t, result.Findings[1].SameAs)
 }
 
 func TestGoogle_CachePrefix(t *testing.T) {

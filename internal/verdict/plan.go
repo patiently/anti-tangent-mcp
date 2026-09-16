@@ -62,6 +62,9 @@ type PlanResult struct {
 	// plan_schema.json, exactly like SummaryBlock. Controllers thread it into
 	// each validate_task_spec call so plan_run_report can assemble the run.
 	PlanRunID string `json:"plan_run_id,omitempty"`
+	// WaivedFindings holds the plan-level reviewer findings a controller ruling
+	// covered. Server-set, like PlanRunID.
+	WaivedFindings []WaivedFinding `json:"waived_findings,omitempty"`
 }
 
 // PlanTaskResult is the per-task analysis carried inside PlanResult.Tasks.
@@ -77,6 +80,9 @@ type PlanTaskResult struct {
 	ExitContracts         []string  `json:"exit_contracts,omitempty"`
 	ExitContractsInferred bool      `json:"exit_contracts_inferred,omitempty"`
 	NormativeTestBodies   []string  `json:"normative_test_bodies,omitempty"`
+	// WaivedFindings holds this task's reviewer findings a controller ruling
+	// covered. Server-set.
+	WaivedFindings []WaivedFinding `json:"waived_findings,omitempty"`
 }
 
 //go:embed tasks_only_schema.json

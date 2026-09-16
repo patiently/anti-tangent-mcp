@@ -380,3 +380,30 @@ func TestLedger_HeaderPrunedByCreatedAt(t *testing.T) {
 	_, ok = l.Load("pr_new000000000")
 	assert.True(t, ok)
 }
+
+func TestLedger_RulingsFieldsRoundTripAndOlderLinesStillLoad(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+	run := &Run{ID: "pr_new000000000", PlanVerdict: "pass", PlanQuality: "actionable", TaskCount: 1}
+	require.NoError(t, l.Append(run, TaskRow{Index: 1, TaskTitle: "ruled", PostVerdict: "pass", Waived: 2, Escalated: true}))
+
+	got, ok := l.Load("pr_new000000000")
+	require.True(t, ok)
+	require.Len(t, got.Rows, 1)
+	assert.Equal(t, 2, got.Rows[0].Waived)
+	assert.True(t, got.Rows[0].Escalated)
+
+	old := `{"plan_run_id":"pr_old000000000","plan_verdict":"pass","plan_quality":"actionable","task_count":1,` +
+		`"row":{"index":1,"task_title":"old row","pre_verdict":"pass","checkpoints":0,"post_verdict":"pass","completed_at":"2026-09-01T00:00:00Z"}}` + "\n"
+	f, err := os.OpenFile(filepath.Join(dir, "plan-runs.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(old)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	older, ok := l.Load("pr_old000000000")
+	require.True(t, ok)
+	require.Len(t, older.Rows, 1)
+	assert.Equal(t, 0, older.Rows[0].Waived)
+	assert.False(t, older.Rows[0].Escalated)
+}

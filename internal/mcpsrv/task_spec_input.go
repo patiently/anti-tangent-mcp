@@ -69,6 +69,7 @@ func normalizeCompletionExitContracts(entries []string) ([]string, error) {
 // task-spec inputs.
 type taskSpecInputs struct {
 	Phase                        string
+	Verification                 []string
 	PinnedBy                     []string
 	ControllerVerifiedReferences []string
 	TestStrategyNotes            []string
@@ -137,6 +138,7 @@ func totalNormalizedTaskSpecBytes(args ValidateTaskSpecArgs, projectKnowledge st
 	for _, s := range args.NonGoals {
 		total += len(s)
 	}
+	total += sumLen(in.Verification)
 	total += sumLen(in.PinnedBy)
 	total += sumLen(in.ControllerVerifiedReferences)
 	total += sumLen(in.TestStrategyNotes)
@@ -147,51 +149,48 @@ func totalNormalizedTaskSpecBytes(args ValidateTaskSpecArgs, projectKnowledge st
 	return total
 }
 
+// boundedListField pairs one bounded-list argument with its normalization
+// limits and the taskSpecInputs slot it lands in, so normalizeTaskSpecInputs
+// can normalize all of them from one loop instead of one repeated
+// trim-check-assign block per field.
+type boundedListField struct {
+	field                string
+	entries              []string
+	maxEntries, maxChars int
+	out                  *[]string
+}
+
 func normalizeTaskSpecInputs(args ValidateTaskSpecArgs, maxPayload int) (taskSpecInputs, error) {
 	phase, err := normalizePhase(args.Phase)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
-	pinnedBy, err := normalizeBoundedStringList("pinned_by", args.PinnedBy, maxPinnedByEntries, maxPinnedByChars)
-	if err != nil {
-		return taskSpecInputs{}, err
+	in := taskSpecInputs{Phase: phase}
+	// Order matters: it is the order in which a call with several bad fields
+	// reports its first error.
+	lists := []boundedListField{
+		{"verification", args.Verification, maxPinnedByEntries, maxPinnedByChars, &in.Verification},
+		{"pinned_by", args.PinnedBy, maxPinnedByEntries, maxPinnedByChars, &in.PinnedBy},
+		{"controller_verified_references", args.ControllerVerifiedReferences, maxPinnedByEntries, maxPinnedByChars, &in.ControllerVerifiedReferences},
+		{"test_strategy_notes", args.TestStrategyNotes, maxPinnedByEntries, maxPinnedByChars, &in.TestStrategyNotes},
+		{"codebase_conventions", args.CodebaseConventions, maxPinnedByEntries, maxPinnedByChars, &in.CodebaseConventions},
+		{"testability_extractions", args.TestabilityExtractions, maxPinnedByEntries, maxPinnedByChars, &in.TestabilityExtractions},
+		{"normative_test_bodies", args.NormativeTestBodies, maxNormativeTestBodyEntries, maxNormativeTestBodyChars, &in.NormativeTestBodies},
 	}
-	controllerVerifiedReferences, err := normalizeBoundedStringList("controller_verified_references", args.ControllerVerifiedReferences, maxPinnedByEntries, maxPinnedByChars)
-	if err != nil {
-		return taskSpecInputs{}, err
-	}
-	testStrategyNotes, err := normalizeBoundedStringList("test_strategy_notes", args.TestStrategyNotes, maxPinnedByEntries, maxPinnedByChars)
-	if err != nil {
-		return taskSpecInputs{}, err
-	}
-	codebaseConventions, err := normalizeBoundedStringList("codebase_conventions", args.CodebaseConventions, maxPinnedByEntries, maxPinnedByChars)
-	if err != nil {
-		return taskSpecInputs{}, err
-	}
-	testabilityExtractions, err := normalizeBoundedStringList("testability_extractions", args.TestabilityExtractions, maxPinnedByEntries, maxPinnedByChars)
-	if err != nil {
-		return taskSpecInputs{}, err
-	}
-	normativeTestBodies, err := normalizeBoundedStringList("normative_test_bodies", args.NormativeTestBodies, maxNormativeTestBodyEntries, maxNormativeTestBodyChars)
-	if err != nil {
-		return taskSpecInputs{}, err
+	for _, l := range lists {
+		normalized, err := normalizeBoundedStringList(l.field, l.entries, l.maxEntries, l.maxChars)
+		if err != nil {
+			return taskSpecInputs{}, err
+		}
+		*l.out = normalized
 	}
 	harnessShapeAttestations, err := normalizeHarnessShapeAttestation(args.HarnessShapeAttestation)
 	if err != nil {
 		return taskSpecInputs{}, err
 	}
+	in.HarnessShapeAttestations = harnessShapeAttestations
 	projectKnowledge := normalizeProjectKnowledge(args.ProjectKnowledge)
-	in := taskSpecInputs{
-		Phase:                        phase,
-		PinnedBy:                     pinnedBy,
-		ControllerVerifiedReferences: controllerVerifiedReferences,
-		TestStrategyNotes:            testStrategyNotes,
-		CodebaseConventions:          codebaseConventions,
-		TestabilityExtractions:       testabilityExtractions,
-		NormativeTestBodies:          normativeTestBodies,
-		HarnessShapeAttestations:     harnessShapeAttestations,
-		ProjectKnowledge:             projectKnowledge,
-	}
+	in.ProjectKnowledge = projectKnowledge
 	if total := totalNormalizedTaskSpecBytes(args, projectKnowledge, in); total > maxPayload {
 		// The error names the cumulative cap and reports each major
 		// contributor's byte count so the caller can see at a glance which

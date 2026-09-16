@@ -34,6 +34,22 @@ func applySeverityFloorAll(fs []Finding) {
 	}
 }
 
+// clearAllServerSetFields applies clearServerSetFields to every element of fs.
+func clearAllServerSetFields(fs []Finding, keepSameAs bool) {
+	for i := range fs {
+		clearServerSetFields(&fs[i], keepSameAs)
+	}
+}
+
+// clearPlanServerSetFields clears server-set fields on every plan-level and
+// task finding, keeping no same_as: the plan schemas have none.
+func clearPlanServerSetFields(pr *PlanResult) {
+	clearAllServerSetFields(pr.PlanFindings, false)
+	for i := range pr.Tasks {
+		clearAllServerSetFields(pr.Tasks[i].Findings, false)
+	}
+}
+
 // ParseResultPartial parses a possibly-truncated reviewer response into a
 // Result. It first attempts a strict json.Unmarshal; on failure, it walks
 // the raw bytes to recover any complete Finding objects inside the
@@ -51,6 +67,7 @@ func ParseResultPartial(raw []byte) (Result, bool) {
 	var r Result
 	if err := json.Unmarshal(trimmed, &r); err == nil {
 		applySeverityFloorAll(r.Findings)
+		clearAllServerSetFields(r.Findings, true)
 		return r, true
 	}
 
@@ -67,6 +84,7 @@ func ParseResultPartial(raw []byte) (Result, bool) {
 		return Result{}, false
 	}
 	applySeverityFloorAll(r.Findings)
+	clearAllServerSetFields(r.Findings, true)
 	r.Partial = true
 	return r, true
 }
@@ -83,6 +101,7 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 	var pr PlanResult
 	if err := json.Unmarshal(trimmed, &pr); err == nil {
 		applyPlanSeverityFloor(&pr)
+		clearPlanServerSetFields(&pr)
 		ApplyPlanQualitySanity(&pr)
 		return pr, true
 	}
@@ -95,6 +114,7 @@ func ParsePlanResultPartial(raw []byte) (PlanResult, bool) {
 		return PlanResult{}, false
 	}
 	applyPlanSeverityFloor(&pr)
+	clearPlanServerSetFields(&pr)
 	ApplyPlanQualitySanity(&pr)
 	pr.Partial = true
 	return pr, true

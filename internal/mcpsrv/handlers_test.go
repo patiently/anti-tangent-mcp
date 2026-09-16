@@ -592,8 +592,7 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarn(t *testing.T) {
 	// No session should be created on truncation.
 	assert.Empty(t, env.SessionID)
 
-	// Pins handlePerTaskReviewErr's Tool: in.Tool assignment (review_error.go)
-	// for the truncation-recovery envelope, shared by all three per-task tools.
+	// Pins the tool name on this tool's truncated-review envelope.
 	require.Equal(t, "validate_task_spec", env.Tool)
 }
 
@@ -624,7 +623,7 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 
-	// Pins handlePerTaskReviewErr's Tool: in.Tool assignment for this tool.
+	// Pins the tool name on this tool's truncated-review envelope.
 	require.Equal(t, "check_progress", env.Tool)
 }
 
@@ -654,7 +653,7 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 
-	// Pins handlePerTaskReviewErr's Tool: in.Tool assignment for this tool.
+	// Pins the tool name on this tool's truncated-review envelope.
 	require.Equal(t, "validate_completion", env.Tool)
 }
 
@@ -715,7 +714,7 @@ func TestRecoverPartialFindings_PreservesReviewerNextActionWithOverrideHint(t *t
 		`{"severity":"major","category":"other","criterion":"ac1","evidence":"e1","suggestion":"s1"}` +
 		`],"next_action":"Tighten AC1 wording."}`)
 
-	r, ok := recoverPartialFindings(raw, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	r, _, ok := recoverPartialFindings(raw, perTaskMaxTokensEnvVar)
 	require.True(t, ok)
 	assert.True(t, r.Partial)
 	assert.Contains(t, r.NextAction, "Tighten AC1 wording.")
@@ -1832,7 +1831,7 @@ func TestValidateCompletion_LightweightMode_EmptySessionAccepted(t *testing.T) {
 	}
 }
 
-func TestValidateCompletion_LightweightMode_OmitsMajorPreFindings(t *testing.T) {
+func TestValidateCompletion_LightweightMode_OmitsPreFindingsToVerify(t *testing.T) {
 	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
 	d := newDeps(t, &cap.fakeReviewer)
 	d.Reviews = providers.Registry{"anthropic": cap}
@@ -1844,7 +1843,7 @@ func TestValidateCompletion_LightweightMode_OmitsMajorPreFindings(t *testing.T) 
 		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n")}},
 	})
 	require.NoError(t, err)
-	assert.NotContains(t, cap.LastRequest.User, "Major pre-task findings to verify")
+	assert.NotContains(t, cap.LastRequest.User, "Pre-task findings to verify")
 }
 
 func TestReferencedPathsMissingEvidence(t *testing.T) {
@@ -1923,7 +1922,7 @@ func TestValidateCompletion_RendersReferencedPathEvidenceNote(t *testing.T) {
 	assert.Contains(t, cap.LastRequest.User, "docs/audit.md")
 }
 
-func TestValidateCompletion_RendersMajorPreFindings(t *testing.T) {
+func TestValidateCompletion_RendersPreTaskFindingsToVerify(t *testing.T) {
 	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic"}}
 	d := newDeps(t, &cap.fakeReviewer)
 	d.Reviews = providers.Registry{"anthropic": cap}
@@ -1934,6 +1933,7 @@ func TestValidateCompletion_RendersMajorPreFindings(t *testing.T) {
 			"verdict":"warn",
 			"findings":[
 				{"severity":"major","category":"ambiguous_spec","criterion":"AC","evidence":"Pre-task review found AC did not specify load.","suggestion":"Clarify load."},
+				{"severity":"minor","category":"ambiguous_spec","criterion":"spec","evidence":"The no-new-warnings gate contradicts the lint Non-goal.","suggestion":"Scope the gate."},
 				{"severity":"minor","category":"quality","criterion":"spec","evidence":"Minor pre-finding should not render.","suggestion":"Consider wording."}
 			],
 			"next_action":"continue"
@@ -1952,8 +1952,9 @@ func TestValidateCompletion_RendersMajorPreFindings(t *testing.T) {
 		TestEvidence: "PASS: TestACUnderLoad",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, cap.LastRequest.User, "Major pre-task findings to verify")
+	assert.Contains(t, cap.LastRequest.User, "## Pre-task findings to verify")
 	assert.Contains(t, cap.LastRequest.User, "Pre-task review found AC did not specify load.")
+	assert.Contains(t, cap.LastRequest.User, "The no-new-warnings gate contradicts the lint Non-goal.")
 	assert.NotContains(t, cap.LastRequest.User, "Minor pre-finding should not render.")
 }
 
