@@ -180,10 +180,10 @@ the truncation-tolerant parser both decode. The plan schemas do not list it, so 
 it on a plan finding. The per-task schema is shared by all three session tools; the server reads
 `same_as` only on `validate_completion` and ignores it on `validate_task_spec` and
 `check_progress`. A `same_as` that names no finding rendered in the prompt — a prior finding
-(§2.2) or a major pre-task finding — is treated as `null`. The server reads `same_as` for the
-waiver match (§2.6 step 4) and the repeat match (step 5), then clears it, so the response never
-echoes it. `repeat_of` is not a copy of it: it is set only for a prior finding answered in this
-call (§2.4).
+(§2.2) or a pre-task finding the final review verifies (§3.2) — is treated as `null`. The server
+reads `same_as` for the waiver match (§2.6 step 4) and the repeat match (step 5), then clears it,
+so the response never echoes it. `repeat_of` is not a copy of it: it is set only for a prior
+finding answered in this call (§2.4).
 
 `verdict.Finding` is also part of `extract_project_knowledge`'s input schema
 (`completion_envelopes[].findings[]`), so `id`, `repeat_of` and `same_as` each carry a
@@ -237,7 +237,7 @@ It lists the prior findings with their display IDs, each followed by this call's
 when one was given. The reviewer is told, per prior finding: omit it if the evidence now satisfies
 it or the response is correct; otherwise re-raise it with `same_as` set to its ID and evidence
 that answers the response directly. "The summary on its own is not evidence" still applies — a
-response is an argument the reviewer must engage, not evidence. "Major pre-task findings to
+response is an argument the reviewer must engage, not evidence. "Pre-task findings to
 verify" shows each finding's display ID, so `same_as` can name a pre-task finding the reviewer
 re-raises under another category, and omits a pre-task finding whose fingerprint carries a
 ruling.
@@ -477,10 +477,13 @@ part.
 - **Deterministic hint.** The server collects names declared on the diff's `-` lines (declaration
   keywords such as `fun`, `func`, `def`, `class`, `object`, `interface`, `val`, `var`, `const`,
   `let`, `enum`, `case`) that no `+` line re-declares, ignoring names shorter than 4 characters,
-  and finds them in comment-looking lines (`//`, `#`, `*`, `/*`, `<!--`, `--`). At most 30 names
-  and 20 hits, each hit a `path:line` plus the line truncated to 200 characters. Hits are rendered
-  in the prompt the way `ReferencedPathsMissingEvidence` is; the hint never becomes a finding by
-  itself.
+  and finds them in comment-looking lines (`//`, `#`, `*`, `/*`, `<!--`, `--`). Names are not
+  collected from a file whose path is prose (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`), a
+  quoted string literal is blanked before declarations are matched, and a name captured after
+  `val`, `var`, `let` or `const` is dropped as a local when it has no uppercase letter. At most 30
+  names and 20 hits, each hit a `path:line` plus the line truncated to 200 characters. Hits are
+  rendered in the prompt the way `ReferencedPathsMissingEvidence` is; the hint never becomes a
+  finding by itself.
 - **`repo_root` on `validate_completion`.** Optional. When set, the server reads the post-change
   version of each file named by the diff's `+++ b/` headers, under `repo_root` and within
   `ANTI_TANGENT_PLAN_ROOTS`, reusing the context-file resolution (`ContextMaxFileBytes`,
@@ -491,7 +494,9 @@ part.
 
 ### 3.2 A verification gate that contradicts a Non-goal
 
-- **Pre-task and plan check.** `pre.tmpl` and `plan_tasks_chunk.tmpl` gain a fourth check: does a
+- **Pre-task and plan check.** `pre.tmpl`, `plan.tmpl` and `plan_tasks_chunk.tmpl` gain a fourth
+  check (`plan.tmpl` reviews a plan of at most `ANTI_TANGENT_PLAN_TASKS_PER_CHUNK` tasks, so
+  leaving it out would make the check depend on plan size): does a
   step or verification gate ("no new warnings", "compiles", "lint clean") force work a Non-goal
   defers? If so, `ambiguous_spec` at major, quoting both.
 - **`verification` input on `validate_task_spec`.** Optional, at most 50 entries of at most 500
@@ -499,8 +504,10 @@ part.
   Stored on `TaskSpec` and rendered in both the pre and post prompts.
 - **Forced deviations post-task.** `post.tmpl` currently turns a non-goal violation into
   `scope_drift`. When the violation is forced by a gate quoted from the spec fields — never from
-  the summary — the reviewer emits one `ambiguous_spec` against the spec instead. Non-major
-  pre-task `ambiguous_spec` findings are carried into the post prompt; today only majors are.
+  the summary — the reviewer emits one minor `ambiguous_spec` against the spec instead: its reader
+  is the controller, and a `fail` would send the implementer to change code that followed the
+  gate. Non-major pre-task `ambiguous_spec` findings are carried into the post prompt; today only
+  majors are.
 
 ### 3.3 Deletions walk
 

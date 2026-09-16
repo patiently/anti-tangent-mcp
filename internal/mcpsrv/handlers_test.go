@@ -1831,7 +1831,7 @@ func TestValidateCompletion_LightweightMode_EmptySessionAccepted(t *testing.T) {
 	}
 }
 
-func TestValidateCompletion_LightweightMode_OmitsMajorPreFindings(t *testing.T) {
+func TestValidateCompletion_LightweightMode_OmitsPreFindingsToVerify(t *testing.T) {
 	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
 	d := newDeps(t, &cap.fakeReviewer)
 	d.Reviews = providers.Registry{"anthropic": cap}
@@ -1843,7 +1843,7 @@ func TestValidateCompletion_LightweightMode_OmitsMajorPreFindings(t *testing.T) 
 		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n")}},
 	})
 	require.NoError(t, err)
-	assert.NotContains(t, cap.LastRequest.User, "Major pre-task findings to verify")
+	assert.NotContains(t, cap.LastRequest.User, "Pre-task findings to verify")
 }
 
 func TestReferencedPathsMissingEvidence(t *testing.T) {
@@ -1922,7 +1922,7 @@ func TestValidateCompletion_RendersReferencedPathEvidenceNote(t *testing.T) {
 	assert.Contains(t, cap.LastRequest.User, "docs/audit.md")
 }
 
-func TestValidateCompletion_RendersMajorPreFindings(t *testing.T) {
+func TestValidateCompletion_RendersPreTaskFindingsToVerify(t *testing.T) {
 	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic"}}
 	d := newDeps(t, &cap.fakeReviewer)
 	d.Reviews = providers.Registry{"anthropic": cap}
@@ -1933,6 +1933,7 @@ func TestValidateCompletion_RendersMajorPreFindings(t *testing.T) {
 			"verdict":"warn",
 			"findings":[
 				{"severity":"major","category":"ambiguous_spec","criterion":"AC","evidence":"Pre-task review found AC did not specify load.","suggestion":"Clarify load."},
+				{"severity":"minor","category":"ambiguous_spec","criterion":"spec","evidence":"The no-new-warnings gate contradicts the lint Non-goal.","suggestion":"Scope the gate."},
 				{"severity":"minor","category":"quality","criterion":"spec","evidence":"Minor pre-finding should not render.","suggestion":"Consider wording."}
 			],
 			"next_action":"continue"
@@ -1951,8 +1952,9 @@ func TestValidateCompletion_RendersMajorPreFindings(t *testing.T) {
 		TestEvidence: "PASS: TestACUnderLoad",
 	})
 	require.NoError(t, err)
-	assert.Contains(t, cap.LastRequest.User, "Major pre-task findings to verify")
+	assert.Contains(t, cap.LastRequest.User, "## Pre-task findings to verify")
 	assert.Contains(t, cap.LastRequest.User, "Pre-task review found AC did not specify load.")
+	assert.Contains(t, cap.LastRequest.User, "The no-new-warnings gate contradicts the lint Non-goal.")
 	assert.NotContains(t, cap.LastRequest.User, "Minor pre-finding should not render.")
 }
 

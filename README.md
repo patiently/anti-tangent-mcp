@@ -314,6 +314,7 @@ In addition to the existing `task_title` / `goal` / `acceptance_criteria` / `non
 
 - `pinned_by` (optional, v0.3.3+): existing tests, docs, commands, or static checks that pin referenced behavior. The reviewer treats these as caller-supplied anchors, not independently verified codebase facts.
 - `controller_verified_references` (optional, v0.4.0+): paths, symbols, line anchors, commands, or adjacent patterns that the controller already verified before dispatch. The reviewer treats these as caller-supplied attestations and suppresses matching `unverifiable_codebase_claim` findings only by deterministic substring match; contradictions, missing acceptance criteria, and ambiguity still surface.
+- `verification` (optional, v0.22.0+): the task's steps and verify commands, at most 50 entries of at most 500 characters. The pre-task review checks each gate against the task's Non-goals, and the final `validate_completion` review uses them to tell a Non-goal violation a gate forced from ordinary scope drift.
 - `harness_shape_attestation` (optional, v0.5.2+): list of `{harness, path, assertions[]}` objects declaring caller-attested shape facts about test harnesses or fixtures. Pairs with the new `attestation_contradiction` finding category, which the reviewer emits only when an acceptance criterion explicitly contradicts an attested assertion.
 - `phase` (optional, v0.3.3+): `pre` (default) or `post`. Use `post` only for post-hoc/session-recovery reviews; normal protocol still calls this at task start.
 
@@ -346,7 +347,10 @@ The requirement is prompt-level: the pairing stays **advisory** on the anti-tang
 
 `validate_plan` accepts `plan_path`, and `validate_completion` accepts `final_diff_path` plus
 `final_files` entries with no `content`. The server reads those files itself, so a large plan or
-diff costs the calling agent no output tokens.
+diff costs the calling agent no output tokens. `validate_completion` also accepts `repo_root`: the
+server reads the post-change version of each file the diff names beneath it, within the
+`context_paths` byte caps, and sends the reviewer only the comment lines that still name a symbol
+the diff removes.
 
 This means the server reads files on your filesystem and sends their contents to the reviewer
 provider. It is stdio-only — the host spawns it as a child process, so it shares your container,

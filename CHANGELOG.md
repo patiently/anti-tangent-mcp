@@ -50,6 +50,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate_completion`'s, and `controller_verified_references`, applied before the codebase
   reference checklist is built. Waived findings appear in `waived_findings`, at plan level and per
   task. A ruling whose id is not shaped like a finding id draws an advisory.
+- `validate_completion` shows the reviewer the comment lines that still name a symbol the diff
+  removes: names declared on the diff's removed lines that no added line declares again, found
+  in comment lines of the changed files, at most 20 lines. With the new optional `repo_root` the
+  server reads the post-change version of each file the diff names beneath it — within
+  `ANTI_TANGENT_PLAN_ROOTS` and the `context_paths` byte caps, never following a symlink out of
+  it, and never a deleted file — so comments outside the diff hunks are found too; without it,
+  the submitted evidence is scanned. Only matching lines reach the prompt. A `repo_root` the
+  server cannot use draws a minor finding.
+- `validate_task_spec` takes `verification`: the task's steps and verify commands, at most 50
+  entries of at most 500 characters. The pre-task review and the same session's
+  `validate_completion` review both see them.
 
 ### Changed
 
@@ -79,6 +90,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `waived:` line at DONE, and judges `validate_plan` convergence by
   major findings' IDs. `implementer.md` §4.3 no longer tells implementers to dispute a finding
   through a `working_on` field `validate_completion` does not have.
+- `validate_completion`'s review looks for comments that still name a symbol, branch or case
+  label the diff removes, including comments outside the diff hunks, and reports all of them in
+  one minor `quality` finding with `criterion: stale_comments`, so a batch of stale comments is
+  one finding rather than several.
+- The pre-task review and `validate_plan` check each step and verification gate, such as no new
+  warnings or lint clean, against the task's Non-goals, and report a gate that can pass only once
+  deferred work is done as a major `ambiguous_spec` quoting both.
+- When a gate the task spec states forces work a Non-goal defers, `validate_completion`'s review
+  reports one minor `ambiguous_spec` against the spec instead of `scope_drift` against the code.
+  Its prompt lists every pre-task `ambiguous_spec` finding, not only the major ones, alongside the
+  major pre-task findings it verifies.
+- `implementer.md`'s dispatch clause lists `verification` among the `validate_task_spec` fields
+  and tells implementers to pass `repo_root` to `validate_completion`.
 
 ### Fixed
 

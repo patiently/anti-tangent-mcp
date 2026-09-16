@@ -163,17 +163,34 @@ type completionReview struct {
 	// prior is the stored prior findings no ruling covers, each with this
 	// call's answer to it.
 	prior []prompts.PriorFinding
-	// majorPre is the major pre-task findings no ruling covers.
-	majorPre []verdict.Finding
+	// preToVerify is the pre-task findings the final review verifies, every
+	// major one and every ambiguous_spec one, that no ruling covers. A minor
+	// ambiguous_spec finding is there so the reviewer can tell a known spec
+	// ambiguity from a deviation the implementer chose.
+	preToVerify []verdict.Finding
 	// rulings is every ruling in force for this review, by fingerprint.
 	rulings map[string]session.Ruling
 	// newRulings is what this call adds or replaces, written after the review.
 	newRulings map[string]session.Ruling
-	// shown is every ID the prompt shows — prior and major pre-task findings,
+	// shown is every ID the prompt shows — prior and pre-task findings,
 	// and every ruling — so a same_as naming any other ID is ignored.
 	shown map[string]bool
 	// advisories report argument entries the server ignored.
 	advisories []verdict.Finding
+}
+
+// verifiedAtCompletion reports whether a pre-task finding is one the final
+// review verifies: every major finding, and every ambiguous_spec finding
+// regardless of severity — a minor ambiguous_spec finding lets the reviewer
+// tell a known spec ambiguity from a deviation the implementer chose.
+func verifiedAtCompletion(f verdict.Finding) bool {
+	if f.Severity == verdict.SeverityMajor {
+		return true
+	}
+	if f.Category == verdict.CategoryAmbiguousSpec {
+		return true
+	}
+	return false
 }
 
 // buildCompletionReview matches this call's answers to the stored prior
@@ -247,13 +264,13 @@ func buildCompletionReview(state session.ReviewState, preFindings, known []verdi
 	}
 
 	for _, f := range preFindings {
-		if f.Severity != verdict.SeverityMajor {
+		if !verifiedAtCompletion(f) {
 			continue
 		}
 		if _, ruled := cr.rulings[fingerprintOf(f)]; ruled {
 			continue
 		}
-		cr.majorPre = append(cr.majorPre, f)
+		cr.preToVerify = append(cr.preToVerify, f)
 		cr.shown[f.ID] = true
 	}
 

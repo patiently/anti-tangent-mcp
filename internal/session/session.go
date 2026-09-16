@@ -32,6 +32,7 @@ type TaskSpec struct {
 	AcceptanceCriteria           []string                  `json:"acceptance_criteria,omitempty"`
 	NonGoals                     []string                  `json:"non_goals,omitempty"`
 	Context                      string                    `json:"context,omitempty"`
+	Verification                 []string                  `json:"verification,omitempty"`
 	PinnedBy                     []string                  `json:"pinned_by,omitempty"`
 	ControllerVerifiedReferences []string                  `json:"controller_verified_references,omitempty"`
 	TestStrategyNotes            []string                  `json:"test_strategy_notes,omitempty"`

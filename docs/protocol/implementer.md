@@ -6,7 +6,7 @@ format it should have had is in [`authoring.md`](authoring.md).
 
 ## 4. For implementers — the lifecycle protocol
 
-> **Lightweight eligibility first.** Many tasks qualify for lightweight mode (skip `validate_task_spec` and `check_progress`; keep `validate_completion` as the sanity gate). See [Lightweight protocol mode](#lightweight-protocol-mode) below for criteria and clause.
+> **Lightweight eligibility first.** Many tasks qualify for lightweight mode; see [Lightweight protocol mode](#lightweight-protocol-mode) below.
 
 | Phase | Tool | Required? | When to call |
 |---|---|---|---|
@@ -65,6 +65,8 @@ response carries `submission_defect_only: true`, every blocking finding is
 about what you submitted, not about your code. Attach the missing evidence
 and re-submit; no rework is implied.** A response with `escalate: true` is a
 stop-and-ask (§4.3), not DONE.
+- Pass `repo_root` (absolute) so the reviewer also checks comments outside the diff that name
+  what it removes.
 - Prefer paths over inline content: omit a `final_files` entry's `content` and the server reads
   its absolute `path`, and pass `final_diff_path` instead of `final_diff`. Write the diff first:
   `f=$(mktemp "$(git rev-parse --absolute-git-dir)/anti-tangent-change-XXXXXX") && git add -- <task paths> && git diff HEAD -- <task paths> > "$f"` —
@@ -121,6 +123,7 @@ this block if there is no KB attached.)
 - acceptance_criteria:  <from "Acceptance criteria:" bullets>
 - non_goals:            <from "Non-goals:" bullets if present>
 - context:              <from "Context:" if present>
+- verification:         <optional; step lines and Verify commands>
 - pinned_by:            <optional anchors for existing behavior>
 - controller_verified_references: <optional references the controller already verified>
 - plan_run_id:          <optional; from the controller's validate_plan>

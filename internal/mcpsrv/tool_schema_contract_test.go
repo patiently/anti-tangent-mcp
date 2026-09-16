@@ -193,6 +193,7 @@ func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 	planPayload := []string{n(config.DefaultPlanMaxPayloadBytes), "ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES"}
 	cases := map[string][]string{
 		"validate_task_spec.pinned_by":                              bounded,
+		"validate_task_spec.verification":                           bounded,
 		"validate_task_spec.controller_verified_references":         bounded,
 		"validate_task_spec.test_strategy_notes":                    bounded,
 		"validate_task_spec.codebase_conventions":                   bounded,
@@ -211,6 +212,7 @@ func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 		"validate_plan.context_paths":                               {n(maxContextFiles)},
 		"prime_project_knowledge.max_picks":                         {n(defaultMaxPicks), n(maxMaxPicks)},
 		"validate_completion.final_diff_path":                       {"ANTI_TANGENT_PLAN_ROOTS"},
+		"validate_completion.repo_root":                             {"ANTI_TANGENT_PLAN_ROOTS"},
 		"validate_plan.plan_text":                                   planPayload,
 		"validate_plan.plan_path":                                   append([]string{"ANTI_TANGENT_PLAN_ROOTS"}, planPayload...),
 		"validate_plan.project_knowledge":                           planPayload,

@@ -71,6 +71,7 @@ type ValidateTaskSpecArgs struct {
 	AcceptanceCriteria           []string                          `json:"acceptance_criteria,omitempty" jsonschema:"The task's acceptance criteria, one entry per bullet, verbatim."`
 	NonGoals                     []string                          `json:"non_goals,omitempty" jsonschema:"The task's Non-goals bullets, verbatim, when the task has them."`
 	Context                      string                            `json:"context,omitempty" jsonschema:"The task's Context section, verbatim: constraints, repo carve-outs and prior decisions a fresh implementer needs. The reviewer treats it as authoritative."`
+	Verification                 []string                          `json:"verification,omitempty" jsonschema:"The task's steps and verify commands, one entry per step or command, such as a Verify line or a no-new-warnings gate. The pre-task review checks each gate against the Non-goals, and the final review uses them to tell a Non-goal violation a gate forced from ordinary scope drift. At most 50 entries of at most 500 characters each."`
 	PinnedBy                     []string                          `json:"pinned_by,omitempty" jsonschema:"Existing tests, docs, commands or static checks that pin behavior an acceptance criterion says stays unchanged. Caller-supplied anchors, not verified facts. At most 50 entries of at most 500 characters each."`
 	ControllerVerifiedReferences []string                          `json:"controller_verified_references,omitempty" jsonschema:"Paths, symbols, line anchors, commands or adjacent patterns the controller already verified before dispatch; a matching unverifiable_codebase_claim finding is suppressed by substring match. At most 50 entries of at most 500 characters each, so split a long reference list into several short entries."`
 	TestStrategyNotes            []string                          `json:"test_strategy_notes,omitempty" jsonschema:"How tests divide coverage between this task and adjacent ones, so complementary tests read as joint coverage. At most 50 entries of at most 500 characters each."`
@@ -127,6 +128,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		AcceptanceCriteria:           args.AcceptanceCriteria,
 		NonGoals:                     args.NonGoals,
 		Context:                      args.Context,
+		Verification:                 inputs.Verification,
 		PinnedBy:                     inputs.PinnedBy,
 		ControllerVerifiedReferences: inputs.ControllerVerifiedReferences,
 		TestStrategyNotes:            inputs.TestStrategyNotes,
@@ -1024,7 +1026,8 @@ func validateCompletionTool() *mcp.Tool {
 			"The reviewer checks the full implementation against every acceptance criterion " +
 			"and non-goal. Treat any `fail` or `warn` findings as work to do before claiming done. " +
 			"Omit a final_files entry's content to have the server read its absolute path, and pass final_diff_path instead of final_diff, to avoid emitting large evidence as output tokens. " +
-			"When ANTI_TANGENT_PLAN_ROOTS is set, both kinds of path must be under one of its roots, for example inside the repository; a per-session scratch directory under /tmp usually is not.",
+			"When ANTI_TANGENT_PLAN_ROOTS is set, both kinds of path must be under one of its roots, for example inside the repository; a per-session scratch directory under /tmp usually is not. " +
+			"Optionally pass repo_root, the checkout's absolute path, so the reviewer also sees comments outside the diff that still name a symbol the diff removes.",
 	}
 }
 
@@ -1034,6 +1037,7 @@ type ValidateCompletionArgs struct {
 	FinalFiles            []CompletionFileArg   `json:"final_files,omitempty" jsonschema:"Changed files, with full content or with content omitted so the server reads them. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; do not also send a file that final_diff already covers."`
 	FinalDiff             string                `json:"final_diff,omitempty" jsonschema:"A unified diff of the task's changes. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; when it is large, generate it with -U1 and leave out generated, lockfile and snapshot files."`
 	FinalDiffPath         string                `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, for example inside the repository; a per-session scratch directory under /tmp usually is not."`
+	RepoRoot              string                `json:"repo_root,omitempty" jsonschema:"Absolute path to the checkout the diff applies to. The server reads the post-change version of each file the diff names beneath it, within ANTI_TANGENT_PLAN_ROOTS and the context_paths byte caps, and shows the reviewer only the comment lines that still name a symbol the diff removes, so nothing it reads counts toward the payload cap. Without it those comments are looked for in the evidence alone; an unusable repo_root draws a minor finding."`
 	TestEvidence          string                `json:"test_evidence,omitempty" jsonschema:"The test run output that proves the change, verbatim. Output showing no test executed draws a finding."`
 	ExitContracts         []string              `json:"exit_contracts,omitempty" jsonschema:"Symbols or behavior later tasks rely on this task leaving in place, copied from validate_plan's exit_contracts for this task; a hard miss draws missing_acceptance_criterion. At most 50 entries of at most 500 characters each."`
 	ExitContractsInferred bool                  `json:"exit_contracts_inferred,omitempty" jsonschema:"validate_plan's exit_contracts_inferred for this task: true when the contracts were inferred from cross-task references rather than written in the plan, which caps a miss at minor."`
@@ -1551,9 +1555,13 @@ func hasNonEmptyEvidence(args *ValidateCompletionArgs, resolvedFiles []FileArg) 
 //     otherwise. On a session, buildCompletionReview matches this call's
 //     finding_responses to the stored prior findings and its
 //     controller_rulings to the IDs the session issued.
+//     8b. The stale-comment hint: the names the diff removes, found in comment
+//     lines of the post-change files, read under repo_root or taken from the
+//     evidence. See staleCommentHint.
 //
 // A call rejected at any of these steps writes nothing to the session and
-// carries no advisory about finding_responses or controller_rulings. Once the
+// carries no advisory about finding_responses, controller_rulings or
+// repo_root. Once the
 // reviewer answers (runReview folds a truncated answer into an ordinary one):
 //
 //   - the reviewer's findings alone go through the ruling waiver and repeat
@@ -1772,6 +1780,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		review = buildCompletionReview(state, state.PreFindings, knownSessionFindings(state), responses, rulingArgs)
 	}
 
+	// 8b. Built only once no rejection can follow: evidenceCacheKey leaves
+	// repo_root out, so a cached rejection must not depend on it, and the
+	// repo_root advisories belong only on a reviewed call.
+	staleComments, repoRootAdvisories := staleCommentHint(h.deps.Cfg, args.FinalDiff, args.RepoRoot, resolvedFiles)
+
 	model, rendered, err := h.resolveModelAndRender(
 		args.ModelOverride,
 		h.deps.Cfg.PostModel,
@@ -1782,13 +1795,14 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				Files:                          toPromptFiles(resolvedFiles),
 				FinalDiff:                      args.FinalDiff,
 				TestEvidence:                   args.TestEvidence,
-				MajorPreFindings:               review.majorPre,
+				PreFindingsToVerify:            review.preToVerify,
 				PriorFindings:                  review.prior,
 				ControllerRulings:              rulingsForPrompt(review.rulings),
 				ReferencedPathsMissingEvidence: referencedPathsMissingEvidence(args.Summary, resolvedFiles, args.FinalDiff),
 				ExitContracts:                  exitContracts,
 				ExitContractsInferred:          args.ExitContractsInferred,
 				Codescene:                      args.Codescene,
+				StaleComments:                  staleComments,
 			})
 		},
 		"render post prompt",
@@ -1841,6 +1855,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		ControllerRulings: appliedRulings(review.rulings),
 	}
 	env.Findings = append(env.Findings, review.advisories...)
+	env.Findings = append(env.Findings, repoRootAdvisories...)
 	if lightweight && (len(responses) > 0 || len(rulingArgs) > 0) {
 		env.Findings = append(env.Findings, noSessionRulingsAdvisory())
 	}

@@ -119,3 +119,22 @@ func TestNormalizeHarnessShapeAttestation_DupsDoNotCountTowardEntryCap(t *testin
 	require.NoError(t, err, "dup collapses → 25 unique entries → within cap")
 	require.Len(t, out, 25)
 }
+
+func TestNormalizeTaskSpecInputs_Verification(t *testing.T) {
+	in, err := normalizeTaskSpecInputs(ValidateTaskSpecArgs{TaskTitle: "t", Goal: "g", Verification: []string{" go test ./... ", " "}}, 1<<20)
+	require.NoError(t, err)
+	require.Equal(t, []string{"go test ./..."}, in.Verification)
+
+	_, err = normalizeTaskSpecInputs(ValidateTaskSpecArgs{TaskTitle: "t", Goal: "g", Verification: []string{strings.Repeat("x", maxPinnedByChars+1)}}, 1<<20)
+	require.EqualError(t, err, "verification[0] must be at most 500 characters")
+
+	many := make([]string, maxPinnedByEntries+1)
+	for i := range many {
+		many[i] = "step"
+	}
+	_, err = normalizeTaskSpecInputs(ValidateTaskSpecArgs{TaskTitle: "t", Goal: "g", Verification: many}, 1<<20)
+	require.EqualError(t, err, "verification must contain at most 50 entries")
+
+	_, err = normalizeTaskSpecInputs(ValidateTaskSpecArgs{TaskTitle: "t", Goal: "g", Verification: []string{strings.Repeat("x", 400)}}, 300)
+	require.ErrorContains(t, err, "task spec payload 402 bytes > cap 300")
+}
