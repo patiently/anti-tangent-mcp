@@ -18,7 +18,14 @@ func TestHumanUntil(t *testing.T) {
 		{41 * time.Minute, "in 41m"},
 		{2*time.Hour + 41*time.Minute, "in 2h41m"},
 		{3 * time.Hour, "in 3h"},
-		{5*24*time.Hour + 3*time.Hour, "in 5d"},
+		{24 * time.Hour, "in 24h"},
+		{53*time.Hour + 30*time.Minute, "in 53h30m"},
+		{59*time.Hour + 59*time.Minute, "in 59h59m"},
+		{60 * time.Hour, "in 3d"},
+		{62 * time.Hour, "in 3d"},
+		{72 * time.Hour, "in 3d"},
+		{72*time.Hour + time.Second, "in 4d"},
+		{5*24*time.Hour + 3*time.Hour, "in 6d"},
 	}
 	for _, c := range cases {
 		if got := humanUntil(c.d); got != c.want {
@@ -33,8 +40,8 @@ func TestClaudeClock(t *testing.T) {
 	if got, want := claudeClock(soon, now), soon.Local().Format("15:04"); got != want {
 		t.Errorf("claudeClock(soon) = %q, want %q", got, want)
 	}
-	later := time.Date(2026, 6, 8, 20, 0, 0, 0, time.UTC) // >24h → date
-	if got, want := claudeClock(later, now), later.Local().Format("Jan 2"); got != want {
+	later := time.Date(2026, 6, 8, 20, 0, 0, 0, time.UTC) // >24h → date and clock
+	if got, want := claudeClock(later, now), later.Local().Format("Jan 2 15:04"); got != want {
 		t.Errorf("claudeClock(later) = %q, want %q", got, want)
 	}
 }

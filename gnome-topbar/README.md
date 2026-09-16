@@ -72,7 +72,8 @@ tray renders the body with a staleness indicator.
 
 ## Changelog
 
-### Unreleased
+### v0.3.3
+- Claude usage submenu: reset countdowns no longer understate the wait. Below 2.5 days the label counts hours (`in 53h30m`); from 2.5 days it counts whole days rounded **up** (`in 3d` for 62h), where it used to round down (`in 2d`). Resets 24h or more away now show the time of day as well as the date (`resets Sep 18 15:30`), matching `/ui/claude`. Resets under 24h (`resets 13:10 (in 3h10m)`) are unchanged.
 - Stats page renders a **Criteria** table beside Severity and Categories, decoded from anti-tangent's `criterion_histogram` rollup key. The per-criterion counts (e.g. `comment_hygiene`) reached `rollup.json` but neither `atstats` struct declared the key, so the tray silently dropped them; a `rollup.json` without the key still decodes cleanly and the section is omitted. The daemon is a separate Go module released on `gnome-topbar-v*` tags, so this reaches users on the next such tag — merging an anti-tangent server release does not rebuild it.
 
 ### v0.3.2
