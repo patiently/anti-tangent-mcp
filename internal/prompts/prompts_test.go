@@ -206,7 +206,8 @@ func TestRenderPost_WithPreFindingsToVerifyIncludesMitigationGuidance(t *testing
 	assert.Contains(t, out.User, "## Pre-task findings to verify")
 	assert.Contains(t, out.User, "Pre-task review found the load profile was undefined.")
 	assert.Contains(t, out.User, "explicitly mitigates")
-	assert.Contains(t, out.User, "is never raised again as a major finding", "this fixture's finding is major AND ambiguous_spec — the general mitigation check excludes it")
+	assert.Contains(t, out.User, "each major finding below, `ambiguous_spec` included",
+		"this fixture's finding is major AND ambiguous_spec — the general mitigation check still covers it")
 }
 
 func TestRenderPlan(t *testing.T) {
@@ -2324,8 +2325,8 @@ func TestRenderPost_PreFindingsToVerifyExplainsMinorAmbiguities(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Contains(t, out.User, "every major finding, and every `ambiguous_spec` finding at any severity")
-	assert.Contains(t, out.User, "is never raised again as a major finding")
-	assert.Contains(t, out.User, "the single minor `ambiguous_spec` finding the Non-goals walk below describes")
-	assert.Contains(t, out.User, "when it forced nothing, do not raise it again")
+	assert.Contains(t, out.User, "The one exception: when the evidence shows the ambiguity forced a deviation from a Non-goal")
+	assert.Contains(t, out.User, "the minor `ambiguous_spec` finding the Non-goals walk below describes")
+	assert.Contains(t, out.User, "raise it again only when the evidence shows it forced a deviation")
 	assert.Contains(t, out.User, "- ID: f_0123abcd\n  Severity: minor")
 }
