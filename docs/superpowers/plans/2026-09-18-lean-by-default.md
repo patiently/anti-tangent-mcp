@@ -2209,6 +2209,7 @@ git commit -m "test(replay): over-built and lean fixtures for the over_building 
 **Acceptance Criteria:**
 - [ ] The `## [0.23.0]` block lists, under `### Added`: `implementation_guidance`; the `over_building` criterion at plan, task-start, mid-task and completion; `authoring.md` §3.10; `lightweight` / `mode: lightweight`; the ponytail attribution; the replay fixtures.
 - [ ] `go build ./... && go test -race ./... && bash plugin/anti-tangent-guard/evals/run.sh && bash scripts/check-protocol-docs.sh` all green locally; CI green on the branch.
+- [ ] After the release, `main`'s `.claude-plugin/marketplace.json` has catalog `version` `0.11.0` and its `anti-tangent-guard` entry `0.5.0`, and `plugin/anti-tangent-guard/.claude-plugin/plugin.json` says `0.5.0` — captured by Step 4.
 - [ ] `git log --oneline origin/main..HEAD` lists only Tasks 6–13's commits — none of the guard commits Checkpoint A already merged — before the PR is opened.
 - [ ] `VERSION` still reads `0.22.0` on the branch before the merge (`cat VERSION`); the release workflow's own commit bumps it (Global Constraints).
 - [ ] The PR from `version/0.23.0` to `main` is merged by the user with `[minor]` in the merge commit; the release workflow publishes `v0.23.0`, and `main`'s `VERSION` then reads `0.23.0`.
@@ -2285,10 +2286,12 @@ gh pr view <PR#> --json state -q .state
 git fetch origin main && git log -1 --format=%B "$SHA" | grep -F '[minor]'
 gh release view v0.23.0 --json tagName,publishedAt -q '.tagName + " " + .publishedAt'
 git fetch origin main && echo "main VERSION $(git show origin/main:VERSION)"
+git show origin/main:.claude-plugin/marketplace.json | jq -r '"catalog " + .version, (.plugins[] | select(.name == "anti-tangent-guard") | "guard entry " + .version)'
+git show origin/main:plugin/anti-tangent-guard/.claude-plugin/plugin.json | jq -r '"guard plugin " + .version'
 ```
 
-Expected: every check `SUCCESS`, `MERGED`, the merge message line carrying `[minor]`, `v0.23.0 <timestamp>`, then `main VERSION 0.23.0` (the release bot's commit). With Step 3's `VERSION 0.22.0 before merge`, that is both `VERSION` states. Paste all of it into the DONE report.
+Expected: every check `SUCCESS`, `MERGED`, the merge message line carrying `[minor]`, `v0.23.0 <timestamp>`, then `main VERSION 0.23.0` (the release bot's commit), `catalog 0.11.0`, `guard entry 0.5.0` and `guard plugin 0.5.0`. With Step 3's `VERSION 0.22.0 before merge`, that is both `VERSION` states. Paste all of it into the DONE report.
 
 ```json:metadata
-{"files": ["CHANGELOG.md", ".claude-plugin/marketplace.json"], "verifyCommand": "gh release view v0.23.0 --json tagName -q .tagName", "acceptanceCriteria": ["CHANGELOG 0.23.0 block covers every shipped change", "full local verification green and every PR check SUCCESS, shown by gh pr checks", "PR merged; the merge commit message carries [minor], shown by git log", "v0.23.0 released, shown by gh release view", "VERSION reads 0.22.0 on the branch before the merge and 0.23.0 on main after the release, both captured"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"], "requireEvidenceTokens": [["SUCCESS"], ["MERGED"], ["[minor]"], ["v0.23.0"], ["VERSION 0.22.0 before merge"], ["main VERSION 0.23.0"]]}
+{"files": ["CHANGELOG.md", ".claude-plugin/marketplace.json"], "verifyCommand": "gh release view v0.23.0 --json tagName -q .tagName", "acceptanceCriteria": ["CHANGELOG 0.23.0 block covers every shipped change", "full local verification green and every PR check SUCCESS, shown by gh pr checks", "PR merged; the merge commit message carries [minor], shown by git log", "v0.23.0 released, shown by gh release view", "VERSION reads 0.22.0 on the branch before the merge and 0.23.0 on main after the release, both captured", "main ships marketplace catalog 0.11.0 with the anti-tangent-guard entry and plugin.json at 0.5.0, captured"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"], "requireEvidenceTokens": [["SUCCESS"], ["MERGED"], ["[minor]"], ["v0.23.0"], ["VERSION 0.22.0 before merge"], ["main VERSION 0.23.0"], ["catalog 0.11.0"], ["guard plugin 0.5.0"]]}
 ```
