@@ -153,7 +153,9 @@ as they bypass the write-time comment guard; Rule B is the backstop. A controlle
 the clause heading defeats the fingerprint, and the hook fails open — the heading is the
 contract, and the README says so. The `subagents/` layout is what Claude Code writes today
 (2.1.276), not a documented interface: a subagent transcript that is missing or unparsable exits
-0, so a layout change disables the gate instead of blocking every write.
+0, so a layout change disables the gate instead of blocking every write. A single malformed entry
+inside a readable transcript is skipped like a malformed line, never raised, so a gated session
+with an odd entry still blocks until the call appears.
 
 **Confirmed live, not by fixtures:** the first implementation task probed a real dispatch. This
 section originally assumed the subagent's own `transcript_path` reached the hook, with the
@@ -175,7 +177,9 @@ Signals, in the two topologies the hook already handles:
 | Pasted block (subagent-driven, controller closes) | the pasted block's `session_id:` line is blank (`summary.go:42`), or it carries the `mode: lightweight` line from §1.5 | the marker text in the `prompt` input of an `Agent` or `Task` `tool_use` in the window — the dispatch prompt is in the controller's own transcript |
 
 The **marker** is the lightweight clause's heading, `Drift-protection protocol (lightweight)`,
-which `examples/lightweight-dispatch.md` already carries. Absence means full protocol: the full
+which `examples/lightweight-dispatch.md` already carries. It is looked for from the task's
+**first** `in_progress`, not its last, so a lightweight task that is reopened and resumed through
+`SendMessage` keeps its dispatch marker; every other signal keeps the last-`in_progress` window. Absence means full protocol: the full
 clause is the default dispatch, so the default is to block. A controller writing its own
 lightweight wording keeps that one heading line; the example and the guard README say so. No
 protocol part changes beyond the kill-switch sentence in §1.6.
