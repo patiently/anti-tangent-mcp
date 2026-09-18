@@ -610,13 +610,15 @@ See [`plugin/anti-tangent-shunt/README.md`](plugin/anti-tangent-shunt/README.md)
 
 ### anti-tangent-guard
 
-Two hooks that enforce anti-tangent-mcp's conventions, both of which block.
+Three hooks that enforce anti-tangent-mcp's conventions, all of which block.
 
 A `PostToolUse` hook on `TaskUpdate` enforces the `validate_completion` gate at task close: when a task is marked completed without running `validate_completion`, or the evidence it was validated against adds comments carrying change history, the guard returns a blocking instruction to reopen, fix, and re-close. It detects rather than prevents — `PostToolUse` fires after the state change, so it cannot stop the close itself.
 
 A `PreToolUse` hook on `Edit`/`Write` refuses a write that adds such a comment, before it lands. **Installing this plugin means some of your edits will be rejected until the comment is rewritten.**
 
-Kill switches: `ANTI_TANGENT_COMPLETION_GUARD=0` turns off the completion gate only; `ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning at both write time and close time; setting both is what silences the close-time hook entirely.
+A second `PreToolUse` hook, on `Edit`/`Write`/`NotebookEdit`, refuses a dispatched implementer's first edit until `validate_task_spec` has been called, and the close-time hook blocks a full-protocol close whose `validate_completion` ran with no task session (an empty `session_id` is reviewed against a spec with no acceptance criteria). The dispatch prompt's heading is the fingerprint: `## Drift-protection protocol (anti-tangent-mcp)` gates the session, `Drift-protection protocol (lightweight)` exempts it.
+
+Kill switches: `ANTI_TANGENT_SESSION_GUARD=0` turns off the start gate and the no-session close rule; `ANTI_TANGENT_COMPLETION_GUARD=0` turns off the completion gate only; `ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning at both write time and close time; setting all three is what silences the close-time hook entirely.
 
 **Install:**
 

@@ -83,10 +83,10 @@ lines and is not scanned at all. Prose narration ("previously", "no longer",
 since it can't be pattern-matched without false positives. A clean hook run means the scanner found nothing —
 it is not proof the comment policy was followed.
 
-`ANTI_TANGENT_COMPLETION_GUARD=0` turns off the completion gate only and
-`ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning; setting both is
-what disables the hook outright, short-circuiting it to a silent no-op
-before it reads anything. It also fails open on its own errors (missing
+`ANTI_TANGENT_COMPLETION_GUARD=0` turns off the completion gate only,
+`ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning, and (guard 0.5.0+)
+`ANTI_TANGENT_SESSION_GUARD=0` turns off the session rules; setting all three
+is what disables the hook outright, before it reads anything. It also fails open on its own errors (missing
 transcript, absent `jq`/`python3`, malformed input): it never blocks a close
 because the hook itself broke. Requires a
 server ≥ 0.18.0 — an older server never emits the `tool:` tag the guard keys

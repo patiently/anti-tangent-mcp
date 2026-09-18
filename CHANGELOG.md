@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] - 2026-09-18
+
+### Added
+
+- `anti-tangent-guard` 0.5.0 gains a session guard under one new kill switch,
+  `ANTI_TANGENT_SESSION_GUARD=0`. A `PreToolUse` hook on `Edit`/`Write`/`NotebookEdit`
+  (`check-task-start`) refuses a dispatched implementer's first edit until
+  `validate_task_spec` has been called. The hook acts only inside a subagent, found through the
+  payload's `agent_id`, and gates it when the subagent's first user message — its dispatch
+  prompt — carries `## Drift-protection protocol (anti-tangent-mcp)` and not the lightweight
+  heading.
+  The close-time hook gains a fourth block condition: a `validate_completion` that ran with an
+  empty `session_id` — a review against a spec with no acceptance criteria — closes a task only
+  when the window shows a lightweight dispatch, marked by the heading
+  `Drift-protection protocol (lightweight)` in a user message or an `Agent` prompt. The
+  close-time hook now short-circuits only when all three switches are `0`.
+
+### Changed
+
+- The guard README counts four block conditions and three kill switches;
+  `examples/lightweight-dispatch.md` names its heading as the guard's marker.
+
 ## [0.22.0] - 2026-09-15
 
 ### Added
