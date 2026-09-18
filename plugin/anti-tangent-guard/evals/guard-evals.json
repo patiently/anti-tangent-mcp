@@ -2363,6 +2363,161 @@
         "{{TMPDIR}}/SENTINEL"
       ],
       "reason": "a blob missing from a partial clone sends git down a lazy fetch that execs the configured transport. This is a second exec path with no filter involved, so no amount of filter pinning covers it. The repository also sets protocol.ssh.allow=always, which overrides the protocol.allow=never default, so what holds the line here is GIT_ALLOW_PROTOCOL and GIT_NO_LAZY_FETCH. Taking those two apart needs an environment this harness cannot build; comment_scan_test.py does it."
+    },
+    {
+      "id": 146,
+      "name": "task-start-implementer-no-call-blocks",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+      },
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "EDIT BEFORE validate_task_spec"
+      ],
+      "reason": "the subagent's first user entry is a full-clause dispatch prompt and no validate_task_spec tool_use follows, so the edit must be refused; a hook that read the parent's transcript, or counted the clause's own mention of the tool as a call, would let it through"
+    },
+    {
+      "id": 147,
+      "name": "task-start-implementer-call-passes",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_task_spec\", \"input\": {\"goal\": \"g\"}}]}}\n"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "task-start | pass | spec-called"
+        ]
+      },
+      "reason": "the call exists after the dispatch prompt; a scan that stopped at the first user entry or ignored assistant tool_use entries would block a compliant implementer"
+    },
+    {
+      "id": 148,
+      "name": "task-start-lightweight-dispatch-passes",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\\n\\n## Drift-protection protocol (lightweight)\"}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "a lightweight dispatch carries both headings and skips validate_task_spec by design; dropping the lightweight exemption would block every lightweight implementer"
+    },
+    {
+      "id": 149,
+      "name": "task-start-controller-clause-in-agent-input-passes",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Execute the plan.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}]}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "the clause appears only inside an Agent tool_use, not in the first user entry; fingerprinting anywhere in the transcript would gate a controller that dispatches implementers"
+    },
+    {
+      "id": 150,
+      "name": "task-start-no-clause-passes",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Fix the typo in README.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "a subagent dispatched without the protocol clause is not an implementer; gating on agent_id alone would block every research subagent's write"
+    },
+    {
+      "id": 151,
+      "name": "task-start-main-session-not-gated",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\"}",
+      "tmpdir_fixture": {
+        "parent.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "the main session carries no agent_id and is never a dispatched implementer, even when its own first message holds the clause; reading transcript_path directly would gate it"
+    },
+    {
+      "id": 152,
+      "name": "task-start-reads-subagent-not-parent",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n",
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Fix the typo in README.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "the parent transcript opens with the clause but the subagent's does not; a hook that fingerprinted transcript_path instead of the agent_id path would block here"
+    },
+    {
+      "id": 153,
+      "name": "task-start-missing-subagent-transcript-fails-open",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "expected_exit": 0,
+      "reason": "agent_id names a transcript that does not exist; failing closed would block every write whenever the transcript layout changes"
+    },
+    {
+      "id": 154,
+      "name": "task-start-malformed-stdin-fails-open",
+      "hook": "check-task-start",
+      "stdin_raw": "not json",
+      "expected_exit": 0,
+      "reason": "unparseable hook input must fail open; a body that raised or exited 2 on bad JSON would block writes on a harness change"
+    },
+    {
+      "id": 155,
+      "name": "task-start-unparsable-transcript-fails-open",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "not json\n{\n]]\n"
+      },
+      "expected_exit": 0,
+      "reason": "no line of the subagent transcript parses, so there is no first user entry to fingerprint; treating that as an implementer would block on corrupt input"
+    },
+    {
+      "id": 156,
+      "name": "task-start-kill-switch",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+      },
+      "env": {
+        "ANTI_TANGENT_SESSION_GUARD": "0"
+      },
+      "expected_exit": 0,
+      "reason": "the same transcript that blocks in the first case passes with ANTI_TANGENT_SESSION_GUARD=0; a missing switch check would leave the operator no way out"
+    },
+    {
+      "id": 157,
+      "name": "task-start-read-is-not-gated",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Read\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "reads are never gated so an implementer can read before validating; matching Read would stall every implementer at its first read"
+    },
+    {
+      "id": 158,
+      "name": "task-start-notebookedit-blocks",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"NotebookEdit\", \"tool_input\": {\"notebook_path\": \"{{TMPDIR}}/n.ipynb\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n"
+      },
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "EDIT BEFORE validate_task_spec"
+      ],
+      "reason": "NotebookEdit writes like Edit; leaving it out of the gated tools would let a notebook edit through before validate_task_spec"
     }
   ]
 }
