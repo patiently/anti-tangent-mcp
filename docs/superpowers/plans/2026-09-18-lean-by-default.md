@@ -41,7 +41,7 @@
 | File | Responsibility |
 |---|---|
 | `plugin/anti-tangent-guard/hooks/check-task-start` (new, bash) | Rule A wrapper: kill switch, trace, exit-code mapping — mirrors `check-comment-write` |
-| `plugin/anti-tangent-guard/hooks/check_task_start.py` (new) | Rule A body: fingerprint the first user message, scan for `validate_task_spec`, sentinel, block message |
+| `plugin/anti-tangent-guard/hooks/check_task_start.py` (new) | Rule A body: locate the subagent's transcript from `agent_id`, fingerprint its first user message, scan for `validate_task_spec`, block message |
 | `plugin/anti-tangent-guard/hooks/check_task_start_test.py` (new) | unittest for `classify()`; `run.sh` discovers `*_test.py` |
 | `plugin/anti-tangent-guard/hooks/check-task-complete` (modify) | Rule B: `no_session` / `lite_marker` signals in the Python scan; fourth block in bash; three-switch short-circuit |
 | `plugin/anti-tangent-guard/hooks/hooks.json` (modify) | second `PreToolUse` entry |
@@ -64,9 +64,11 @@
 
 ---
 
-### Task 1: Live probe — a hook inside a subagent gets the subagent's transcript
+### Task 1: Live probe — how a hook inside a subagent reaches the subagent's transcript
 
-**Goal:** Confirm, with captured output, that a `PreToolUse` hook firing inside a dispatched subagent receives the subagent's own `transcript_path` (under `…/subagents/agent-*.jsonl`) and not the parent's — Rule A depends on it.
+**Goal:** Establish, with captured output, how a `PreToolUse` hook firing inside a dispatched subagent can read that subagent's own transcript — Rule A fingerprints the dispatch prompt there.
+
+**Outcome (2026-09-18, recorded in the SDD ledger):** the premise the first version of this task tested was false. A subagent's hook payload carries the **parent's** `transcript_path` and `session_id`, and no `scratchpad_dir`. It also carries `agent_id` and `agent_type`, which the main session's payload lacks, and `<transcript_path without .jsonl>/subagents/agent-<agent_id>.jsonl` exists and opens with the dispatch prompt. The user chose to keep Rule A on that basis; Task 2 and spec §1.3 were revised. The steps below reproduce the probe that established it.
 
 **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it "verified inline", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.
 
@@ -75,19 +77,17 @@
 - Create (temporary): `.claude/hook-probe.jsonl`
 
 **Acceptance Criteria:**
-- [ ] `.claude/hook-probe.jsonl` contains at least one line whose `transcript_path` matches `/subagents/agent-` and whose `tool_name` is `Read`.
-- [ ] The file also holds the parent's own line (a `transcript_path` not under `/subagents/`), and the DONE report states whether the subagent line's `session_id` and `scratchpad_dir` equal the parent's. Rule A keys its sentinel on the transcript, so either answer is safe, but the guard README states it.
-- [ ] The captured lines are pasted into the task's DONE report verbatim.
-- [ ] The probe never overwrites an existing `.claude/settings.local.json`: Step 1 refuses to start if one exists (none does in this worktree at plan time), so the cleanup's `rm -f` only ever removes the probe's own file.
+- [ ] The probe file holds the headless run's two `Read` lines: the parent's (`VERSION`), with no `agent_id`, and the subagent's (`README.md`), with `agent_id` and `agent_type`.
+- [ ] `<transcript_path without .jsonl>/subagents/agent-<agent_id>.jsonl` exists for the subagent line's `agent_id`, and its first `type: "user"` entry is the dispatch prompt.
+- [ ] The report states whether `scratchpad_dir` appears in either payload.
+- [ ] The probe never overwrites an existing `.claude/settings.local.json`: Step 1 refuses to start if one exists.
 - [ ] `.claude/settings.local.json` and `.claude/hook-probe.jsonl` are removed before the task closes; `git status --short` shows neither.
 
-**Verify:** `git status --short .claude/` → empty. The probe file is gone by then (Step 4), so the positive evidence is the `/subagents/agent-` lines pasted into the DONE report from Step 3, not a re-run grep.
+**Verify:** `git status --short .claude/` → empty; the positive evidence is the probe lines and the transcript check pasted into the DONE report.
 
 **Steps:**
 
-- [ ] **Step 1: Write the probe hook**
-
-Hooks are read at session start, so the probe runs in a fresh headless session rather than this one.
+- [ ] **Step 1: Write the probe hook** — it records the whole payload.
 
 ```bash
 if [ -e .claude/settings.local.json ] || [ -e .claude/hook-probe.jsonl ]; then
@@ -95,47 +95,29 @@ if [ -e .claude/settings.local.json ] || [ -e .claude/hook-probe.jsonl ]; then
 fi
 mkdir -p .claude
 cat > .claude/settings.local.json <<'EOF'
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "jq -c '{tool_name, session_id, transcript_path, scratchpad_dir}' >> \"$CLAUDE_PROJECT_DIR/.claude/hook-probe.jsonl\""
-          }
-        ]
-      }
-    ]
-  }
-}
+{"hooks":{"PreToolUse":[{"matcher":"Read","hooks":[{"type":"command","command":"jq -c . >> \"$CLAUDE_PROJECT_DIR/.claude/hook-probe.jsonl\""}]}]}}
 EOF
 ```
 
-- [ ] **Step 2: Run a headless session that dispatches a subagent which Reads a file**
+- [ ] **Step 2: Run a headless session whose parent and one subagent each Read a file**
 
 ```bash
-claude -p --model haiku --dangerously-skip-permissions \
-  "First use the Read tool on the file VERSION yourself. Then use the Agent tool (subagent_type general-purpose) to dispatch ONE subagent whose only job is to Read the file README.md in the current directory and reply with its first line. Report the subagent's reply."
+OUT=$(claude -p --model haiku --dangerously-skip-permissions --output-format json \
+  "First use the Read tool on the file VERSION yourself. Then use the Agent tool (subagent_type general-purpose) to dispatch ONE subagent whose only job is to Read the file README.md in the current directory and reply with its first line. Wait for it, then report the subagent's reply." < /dev/null)
+SID=$(printf '%s' "$OUT" | jq -r .session_id); echo "headless session: $SID"
 ```
 
-Expected: a reply quoting README's first line, and `.claude/hook-probe.jsonl` now exists.
-
-- [ ] **Step 3: Read the probe file**
+- [ ] **Step 3: Read the payloads and the subagent's transcript**
 
 ```bash
-cat .claude/hook-probe.jsonl
-wc -l < .claude/hook-probe.jsonl
-grep -c '/subagents/agent-' .claude/hook-probe.jsonl
-jq -c '{subagent: (.transcript_path | test("/subagents/agent-")), session_id, scratchpad_dir}' .claude/hook-probe.jsonl
+jq -c --arg s "$SID" 'select(.session_id == $s) | {tool_name, file: .tool_input.file_path, transcript_path, agent_id, agent_type, has_scratchpad: has("scratchpad_dir")}' .claude/hook-probe.jsonl
+AID=$(jq -r --arg s "$SID" 'select(.session_id == $s and .agent_id != null) | .agent_id' .claude/hook-probe.jsonl | head -1)
+TP=$(jq -r --arg s "$SID" 'select(.session_id == $s) | .transcript_path' .claude/hook-probe.jsonl | head -1)
+F="${TP%.jsonl}/subagents/agent-$AID.jsonl"; ls -la "$F"
+python3 -c 'import json,sys; e=next(json.loads(l) for l in open(sys.argv[1]) if json.loads(l).get("type")=="user"); c=e["message"]["content"]; print(str(c)[:160])' "$F"
 ```
 
-Expected: at least one line like
-`{"tool_name":"Read","session_id":"…","transcript_path":"/home/…/.claude/projects/…/<session>/subagents/agent-<id>.jsonl","scratchpad_dir":"…"}`.
-The two counts are the total lines (at least 2: the parent's `VERSION` read and the subagent's `README.md` read) and the subagent lines (at least 1). From the `jq` output, note whether `scratchpad_dir` is present, and whether the subagent's `session_id` and `scratchpad_dir` equal the parent's. Rule A's sentinel lives under `scratchpad_dir` when it is present and is named after the transcript, so a scratchpad shared with the parent is still safe.
-
-If NO line matches `/subagents/agent-`: paste the file's contents and both counts into the report, run Step 4's cleanup and confirm `git status --short .claude/` is empty, then mark the task as failed. The controller then **stops the run and returns to the user for replanning** — it does not continue. Spec §1.3 says Rule A is then dropped and Rule B ships alone, and that changes Task 2 (dropped), Task 4 (no start-gate section, three hooks become two, two kill-switch scopes), Task 5 (no `task-start` probe) and the CHANGELOG; those edits are a revised plan, not an in-flight improvisation.
+If no line for this session carries `agent_id`, or the file is missing: paste the output, run Step 4, and mark the task failed — the controller stops the run for replanning.
 
 - [ ] **Step 4: Clean up**
 
@@ -145,21 +127,17 @@ rmdir .claude 2>/dev/null || true
 git status --short
 ```
 
-Expected: no `.claude/` entries in the status.
-
-- [ ] **Step 5: Report**
-
-Paste into the DONE report: the probe lines, the two counts (total, subagent), and the two comparisons, each reported as exactly one of `equal`, `different` or `absent` (absent from either line), with the parent and subagent lines that support it. Nothing to commit.
+- [ ] **Step 5: Report** the probe lines, the subagent transcript path and its first user entry, and whether `scratchpad_dir` appeared. Nothing to commit.
 
 ```json:metadata
-{"files": [".claude/settings.local.json", ".claude/hook-probe.jsonl"], "verifyCommand": "git status --short .claude/", "acceptanceCriteria": ["hook-probe.jsonl has a Read line whose transcript_path matches /subagents/agent-", "the parent's line is present and the DONE report states whether the subagent's session_id and scratchpad_dir equal the parent's", "probe lines, both counts and both equalities pasted into the DONE report", "settings.local.json and hook-probe.jsonl removed; git status clean"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"], "requireEvidenceTokens": [["/subagents/agent-"]]}
+{"files": [".claude/settings.local.json", ".claude/hook-probe.jsonl"], "verifyCommand": "git status --short .claude/", "acceptanceCriteria": ["the headless run's parent Read line has no agent_id; its subagent Read line carries agent_id and agent_type", "<transcript_path stem>/subagents/agent-<agent_id>.jsonl exists and its first user entry is the dispatch prompt", "the report states whether scratchpad_dir appears in either payload", "settings.local.json and hook-probe.jsonl removed; git status clean"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"], "requireEvidenceTokens": [["agent_id"], ["/subagents/agent-"]]}
 ```
 
 ---
 
 ### Task 2: Rule A — the write-time start gate (`check-task-start`)
 
-**Goal:** A `PreToolUse` hook on `Edit|Write|NotebookEdit` that, in a session whose first user message is a full-protocol dispatch prompt, refuses every write until `mcp__anti-tangent__validate_task_spec` has been called; with module tests and thirteen eval fixtures.
+**Goal:** A `PreToolUse` hook on `Edit|Write|NotebookEdit` that, in a dispatched subagent whose first user message is a full-protocol dispatch prompt, refuses every write until `mcp__anti-tangent__validate_task_spec` has been called. The subagent's own transcript is found through the payload's `agent_id` (Task 1: a subagent's payload carries the parent's `transcript_path`); with module tests and thirteen eval fixtures.
 
 **Files:**
 - Create: `plugin/anti-tangent-guard/hooks/check-task-start`
@@ -169,12 +147,14 @@ Paste into the DONE report: the probe lines, the two counts (total, subagent), a
 - Modify: `plugin/anti-tangent-guard/evals/guard-evals.json` (append 13 cases), `plugin/anti-tangent-guard/evals/run.sh` (`EXPECTED_CASE_COUNT=145` → `158`)
 
 **Acceptance Criteria:**
-- [ ] A transcript whose first `type: "user"` entry contains `## Drift-protection protocol (anti-tangent-mcp)` and no `validate_task_spec` `tool_use` → exit 2, stderr contains `EDIT BEFORE validate_task_spec`.
-- [ ] Same transcript with a `mcp__anti-tangent__validate_task_spec` `tool_use` after the first user entry → exit 0, and `<scratchpad_dir>/anti-tangent-guard/session-ok/<transcript stem>` is written, holding the transcript's full path, when `scratchpad_dir` is in the payload. The sentinel is per transcript, not per scratchpad: a subagent may share its parent's `scratchpad_dir`, and one file per scratchpad would let the first implementer's pass wave every later one through.
+- [ ] The hook reads the subagent's own transcript, `<transcript_path without .jsonl>/subagents/agent-<agent_id>.jsonl`, never `transcript_path` itself (that is the parent's). A payload with no `agent_id` is the main session and is never gated. An `agent_id` that is not a plain identifier (letters, digits, `-`, `_`) is refused, not joined into a path.
+- [ ] A subagent transcript whose first `type: "user"` entry contains `## Drift-protection protocol (anti-tangent-mcp)` and no `validate_task_spec` `tool_use` → exit 2, stderr contains `EDIT BEFORE validate_task_spec`.
+- [ ] Same transcript with a `mcp__anti-tangent__validate_task_spec` `tool_use` after the first user entry → exit 0, trace `task-start | pass | spec-called`.
 - [ ] A first user entry carrying `Drift-protection protocol (lightweight)` → exit 0. A first user entry with no clause → exit 0, even when the clause appears later inside an `Agent` `tool_use` input.
-- [ ] A sentinel whose content is this transcript's full path → exit 0 without opening the transcript, proven by the `task-start | pass | sentinel` trace event (a missing transcript also exits 0, so the exit code alone proves nothing). A sentinel of the same name holding another transcript's path — two transcripts sharing a stem — does not pass.
-- [ ] `ANTI_TANGENT_SESSION_GUARD=0`, a missing transcript, a transcript with no parseable line, malformed stdin, `tool_name: Read` → exit 0.
+- [ ] A parent transcript that opens with the clause does not gate a subagent whose own transcript does not; the main session (no `agent_id`) is not gated even when its first message holds the clause.
+- [ ] `ANTI_TANGENT_SESSION_GUARD=0`, a missing subagent transcript, a transcript with no parseable line, malformed stdin, `tool_name: Read` → exit 0.
 - [ ] `NotebookEdit` is gated like `Edit`.
+- [ ] No sentinel or cache: the payload carries no `scratchpad_dir` (Task 1), and `classify` stops at the first `validate_task_spec` call, which precedes every allowed edit, so each check reads only the transcript's prefix.
 - [ ] `python3 -B -m unittest discover -s plugin/anti-tangent-guard/hooks -p '*_test.py'` passes; `bash plugin/anti-tangent-guard/evals/run.sh` reports 158 passed.
 
 **Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → `Total: 158 passed, 0 failed, 158 total`
@@ -189,10 +169,7 @@ Paste into the DONE report: the probe lines, the two counts (total, subagent), a
 import json
 import unittest
 
-import os
-import tempfile
-
-from check_task_start import classify, sentinel_path, sentinel_matches, FULL_HEADING, LITE_HEADING, SPEC_TOOL
+from check_task_start import classify, subagent_transcript, FULL_HEADING, LITE_HEADING, SPEC_TOOL
 
 
 def user(text):
@@ -244,23 +221,16 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(classify([user(CLAUSE + "\nmcp__anti-tangent__validate_task_spec")]), "block")
 
 
-class SentinelPathTest(unittest.TestCase):
-    def test_sentinel_is_named_after_the_transcript(self):
-        got = sentinel_path({"scratchpad_dir": "/s", "transcript_path": "/p/subagents/agent-a1.jsonl"})
-        self.assertEqual(got, "/s/anti-tangent-guard/session-ok/agent-a1")
+class SubagentTranscriptTest(unittest.TestCase):
+    def test_subagent_transcript_sits_under_the_parent_stem(self):
+        got = subagent_transcript({"transcript_path": "/p/s1.jsonl", "session_id": "s1", "agent_id": "a1"})
+        self.assertEqual(got, "/p/s1/subagents/agent-a1.jsonl")
 
-    def test_no_scratchpad_or_no_transcript_means_no_sentinel(self):
-        self.assertEqual(sentinel_path({"transcript_path": "/p/agent-a1.jsonl"}), "")
-        self.assertEqual(sentinel_path({"scratchpad_dir": "/s"}), "")
+    def test_main_session_has_no_subagent_transcript(self):
+        self.assertEqual(subagent_transcript({"transcript_path": "/p/s1.jsonl", "session_id": "s1"}), "")
 
-    def test_sentinel_matches_only_the_path_it_holds(self):
-        with tempfile.TemporaryDirectory() as d:
-            sentinel = os.path.join(d, "agent-a1")
-            with open(sentinel, "w") as fh:
-                fh.write("/p/a/agent-a1.jsonl\n")
-            self.assertTrue(sentinel_matches(sentinel, "/p/a/agent-a1.jsonl"))
-            self.assertFalse(sentinel_matches(sentinel, "/p/b/agent-a1.jsonl"))
-            self.assertFalse(sentinel_matches(os.path.join(d, "absent"), "/p/a/agent-a1.jsonl"))
+    def test_agent_id_that_is_not_an_identifier_is_refused(self):
+        self.assertEqual(subagent_transcript({"transcript_path": "/p/s1.jsonl", "agent_id": "../x"}), "")
 
 
 if __name__ == "__main__":
@@ -282,15 +252,17 @@ until validate_task_spec has been called.
 
 Reads the hook payload as JSON on stdin; the wrapper consumes the hook's own
 stdin and re-feeds it here, so nothing else in this process may read stdin.
-Exit 0 = allow (the call exists), 4 = allow (sentinel from an earlier
-positive), 3 = allow without deciding (not an implementer session, no readable
-transcript, an ungated tool), 2 = block. The wrapper maps every other exit to
-allow.
+Exit 0 = allow (the call exists), 3 = allow without deciding (not a subagent,
+not an implementer, no readable transcript, an ungated tool), 2 = block. The
+wrapper maps every other exit to allow.
 
-A session is an implementer's when its FIRST user entry — the dispatch prompt —
-carries the full clause heading and not the lightweight one. Controllers meet
-the clause only in file reads and Agent inputs, never as their own first user
-message, so they are never gated.
+A hook firing inside a subagent receives the parent's transcript_path and
+session_id; only agent_id marks the subagent, and its own transcript sits
+beside the parent's at <parent stem>/subagents/agent-<agent_id>.jsonl. The
+main session carries no agent_id and is never a dispatched implementer.
+
+A subagent is an implementer when its FIRST user entry -- the dispatch
+prompt -- carries the full clause heading and not the lightweight one.
 """
 import json
 import os
@@ -300,7 +272,6 @@ FULL_HEADING = "## Drift-protection protocol (anti-tangent-mcp)"
 LITE_HEADING = "Drift-protection protocol (lightweight)"
 SPEC_TOOL = "mcp__anti-tangent__validate_task_spec"
 GATED_TOOLS = ("Edit", "Write", "NotebookEdit")
-SENTINEL_DIR = os.path.join("anti-tangent-guard", "session-ok")
 
 BLOCK_MESSAGE = """EDIT BEFORE validate_task_spec
 
@@ -329,8 +300,8 @@ def classify(lines):
 
     Entries before the first user entry (attachments, system records) are
     ignored. The first user entry decides whether the session is gated at all;
-    after it, one validate_task_spec tool_use is a pass. Text merely naming the
-    tool is not a call.
+    after it, one validate_task_spec tool_use is a pass, and the scan stops
+    there. Text merely naming the tool is not a call.
     """
     seen_first_user = False
     for line in lines:
@@ -357,27 +328,16 @@ def classify(lines):
     return "block" if seen_first_user else "skip"
 
 
-def sentinel_path(data):
-    """Return this transcript's sentinel under the scratchpad, or "".
-
-    A dispatched subagent may share its parent's scratchpad_dir, so one file
-    per scratchpad would let the first implementer's pass wave every later
-    implementer through. The file is named after the transcript's stem and
-    holds its full path; sentinel_matches compares that path, so two
-    transcripts sharing a stem never share a pass.
-    """
-    base = data.get("scratchpad_dir") or ""
-    stem = os.path.splitext(os.path.basename(data.get("transcript_path") or ""))[0]
-    stem = "".join(ch for ch in stem if ch.isalnum() or ch in "-_")
-    return os.path.join(base, SENTINEL_DIR, stem) if base and stem else ""
-
-
-def sentinel_matches(sentinel, transcript_path):
-    try:
-        with open(sentinel, encoding="utf-8") as fh:
-            return fh.read().strip() == transcript_path
-    except OSError:
-        return False
+def subagent_transcript(data):
+    """Return the dispatched subagent's own transcript path, or "" when the
+    payload is not from a subagent. An agent_id that is not a plain
+    identifier is refused rather than joined into a path."""
+    agent_id = data.get("agent_id") or ""
+    parent = data.get("transcript_path") or ""
+    if not agent_id or not parent or not all(ch.isalnum() or ch in "-_" for ch in agent_id):
+        return ""
+    stem = os.path.splitext(parent)[0]
+    return os.path.join(stem, "subagents", "agent-" + agent_id + ".jsonl")
 
 
 def main():
@@ -387,10 +347,9 @@ def main():
         return 3
     if not isinstance(data, dict) or (data.get("tool_name") or "") not in GATED_TOOLS:
         return 3
-    sentinel = sentinel_path(data)
-    path = data.get("transcript_path") or ""
-    if sentinel and sentinel_matches(sentinel, path):
-        return 4
+    path = subagent_transcript(data)
+    if not path:
+        return 3
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             verdict = classify(fh)
@@ -399,13 +358,6 @@ def main():
     if verdict == "skip":
         return 3
     if verdict == "pass":
-        if sentinel:
-            try:
-                os.makedirs(os.path.dirname(sentinel), mode=0o700, exist_ok=True)
-                with open(sentinel, "w", encoding="utf-8") as fh:
-                    fh.write(path + "\n")
-            except OSError:
-                pass
         return 0
     sys.stderr.write(BLOCK_MESSAGE.format(trace=os.environ.get("ATG_TRACE_LOG", "")))
     return 2
@@ -476,7 +428,6 @@ printf '%s' "$ATG_INPUT" | ATG_TRACE_LOG="$TRACE_LOG" python3 -I -B "$PLUGIN_ROO
 status=${PIPESTATUS[1]}
 case "$status" in
     0) trace "pass" "spec-called"; exit 0 ;;
-    4) trace "pass" "sentinel"; exit 0 ;;
     2) trace "block" "no-spec-call"; exit 2 ;;
     3) trace "skip" "not-gated"; exit 0 ;;
     *) trace "error" "python-exit=$status"; exit 0 ;;
@@ -512,78 +463,166 @@ esac
 
 - [ ] **Step 7: Append the eval fixtures**
 
-Append these thirteen objects to the `evals` array in `plugin/anti-tangent-guard/evals/guard-evals.json`, with `id` continuing from the last existing id (146…158). `run.sh` names every case's transcript `transcript.jsonl` — including the `no_transcript` path, `…/does-not-exist/transcript.jsonl` — so the sentinel for a fixture is `{{TMPDIR}}/scratch/anti-tangent-guard/session-ok/transcript`. The `input` objects need no `transcript_path` substitution beyond what `run.sh` already does (`.transcript_path = $tp`); `scratchpad_dir` uses `{{TMPDIR}}`, which `run.sh` substitutes throughout `input`. `IMPL` below stands for this exact transcript line (write it out in each fixture; `run.sh` reads fixtures independently):
-
-```
-{"type": "user", "message": {"role": "user", "content": "Implement Task 3: add the flag.\n\n## Drift-protection protocol (anti-tangent-mcp)\n\nAt task start and before DONE, you must use validate_task_spec and validate_completion."}}
-```
-
-| name | hook | transcript_raw_lines | input extras | expected |
-|---|---|---|---|---|
-| `task-start-implementer-no-call-blocks` | `check-task-start` | IMPL; `tool_use Read` | `tool_name: Edit`, `tool_input.file_path: {{TMPDIR}}/x.go`, `scratchpad_dir: {{TMPDIR}}/scratch` | exit 2, stderr contains `EDIT BEFORE validate_task_spec` |
-| `task-start-implementer-call-passes-and-writes-sentinel` | same | IMPL; `tool_use Read`; `tool_use mcp__anti-tangent__validate_task_spec` | same | exit 0; `expected_file_contains: {"{{TMPDIR}}/scratch/anti-tangent-guard/session-ok/transcript": ["/transcript.jsonl"]}` — the sentinel holds the full transcript path |
-| `task-start-lightweight-dispatch-passes` | same | first user content = IMPL's text with `"\n\n## Drift-protection protocol (lightweight)"` appended | same | exit 0 |
-| `task-start-controller-clause-in-agent-input-passes` | same | `user "Execute the plan."`; `tool_use Agent {prompt: <IMPL text>}` | same | exit 0 |
-| `task-start-no-clause-passes` | same | `user "Fix the typo in README."`; `tool_use Read` | same | exit 0 |
-| `task-start-sentinel-short-circuits` | same | — (`stdin_raw` below, whose `transcript_path` does not exist) | see below | exit 0, and `expected_file_contains: {"{{TMPDIR}}/trace.log": ["task-start | pass | sentinel"]}` |
-| `task-start-same-stem-other-path-does-not-pass` | same | — (`stdin_raw` below; the transcript is a `tmpdir_fixture`) | see below | exit 2, stderr contains `EDIT BEFORE validate_task_spec` |
-| `task-start-missing-transcript-fails-open` | same | `"no_transcript": true` | same, no sentinel | exit 0 |
-| `task-start-malformed-stdin-fails-open` | same | — (`"stdin_raw": "not json"` instead of `input`) | — | exit 0 |
-| `task-start-unparsable-transcript-fails-open` | same | `["not json", "{", "]]"]` — no line parses, so there is no first user entry to fingerprint | same, no sentinel | exit 0 |
-| `task-start-kill-switch` | same | IMPL; `tool_use Read` | same + `env: {"ANTI_TANGENT_SESSION_GUARD": "0"}` | exit 0 |
-| `task-start-read-is-not-gated` | same | IMPL | `tool_name: Read` | exit 0 |
-| `task-start-notebookedit-blocks` | same | IMPL | `tool_name: NotebookEdit`, `tool_input.notebook_path: {{TMPDIR}}/n.ipynb` | exit 2, stderr contains `EDIT BEFORE validate_task_spec` |
-
-The two sentinel cases need a `transcript_path` the fixture itself can name, which `input` cannot give (`run.sh` overwrites it with a per-case path outside `{{TMPDIR}}`). They use `stdin_raw`, where `run.sh` substitutes `{{TMPDIR}}`, and a `setup_script`, which runs in `{{TMPDIR}}` with the same substitution:
+Append these thirteen objects, verbatim, to the `evals` array in `plugin/anti-tangent-guard/evals/guard-evals.json` (ids 146–158). Every case uses `stdin_raw`, because `run.sh` overwrites an `input` case's `transcript_path` with a per-case path outside `{{TMPDIR}}`, and the subagent transcript has to sit under that path's stem: `stdin_raw` names `{{TMPDIR}}/parent.jsonl`, and `tmpdir_fixture` writes the subagent's transcript at `parent/subagents/agent-a1.jsonl`. These objects were run through `run.sh` against the Step 3 body at plan time: 158/158 with the existing suite, and 5 of them fail when the body reads `transcript_path` directly.
 
 ```json
-{
-  "name": "task-start-sentinel-short-circuits",
-  "hook": "check-task-start",
-  "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/gone/agent-a1.jsonl\", \"scratchpad_dir\": \"{{TMPDIR}}/scratch\", \"session_id\": \"sess-start-6\"}",
-  "setup_script": "mkdir -p scratch/anti-tangent-guard/session-ok && printf '%s\\n' '{{TMPDIR}}/gone/agent-a1.jsonl' > scratch/anti-tangent-guard/session-ok/agent-a1",
-  "env": {"ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"},
-  "expected_exit": 0,
-  "expected_file_contains": {"{{TMPDIR}}/trace.log": ["task-start | pass | sentinel"]}
-}
-```
-
-```json
-{
-  "name": "task-start-same-stem-other-path-does-not-pass",
-  "hook": "check-task-start",
-  "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/b/agent-a1.jsonl\", \"scratchpad_dir\": \"{{TMPDIR}}/scratch\", \"session_id\": \"sess-start-7\"}",
-  "tmpdir_fixture": {"b/agent-a1.jsonl": "IMPL_LINE\n"},
-  "setup_script": "mkdir -p scratch/anti-tangent-guard/session-ok && printf '%s\\n' '{{TMPDIR}}/a/agent-a1.jsonl' > scratch/anti-tangent-guard/session-ok/agent-a1",
-  "expected_exit": 2,
-  "expected_stderr_contains": ["EDIT BEFORE validate_task_spec"]
-}
-```
-
-`IMPL_LINE` is the IMPL transcript line above, JSON-escaped into the string. Both also get an `id` and a `reason`.
-
-Each fixture carries a one-sentence `reason` naming a concrete regression that would flip its expected result (the file's convention — read fixture 1's `reason` for the shape). The first fixture, written out in full:
-
-```json
-{
-  "id": 146,
-  "name": "task-start-implementer-no-call-blocks",
-  "hook": "check-task-start",
-  "input": {
-    "tool_name": "Edit",
-    "tool_input": {"file_path": "{{TMPDIR}}/x.go", "old_string": "a", "new_string": "b"},
-    "transcript_path": "{{TRANSCRIPT}}",
-    "scratchpad_dir": "{{TMPDIR}}/scratch",
-    "session_id": "sess-start-1"
+[
+  {
+    "id": 146,
+    "name": "task-start-implementer-no-call-blocks",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "tmpdir_fixture": {
+      "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+    },
+    "expected_exit": 2,
+    "expected_stderr_contains": [
+      "EDIT BEFORE validate_task_spec"
+    ],
+    "reason": "the subagent's first user entry is a full-clause dispatch prompt and no validate_task_spec tool_use follows, so the edit must be refused; a hook that read the parent's transcript, or counted the clause's own mention of the tool as a call, would let it through"
   },
-  "transcript_raw_lines": [
-    "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}",
-    "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}"
-  ],
-  "expected_exit": 2,
-  "expected_stderr_contains": ["EDIT BEFORE validate_task_spec"],
-  "reason": "the first user entry is a full-clause dispatch prompt and no validate_task_spec tool_use follows, so the edit must be refused — a fingerprint that missed the heading, or a scan that counted the clause's own mention of the tool as a call, would let it through"
-}
+  {
+    "id": 147,
+    "name": "task-start-implementer-call-passes",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "tmpdir_fixture": {
+      "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_task_spec\", \"input\": {\"goal\": \"g\"}}]}}\n"
+    },
+    "env": {
+      "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+    },
+    "expected_exit": 0,
+    "expected_file_contains": {
+      "{{TMPDIR}}/trace.log": [
+        "task-start | pass | spec-called"
+      ]
+    },
+    "reason": "the call exists after the dispatch prompt; a scan that stopped at the first user entry or ignored assistant tool_use entries would block a compliant implementer"
+  },
+  {
+    "id": 148,
+    "name": "task-start-lightweight-dispatch-passes",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "tmpdir_fixture": {
+      "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\\n\\n## Drift-protection protocol (lightweight)\"}}\n"
+    },
+    "expected_exit": 0,
+    "reason": "a lightweight dispatch carries both headings and skips validate_task_spec by design; dropping the lightweight exemption would block every lightweight implementer"
+  },
+  {
+    "id": 149,
+    "name": "task-start-controller-clause-in-agent-input-passes",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "tmpdir_fixture": {
+      "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Execute the plan.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}]}}\n"
+    },
+    "expected_exit": 0,
+    "reason": "the clause appears only inside an Agent tool_use, not in the first user entry; fingerprinting anywhere in the transcript would gate a controller that dispatches implementers"
+  },
+  {
+    "id": 150,
+    "name": "task-start-no-clause-passes",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "tmpdir_fixture": {
+      "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Fix the typo in README.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+    },
+    "expected_exit": 0,
+    "reason": "a subagent dispatched without the protocol clause is not an implementer; gating on agent_id alone would block every research subagent's write"
+  },
+  {
+    "id": 151,
+    "name": "task-start-main-session-not-gated",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\"}",
+    "tmpdir_fixture": {
+      "parent.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+    },
+    "expected_exit": 0,
+    "reason": "the main session carries no agent_id and is never a dispatched implementer, even when its own first message holds the clause; reading transcript_path directly would gate it"
+  },
+  {
+    "id": 152,
+    "name": "task-start-reads-subagent-not-parent",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "tmpdir_fixture": {
+      "parent.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n",
+      "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Fix the typo in README.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+    },
+    "expected_exit": 0,
+    "reason": "the parent transcript opens with the clause but the subagent's does not; a hook that fingerprinted transcript_path instead of the agent_id path would block here"
+  },
+  {
+    "id": 153,
+    "name": "task-start-missing-subagent-transcript-fails-open",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "expected_exit": 0,
+    "reason": "agent_id names a transcript that does not exist; failing closed would block every write whenever the transcript layout changes"
+  },
+  {
+    "id": 154,
+    "name": "task-start-malformed-stdin-fails-open",
+    "hook": "check-task-start",
+    "stdin_raw": "not json",
+    "expected_exit": 0,
+    "reason": "unparseable hook input must fail open; a body that raised or exited 2 on bad JSON would block writes on a harness change"
+  },
+  {
+    "id": 155,
+    "name": "task-start-unparsable-transcript-fails-open",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "tmpdir_fixture": {
+      "parent/subagents/agent-a1.jsonl": "not json\n{\n]]\n"
+    },
+    "expected_exit": 0,
+    "reason": "no line of the subagent transcript parses, so there is no first user entry to fingerprint; treating that as an implementer would block on corrupt input"
+  },
+  {
+    "id": 156,
+    "name": "task-start-kill-switch",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "tmpdir_fixture": {
+      "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+    },
+    "env": {
+      "ANTI_TANGENT_SESSION_GUARD": "0"
+    },
+    "expected_exit": 0,
+    "reason": "the same transcript that blocks in the first case passes with ANTI_TANGENT_SESSION_GUARD=0; a missing switch check would leave the operator no way out"
+  },
+  {
+    "id": 157,
+    "name": "task-start-read-is-not-gated",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"Read\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "tmpdir_fixture": {
+      "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n"
+    },
+    "expected_exit": 0,
+    "reason": "reads are never gated so an implementer can read before validating; matching Read would stall every implementer at its first read"
+  },
+  {
+    "id": 158,
+    "name": "task-start-notebookedit-blocks",
+    "hook": "check-task-start",
+    "stdin_raw": "{\"tool_name\": \"NotebookEdit\", \"tool_input\": {\"notebook_path\": \"{{TMPDIR}}/n.ipynb\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+    "tmpdir_fixture": {
+      "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n"
+    },
+    "expected_exit": 2,
+    "expected_stderr_contains": [
+      "EDIT BEFORE validate_task_spec"
+    ],
+    "reason": "NotebookEdit writes like Edit; leaving it out of the gated tools would let a notebook edit through before validate_task_spec"
+  }
+]
 ```
 
 Then in `plugin/anti-tangent-guard/evals/run.sh` change `EXPECTED_CASE_COUNT=145` to `EXPECTED_CASE_COUNT=158`.
@@ -601,7 +640,7 @@ git commit -m "feat(guard): refuse an implementer's first edit until validate_ta
 ```
 
 ```json:metadata
-{"files": ["plugin/anti-tangent-guard/hooks/check-task-start", "plugin/anti-tangent-guard/hooks/check_task_start.py", "plugin/anti-tangent-guard/hooks/check_task_start_test.py", "plugin/anti-tangent-guard/hooks/hooks.json", "plugin/anti-tangent-guard/evals/guard-evals.json", "plugin/anti-tangent-guard/evals/run.sh"], "verifyCommand": "bash plugin/anti-tangent-guard/evals/run.sh", "acceptanceCriteria": ["full-clause first user entry without validate_task_spec tool_use exits 2 with EDIT BEFORE validate_task_spec", "with the tool_use exits 0 and writes the per-transcript sentinel, holding the full transcript path, under scratchpad_dir", "a matching sentinel short-circuits (trace pass | sentinel); a same-stem sentinel holding another path does not pass", "lightweight heading, no clause, clause only inside an Agent input, kill switch, missing transcript, unparsable transcript, malformed stdin, tool_name Read all exit 0", "NotebookEdit is gated", "run.sh reports 158 passed"], "modelTier": "standard"}
+{"files": ["plugin/anti-tangent-guard/hooks/check-task-start", "plugin/anti-tangent-guard/hooks/check_task_start.py", "plugin/anti-tangent-guard/hooks/check_task_start_test.py", "plugin/anti-tangent-guard/hooks/hooks.json", "plugin/anti-tangent-guard/evals/guard-evals.json", "plugin/anti-tangent-guard/evals/run.sh"], "verifyCommand": "bash plugin/anti-tangent-guard/evals/run.sh", "acceptanceCriteria": ["reads <transcript_path stem>/subagents/agent-<agent_id>.jsonl, never transcript_path; no agent_id is never gated; a non-identifier agent_id is refused", "full-clause first user entry without validate_task_spec tool_use exits 2 with EDIT BEFORE validate_task_spec", "with the tool_use exits 0 and traces task-start | pass | spec-called", "a parent transcript with the clause does not gate a subagent without it; the main session is not gated", "lightweight heading, no clause, clause only inside an Agent input, kill switch, missing subagent transcript, unparsable transcript, malformed stdin, tool_name Read all exit 0", "NotebookEdit is gated", "no sentinel: the payload carries no scratchpad_dir", "run.sh reports 158 passed"], "modelTier": "standard"}
 ```
 
 ---
@@ -920,40 +959,36 @@ Rename `## The three block conditions` to `## The four block conditions` and app
 
 Update the paragraph after the list ("The first two messages state the same recovery flow…") to say the first two and the fourth.
 
-Add a new section before `## Write-time comment guard (PreToolUse hook)`, filling the one `<Task 1's finding: …>` slot from Task 1's DONE report:
+Add a new section before `## Write-time comment guard (PreToolUse hook)`:
 
 ```markdown
 ## Start gate (PreToolUse hook)
 
-`check-task-start` fires on `Edit`, `Write` and `NotebookEdit`. It reads the
-transcript up to the first user entry — in a dispatched subagent's transcript
-that entry is the dispatch prompt — and gates the session only when that entry
-carries `## Drift-protection protocol (anti-tangent-mcp)` and not
+`check-task-start` fires on `Edit`, `Write` and `NotebookEdit`, and acts only
+inside a dispatched subagent. A hook firing there receives the parent's
+`transcript_path` and `session_id`; what marks the subagent is `agent_id`, and
+its own transcript sits beside the parent's at
+`<transcript_path without .jsonl>/subagents/agent-<agent_id>.jsonl`. A payload
+with no `agent_id` is the main session, which is never gated — so a
+controller editing a CHANGELOG is never touched.
+
+The hook reads the subagent's transcript up to its first user entry — the
+dispatch prompt — and gates the session only when that entry carries
+`## Drift-protection protocol (anti-tangent-mcp)` and not
 `Drift-protection protocol (lightweight)`. In a gated session every write is
 refused (`exit 2`) until an `mcp__anti-tangent__validate_task_spec` tool call
-appears in the transcript. Reads are never gated: read what the change
-touches, call `validate_task_spec`, then edit.
-
-Only a dispatched implementer's session has that first user entry. A
-controller meets the clause in file reads and in `Agent` inputs, never as its
-own first user message, so a controller editing a CHANGELOG is never touched.
-
-The first positive is cached as
-`<scratchpad_dir>/anti-tangent-guard/session-ok/<transcript stem>` when the
-hook payload carries `scratchpad_dir`; it holds the transcript's full path,
-and later writes from that exact path exit 0 without opening the transcript.
-It is per transcript because a dispatched subagent's payload <Task 1's
-finding: carries / does not carry> its parent's `scratchpad_dir`, and one file
-per scratchpad would let the first implementer's pass wave every later one
-through. Without `scratchpad_dir`
-there is no cache, and each write before step 1 re-reads a transcript that is
-still short.
+appears in that transcript. Reads are never gated: read what the change
+touches, call `validate_task_spec`, then edit. There is no cache: the scan
+stops at the first `validate_task_spec` call, which comes before every allowed
+edit, so each check reads only the transcript's opening.
 
 Limits: writes through `Bash` (`cat >`, `sed -i`) bypass this hook, as they
 bypass the comment guard; the close-time no-session rule is the backstop. A
 controller that rewrites the clause heading defeats the fingerprint and the
-hook fails open — the heading is the contract. A transcript that cannot be
-read exits 0. Kill switch: `ANTI_TANGENT_SESSION_GUARD=0`.
+hook fails open — the heading is the contract. The `subagents/` layout is what
+Claude Code writes today, not a documented interface: a subagent transcript
+that is missing or unreadable exits 0, so a layout change disables the gate
+rather than blocking every write. Kill switch: `ANTI_TANGENT_SESSION_GUARD=0`.
 ```
 
 In `## Kill switches` add a bullet and fix the last one:
@@ -967,7 +1002,7 @@ In `## Kill switches` add a bullet and fix the last one:
   and runs the rules that are still enabled.
 ```
 
-Add a `task-start` line to the `## Trace log` section's event list matching the wrapper's events (`pass | spec-called`, `pass | sentinel`, `block | no-spec-call`, `skip | not-gated`, `skip | guard=0`) and `block | no-session` for the close-time hook.
+Add a `task-start` line to the `## Trace log` section's event list matching the wrapper's events (`pass | spec-called`, `block | no-spec-call`, `skip | not-gated`, `skip | guard=0`) and `block | no-session` for the close-time hook.
 
 - [ ] **Step 3: Root README, CLAUDE.md, controller.md**
 
@@ -1031,8 +1066,10 @@ Insert above `## [0.22.0] - 2026-09-15`:
 - `anti-tangent-guard` 0.5.0 gains a session guard under one new kill switch,
   `ANTI_TANGENT_SESSION_GUARD=0`. A `PreToolUse` hook on `Edit`/`Write`/`NotebookEdit`
   (`check-task-start`) refuses a dispatched implementer's first edit until
-  `validate_task_spec` has been called; the session is recognised by its first user message
-  carrying `## Drift-protection protocol (anti-tangent-mcp)` and not the lightweight heading.
+  `validate_task_spec` has been called. The hook acts only inside a subagent, found through the
+  payload's `agent_id`, and gates it when the subagent's first user message — its dispatch
+  prompt — carries `## Drift-protection protocol (anti-tangent-mcp)` and not the lightweight
+  heading.
   The close-time hook gains a fourth block condition: a `validate_completion` that ran with an
   empty `session_id` — a review against a spec with no acceptance criteria — closes a task only
   when the window shows a lightweight dispatch, marked by the heading

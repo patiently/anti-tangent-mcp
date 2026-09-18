@@ -55,7 +55,7 @@ Each fact the design leans on was checked against `main` at v0.22.0 or against l
 | `SubagentStart` input | `agent_type` and `agent_id` only; no dispatch prompt. `hookSpecificOutput.additionalContext` does inject text (ponytail depends on it). |
 | Who calls `validate_task_spec` | The implementing subagent, once, before edits (§4.2 step 1). Controllers never (§5). |
 | What enforces it | `validate_completion` with an unknown `session_id` returns a critical `session_not_found`; an **empty** one is the lightweight path (`handlers.go:1683`), reviewed against a synthesized spec — `Goal = summary`, no ACs (`handlers.go:1758`). The guard's close-time hook looks for `validate_completion` only. `plan_run_report` shows the task as `Incomplete`, at run end. |
-| Implementer transcripts | Each dispatched subagent has its own `subagents/agent-*.jsonl`, and its **first user message is the dispatch prompt**. On the development machine, 16 of 1,206 subagent transcripts open with `## Drift-protection protocol (anti-tangent-mcp)`; all are implementers. |
+| Implementer transcripts | Each dispatched subagent has its own `<parent session>/subagents/agent-<agent_id>.jsonl`, and its **first user message is the dispatch prompt**. A hook firing inside it receives the parent's `transcript_path` and `session_id` plus `agent_id` / `agent_type` (live probe, Claude Code 2.1.276); no `scratchpad_dir`. On the development machine, 16 of 1,206 subagent transcripts open with `## Drift-protection protocol (anti-tangent-mcp)`; all are implementers. |
 | Verdict ladder | `finalize.go:15`: `critical ≥ 1 or major ≥ 2 → fail`; `major ≥ 1 or minor ≥ 3 → warn`, with a `noise_cluster` advisory; else `pass`. One minor finding never moves the verdict. |
 | Prior art in the repo | `stale_comments` is a rolled-up always-minor finding; `plan_comment_rules.tmpl` exempts its findings from quick mode's cap; `THIRD_PARTY_NOTICES.md` and `internal/notices` attribute Spotify's MIT shunt hooks and a test asserts the entry. |
 | Process model | One `anti-tangent-mcp` per `claude` process (`"type": "stdio"`); subagents use the parent's connection. All state is in that process's memory. |
@@ -108,15 +108,22 @@ session rules, or the reverse.
 A new `PreToolUse` hook, `check-task-start`, matched on `Edit|Write|NotebookEdit`. This is the
 rule that fires before implementation starts.
 
-**Fingerprint.** Read the transcript from the top until the first `type: "user"` entry and take
-its text. `full` is true when it contains `## Drift-protection protocol (anti-tangent-mcp)`;
+**Which transcript.** The hook acts only inside a dispatched subagent. A hook firing there
+receives the **parent's** `transcript_path` and `session_id` (live probe, 2026-09-18); what marks
+the subagent is `agent_id` (with `agent_type`), which the main session's payload lacks. The
+subagent's own transcript is `<transcript_path without .jsonl>/subagents/agent-<agent_id>.jsonl`,
+and it opens with the dispatch prompt. No `agent_id` → the main session → exit 0. An `agent_id`
+that is not a plain identifier is refused rather than joined into a path.
+
+**Fingerprint.** Read the subagent's transcript from the top until the first `type: "user"` entry
+and take its text. `full` is true when it contains `## Drift-protection protocol (anti-tangent-mcp)`;
 `lite` when it contains `Drift-protection protocol (lightweight)`. If not `full`, or if `lite`,
 exit 0. Only a dispatched implementer's session has that first message: controllers see the
 clause in file reads and in `Agent` inputs, never as their own first user message, so a
 controller editing a CHANGELOG is never touched.
 
 **Gate.** Otherwise scan the rest of the transcript for an assistant `tool_use` named
-`mcp__anti-tangent__validate_task_spec`. Found: write the sentinel and exit 0. Not found: exit 2
+`mcp__anti-tangent__validate_task_spec`. Found: exit 0. Not found: exit 2
 with, on stderr:
 
 ```
@@ -136,27 +143,22 @@ Reads are not gated — read what the change touches, then call it, then edit.
 
 Reads stay free. "Read fully, then be lazy" is exactly the order wanted.
 
-**Sentinel.** When the hook input carries `scratchpad_dir`, the first positive writes
-`<scratchpad_dir>/anti-tangent-guard/session-ok/<transcript stem>` holding the transcript's full
-path, and later invocations whose `transcript_path` equals that content exit 0 without opening
-the transcript; two transcripts that share a stem never share a pass. Without `scratchpad_dir` there is
-no cache; the transcript before the first edit is short. The sentinel is per transcript, not per
-scratchpad: a dispatched subagent may share its parent's `scratchpad_dir` (the live probe records
-whether it does), and one file per scratchpad would let the first implementer's pass wave every
-later implementer through.
-
-**Cost.** A non-matching session pays reading the transcript head once per write. A matching
-session pays a scan per write only until step 1 happens.
+**No cache.** The payload carries no `scratchpad_dir`, and none is needed: the scan stops at the
+first `validate_task_spec` call, which precedes every allowed edit, so a gated session reads only
+the transcript's opening on each write, and a non-implementer subagent only its first user
+entry. The main session reads nothing.
 
 **Limits, stated in the README.** Writes through `Bash` (`cat >`, `sed -i`) bypass it, exactly
 as they bypass the write-time comment guard; Rule B is the backstop. A controller that rewrites
 the clause heading defeats the fingerprint, and the hook fails open — the heading is the
-contract, and the README says so. A hook that cannot parse the transcript exits 0.
+contract, and the README says so. The `subagents/` layout is what Claude Code writes today
+(2.1.276), not a documented interface: a subagent transcript that is missing or unparsable exits
+0, so a layout change disables the gate instead of blocking every write.
 
-**One fact the first implementation task confirms live:** that a hook firing inside a subagent
-receives the subagent's `transcript_path` and not the parent's. The fixture evals cannot prove
-it; a two-minute dispatch with the trace log open can. If it turns out otherwise, Rule A is
-dropped from the release and Rule B ships alone, with this spec amended.
+**Confirmed live, not by fixtures:** the first implementation task probed a real dispatch. This
+section originally assumed the subagent's own `transcript_path` reached the hook, with the
+contingency of dropping Rule A if not; the probe found the parent's path plus `agent_id`, and
+Rule A was kept on that basis.
 
 ### 1.4 Rule B — the close-time no-session rule
 
@@ -487,9 +489,10 @@ asserts the copyright holder, the URL, "MIT" and both paths, so removing the ent
   gain a `session_id` first: most omit the key, which Rule B reads as empty.
 - Rule A: implementer transcript without the call → block; with the call → pass; lightweight
   heading → pass; a controller transcript (clause only inside an `Agent` input) → pass; a
-  session with no clause anywhere → pass; this transcript's sentinel present → pass without
-  reading the transcript; a same-stem sentinel holding another transcript's path → block;
-  unparsable transcript → pass; malformed stdin → pass; kill switch → pass.
+  subagent with no clause → pass; the main session (no `agent_id`) → pass even when its first
+  message holds the clause; a parent transcript with the clause does not gate a subagent
+  without it; missing subagent transcript → pass; unparsable transcript → pass; malformed
+  stdin → pass; kill switch → pass; `NotebookEdit` → block.
 - The false-positive gate is untouched: neither rule scans comments.
 
 **Replay gate (`-tags=e2e`, `ANTI_TANGENT_REPLAY_DIR`):** two fixtures, both synthetic, so
