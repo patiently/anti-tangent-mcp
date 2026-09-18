@@ -137,9 +137,13 @@ Reads are not gated — read what the change touches, then call it, then edit.
 Reads stay free. "Read fully, then be lazy" is exactly the order wanted.
 
 **Sentinel.** When the hook input carries `scratchpad_dir`, the first positive writes
-`<scratchpad_dir>/anti-tangent-guard/session-ok`, and later invocations exit 0 on its presence
-without opening the transcript. Without `scratchpad_dir` there is no cache; the transcript before
-the first edit is short. The sentinel is per session by construction — the scratchpad is.
+`<scratchpad_dir>/anti-tangent-guard/session-ok/<transcript stem>` holding the transcript's full
+path, and later invocations whose `transcript_path` equals that content exit 0 without opening
+the transcript; two transcripts that share a stem never share a pass. Without `scratchpad_dir` there is
+no cache; the transcript before the first edit is short. The sentinel is per transcript, not per
+scratchpad: a dispatched subagent may share its parent's `scratchpad_dir` (the live probe records
+whether it does), and one file per scratchpad would let the first implementer's pass wave every
+later implementer through.
 
 **Cost.** A non-matching session pays reading the transcript head once per write. A matching
 session pays a scan per write only until step 1 happens.
@@ -165,14 +169,14 @@ Signals, in the two topologies the hook already handles:
 
 | Topology | Empty session | Lightweight marker |
 |---|---|---|
-| Direct call (executing-plans, same session) | `completion_inputs[-1].session_id == ""`; the hook already collects these inputs | the marker text in any user message in the window |
+| Direct call (executing-plans, same session) | `completion_inputs[-1].session_id` missing or `""` — a missing key is what the server reads as empty; the hook already collects these inputs | the marker text in a user message's own text in the window — not inside a `tool_result`, which is file content, not a dispatch decision |
 | Pasted block (subagent-driven, controller closes) | the pasted block's `session_id:` line is blank (`summary.go:42`), or it carries the `mode: lightweight` line from §1.5 | the marker text in the `prompt` input of an `Agent` or `Task` `tool_use` in the window — the dispatch prompt is in the controller's own transcript |
 
 The **marker** is the lightweight clause's heading, `Drift-protection protocol (lightweight)`,
 which `examples/lightweight-dispatch.md` already carries. Absence means full protocol: the full
 clause is the default dispatch, so the default is to block. A controller writing its own
 lightweight wording keeps that one heading line; the example and the guard README say so. No
-protocol part changes.
+protocol part changes beyond the kill-switch sentence in §1.6.
 
 **Precedence** among block conditions: comment violations → `verdict: fail` → **no session
 under full protocol** → neither signal present; otherwise pass. Trace event `block | no-session`. Message:
@@ -204,7 +208,8 @@ fingerprint; Rule B covers the omission there and the README says the order is n
 
 ### 1.5 Server side — a lightweight completion is visible on every host
 
-An empty-session `validate_completion` sets `Envelope.Lightweight bool` (`json:"lightweight,omitempty"`)
+An empty-session `validate_completion` — its `payload_too_large` rejection included, since the flag
+describes the call rather than the review — sets `Envelope.Lightweight bool` (`json:"lightweight,omitempty"`)
 and prints one extra line in `summary_block`, immediately after `verdict:`:
 
 ```
@@ -214,8 +219,8 @@ and prints one extra line in `summary_block`, immediately after `verdict:`:
 Only in lightweight mode; the block is byte-identical otherwise. A controller reading a DONE
 report for a task it dispatched with the full clause sees it with no plugin installed. The
 guard's block regexes are anchored per key, so the extra key does not disturb an older guard;
-a fixture proves guard 0.4.0 still reads `tool:`, `session_id:` and `verdict:` from a block that
-carries it. Non-breaking.
+guard evals prove the close-time hook's `tool:`, `session_id:` and `verdict:` regexes — which Part 1
+leaves as guard 0.4.0 ships them — still read a block that carries it. Non-breaking.
 
 ### 1.6 Plugin packaging
 
@@ -223,6 +228,11 @@ carries it. Non-breaking.
 README changes: "The three block conditions" becomes four; a new "Start gate (PreToolUse)"
 section; the kill-switch table gains `ANTI_TANGENT_SESSION_GUARD`; a "Limits" note under each
 rule as above. `plugin.json`'s description names the third switch.
+
+One protocol sentence changes with it. `controller.md` says that setting the two existing
+switches "disables the hook outright", which Rule B makes false; that sentence names the third
+switch and says all three (+43 bytes, to 15,983 of 16,000), and the bundle is resynced. It is
+the only protocol-part change Part 1 makes.
 
 ## Part 2 — the plan-level check
 
@@ -290,7 +300,8 @@ comment-guard section. Content, in this order:
 - A cross-reference to §3.5: an AC that names an interface is an implementation step in
   disguise.
 
-The plugin bundle is resynced in the same commit. No other protocol part changes.
+The plugin bundle is resynced in the same commit. No other protocol part changes beyond §1.6's
+kill-switch sentence in `controller.md`.
 
 ## Part 3 — the implementer ruleset
 
@@ -470,11 +481,15 @@ asserts the copyright holder, the URL, "MIT" and both paths, so removing the ent
 
 - Rule B, six cells: {direct, pasted} × {full clause + empty session → block, lightweight
   heading + empty session → pass, session present → pass}; plus `mode: lightweight` line with
-  the full clause → block; plus `ANTI_TANGENT_SESSION_GUARD=0` → pass.
+  the full clause → block; plus `ANTI_TANGENT_SESSION_GUARD=0` → pass; plus a block carrying
+  `mode: lightweight` under a lightweight dispatch → pass, and the same with `verdict: fail` →
+  the failed-verdict block (§1.5). The existing fixtures' direct `validate_completion` inputs
+  gain a `session_id` first: most omit the key, which Rule B reads as empty.
 - Rule A: implementer transcript without the call → block; with the call → pass; lightweight
   heading → pass; a controller transcript (clause only inside an `Agent` input) → pass; a
-  session with no clause anywhere → pass; sentinel present → pass without reading the
-  transcript; unparsable transcript → pass; kill switch → pass.
+  session with no clause anywhere → pass; this transcript's sentinel present → pass without
+  reading the transcript; a same-stem sentinel holding another transcript's path → block;
+  unparsable transcript → pass; malformed stdin → pass; kill switch → pass.
 - The false-positive gate is untouched: neither rule scans comments.
 
 **Replay gate (`-tags=e2e`, `ANTI_TANGENT_REPLAY_DIR`):** two fixtures, both synthetic, so
@@ -494,7 +509,7 @@ description contract test from v0.22.0 runs unchanged, since no input changed.
 - Every envelope change is additive and `omitempty`. A consumer that ignores unknown fields
   sees no difference on non-lightweight calls.
 - The `summary_block` grammar gains one optional key in the header region. Guard 0.4.0 parses
-  such a block correctly (fixture-proven, §1.5).
+  such a block correctly (eval-proven against its unchanged regexes, §1.5).
 - Guard 0.5.0 against a v0.22.0 server: Rule B works from the blank `session_id:` line alone;
   Rule A does not depend on the server at all.
 - A controller with a non-canonical lightweight clause gets a false block from Rule B until
