@@ -1073,7 +1073,7 @@ git commit -m "docs(guard): 0.5.0 — three hooks, four block conditions, three 
 
 **Acceptance Criteria:**
 - [ ] The branch is pushed as `origin/version/0.23.0` (`git push origin HEAD:refs/heads/version/0.23.0`) and CI's `changelog` and `hook-evals` jobs are green on it.
-- [ ] A PR from `version/0.23.0` to `main` titled `guard 0.5.0: session guard (start gate + no-session close rule) [skip ci]` is merged by the user; the merge commit message carries `[skip ci]`.
+- [ ] A PR from `version/0.23.0` to `main` titled `guard 0.5.0: session guard (start gate + no-session close rule) [skip ci]` is merged by the user **as a merge commit — not squash, not rebase** (`gh pr merge <PR#> --merge`). The branch is reused for Checkpoint B, so its guard commits must be in `main`'s ancestry; a squash would put them in the second PR again. The merge commit message carries `[skip ci]`, and `git merge-base --is-ancestor <branch tip at merge> origin/main` succeeds.
 - [ ] The user has moved the `claude-sandbox-pinned` pin for `anti-tangent-guard` to 0.5.0 and the local install shows it: `jq -r '.plugins["anti-tangent-guard@claude-sandbox-pinned"][0].version' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json"` → `0.5.0`.
 - [ ] The executing session has been restarted after the pin moved (hooks load at session start), and a disposable probe subagent dispatched from it (Step 3) has its first `Write` refused with `EDIT BEFORE validate_task_spec`, with a matching `task-start | block | no-spec-call` line in `/tmp/claude-hooks/anti-tangent-guard.log` (or the trace path the environment sets). The probe is part of this task, so Task 5 closes before Task 6 is dispatched.
 
@@ -1103,7 +1103,7 @@ EOF
 
 - [ ] **Step 2: Hand to the user**
 
-Tell the user: CI status, the PR link, and the two actions that are theirs — merge with `[skip ci]` in the merge commit, then move the `claude-sandbox-pinned` pin to guard 0.5.0 and restart this session. Resume with `/superpowers-extended-cc:executing-plans docs/superpowers/plans/2026-09-18-lean-by-default.md` (the `.tasks.json` carries the state). Do not proceed to Task 6 in a session whose hooks predate the pin.
+Tell the user: CI status, the PR link, and the two actions that are theirs — merge with **Create a merge commit** (not squash or rebase: this branch is reused for Checkpoint B) and `[skip ci]` in the merge commit message, then move the `claude-sandbox-pinned` pin to guard 0.5.0 and restart this session. Resume with `/superpowers-extended-cc:executing-plans docs/superpowers/plans/2026-09-18-lean-by-default.md` (the `.tasks.json` carries the state). Do not proceed to Task 6 in a session whose hooks predate the pin.
 
 - [ ] **Step 3: Confirm after restart, with a disposable probe**
 
@@ -1111,7 +1111,13 @@ Tell the user: CI status, the PR link, and the two actions that are theirs — m
 jq -r '.plugins["anti-tangent-guard@claude-sandbox-pinned"][0].version' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json"
 ```
 
-Expected: `0.5.0`. Then create the probe's target directory and note its path:
+Expected: `0.5.0`. Confirm the merge kept the branch's history:
+
+```bash
+git fetch origin main && git merge-base --is-ancestor HEAD origin/main && echo "branch tip is in main"
+```
+
+Expected: `branch tip is in main` (run before any Task 6 commit). Then create the probe's target directory and note its path:
 
 ```bash
 PROBE_DIR=$(mktemp -d) && echo "$PROBE_DIR"
@@ -1145,7 +1151,7 @@ grep 'task-start' "${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangen
 shows a `task-start | block | no-spec-call` line. The probe costs no reviewer call — it never reaches `validate_task_spec`. Only after this passes does Task 6 get dispatched.
 
 ```json:metadata
-{"files": [], "verifyCommand": "jq -r '.plugins[\"anti-tangent-guard@claude-sandbox-pinned\"][0].version' \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json\"", "acceptanceCriteria": ["branch pushed as version/0.23.0 with green changelog and hook-evals jobs, shown by gh pr checks", "PR merged to main; the merge commit message carries [skip ci], shown by git log", "installed guard version is 0.5.0", "session restarted; a disposable probe subagent's first Write is refused with EDIT BEFORE validate_task_spec and traces task-start block no-spec-call"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"], "requireEvidenceTokens": [["MERGED"], ["[skip ci]"], ["SUCCESS"], ["0.5.0"], ["EDIT BEFORE validate_task_spec"], ["probe file absent"]]}
+{"files": [], "verifyCommand": "jq -r '.plugins[\"anti-tangent-guard@claude-sandbox-pinned\"][0].version' \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json\"", "acceptanceCriteria": ["branch pushed as version/0.23.0 with green changelog and hook-evals jobs, shown by gh pr checks", "PR merged to main; the merge commit message carries [skip ci], shown by git log", "installed guard version is 0.5.0", "session restarted; a disposable probe subagent's first Write is refused with EDIT BEFORE validate_task_spec and traces task-start block no-spec-call"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"], "requireEvidenceTokens": [["MERGED"], ["[skip ci]"], ["SUCCESS"], ["0.5.0"], ["branch tip is in main"], ["EDIT BEFORE validate_task_spec"], ["probe file absent"]]}
 ```
 
 ---
@@ -2166,6 +2172,7 @@ git commit -m "test(replay): over-built and lean fixtures for the over_building 
 **Acceptance Criteria:**
 - [ ] The `## [0.23.0]` block lists, under `### Added`: `implementation_guidance`; the `over_building` criterion at plan, task-start, mid-task and completion; `authoring.md` §3.10; `lightweight` / `mode: lightweight`; the ponytail attribution; the replay fixtures.
 - [ ] `go build ./... && go test -race ./... && bash plugin/anti-tangent-guard/evals/run.sh && bash scripts/check-protocol-docs.sh` all green locally; CI green on the branch.
+- [ ] `git log --oneline origin/main..HEAD` lists only Tasks 6–13's commits — none of the guard commits Checkpoint A already merged — before the PR is opened.
 - [ ] `VERSION` still reads `0.22.0` on the branch before the merge (`cat VERSION`); the release workflow's own commit bumps it (Global Constraints).
 - [ ] The PR from `version/0.23.0` to `main` is merged by the user with `[minor]` in the merge commit; the release workflow publishes `v0.23.0`, and `main`'s `VERSION` then reads `0.23.0`.
 
@@ -2212,6 +2219,7 @@ git push origin HEAD:refs/heads/version/0.23.0
 
 ```bash
 test "$(cat VERSION)" = 0.22.0 && echo "VERSION 0.22.0 before merge"
+git fetch origin main && git log --oneline origin/main..HEAD
 gh pr create --base main --head version/0.23.0 \
   --title "v0.23.0: lean by default — over_building at plan, task and review level [minor]" \
   --body-file - <<'EOF'
