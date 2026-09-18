@@ -52,6 +52,21 @@ class ClassifyTest(unittest.TestCase):
         # The clause itself names the tool; only a tool_use entry is a call.
         self.assertEqual(classify([user(CLAUSE + "\nmcp__anti-tangent__validate_task_spec")]), "block")
 
+    def test_non_dict_message_without_call_blocks(self):
+        # A truthy non-dict "message" (e.g. a bare string) must not raise;
+        # it is treated as carrying no tool_use, so the gated session blocks.
+        bad = json.dumps({"type": "assistant", "message": "oops"})
+        self.assertEqual(classify([user(CLAUSE), bad]), "block")
+
+    def test_non_dict_message_then_real_call_passes(self):
+        bad = json.dumps({"type": "assistant", "message": "oops"})
+        self.assertEqual(classify([user(CLAUSE), bad, tool_use(SPEC_TOOL)]), "pass")
+
+    def test_first_user_entry_with_int_content_skips(self):
+        # content that is neither a string nor a list must read as "", not raise.
+        entry = json.dumps({"type": "user", "message": {"content": 5}})
+        self.assertEqual(classify([entry]), "skip")
+
 
 class SubagentTranscriptTest(unittest.TestCase):
     def test_subagent_transcript_sits_under_the_parent_stem(self):
@@ -63,6 +78,12 @@ class SubagentTranscriptTest(unittest.TestCase):
 
     def test_agent_id_that_is_not_an_identifier_is_refused(self):
         self.assertEqual(subagent_transcript({"transcript_path": "/p/s1.jsonl", "agent_id": "../x"}), "")
+
+    def test_agent_id_that_is_not_a_string_is_refused(self):
+        self.assertEqual(subagent_transcript({"transcript_path": "/p/s1.jsonl", "agent_id": 5}), "")
+
+    def test_transcript_path_that_is_not_a_string_is_refused(self):
+        self.assertEqual(subagent_transcript({"transcript_path": 5, "agent_id": "a1"}), "")
 
 
 if __name__ == "__main__":

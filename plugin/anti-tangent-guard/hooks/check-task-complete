@@ -212,6 +212,7 @@ except Exception:
     print(json.dumps({"error": True})); sys.exit(0)
 
 last_inprogress = -1
+first_inprogress = -1
 called_idx, texts, lite_idx = [], [], []   # (idx) of direct calls; (idx, text) of tool_result chunks; (idx) of lightweight markers
 call_ids = {}                # tool_use id -> idx, for validate_completion calls only
 completion_inputs = []       # (idx, input) for every validate_completion call, in order
@@ -243,6 +244,8 @@ for idx, line in enumerate(lines):
                 elif name == "TaskUpdate":
                     tid = str(inp.get("taskId", ""))
                     if tid == task_id and inp.get("status") == "in_progress":
+                        if first_inprogress < 0:
+                            first_inprogress = idx
                         last_inprogress = idx
                 elif name in ("Agent", "Task"):
                     if LITE_HEADING in str(inp.get("prompt", "")):
@@ -357,7 +360,15 @@ if last_direct and (last_block is None or last_direct[0] > last_block[0]):
 elif last_block:
     sm = SESSION_RE.search(last_block[1])
     no_session = sm is None or sm.group(1) == "" or bool(MODE_LITE_RE.search(last_block[1]))
-lite_marker = any(i >= scan_from for i in lite_idx)
+# The lightweight marker window starts at the first in_progress recorded
+# for this task, not the last (scan_from). A controller can dispatch a task
+# lightweight, reopen it later (a second in_progress), and resume the same
+# implementer -- the marker from the original dispatch sits before that
+# second in_progress, so anchoring on scan_from would lose it and block the
+# re-close under Rule B. Every other signal above and below still uses
+# scan_from.
+marker_from = first_inprogress if first_inprogress >= 0 else 0
+lite_marker = any(i >= marker_from for i in lite_idx)
 
 # Comment-hygiene scan over the diff evidence of the LAST validate_completion
 # call in the task window -- defence in depth for a comment that carries

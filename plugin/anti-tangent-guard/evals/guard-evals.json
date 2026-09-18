@@ -2825,6 +2825,26 @@
         "TASK CLOSED ON A FAILED anti-tangent VERDICT"
       ],
       "reason": "a direct call whose realistic JSON result carries both an empty session_id and verdict: fail must block on the failed verdict, not the no-session rule; checking Rule B before the verdict-fail check would report the wrong reason and mislead the fix-it steps in stderr"
+    },
+    {
+      "id": 173,
+      "name": "close-no-session-lite-marker-survives-reopen",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (lightweight)\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"\"}}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a controller that dispatched this task lightweight, then reopened it (a second in_progress) and resumed the same implementer, must keep passing on the empty-session close; computing the lightweight marker from the task LAST in_progress instead of its FIRST would put the marker before scan_from and wrongly block this re-close under Rule B"
     }
   ]
 }

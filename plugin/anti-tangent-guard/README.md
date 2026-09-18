@@ -75,7 +75,10 @@ gate becomes visible from the controller's own transcript). It blocks
    text or in the `prompt` of an `Agent` tool call. Inside a `tool_result` it
    is file content, not a dispatch decision, and does not count. Absence means
    full protocol: the default dispatch is the full clause, so the default is
-   to block. Kill switch: `ANTI_TANGENT_SESSION_GUARD=0`.
+   to block. Unlike the rest of this window (see "Window scoping" below), the
+   marker itself is looked for from the task's *first* `in_progress`, not its
+   last, so a task dispatched lightweight and later reopened keeps its
+   original dispatch marker. Kill switch: `ANTI_TANGENT_SESSION_GUARD=0`.
 
    Two limits. Under executing-plans there is no dispatch prompt, so a
    lightweight task there needs the heading in the user's instruction — or
