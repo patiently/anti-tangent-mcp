@@ -11,30 +11,31 @@ output formats, none of which changes what gets built.
 ## Summary
 
 Ponytail makes an agent build the leanest thing that works: reuse before stdlib, stdlib before
-a dependency, one line before fifty, no interface with one implementation. This design puts
-that behaviour where anti-tangent already has leverage, at three moments, and closes the hole
-that would otherwise let the first two be skipped.
+a dependency, one line before fifty, no interface with one implementation. This design first closes
+the hole that would let the guidance be skipped, then puts that behaviour where anti-tangent
+already has leverage, at three moments.
 
-1. **Plan level.** `validate_plan` flags a plan that mandates over-building — an interface for
+1. **The session guard — built first.** Everything below rides on `validate_task_spec` being
+   called before the first edit, and nothing enforces that today: an empty `session_id` on
+   `validate_completion` is accepted as lightweight mode, and the close-time guard never looks
+   for step 1. A `validate_completion` without a session is reviewed against a synthesized spec
+   with **no acceptance criteria**, so a skipped step 1 hollows out step 3 as well. The guard
+   plugin gains a write-time start gate and a close-time no-session rule under one new kill
+   switch, and the server makes a lightweight completion visible on every host. It lands first
+   so that the rest of this design is implemented under it. (Part 1)
+2. **Plan level.** `validate_plan` flags a plan that mandates over-building — an interface for
    one implementation, a dependency for what the stdlib does, scaffolding for a phase the plan
    does not deliver — before any implementer builds it. The plan is where most over-building
    is decided; an implementer's lean ruleset cannot undo an AC that says "create a
    `StorageBackend` interface". `authoring.md` tells plan authors what is flagged and how one
-   line of `Context:` pre-empts it. (Part 1)
-2. **Implementer level.** `validate_task_spec` returns a ~2 KB ruleset, adapted from ponytail's,
+   line of `Context:` pre-empts it. (Part 2)
+3. **Implementer level.** `validate_task_spec` returns a ~2 KB ruleset, adapted from ponytail's,
    in a new envelope field. It reaches exactly the audience that calls that tool — implementers
    — on every MCP host, and it is one text the reviewer is also handed, so the two cannot
-   drift. (Part 2)
-3. **Review level.** `check_progress` and `validate_completion` check the diff against that same
+   drift. (Part 3)
+4. **Review level.** `check_progress` and `validate_completion` check the diff against that same
    ruleset and report departures as one rolled-up `quality` / `over_building` finding, always
-   `minor`. (Part 3)
-4. **The session guard.** Delivery of (2) rides on `validate_task_spec` being called before the
-   first edit, and nothing enforces that today: an empty `session_id` on `validate_completion`
-   is accepted as lightweight mode, and the close-time guard never looks for step 1. A
-   `validate_completion` without a session is reviewed against a synthesized spec with **no
-   acceptance criteria**, so a skipped step 1 hollows out step 3 as well. The guard plugin gains
-   a write-time start gate and a close-time no-session rule under one new kill switch, and the
-   server makes a lightweight completion visible on every host. (Part 4)
+   `minor`. (Part 4)
 
 Why not bundle ponytail, or a plugin like it: a `SubagentStart` hook injects text at the top of
 a subagent's context — the strongest position there is — but it only sees `agent_type`, and
@@ -74,214 +75,9 @@ Each fact the design leans on was checked against `main` at v0.22.0 or against l
 - Any new verdict category or finding schema field, and no renumbering of protocol sections
   (§3.10 is appended; nothing existing moves).
 
-## Part 1 — the plan-level check
+## Part 1 — the session guard
 
-### 1.1 `plan_lean_rules.tmpl`
-
-A new template, `{{define "plan_lean_rules"}}`, included by `plan.tmpl` and by `pre.tmpl`. It
-takes a scope word, so "anywhere in the plan" reads "anywhere in the task spec" when one task is
-all the reviewer has. It climbs ponytail's ladder as six tags — the vocabulary Part 3 uses on code — and says what plan
-text can and cannot settle. The plan is a closed world: "nothing else in this plan uses it" is
-checkable in a way codebase claims are not.
-
-| Tag | Flagged when a task… | Evidence the reviewer must cite |
-|---|---|---|
-| `reuse` | writes a helper an **attached file** (`context_paths`) or **Project knowledge** already provides | the attached path and symbol. Never from the black box: silence there is not approval |
-| `stdlib` | adds a dependency, or hand-writes a utility, for what the language's standard library covers | language from paths and fences; general knowledge, not a codebase claim. "An installed dependency covers it" only when a manifest (`go.mod`, `package.json`, …) is attached |
-| `native` | builds in application code what the platform provides: uniqueness in a service instead of a DB constraint, a date-picker library over `<input type="date">`, JS over CSS | the step or AC text |
-| `yagni` | mandates an interface or abstract type with one implementation, a factory or registry for one product, a config value or flag no task varies, a layer with one caller — **across the whole plan** | the introducing task, and the absence of a second consumer anywhere in the plan |
-| `delete` | scaffolds for a phase this plan does not deliver: placeholder modules, "extension points", empty hooks, stubs for later | the step text. A whole task outside the plan's goal is scope, not this |
-| `shrink` | fenced code — transcribed verbatim, as the comment-hygiene rule already states — does in many lines what a shorter form does in few | the fence. Test fences are exempt from `shrink` only: arrange/act/assert is verbose by nature |
-
-**Never flagged:** validation at trust boundaries, error handling that prevents data loss,
-security measures, accessibility basics, tests an AC calls for, normative test bodies, and
-anything the plan's Goal explicitly asks for.
-
-**`Context:` is the escape hatch.** A structure the author justifies there — "Task 9 adds the S3
-backend", "chosen for the TZ edge cases stdlib mishandles", a decision note quoted from Project
-knowledge — draws no finding. `Context:` is already authoritative in `pre.tmpl` and `post.tmpl`,
-so one line written once propagates through all three checks. That is the answer to the
-triple-flag hazard: a deliberate interface flagged by `validate_plan`, again by
-`validate_task_spec`, again on the built code. A controller ruling waives a finding at plan
-level only; `Context:` is what reaches the task.
-
-### 1.2 Emission
-
-At most **one** `over_building` finding per task, in that task's findings: `category: quality`,
-`criterion: over_building`, `severity: minor`. `evidence` lists each instance on its own line as
-`<tag>: <what>. <replacement>.` — ponytail-review's line format. `suggestion` is the rewritten
-AC or step, or the `Context:` line to add when the structure is deliberate. A cross-task pattern
-(three tasks each writing their own config loader) is one plan-level finding instead.
-
-The finding is exempt from quick mode's minor cap, with the clause `plan_comment_rules.tmpl`
-already uses: minor because that is the severity it is worth, not because it is discretionary.
-Without the exemption quick mode drops the check entirely, since every finding it makes is
-minor.
-
-### 1.3 Where it runs
-
-- `plan.tmpl` — every `validate_plan` round, per task and plan-wide.
-- `pre.tmpl` — `validate_task_spec` runs the same task-scoped check on the one spec it is given,
-  so a task dispatched from an unvalidated plan still gets it. At task start it informs rather
-  than redirects: the implementer builds every AC. But it seeds the session's pre-task findings,
-  so the completion review's `same_as` can link the built structure back to the spec that
-  mandated it.
-
-### 1.4 `authoring.md` §3.10 "Lean by default"
-
-About 1.5 KB, well inside the part's headroom, placed after §3.9 and before the write-time
-comment-guard section. Content, in this order:
-
-- The six tags, one line each, as "what `validate_plan` flags as `over_building`".
-- Put the justification in `Context:`, not in the dispatch conversation: the same check runs at
-  task start and at completion, and only `Context:` reaches them.
-- Attach the files a task might duplicate via `context_paths`. A helper the reviewer can see is
-  a `reuse` finding; one it cannot see is silence, not approval.
-- A cross-reference to §3.5: an AC that names an interface is an implementation step in
-  disguise.
-
-The plugin bundle is resynced in the same commit. No other protocol part changes.
-
-## Part 2 — the implementer ruleset
-
-### 2.1 `lean.tmpl`
-
-The text `validate_task_spec` returns, and the text Part 3 hands the reviewer as the definition
-of the check. Written once, for both readers. Rendered by a new `prompts.LeanGuidance()`.
-
-```markdown
-## Build guidance (apply while implementing this task)
-
-Build every acceptance criterion in its leanest working form. Lean means
-efficient, not careless: read the task and the code it touches first, trace
-the real flow end to end, then climb the ladder and stop at the first rung
-that holds.
-
-1. Already in this codebase? A helper, util, type or pattern that already
-   lives here → reuse it. Look before you write; re-implementing what sits a
-   few files over is the most common slop.
-2. Stdlib does it? Use it.
-3. Native platform feature covers it? `<input type="date">` over a picker
-   lib, CSS over JS, a DB constraint over app code.
-4. An already-installed dependency solves it? Use it. Never add a new one
-   for what a few lines can do.
-5. Can it be one line? One line.
-6. Only then: the minimum code that works.
-
-Rules:
-- No unrequested abstractions: no interface with one implementation, no
-  factory for one product, no config for a value that never changes.
-- No boilerplate, no scaffolding "for later"; later can scaffold for itself.
-- Deletion over addition. Boring over clever — clever is what someone
-  decodes at 3am.
-- Fewest files, shortest working diff — once you understand the problem.
-  The smallest change in the wrong place is not lean, it is a second bug.
-- Bug fix = root cause, not symptom. Grep every caller before you edit; one
-  guard in the shared function is a smaller diff than a guard in every caller.
-- Two stdlib options, same size? Take the one that is correct on edge cases.
-- A deliberate simplification with a known ceiling (global lock, O(n²) scan,
-  naive heuristic) gets a comment naming the ceiling and the upgrade path.
-
-Scope is set by the acceptance criteria, not by this guidance: never skip,
-narrow or defer an AC to be lean. Speculative work beyond the ACs is what
-to skip. If an AC itself mandates more structure than its goal needs, build
-it as written — scope is the controller's call. The completion review will
-still name it, and your summary_block carries that to the controller.
-Anything the task spec's Context: justifies is deliberate; build it.
-
-Never simplify away: input validation at trust boundaries, error handling
-that prevents data loss, security measures, accessibility basics, the tests
-the task calls for, or anything explicitly requested.
-
-The reviewer checks your changes against this ruleset at check_progress and
-validate_completion and reports departures as quality / over_building, minor.
-```
-
-### 2.2 Provenance
-
-| Kept verbatim or near it | Narrowed or changed | Dropped |
-|---|---|---|
-| Ladder rungs 2–7; the root-cause rule; the six Rules; "read fully, then be lazy"; "never simplify away" | **Rung 1** ("does this need to exist?") applies only beyond the ACs; an AC is never skipped. **"Ship the lazy version and question it"** becomes: build the AC as written; the completion finding and `summary_block` carry the objection to the controller, and `same_as` links it to the pre-task finding — no new protocol. **The `ponytail:` comment marker** becomes an unprefixed comment: a third-party brand in consumer code is not ours to mandate, and the debt ledger is a non-goal. | Persistence and mode switching; intensity levels; "code first, three lines" (reports follow the protocol); "one runnable check, no frameworks" (ACs and TDD own tests); the hardware-calibration paragraph (domain-specific — a hardware task says it in `Context:`); Caveman pairing |
-
-### 2.3 Envelope field
-
-`Envelope.ImplementationGuidance string` with `json:"implementation_guidance,omitempty"`. Set on
-every `validate_task_spec` response that reached the reviewer, including re-validation rounds:
-each mints a new session, and 2 KB per round is not worth a special case. Empty on
-`check_progress` and `validate_completion` (same struct) and on the error envelopes
-(`payload_too_large`, provider failure), where the caller is about to retry anyway. Not part of
-`summary_block` — the block is what gets pasted into DONE reports, and the guidance would be
-noise there.
-
-Lightweight-mode tasks skip `validate_task_spec` and so get no guidance. They are mechanical by
-definition, and `validate_completion` still runs Part 3's check on their diff.
-
-### 2.4 Delivery
-
-Field only; no protocol pointer. The heading is the instruction, `implementer.md` has 46 bytes,
-and the Part 3 check is the backstop for an implementer that skims it or loses it over a long
-task. `next_action` is untouched: it is the reviewer's single highest-leverage item, and
-diluting it costs more than a pointer buys. The one real weakness of a tool-result position —
-that it is never seen if the tool is never called — is what Part 4 removes.
-
-## Part 3 — the reviewer check
-
-### 3.1 `post.tmpl`
-
-A new `### Over-building` section after `### Stale comments`, which includes `lean.tmpl` framed
-as "the implementer was handed this ruleset at task start". Evidence rules mirror comment
-hygiene's, because the reasoning is identical — only what this change *added* can be judged:
-
-- **Diff present:** judge the `+` lines. `path:line` comes from hunk headers.
-- **`final_files` only:** emit no over-building finding. A new interface cannot be told from
-  one that was already there, and the summary is not evidence.
-- **`reuse`** only when the evidence itself shows the existing thing: the diff adds a helper a
-  submitted file already has, or the task spec's `Context:` or `pinned_by` names it. The
-  reviewer never sees the rest of the codebase; absence is silence, not approval.
-- **`stdlib` / `native`:** language from the paths; general knowledge, not a codebase claim.
-- **Test code** is exempt from `shrink`; the other tags apply — a mocking dependency for what a
-  stub does is still `native`.
-
-Never flagged: the Part 1 list, plus anything `Context:` justifies. `Context:` is already the
-disambiguator in `post.tmpl`; no new rule is needed.
-
-**Structure an AC mandated.** The implementer built it as written, so it *is* flagged — but
-`evidence` says the AC mandated it, `suggestion` is addressed to the plan author ("drop the
-interface from the AC, or justify it in `Context:`"), and `same_as` points at the pre-task
-`over_building` finding. The implementer is not expected to act; this is how the objection
-reaches the controller through `summary_block` without any new protocol.
-
-### 3.2 `mid.tmpl`
-
-The same section with the structural tags only — `reuse`, `stdlib`, `native`, `yagni`,
-`delete` — and not `shrink`. Mid-task is when an unnecessary abstraction is cheapest to remove,
-before tests and callers accrete on it, which is why it belongs there despite "style is noise
-mid-task"; `shrink` *is* style, so it waits for completion. `check_progress` stays optional;
-nothing changes about when implementers call it.
-
-### 3.3 Emission
-
-**One finding per call**, like `stale_comments`: `category: quality`, `criterion:
-over_building`, `severity: minor`. `evidence` lists every instance as `path:line: <tag>: <what>.
-<replacement>.` and ends with ponytail-review's estimate, `net: -N lines`. `suggestion` gives the
-replacement code or the removal.
-
-Rolled-up matters because of the verdict ladder: one finding can never tip the verdict by
-itself, and a diff with four over-built spots is not labelled a noise cluster. An implementer
-who agrees with three instances and disputes one answers the one finding via
-`finding_responses` and fixes the rest. At completion, `same_as` is the pre-task
-`over_building` finding when the structure it named got built, else the prior finding it
-repeats, else null. `check_progress` keeps setting `same_as` to null, as it does for every
-finding today.
-
-### 3.4 Stats
-
-`over_building` joins `countedCriteria` in `internal/stats/event.go`. `criterion` is free text
-on the wire; the sentinel is what makes it countable in the opt-in ledger.
-
-## Part 4 — the session guard
-
-### 4.1 The hole
+### 1.1 The hole
 
 Under the full clause, `validate_task_spec` is REQUIRED before any edit, and four layers each
 fail to enforce it:
@@ -299,7 +95,7 @@ implementer that skips step 1 and then calls completion with an empty id. That c
 reviewed against a synthesized spec with no ACs — the build gets a pass-shaped review, and the
 trimming happens afterwards by hand.
 
-### 4.2 One concern, one switch
+### 1.2 One concern, one switch
 
 `ANTI_TANGENT_SESSION_GUARD=0` turns off both rules below and nothing else. The concern: *a
 full-protocol task has a task session before its first edit and at its close.* It is scoped by
@@ -307,7 +103,7 @@ concern, not by hook, like the two existing switches; the close-time rule is del
 under `ANTI_TANGENT_COMPLETION_GUARD`, so an operator can keep the completion gate and drop the
 session rules, or the reverse.
 
-### 4.3 Rule A — the write-time start gate
+### 1.3 Rule A — the write-time start gate
 
 A new `PreToolUse` hook, `check-task-start`, matched on `Edit|Write|NotebookEdit`. This is the
 rule that fires before implementation starts.
@@ -358,7 +154,7 @@ receives the subagent's `transcript_path` and not the parent's. The fixture eval
 it; a two-minute dispatch with the trace log open can. If it turns out otherwise, Rule A is
 dropped from the release and Rule B ships alone, with this spec amended.
 
-### 4.4 Rule B — the close-time no-session rule
+### 1.4 Rule B — the close-time no-session rule
 
 `check-task-complete` gains a fourth block condition:
 
@@ -370,7 +166,7 @@ Signals, in the two topologies the hook already handles:
 | Topology | Empty session | Lightweight marker |
 |---|---|---|
 | Direct call (executing-plans, same session) | `completion_inputs[-1].session_id == ""`; the hook already collects these inputs | the marker text in any user message in the window |
-| Pasted block (subagent-driven, controller closes) | the pasted block's `session_id:` line is blank (`summary.go:42`), or it carries the `mode: lightweight` line from §4.5 | the marker text in the `prompt` input of an `Agent` or `Task` `tool_use` in the window — the dispatch prompt is in the controller's own transcript |
+| Pasted block (subagent-driven, controller closes) | the pasted block's `session_id:` line is blank (`summary.go:42`), or it carries the `mode: lightweight` line from §1.5 | the marker text in the `prompt` input of an `Agent` or `Task` `tool_use` in the window — the dispatch prompt is in the controller's own transcript |
 
 The **marker** is the lightweight clause's heading, `Drift-protection protocol (lightweight)`,
 which `examples/lightweight-dispatch.md` already carries. Absence means full protocol: the full
@@ -406,7 +202,7 @@ With Rule A in place, a *late* `validate_task_spec` — called after the edits t
 exists. It remains possible under executing-plans, where there is no dispatch prompt to
 fingerprint; Rule B covers the omission there and the README says the order is not checked.
 
-### 4.5 Server side — a lightweight completion is visible on every host
+### 1.5 Server side — a lightweight completion is visible on every host
 
 An empty-session `validate_completion` sets `Envelope.Lightweight bool` (`json:"lightweight,omitempty"`)
 and prints one extra line in `summary_block`, immediately after `verdict:`:
@@ -421,12 +217,217 @@ guard's block regexes are anchored per key, so the extra key does not disturb an
 a fixture proves guard 0.4.0 still reads `tool:`, `session_id:` and `verdict:` from a block that
 carries it. Non-breaking.
 
-### 4.6 Plugin packaging
+### 1.6 Plugin packaging
 
 `anti-tangent-guard` 0.4.0 → 0.5.0: a new hook script, a new `hooks.json` entry, a new env var.
 README changes: "The three block conditions" becomes four; a new "Start gate (PreToolUse)"
 section; the kill-switch table gains `ANTI_TANGENT_SESSION_GUARD`; a "Limits" note under each
 rule as above. `plugin.json`'s description names the third switch.
+
+## Part 2 — the plan-level check
+
+### 2.1 `plan_lean_rules.tmpl`
+
+A new template, `{{define "plan_lean_rules"}}`, included by `plan.tmpl` and by `pre.tmpl`. It
+takes a scope word, so "anywhere in the plan" reads "anywhere in the task spec" when one task is
+all the reviewer has. It climbs ponytail's ladder as six tags — the vocabulary Part 4 uses on code — and says what plan
+text can and cannot settle. The plan is a closed world: "nothing else in this plan uses it" is
+checkable in a way codebase claims are not.
+
+| Tag | Flagged when a task… | Evidence the reviewer must cite |
+|---|---|---|
+| `reuse` | writes a helper an **attached file** (`context_paths`) or **Project knowledge** already provides | the attached path and symbol. Never from the black box: silence there is not approval |
+| `stdlib` | adds a dependency, or hand-writes a utility, for what the language's standard library covers | language from paths and fences; general knowledge, not a codebase claim. "An installed dependency covers it" only when a manifest (`go.mod`, `package.json`, …) is attached |
+| `native` | builds in application code what the platform provides: uniqueness in a service instead of a DB constraint, a date-picker library over `<input type="date">`, JS over CSS | the step or AC text |
+| `yagni` | mandates an interface or abstract type with one implementation, a factory or registry for one product, a config value or flag no task varies, a layer with one caller — **across the whole plan** | the introducing task, and the absence of a second consumer anywhere in the plan |
+| `delete` | scaffolds for a phase this plan does not deliver: placeholder modules, "extension points", empty hooks, stubs for later | the step text. A whole task outside the plan's goal is scope, not this |
+| `shrink` | fenced code — transcribed verbatim, as the comment-hygiene rule already states — does in many lines what a shorter form does in few | the fence. Test fences are exempt from `shrink` only: arrange/act/assert is verbose by nature |
+
+**Never flagged:** validation at trust boundaries, error handling that prevents data loss,
+security measures, accessibility basics, tests an AC calls for, normative test bodies, and
+anything the plan's Goal explicitly asks for.
+
+**`Context:` is the escape hatch.** A structure the author justifies there — "Task 9 adds the S3
+backend", "chosen for the TZ edge cases stdlib mishandles", a decision note quoted from Project
+knowledge — draws no finding. `Context:` is already authoritative in `pre.tmpl` and `post.tmpl`,
+so one line written once propagates through all three checks. That is the answer to the
+triple-flag hazard: a deliberate interface flagged by `validate_plan`, again by
+`validate_task_spec`, again on the built code. A controller ruling waives a finding at plan
+level only; `Context:` is what reaches the task.
+
+### 2.2 Emission
+
+At most **one** `over_building` finding per task, in that task's findings: `category: quality`,
+`criterion: over_building`, `severity: minor`. `evidence` lists each instance on its own line as
+`<tag>: <what>. <replacement>.` — ponytail-review's line format. `suggestion` is the rewritten
+AC or step, or the `Context:` line to add when the structure is deliberate. A cross-task pattern
+(three tasks each writing their own config loader) is one plan-level finding instead.
+
+The finding is exempt from quick mode's minor cap, with the clause `plan_comment_rules.tmpl`
+already uses: minor because that is the severity it is worth, not because it is discretionary.
+Without the exemption quick mode drops the check entirely, since every finding it makes is
+minor.
+
+### 2.3 Where it runs
+
+- `plan.tmpl` — every `validate_plan` round, per task and plan-wide.
+- `pre.tmpl` — `validate_task_spec` runs the same task-scoped check on the one spec it is given,
+  so a task dispatched from an unvalidated plan still gets it. At task start it informs rather
+  than redirects: the implementer builds every AC. But it seeds the session's pre-task findings,
+  so the completion review's `same_as` can link the built structure back to the spec that
+  mandated it.
+
+### 2.4 `authoring.md` §3.10 "Lean by default"
+
+About 1.5 KB, well inside the part's headroom, placed after §3.9 and before the write-time
+comment-guard section. Content, in this order:
+
+- The six tags, one line each, as "what `validate_plan` flags as `over_building`".
+- Put the justification in `Context:`, not in the dispatch conversation: the same check runs at
+  task start and at completion, and only `Context:` reaches them.
+- Attach the files a task might duplicate via `context_paths`. A helper the reviewer can see is
+  a `reuse` finding; one it cannot see is silence, not approval.
+- A cross-reference to §3.5: an AC that names an interface is an implementation step in
+  disguise.
+
+The plugin bundle is resynced in the same commit. No other protocol part changes.
+
+## Part 3 — the implementer ruleset
+
+### 3.1 `lean.tmpl`
+
+The text `validate_task_spec` returns, and the text Part 4 hands the reviewer as the definition
+of the check. Written once, for both readers. Rendered by a new `prompts.LeanGuidance()`.
+
+```markdown
+## Build guidance (apply while implementing this task)
+
+Build every acceptance criterion in its leanest working form. Lean means
+efficient, not careless: read the task and the code it touches first, trace
+the real flow end to end, then climb the ladder and stop at the first rung
+that holds.
+
+1. Already in this codebase? A helper, util, type or pattern that already
+   lives here → reuse it. Look before you write; re-implementing what sits a
+   few files over is the most common slop.
+2. Stdlib does it? Use it.
+3. Native platform feature covers it? `<input type="date">` over a picker
+   lib, CSS over JS, a DB constraint over app code.
+4. An already-installed dependency solves it? Use it. Never add a new one
+   for what a few lines can do.
+5. Can it be one line? One line.
+6. Only then: the minimum code that works.
+
+Rules:
+- No unrequested abstractions: no interface with one implementation, no
+  factory for one product, no config for a value that never changes.
+- No boilerplate, no scaffolding "for later"; later can scaffold for itself.
+- Deletion over addition. Boring over clever — clever is what someone
+  decodes at 3am.
+- Fewest files, shortest working diff — once you understand the problem.
+  The smallest change in the wrong place is not lean, it is a second bug.
+- Bug fix = root cause, not symptom. Grep every caller before you edit; one
+  guard in the shared function is a smaller diff than a guard in every caller.
+- Two stdlib options, same size? Take the one that is correct on edge cases.
+- A deliberate simplification with a known ceiling (global lock, O(n²) scan,
+  naive heuristic) gets a comment naming the ceiling and the upgrade path.
+
+Scope is set by the acceptance criteria, not by this guidance: never skip,
+narrow or defer an AC to be lean. Speculative work beyond the ACs is what
+to skip. If an AC itself mandates more structure than its goal needs, build
+it as written — scope is the controller's call. The completion review will
+still name it, and your summary_block carries that to the controller.
+Anything the task spec's Context: justifies is deliberate; build it.
+
+Never simplify away: input validation at trust boundaries, error handling
+that prevents data loss, security measures, accessibility basics, the tests
+the task calls for, or anything explicitly requested.
+
+The reviewer checks your changes against this ruleset at check_progress and
+validate_completion and reports departures as quality / over_building, minor.
+```
+
+### 3.2 Provenance
+
+| Kept verbatim or near it | Narrowed or changed | Dropped |
+|---|---|---|
+| Ladder rungs 2–7; the root-cause rule; the six Rules; "read fully, then be lazy"; "never simplify away" | **Rung 1** ("does this need to exist?") applies only beyond the ACs; an AC is never skipped. **"Ship the lazy version and question it"** becomes: build the AC as written; the completion finding and `summary_block` carry the objection to the controller, and `same_as` links it to the pre-task finding — no new protocol. **The `ponytail:` comment marker** becomes an unprefixed comment: a third-party brand in consumer code is not ours to mandate, and the debt ledger is a non-goal. | Persistence and mode switching; intensity levels; "code first, three lines" (reports follow the protocol); "one runnable check, no frameworks" (ACs and TDD own tests); the hardware-calibration paragraph (domain-specific — a hardware task says it in `Context:`); Caveman pairing |
+
+### 3.3 Envelope field
+
+`Envelope.ImplementationGuidance string` with `json:"implementation_guidance,omitempty"`. Set on
+every `validate_task_spec` response that reached the reviewer, including re-validation rounds:
+each mints a new session, and 2 KB per round is not worth a special case. Empty on
+`check_progress` and `validate_completion` (same struct) and on the error envelopes
+(`payload_too_large`, provider failure), where the caller is about to retry anyway. Not part of
+`summary_block` — the block is what gets pasted into DONE reports, and the guidance would be
+noise there.
+
+Lightweight-mode tasks skip `validate_task_spec` and so get no guidance. They are mechanical by
+definition, and `validate_completion` still runs Part 4's check on their diff.
+
+### 3.4 Delivery
+
+Field only; no protocol pointer. The heading is the instruction, `implementer.md` has 46 bytes,
+and the Part 4 check is the backstop for an implementer that skims it or loses it over a long
+task. `next_action` is untouched: it is the reviewer's single highest-leverage item, and
+diluting it costs more than a pointer buys. The one real weakness of a tool-result position —
+that it is never seen if the tool is never called — is what Part 1 removes.
+
+## Part 4 — the reviewer check
+
+### 4.1 `post.tmpl`
+
+A new `### Over-building` section after `### Stale comments`, which includes `lean.tmpl` framed
+as "the implementer was handed this ruleset at task start". Evidence rules mirror comment
+hygiene's, because the reasoning is identical — only what this change *added* can be judged:
+
+- **Diff present:** judge the `+` lines. `path:line` comes from hunk headers.
+- **`final_files` only:** emit no over-building finding. A new interface cannot be told from
+  one that was already there, and the summary is not evidence.
+- **`reuse`** only when the evidence itself shows the existing thing: the diff adds a helper a
+  submitted file already has, or the task spec's `Context:` or `pinned_by` names it. The
+  reviewer never sees the rest of the codebase; absence is silence, not approval.
+- **`stdlib` / `native`:** language from the paths; general knowledge, not a codebase claim.
+- **Test code** is exempt from `shrink`; the other tags apply — a mocking dependency for what a
+  stub does is still `native`.
+
+Never flagged: the Part 2 list, plus anything `Context:` justifies. `Context:` is already the
+disambiguator in `post.tmpl`; no new rule is needed.
+
+**Structure an AC mandated.** The implementer built it as written, so it *is* flagged — but
+`evidence` says the AC mandated it, `suggestion` is addressed to the plan author ("drop the
+interface from the AC, or justify it in `Context:`"), and `same_as` points at the pre-task
+`over_building` finding. The implementer is not expected to act; this is how the objection
+reaches the controller through `summary_block` without any new protocol.
+
+### 4.2 `mid.tmpl`
+
+The same section with the structural tags only — `reuse`, `stdlib`, `native`, `yagni`,
+`delete` — and not `shrink`. Mid-task is when an unnecessary abstraction is cheapest to remove,
+before tests and callers accrete on it, which is why it belongs there despite "style is noise
+mid-task"; `shrink` *is* style, so it waits for completion. `check_progress` stays optional;
+nothing changes about when implementers call it.
+
+### 4.3 Emission
+
+**One finding per call**, like `stale_comments`: `category: quality`, `criterion:
+over_building`, `severity: minor`. `evidence` lists every instance as `path:line: <tag>: <what>.
+<replacement>.` and ends with ponytail-review's estimate, `net: -N lines`. `suggestion` gives the
+replacement code or the removal.
+
+Rolled-up matters because of the verdict ladder: one finding can never tip the verdict by
+itself, and a diff with four over-built spots is not labelled a noise cluster. An implementer
+who agrees with three instances and disputes one answers the one finding via
+`finding_responses` and fixes the rest. At completion, `same_as` is the pre-task
+`over_building` finding when the structure it named got built, else the prior finding it
+repeats, else null. `check_progress` keeps setting `same_as` to null, as it does for every
+finding today.
+
+### 4.4 Stats
+
+`over_building` joins `countedCriteria` in `internal/stats/event.go`. `criterion` is free text
+on the wire; the sentinel is what makes it countable in the opt-in ledger.
 
 ## Input and envelope changes
 
@@ -493,7 +494,7 @@ description contract test from v0.22.0 runs unchanged, since no input changed.
 - Every envelope change is additive and `omitempty`. A consumer that ignores unknown fields
   sees no difference on non-lightweight calls.
 - The `summary_block` grammar gains one optional key in the header region. Guard 0.4.0 parses
-  such a block correctly (fixture-proven, §4.5).
+  such a block correctly (fixture-proven, §1.5).
 - Guard 0.5.0 against a v0.22.0 server: Rule B works from the blank `session_id:` line alone;
   Rule A does not depend on the server at all.
 - A controller with a non-canonical lightweight clause gets a false block from Rule B until
@@ -510,9 +511,12 @@ Branch `version/0.23.0`, merge with `[minor]`. `CHANGELOG.md` `## [0.23.0] - 202
 - **Changed:** the guard README's block-condition count and kill-switch table;
   `examples/lightweight-dispatch.md` names its heading as the guard's marker.
 
-The work splits into two merges to `main`, in this order: the server and protocol parts
-(Parts 1–3, §4.5, attribution) with `[skip ci]`, then the guard (§4.3–4.4, 4.6) with `[minor]`,
-whose first task is the live `transcript_path` confirmation. One release, after both.
+The work splits into two merges to `main`, in this order: **the guard first** (§1.3–1.4, §1.6)
+with `[skip ci]`, whose very first task is the live `transcript_path` confirmation; then the
+server and protocol parts (§1.5, Parts 2–4, attribution) with `[minor]`. One release, after
+both. Between the two, the `claude-sandbox-pinned` marketplace pin moves to the merged guard, so the implementers
+that build Parts 2–4 run under Rule A — the enforcement is exercised on the work that follows
+it, not only on work that comes after the release.
 
 ## References
 
