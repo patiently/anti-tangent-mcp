@@ -165,14 +165,16 @@ trace() {
         >> "$TRACE_LOG" 2>/dev/null || true
 }
 
-# Two switches, two concerns. COMPLETION_GUARD governs whether a close is
+# Three switches, three concerns. COMPLETION_GUARD governs whether a close is
 # checked for having run validate_completion at all; COMMENT_GUARD governs
-# the comment-hygiene scan over the evidence that call submitted. Neither
-# implies the other, so the hook exits early only when both are off — a
-# variable that names one concern must not silently disable the other.
+# the comment-hygiene scan over the evidence that call submitted; SESSION_GUARD
+# governs Rule B, the no-task-session check. None implies another, so the hook
+# exits early only when all three are off — a variable that names one concern
+# must not silently disable the others.
 COMPLETION_GUARD="${ANTI_TANGENT_COMPLETION_GUARD:-1}"
 COMMENT_GUARD="${ANTI_TANGENT_COMMENT_GUARD:-1}"
-if [[ "$COMPLETION_GUARD" == "0" && "$COMMENT_GUARD" == "0" ]]; then
+SESSION_GUARD="${ANTI_TANGENT_SESSION_GUARD:-1}"
+if [[ "$COMPLETION_GUARD" == "0" && "$COMMENT_GUARD" == "0" && "$SESSION_GUARD" == "0" ]]; then
     trace "?" "skip" "guard=0"
     exit 0
 fi
@@ -210,9 +212,18 @@ except Exception:
     print(json.dumps({"error": True})); sys.exit(0)
 
 last_inprogress = -1
-called_idx, texts = [], []   # (idx) of direct calls; (idx, text) of tool_result chunks
+first_inprogress = -1
+called_idx, texts, lite_idx = [], [], []   # (idx) of direct calls; (idx, text) of tool_result chunks; (idx) of lightweight markers
 call_ids = {}                # tool_use id -> idx, for validate_completion calls only
 completion_inputs = []       # (idx, input) for every validate_completion call, in order
+
+# [ \t]* rather than \s*, since \s matches a newline: a blank session_id:
+# line followed by a one-token line would otherwise read that token as the
+# id. Defined before the entry loop below, which dereferences LITE_HEADING
+# on an Agent/Task prompt or a plain-text user entry within the same pass.
+SESSION_RE = re.compile(r"(?m)^[ \t]*session_id:[ \t]*(\S*)[ \t]*$")
+MODE_LITE_RE = re.compile(r"(?m)^[ \t]*mode:[ \t]*lightweight[ \t]*$")
+LITE_HEADING = "Drift-protection protocol (lightweight)"
 
 for idx, line in enumerate(lines):
     try: entry = json.loads(line)
@@ -233,9 +244,21 @@ for idx, line in enumerate(lines):
                 elif name == "TaskUpdate":
                     tid = str(inp.get("taskId", ""))
                     if tid == task_id and inp.get("status") == "in_progress":
+                        if first_inprogress < 0:
+                            first_inprogress = idx
                         last_inprogress = idx
+                elif name in ("Agent", "Task"):
+                    if LITE_HEADING in str(inp.get("prompt", "")):
+                        lite_idx.append(idx)
     elif etype == "user":
         content = msg.get("content")
+        if isinstance(content, str):
+            if LITE_HEADING in content:
+                lite_idx.append(idx)
+        elif isinstance(content, list):
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "text" and LITE_HEADING in (c.get("text") or ""):
+                    lite_idx.append(idx)
         if isinstance(content, list):
             for c in content:
                 if not isinstance(c, dict) or c.get("type") != "tool_result": continue
@@ -308,6 +331,44 @@ verdict = ""
 if qualifying:
     vm = VERDICT_RE.search(qualifying[-1])
     if vm: verdict = vm.group(1)
+
+# Did the last completion in the window run without a task session? The
+# latest signal by transcript position wins: the tool_use input of a direct call (a
+# missing key is empty, as the server reads it), or a validate_completion
+# block -- pasted, or synthesized above from the tool_result of a direct call,
+# which sits after its own tool_use. A block reads as no session on a blank
+# session_id: line or a mode: lightweight line. A tool_result carrying the
+# lightweight heading is file content, not a dispatch decision, so it never
+# exempts.
+last_direct = None
+for (i, inp) in completion_inputs:
+    if i >= scan_from:
+        last_direct = (i, inp)
+last_block = None
+for (i, t) in texts:
+    if i < scan_from:
+        continue
+    heads = [m.start() for m in HEADER_RE.finditer(t)]
+    for k, h in enumerate(heads):
+        b = t[h:(heads[k + 1] if k + 1 < len(heads) else len(t))]
+        tm = TOOL_RE.search(b)
+        if "session_id:" in b and tm and tm.group(1) == "validate_completion":
+            last_block = (i, b)
+no_session = False
+if last_direct and (last_block is None or last_direct[0] > last_block[0]):
+    no_session = not str(last_direct[1].get("session_id") or "").strip()
+elif last_block:
+    sm = SESSION_RE.search(last_block[1])
+    no_session = sm is None or sm.group(1) == "" or bool(MODE_LITE_RE.search(last_block[1]))
+# The lightweight marker window starts at the first in_progress recorded
+# for this task, not the last (scan_from). A controller can dispatch a task
+# lightweight, reopen it later (a second in_progress), and resume the same
+# implementer -- the marker from the original dispatch sits before that
+# second in_progress, so anchoring on scan_from would lose it and block the
+# re-close under Rule B. Every other signal above and below still uses
+# scan_from.
+marker_from = first_inprogress if first_inprogress >= 0 else 0
+lite_marker = any(i >= marker_from for i in lite_idx)
 
 # Comment-hygiene scan over the diff evidence of the LAST validate_completion
 # call in the task window -- defence in depth for a comment that carries
@@ -584,6 +645,7 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
 
 print(json.dumps({"error": False, "called": called,
                   "block_found": bool(qualifying), "verdict": verdict,
+                  "no_session": no_session, "lite_marker": lite_marker,
                   "comment_violations": comment_violations,
                   "comment_scan_unavailable": comment_scan_unavailable,
                   "scan": scan_stats}))
@@ -609,7 +671,9 @@ RESULT=$({ ATG_ROOT="$PLUGIN_ROOT" ATG_COMMENT_GUARD="$COMMENT_GUARD" python3 -I
 CALLED=$(echo "$RESULT" | jq -r '.called // false')
 BLOCK=$(echo "$RESULT" | jq -r '.block_found // false')
 VERDICT=$(echo "$RESULT" | jq -r '.verdict // ""')
-trace "$TASK_ID" "parsed" "called=$CALLED block=$BLOCK verdict=$VERDICT"
+NO_SESSION=$(echo "$RESULT" | jq -r '.no_session // false')
+LITE_MARKER=$(echo "$RESULT" | jq -r '.lite_marker // false')
+trace "$TASK_ID" "parsed" "called=$CALLED block=$BLOCK verdict=$VERDICT no_session=$NO_SESSION lite=$LITE_MARKER"
 
 # Recorded unconditionally, before any block/pass branch below, so a broken
 # comment-scan import is visible in the trace log whether the close goes on
@@ -672,12 +736,7 @@ if [[ "$COMMENT_GUARD" != "0" ]]; then
     fi
 fi
 
-if [[ "$COMPLETION_GUARD" == "0" ]]; then
-    trace "$TASK_ID" "skip" "completion-guard=0"
-    exit 0
-fi
-
-if [[ "$VERDICT" == "fail" ]]; then
+if [[ "$COMPLETION_GUARD" != "0" && "$VERDICT" == "fail" ]]; then
     trace "$TASK_ID" "block" "verdict-fail"
     {
         echo "TASK CLOSED ON A FAILED anti-tangent VERDICT"
@@ -700,6 +759,35 @@ if [[ "$VERDICT" == "fail" ]]; then
         echo "(Disable: ANTI_TANGENT_COMPLETION_GUARD=0. Trace: $TRACE_LOG)"
     } >&2
     exit 2
+fi
+
+if [[ "$SESSION_GUARD" != "0" && "$NO_SESSION" == "true" && "$LITE_MARKER" != "true" ]]; then
+    trace "$TASK_ID" "block" "no-session"
+    {
+        echo "TASK CLOSED WITHOUT A TASK SESSION"
+        echo
+        echo "Task #$TASK_ID was closed on a validate_completion that ran with an empty"
+        echo "session_id. That is lightweight mode: the review was made against a"
+        echo "synthesized spec with no acceptance criteria. Nothing in this window shows a"
+        echo "lightweight dispatch, so this task was dispatched under the full protocol and"
+        echo "validate_task_spec was never called."
+        echo
+        echo "  1. TaskUpdate taskId=$TASK_ID status=in_progress"
+        echo "  2. Call mcp__anti-tangent__validate_task_spec with the task's fields"
+        echo "  3. Call mcp__anti-tangent__validate_completion with the returned session_id"
+        echo "  4. Re-close once the verdict is pass"
+        echo
+        echo "If the controller did dispatch this task lightweight, its dispatch prompt"
+        echo "must carry the heading \"Drift-protection protocol (lightweight)\"."
+        echo
+        echo "(Disable: ANTI_TANGENT_SESSION_GUARD=0. Trace: $TRACE_LOG)"
+    } >&2
+    exit 2
+fi
+
+if [[ "$COMPLETION_GUARD" == "0" ]]; then
+    trace "$TASK_ID" "skip" "completion-guard=0"
+    exit 0
 fi
 
 if [[ "$CALLED" == "true" || "$BLOCK" == "true" ]]; then

@@ -1,16 +1,20 @@
 # anti-tangent-guard
 
-Two hooks enforcing anti-tangent-mcp's conventions: a `PostToolUse` hook that
-mandates the `validate_completion` gate at task close and detects when submitted
-diffs add comments carrying change history, and a `PreToolUse` hook that prevents
+Three hooks enforcing anti-tangent-mcp's conventions: a `PostToolUse` hook that
+mandates the `validate_completion` gate at task close, blocks a full-protocol
+close that ran with no task session, and detects when submitted diffs add
+comments carrying change history; a `PreToolUse` hook on `Edit`/`Write`/
+`NotebookEdit` that refuses a dispatched implementer's first edit until
+`validate_task_spec` has been called; and a `PreToolUse` hook that prevents
 such comments from being written in the first place.
 
 ## Active on install
 
-This plugin has two hooks and no configuration step. As soon as it is
-installed, every `TaskUpdate` call is watched for the completion gate, and
-every `Edit`/`Write` call is intercepted for the write-time comment-hygiene
-scan — there is nothing further to turn on.
+This plugin has three hooks and no configuration step. As soon as it is
+installed, every `TaskUpdate` call is watched for the completion gate, every
+`Edit`/`Write`/`NotebookEdit` call inside a dispatched subagent is watched for
+the start gate, and every `Edit`/`Write` call is intercepted for the write-time
+comment-hygiene scan — there is nothing further to turn on.
 
 ## What it does, and what it does not do
 
@@ -31,7 +35,7 @@ Is Not"). Enforcement, where a project wants it, lives here instead.
 The hook watches for a `TaskUpdate` whose `tool_input.status` is `completed`.
 Every other tool call, and every other status, is a silent no-op (exit 0).
 
-## The three block conditions
+## The four block conditions
 
 For a matching close, the hook scans the transcript window for this task (see
 "Window scoping" below) for two possible pass signals: a direct
@@ -39,7 +43,7 @@ For a matching close, the hook scans the transcript window for this task (see
 envelope` / `session_id:` summary block, **tagged `tool: validate_completion`**,
 pasted into a `tool_result` (this is how a subagent's report of running the
 gate becomes visible from the controller's own transcript). It blocks
-(`exit 2`) in exactly three cases:
+(`exit 2`) in exactly four cases:
 
 1. **Neither signal is present.** Nothing in the window shows the completion
    gate ran at all.
@@ -59,7 +63,31 @@ gate becomes visible from the controller's own transcript). It blocks
    rather than prevents, catching comments that reached disk through `Bash`
    or other pathways the write-time hook cannot intercept.
 
-The first two messages state the same recovery flow explicitly: reopen the task with
+4. **The last `validate_completion` in the window ran with no task session, and
+   nothing in the window shows a lightweight dispatch.** An empty `session_id`
+   is the server's lightweight path: the review is made against a synthesized
+   spec with no acceptance criteria. Under the full protocol that means step 1
+   (`validate_task_spec`) was skipped. The empty session is read from the
+   direct call's input, or from a pasted block whose `session_id:` line is
+   blank or which carries `mode: lightweight`. The lightweight marker is the
+   heading `Drift-protection protocol (lightweight)` — the one
+   `examples/lightweight-dispatch.md` carries — found in a user message's own
+   text or in the `prompt` of an `Agent` tool call. Inside a `tool_result` it
+   is file content, not a dispatch decision, and does not count. Absence means
+   full protocol: the default dispatch is the full clause, so the default is
+   to block. Unlike the rest of this window (see "Window scoping" below), the
+   marker itself is looked for from the task's *first* `in_progress`, not its
+   last, so a task dispatched lightweight and later reopened keeps its
+   original dispatch marker. Kill switch: `ANTI_TANGENT_SESSION_GUARD=0`.
+
+   Two limits. Under executing-plans there is no dispatch prompt, so a
+   lightweight task there needs the heading in the user's instruction — or
+   `validate_task_spec` gets called, which is the right outcome. And the hook
+   sees that `validate_task_spec` ran, not when: a call made after the edits
+   satisfies this rule; the start gate below is what enforces the order, and
+   only in dispatched-subagent sessions.
+
+The first two messages and the fourth state the same recovery flow explicitly: reopen the task with
 `status=in_progress`, address whatever the gate is asking for, run
 `mcp__anti-tangent__validate_completion` (again), and only then re-close.
 The third message names the pattern set and instructs the same recovery.
@@ -202,6 +230,34 @@ to entries at or after the most recent `TaskUpdate` that set this task to
 already-abandoned attempt cannot satisfy the gate for this one. If no
 `in_progress` entry exists for the task, it falls back to the whole
 transcript.
+
+## Start gate (PreToolUse hook)
+
+`check-task-start` fires on `Edit`, `Write` and `NotebookEdit`, and acts only
+inside a dispatched subagent. A hook firing there receives the parent's
+`transcript_path` and `session_id`; what marks the subagent is `agent_id`, and
+its own transcript sits beside the parent's at
+`<transcript_path without .jsonl>/subagents/agent-<agent_id>.jsonl`. A payload
+with no `agent_id` is the main session, which is never gated — so a
+controller editing a CHANGELOG is never touched.
+
+The hook reads the subagent's transcript up to its first user entry — the
+dispatch prompt — and gates the session only when that entry carries
+`## Drift-protection protocol (anti-tangent-mcp)` and not
+`Drift-protection protocol (lightweight)`. In a gated session every write is
+refused (`exit 2`) until an `mcp__anti-tangent__validate_task_spec` tool call
+appears in that transcript. Reads are never gated: read what the change
+touches, call `validate_task_spec`, then edit. There is no cache: the scan
+stops at the first `validate_task_spec` call, which comes before every allowed
+edit, so each check reads only the transcript's opening.
+
+Limits: writes through `Bash` (`cat >`, `sed -i`) bypass this hook, as they
+bypass the comment guard; the close-time no-session rule is the backstop. A
+controller that rewrites the clause heading defeats the fingerprint and the
+hook fails open — the heading is the contract. The `subagents/` layout is what
+Claude Code writes today, not a documented interface: a subagent transcript
+that is missing or unreadable exits 0, so a layout change disables the gate
+rather than blocking every write. Kill switch: `ANTI_TANGENT_SESSION_GUARD=0`.
 
 ## Write-time comment guard (PreToolUse hook)
 
@@ -408,9 +464,12 @@ Both hooks honour it: the tell is appended to the scanner's set when `comment_sc
   close-time comment-hygiene scan is a separate concern and keeps running.
 - `ANTI_TANGENT_COMMENT_GUARD=0` disables the comment-hygiene scan, both
   write-time and close-time, while leaving the completion-gate check active.
-- Setting both to `0` is what short-circuits the `PostToolUse` hook to
-  `exit 0` before it reads stdin. With only one set, the hook reads stdin and
-  runs the half that is still enabled.
+- `ANTI_TANGENT_SESSION_GUARD=0` disables the start gate (`PreToolUse`) and
+  the no-session close rule (block condition 4). It leaves the completion gate
+  and the comment scan alone.
+- Setting all three to `0` is what short-circuits the `PostToolUse` hook to
+  `exit 0` before it reads stdin. With any one still on, the hook reads stdin
+  and runs the rules that are still enabled.
 
 ## Fail-open policy
 
@@ -476,7 +535,15 @@ line emitted before the payload was read — the kill-switch skip, the
 missing-`jq`/`python3` skip — where the hook genuinely does not know it yet),
 the task id for `check-task-complete` (or `?` if the hook exited before
 reaching one), and the decision plus its reason (e.g. `skip | no-jq`,
-`pass | called=true block=false`, `block | verdict-fail`).
+`pass | called=true block=false`, `block | verdict-fail`). The close-time
+hook's fourth block condition traces `block | no-session`.
+
+`check-task-start` carries the literal tag `task-start` in that same column,
+since it has no task id to report, and its own event set: `pass | spec-called`
+(the edit is allowed), `block | no-spec-call` (the edit is refused),
+`skip | not-gated` (not a dispatched full-protocol subagent, or its transcript
+could not be read), `skip | guard=0`, `skip | no-python3`, `skip | no-body`,
+and `error | python-exit=N`.
 
 A close whose comment scan ran also emits a `scan` line — for example
 `scan | src=final_files submitted=3 scanned=0 lines=0` — naming which
@@ -512,10 +579,11 @@ bash evals/run.sh
 ```
 
 Runs the hooks' own unit tests (`hooks/*_test.py`) first, then the full eval
-suite (145 cases) against both hooks, and exits non-zero on either — the
-cases cover check-task-complete's three block conditions (the third being its
-own close-time comment-hygiene scan), plus check-comment-write's write-time
-comment-hygiene guard. See `evals/run.sh`'s header comment for the
+suite (172 cases) against all three hooks, and exits non-zero on either — the
+cases cover check-task-complete's four block conditions (the third being its
+own close-time comment-hygiene scan, the fourth being the no-session rule),
+check-comment-write's write-time comment-hygiene guard, and check-task-start's
+start gate. See `evals/run.sh`'s header comment for the
 full breakdown by case. Cases 18/19 are deliberately un-escaped fixtures — they
 test positional extraction against an older server. Cases 20/21 are the
 current server's own rendering, pinned byte-for-byte to the formatters by
@@ -523,7 +591,7 @@ current server's own rendering, pinned byte-for-byte to the formatters by
 exercised end-to-end through the real hook rather than only through a Go
 mirror of its regexes. Case 22 pairs a validate_completion tool_use with its
 tool_result exactly as the server's `envelopeResult` marshals it, so the
-direct-call verdict read (see "The three block conditions" above) is
+direct-call verdict read (see "The four block conditions" above) is
 exercised end-to-end too.
 
 ### The false-positive gate

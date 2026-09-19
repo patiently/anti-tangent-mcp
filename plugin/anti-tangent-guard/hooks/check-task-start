@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# PreToolUse hook on Edit/Write/NotebookEdit: in a session whose first user
+# message is a full-protocol dispatch prompt, refuse every write until
+# validate_task_spec has been called. Reads are never gated. The Python body
+# owns the transcript work; this wrapper owns the kill switch, the trace log
+# and the exit-code mapping, the same split as check-comment-write.
+set -uo pipefail
+
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
+# Mode 700 on creation: the default lives in a world-writable directory.
+mkdir -p -m 700 "$(dirname "$TRACE_LOG")" 2>/dev/null || true
+ATG_SESSION="-"
+
+atg_rotate_trace() {
+    local max=${ANTI_TANGENT_GUARD_TRACE_MAX_BYTES:-1048576} size
+    [[ "$max" =~ ^[0-9]+$ ]] || max=1048576
+    [[ -L "$TRACE_LOG" ]] && return 0
+    [[ -f "$TRACE_LOG" ]] || return 0
+    size=$(wc -c < "$TRACE_LOG" 2>/dev/null) || return 0
+    [[ "$size" -gt "$max" ]] || return 0
+    mv -f "$TRACE_LOG" "$TRACE_LOG.1" 2>/dev/null || true
+    return 0
+}
+atg_rotate_trace
+
+trace() {
+    # Never append through a symlink, and scrub the field separators out of
+    # every argument at the sink: a newline or "|" reaching printf would split
+    # one record into two.
+    [[ -L "$TRACE_LOG" ]] && return 0
+    local ev=${1:-?} detail=${2:-}
+    ev=${ev//[$'\r\n|']/}
+    detail=${detail//[$'\r\n|']/}
+    printf '%s | s=%s | task-start | %s%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ATG_SESSION" "${ev:-?}" "${detail:+ | $detail}" \
+        >> "$TRACE_LOG" 2>/dev/null || true
+}
+
+[[ "${ANTI_TANGENT_SESSION_GUARD:-1}" == "0" ]] && { trace "skip" "guard=0"; exit 0; }
+command -v python3 >/dev/null 2>&1 || { trace "skip" "no-python3"; exit 0; }
+[[ -r "$PLUGIN_ROOT/hooks/check_task_start.py" ]] || { trace "skip" "no-body"; exit 0; }
+
+ATG_INPUT="$(cat)"
+ATG_SESSION_RAW=$(printf '%s' "$ATG_INPUT" | jq -r '(.session_id // "") | gsub("[^A-Za-z0-9_-]"; "") | .[0:8]' 2>/dev/null) || ATG_SESSION_RAW=""
+[[ -n "$ATG_SESSION_RAW" ]] && ATG_SESSION="$ATG_SESSION_RAW"
+
+printf '%s' "$ATG_INPUT" | ATG_TRACE_LOG="$TRACE_LOG" python3 -I -B "$PLUGIN_ROOT/hooks/check_task_start.py"
+status=${PIPESTATUS[1]}
+case "$status" in
+    0) trace "pass" "spec-called"; exit 0 ;;
+    2) trace "block" "no-spec-call"; exit 2 ;;
+    3) trace "skip" "not-gated"; exit 0 ;;
+    *) trace "error" "python-exit=$status"; exit 0 ;;
+esac

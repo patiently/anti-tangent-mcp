@@ -548,7 +548,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -570,7 +570,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -589,9 +589,9 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t2\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t2\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t2\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -610,7 +610,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"{{DIFFFILE}}\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff_path\": \"{{DIFFFILE}}\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "diff_file": "+++ b/a.go\n+// fixes #58\n",
@@ -633,7 +633,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"relative/final.diff\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff_path\": \"relative/final.diff\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -655,7 +655,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"{{DIFFFILE}}\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff_path\": \"{{DIFFFILE}}\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "diff_file": "+++ b/a.go\n+// fixes #58\n",
@@ -679,7 +679,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -701,7 +701,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -728,7 +728,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [\"a.go\"]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [\"a.go\"]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -747,7 +747,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/README.md\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/README.md\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -766,7 +766,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n // fixes #58\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n // fixes #58\\n+// callers must hold the lock\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -788,7 +788,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// callers must hold the lock\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"fail\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -876,7 +876,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -1234,7 +1234,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff_path\": \"{{TMPDIR}}/link.diff\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff_path\": \"{{TMPDIR}}/link.diff\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -1614,7 +1614,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -1680,7 +1680,7 @@
       },
       "expected_file_contains": {
         "{{TMPDIR}}/trace.log": [
-          "| skip | guard=0"
+          "| skip | completion-guard=0"
         ]
       },
       "input": {
@@ -1693,11 +1693,11 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
-      "reason": "both concerns disabled is the only early exit"
+      "reason": "completion and comment scanning off, session guard on: the hook reads stdin, Rule B finds a session-backed completion, and the completion-guard exit is taken — the all-three-off fixture owns the pre-stdin short-circuit"
     },
     {
       "id": 120,
@@ -1713,7 +1713,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/r/new.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [{\"path\": \"{{TMPDIR}}/r/new.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -1736,7 +1736,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/r2/old.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [{\"path\": \"{{TMPDIR}}/r2/old.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -1756,7 +1756,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/nr/loose.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [{\"path\": \"{{TMPDIR}}/nr/loose.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -1777,7 +1777,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/w/.wt/feat/tracked.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [{\"path\": \"{{TMPDIR}}/w/.wt/feat/tracked.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -1797,7 +1797,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/g/build/gen.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [{\"path\": \"{{TMPDIR}}/g/build/gen.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -1817,7 +1817,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/seed\\n-gone\\n\", \"final_files\": [{\"path\": \"{{TMPDIR}}/d/new.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/seed\\n-gone\\n\", \"final_files\": [{\"path\": \"{{TMPDIR}}/d/new.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -1837,7 +1837,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"\", \"final_files\": [{\"path\": \"{{TMPDIR}}/e/new.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"\", \"final_files\": [{\"path\": \"{{TMPDIR}}/e/new.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -1857,7 +1857,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/m/mod.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [{\"path\": \"{{TMPDIR}}/m/mod.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -1879,7 +1879,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- pkg/a.go\\n+++ pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"--- pkg/a.go\\n+++ pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -1905,7 +1905,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/c/done.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [{\"path\": \"{{TMPDIR}}/c/done.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -1932,7 +1932,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1 @@\\n+plain\\n+++ b/pkg/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1 @@\\n+plain\\n+++ b/pkg/a.go\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -1963,7 +1963,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/gone.go\\n+++ /dev/null\\n@@ -1 +0,0 @@\\n-// fixes #99\\n--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+plain line\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"--- a/pkg/gone.go\\n+++ /dev/null\\n@@ -1 +0,0 @@\\n-// fixes #99\\n--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+plain line\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -1990,7 +1990,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,3 @@\\n package x\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,3 @@\\n package x\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -2021,7 +2021,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1,9 @@\\n+plain\\n+++ b/pkg/a.go\\n@@ -0,0 +1 @@\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1,9 @@\\n+plain\\n+++ b/pkg/a.go\\n@@ -0,0 +1 @@\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -2052,7 +2052,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -3,0 +4,2 @@ func A() {}\\n+// helper text\\n+++ b/notes\\n@@ -9,0 +12 @@ func B() {}\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -3,0 +4,2 @@ func A() {}\\n+// helper text\\n+++ b/notes\\n@@ -9,0 +12 @@ func B() {}\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -2083,7 +2083,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -3,0 +4 @@ func A() {}\\n+++ b/notes\\n@@ -9,0 +12 @@ func B() {}\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -3,0 +4 @@ func A() {}\\n+++ b/notes\\n@@ -9,0 +12 @@ func B() {}\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -2114,7 +2114,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/notes.txt\\n+++ b/notes.txt\\n@@ -1,2 +1,3 @@\\n plain\\n+one\\n--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"--- a/notes.txt\\n+++ b/notes.txt\\n@@ -1,2 +1,3 @@\\n plain\\n+one\\n--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -2145,7 +2145,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+plain\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1 +1,2 @@\\n package x\\n+plain\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -2172,7 +2172,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1,2 @@\\n+plain\\n+++ b/pkg/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/notes.txt\\n@@ -0,0 +1,2 @@\\n+plain\\n+++ b/pkg/a.go\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -2199,7 +2199,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1,2 +1,3 @@\\n package x\\n--- b/notes.txt\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"--- a/pkg/a.go\\n+++ b/pkg/a.go\\n@@ -1,2 +1,3 @@\\n package x\\n--- b/notes.txt\\n+++ b/notes.txt\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -2226,7 +2226,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"+++ b/a.go\\n+// ABC-1234: hold the lock\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"+++ b/a.go\\n+// ABC-1234: hold the lock\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -2253,7 +2253,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_diff\": \"--- a/notes.txt\\n+++ b/notes.txt\\n@@ -1,2 +1,3 @@\\n intro\\n--- b/hack.go\\n+++ b/hack.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_diff\": \"--- a/notes.txt\\n+++ b/notes.txt\\n@@ -1,2 +1,3 @@\\n intro\\n--- b/hack.go\\n+++ b/hack.go\\n+// fixes #58\\n\"}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"s\\\", \\\"verdict\\\": \\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 2,
@@ -2309,7 +2309,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/r/f.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [{\"path\": \"{{TMPDIR}}/r/f.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -2332,7 +2332,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/r/f.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [{\"path\": \"{{TMPDIR}}/r/f.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -2355,7 +2355,7 @@
       },
       "transcript_raw_lines": [
         "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
-        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"final_files\": [{\"path\": \"{{TMPDIR}}/r/f.go\"}]}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"t1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\", \"final_files\": [{\"path\": \"{{TMPDIR}}/r/f.go\"}]}}]}}",
         "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"t1\", \"content\": \"{\\\"tool\\\":\\\"validate_completion\\\",\\\"session_id\\\":\\\"s\\\",\\\"verdict\\\":\\\"pass\\\"}\"}]}}"
       ],
       "expected_exit": 0,
@@ -2363,6 +2363,488 @@
         "{{TMPDIR}}/SENTINEL"
       ],
       "reason": "a blob missing from a partial clone sends git down a lazy fetch that execs the configured transport. This is a second exec path with no filter involved, so no amount of filter pinning covers it. The repository also sets protocol.ssh.allow=always, which overrides the protocol.allow=never default, so what holds the line here is GIT_ALLOW_PROTOCOL and GIT_NO_LAZY_FETCH. Taking those two apart needs an environment this harness cannot build; comment_scan_test.py does it."
+    },
+    {
+      "id": 146,
+      "name": "task-start-implementer-no-call-blocks",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+      },
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "EDIT BEFORE validate_task_spec"
+      ],
+      "reason": "the subagent's first user entry is a full-clause dispatch prompt and no validate_task_spec tool_use follows, so the edit must be refused; a hook that read the parent's transcript, or counted the clause's own mention of the tool as a call, would let it through"
+    },
+    {
+      "id": 147,
+      "name": "task-start-implementer-call-passes",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_task_spec\", \"input\": {\"goal\": \"g\"}}]}}\n"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "task-start | pass | spec-called"
+        ]
+      },
+      "reason": "the call exists after the dispatch prompt; a scan that stopped at the first user entry or ignored assistant tool_use entries would block a compliant implementer"
+    },
+    {
+      "id": 148,
+      "name": "task-start-lightweight-dispatch-passes",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\\n\\n## Drift-protection protocol (lightweight)\"}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "a lightweight dispatch carries both headings and skips validate_task_spec by design; dropping the lightweight exemption would block every lightweight implementer"
+    },
+    {
+      "id": 149,
+      "name": "task-start-controller-clause-in-agent-input-passes",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Execute the plan.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}]}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "the clause appears only inside an Agent tool_use, not in the first user entry; fingerprinting anywhere in the transcript would gate a controller that dispatches implementers"
+    },
+    {
+      "id": 150,
+      "name": "task-start-no-clause-passes",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Fix the typo in README.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "a subagent dispatched without the protocol clause is not an implementer; gating on agent_id alone would block every research subagent's write"
+    },
+    {
+      "id": 151,
+      "name": "task-start-main-session-not-gated",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\"}",
+      "tmpdir_fixture": {
+        "parent.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "the main session carries no agent_id and is never a dispatched implementer, even when its own first message holds the clause; reading transcript_path directly would gate it"
+    },
+    {
+      "id": 152,
+      "name": "task-start-reads-subagent-not-parent",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n",
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Fix the typo in README.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "the parent transcript opens with the clause but the subagent's does not; a hook that fingerprinted transcript_path instead of the agent_id path would block here"
+    },
+    {
+      "id": 153,
+      "name": "task-start-missing-subagent-transcript-fails-open",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "expected_exit": 0,
+      "reason": "agent_id names a transcript that does not exist; failing closed would block every write whenever the transcript layout changes"
+    },
+    {
+      "id": 154,
+      "name": "task-start-malformed-stdin-fails-open",
+      "hook": "check-task-start",
+      "stdin_raw": "not json",
+      "expected_exit": 0,
+      "reason": "unparseable hook input must fail open; a body that raised or exited 2 on bad JSON would block writes on a harness change"
+    },
+    {
+      "id": 155,
+      "name": "task-start-unparsable-transcript-fails-open",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "not json\n{\n]]\n"
+      },
+      "expected_exit": 0,
+      "reason": "no line of the subagent transcript parses, so there is no first user entry to fingerprint; treating that as an implementer would block on corrupt input"
+    },
+    {
+      "id": 156,
+      "name": "task-start-kill-switch",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Edit\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/y.go\"}}]}}\n"
+      },
+      "env": {
+        "ANTI_TANGENT_SESSION_GUARD": "0"
+      },
+      "expected_exit": 0,
+      "reason": "the same transcript that blocks in the first case passes with ANTI_TANGENT_SESSION_GUARD=0; a missing switch check would leave the operator no way out"
+    },
+    {
+      "id": 157,
+      "name": "task-start-read-is-not-gated",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Read\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n"
+      },
+      "expected_exit": 0,
+      "reason": "reads are never gated so an implementer can read before validating; matching Read would stall every implementer at its first read"
+    },
+    {
+      "id": 158,
+      "name": "task-start-notebookedit-blocks",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"NotebookEdit\", \"tool_input\": {\"notebook_path\": \"{{TMPDIR}}/n.ipynb\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"agent_id\": \"a1\", \"agent_type\": \"general-purpose\"}",
+      "tmpdir_fixture": {
+        "parent/subagents/agent-a1.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}\n"
+      },
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "EDIT BEFORE validate_task_spec"
+      ],
+      "reason": "NotebookEdit writes like Edit; leaving it out of the gated tools would let a notebook edit through before validate_task_spec"
+    },
+    {
+      "id": 159,
+      "name": "close-no-session-direct-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"\"}}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT A TASK SESSION"
+      ],
+      "reason": "a direct validate_completion call whose input carries no session_id must block; reading a missing key as anything but empty would let a full-protocol close through with no task session"
+    },
+    {
+      "id": 160,
+      "name": "close-no-session-direct-lite-in-user-text-passes",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"text\", \"text\": \"Lightweight task.\\n\\n## Drift-protection protocol (lightweight)\"}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"\"}}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "the lightweight heading sitting in a plain-string user content part must exempt the same empty-session direct call that blocks in the case above; missing the text-part scan would block every lightweight task whose dispatch used a bare string"
+    },
+    {
+      "id": 161,
+      "name": "close-no-session-pasted-blank-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: \\nverdict: pass\\n\"}]}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT A TASK SESSION"
+      ],
+      "reason": "a pasted envelope block whose session_id: line is blank must block the same as a direct call with an empty session_id; SESSION_RE matching the blank line as a non-empty id would let this close pass"
+    },
+    {
+      "id": 162,
+      "name": "close-no-session-pasted-lite-in-agent-prompt-passes",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\\n\\n## Drift-protection protocol (lightweight)\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: \\nverdict: pass\\n\"}]}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "the lightweight heading inside the dispatching Agent call's own prompt must exempt the blank pasted block that blocks in the case above; scanning only user text parts and not Agent/Task tool_use inputs would block every lightweight subagent that pastes its block"
+    },
+    {
+      "id": 163,
+      "name": "close-no-session-mode-line-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: -\\nverdict: pass\\nmode: lightweight\\n\"}]}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT A TASK SESSION"
+      ],
+      "reason": "a mode: lightweight line must block even though session_id: is non-blank; reading no_session only off SESSION_RE and ignoring MODE_LITE_RE would let a lightweight-mode review with a filled-in placeholder session id close under the full protocol"
+    },
+    {
+      "id": 164,
+      "name": "close-no-session-lite-in-tool-result-does-not-exempt",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"tr1\", \"name\": \"Read\", \"input\": {\"file_path\": \"/tmp/lite.md\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"# Lightweight dispatch clause\\n## Drift-protection protocol (lightweight)\"}], \"tool_use_id\": \"tr1\"}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: \\nverdict: pass\\n\"}]}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT A TASK SESSION"
+      ],
+      "reason": "the lightweight heading appearing only inside a Read's tool_result (file content, not a dispatch decision) must not exempt the blank pasted block that follows; scanning tool_result text for the heading the same way user text is scanned would wrongly pass a full-protocol close that merely read a file mentioning the heading"
+    },
+    {
+      "id": 165,
+      "name": "close-no-session-session-guard-off-passes",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"\"}}]}}"
+      ],
+      "env": {
+        "ANTI_TANGENT_SESSION_GUARD": "0"
+      },
+      "expected_exit": 0,
+      "reason": "the same empty-session call that blocks in case 159 must pass with ANTI_TANGENT_SESSION_GUARD=0; a rule that ignored this switch would leave the operator no way to disable Rule B on its own"
+    },
+    {
+      "id": 166,
+      "name": "close-no-session-completion-guard-off-still-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"\"}}]}}"
+      ],
+      "env": {
+        "ANTI_TANGENT_COMPLETION_GUARD": "0"
+      },
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT A TASK SESSION"
+      ],
+      "reason": "disabling only COMPLETION_GUARD must not disarm Rule B, since the no-session check is gated on SESSION_GUARD alone; a no-session condition that also checked COMPLETION_GUARD would silently pass a full-protocol close whenever completion checking was turned off for an unrelated reason"
+    },
+    {
+      "id": 167,
+      "name": "switch-all-three-off-allows",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"\"}}]}}"
+      ],
+      "env": {
+        "ANTI_TANGENT_COMPLETION_GUARD": "0",
+        "ANTI_TANGENT_COMMENT_GUARD": "0",
+        "ANTI_TANGENT_SESSION_GUARD": "0",
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "| skip | guard=0"
+        ]
+      },
+      "reason": "with all three switches off the hook must exit before stdin is even read, proving the pre-stdin short-circuit rather than a full parse that happens to find nothing to block on; a short-circuit that required only two of the three switches would trip this trace event too early and mask fixture 119's completion-guard=0 path"
+    },
+    {
+      "id": 168,
+      "name": "close-mode-line-lite-dispatch-passes",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\\n\\n## Drift-protection protocol (lightweight)\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\n  tool:          validate_completion\\n  session_id:    \\n  verdict:       pass\\n  mode:          lightweight\\n  model_used:    m\\n\"}]}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a block in summary.go's indented layout carrying mode: lightweight must still qualify on the unchanged tool: regex and pass under a lightweight dispatch; a TOOL_RE or qualification change that stopped matching the indented mode: line would block every real lightweight completion this hook ships against"
+    },
+    {
+      "id": 169,
+      "name": "close-mode-line-fail-verdict-still-read",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\\n\\n## Drift-protection protocol (lightweight)\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\n  tool:          validate_completion\\n  session_id:    \\n  verdict:       fail\\n  mode:          lightweight\\n  model_used:    m\\n\"}]}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED ON A FAILED anti-tangent VERDICT"
+      ],
+      "reason": "the same indented block with verdict: fail must still block on the failed verdict even though the lightweight heading exempts Rule B; a mode: line change that disturbed VERDICT_RE's position in the block would let a failed lightweight review close"
+    },
+    {
+      "id": 170,
+      "name": "close-mixed-window-later-blank-block-blocks",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: \\nverdict: pass\\n\"}]}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT A TASK SESSION"
+      ],
+      "reason": "when a session-backed direct call is followed by a later pasted blank block, the later one must decide and block; picking the earliest signal instead of the latest would pass a close whose actual last completion ran without a session"
+    },
+    {
+      "id": 171,
+      "name": "close-mixed-window-later-direct-call-passes",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\ntool: validate_completion\\nsession_id: \\nverdict: pass\\n\"}]}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-eval\"}}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "when a pasted blank block is followed by a later session-backed direct call, the later one must decide and pass; picking the earliest signal instead of the latest would block a close whose actual last completion ran with a real session"
+    },
+    {
+      "id": 172,
+      "name": "close-no-session-fail-verdict-wins",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"\"}, \"id\": \"toolu_ns1\"}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"\\\", \\\"verdict\\\": \\\"fail\\\", \\\"findings\\\": [{\\\"severity\\\": \\\"critical\\\", \\\"category\\\": \\\"quality\\\", \\\"criterion\\\": \\\"AC #1\\\", \\\"evidence\\\": \\\"missing test coverage\\\", \\\"suggestion\\\": \\\"add a test\\\"}], \\\"next_action\\\": \\\"fix the findings and re-validate\\\", \\\"model_used\\\": \\\"anthropic:claude-opus-4-7\\\", \\\"review_ms\\\": 842, \\\"summary_block\\\": \\\"anti-tangent envelope\\\\n  tool:          validate_completion\\\\n  session_id:    sess-eval-1\\\\n  verdict:       fail\\\\n  model_used:    anthropic:claude-opus-4-7\\\\n  review_ms:     842\\\\n  findings:      1 total (1 critical, 0 major, 0 minor)\\\\n    - [critical][quality] AC #1 \\\\u2014 missing test coverage\\\\n  next_action:   fix the findings and re-validate\\\\n\\\"}\"}], \"tool_use_id\": \"toolu_ns1\"}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED ON A FAILED anti-tangent VERDICT"
+      ],
+      "reason": "a direct call whose realistic JSON result carries both an empty session_id and verdict: fail must block on the failed verdict, not the no-session rule; checking Rule B before the verdict-fail check would report the wrong reason and mislead the fix-it steps in stderr"
+    },
+    {
+      "id": 173,
+      "name": "close-no-session-lite-marker-survives-reopen",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (lightweight)\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"\"}}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a controller that dispatched this task lightweight, then reopened it (a second in_progress) and resumed the same implementer, must keep passing on the empty-session close; computing the lightweight marker from the task LAST in_progress instead of its FIRST would put the marker before scan_from and wrongly block this re-close under Rule B"
     }
   ]
 }

@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "anti-tangent-mcp",
   "version": "0.10.0",
-  "description": "Anti-tangent MCP server companions: the anti-tangent-protocol on-demand protocol plugin, the bm-scribe Basic Memory note-writing plugin, and I/O-delegation hooks (anti-tangent-shunt for bulk reads, anti-tangent-guard for completion enforcement and comment hygiene, which also refuses Edit/Write calls that add comments carrying change history).",
+  "description": "Anti-tangent MCP server companions: the anti-tangent-protocol on-demand protocol plugin, the bm-scribe Basic Memory note-writing plugin, and I/O-delegation hooks (anti-tangent-shunt for bulk reads, anti-tangent-guard for task-session and completion enforcement and comment hygiene, which also refuses a dispatched implementer's edits before validate_task_spec and Edit/Write calls that add comments carrying change history).",
   "owner": {
     "name": "Patrick Gilmore",
     "email": "p@patiently.io"
@@ -34,8 +34,8 @@
     },
     {
       "name": "anti-tangent-guard",
-      "description": "Two hooks enforcing anti-tangent-mcp's conventions. A PostToolUse hook on TaskUpdate mandates the validate_completion gate at task close and, when the evidence that call submitted adds comments carrying change history, returns a blocking instruction to reopen and fix — reading the submitted diff, or a final_files completion through git, which reports nothing for work already committed. It detects rather than prevents: PostToolUse fires after the state change, so it cannot stop the close itself. A PreToolUse hook on Edit/Write refuses such a comment before it is written. Set ANTI_TANGENT_TICKET_PATTERN to your tracker's key shape to have tracker keys caught by both hooks. Kill switches: ANTI_TANGENT_COMPLETION_GUARD=0 (completion gate only), ANTI_TANGENT_COMMENT_GUARD=0 (comment scan, both hooks).",
-      "version": "0.4.0",
+      "description": "Three hooks enforcing anti-tangent-mcp's conventions. A PreToolUse hook on Edit/Write/NotebookEdit refuses a dispatched implementer's first edit until validate_task_spec has been called. A PostToolUse hook on TaskUpdate mandates the validate_completion gate at task close, blocks a full-protocol close whose completion ran with no task session, and, when the evidence that call submitted adds comments carrying change history, returns a blocking instruction to reopen and fix — reading the submitted diff, or a final_files completion through git, which reports nothing for work already committed. It detects rather than prevents: PostToolUse fires after the state change. A PreToolUse hook on Edit/Write refuses such a comment before it is written. Set ANTI_TANGENT_TICKET_PATTERN to your tracker's key shape to have tracker keys caught. Kill switches: ANTI_TANGENT_SESSION_GUARD=0 (start gate and no-session close rule), ANTI_TANGENT_COMPLETION_GUARD=0 (completion gate only), ANTI_TANGENT_COMMENT_GUARD=0 (comment scan, both hooks).",
+      "version": "0.5.0",
       "source": "./plugin/anti-tangent-guard",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"
