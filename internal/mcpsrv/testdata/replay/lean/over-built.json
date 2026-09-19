@@ -1,0 +1,24 @@
+{
+  "name": "over-built",
+  "validate_task_spec": {
+    "task_title": "Task 2: Cursor persistence helpers",
+    "goal": "The poll package can save the last-seen cursor to a file in a caller-given data directory, load it back, and tell whether a topic is one of the fixed topics.",
+    "acceptance_criteria": [
+      "Saving the cursor \"abc\" to a data directory and then loading from that same directory returns \"abc\" and no error.",
+      "Loading from a data directory where no cursor was saved returns \"\" and no error.",
+      "IsKnownTopic(\"orders\") returns true when \"orders\" is in Topics, and IsKnownTopic returns false for a topic that is not in Topics."
+    ],
+    "non_goals": ["No remote storage.", "No change to the poller: a later task calls these helpers."],
+    "context": "The cursor lives in a single file named cursor under the data directory the caller passes. Topics is the fixed []string declared in topics.go."
+  },
+  "validate_completion": {
+    "summary": "Added a CursorStore interface with a FileCursorStore implementation, a CursorConfig struct, and an IsKnownTopic helper.",
+    "final_diff": "diff --git a/internal/poll/cursor.go b/internal/poll/cursor.go\nnew file mode 100644\n--- /dev/null\n+++ b/internal/poll/cursor.go\n@@ -0,0 +1,58 @@\n+package poll\n+\n+import (\n+\t\"os\"\n+\t\"path/filepath\"\n+)\n+\n+// CursorStore persists the poller's last-seen cursor.\n+type CursorStore interface {\n+\tSaveCursor(cursor string) error\n+\tLoadCursor() (string, error)\n+}\n+\n+// CursorConfig holds the cursor storage settings.\n+type CursorConfig struct {\n+\tFileName string\n+}\n+\n+// DefaultCursorConfig returns the default configuration.\n+func DefaultCursorConfig() CursorConfig {\n+\treturn CursorConfig{FileName: \"cursor\"}\n+}\n+\n+// FileCursorStore stores the cursor in a file under dir.\n+type FileCursorStore struct {\n+\tdir string\n+\tcfg CursorConfig\n+}\n+\n+// NewFileCursorStore builds a FileCursorStore.\n+func NewFileCursorStore(dir string, cfg CursorConfig) *FileCursorStore {\n+\treturn &FileCursorStore{dir: dir, cfg: cfg}\n+}\n+\n+func (s *FileCursorStore) path() string { return filepath.Join(s.dir, s.cfg.FileName) }\n+\n+func (s *FileCursorStore) SaveCursor(cursor string) error {\n+\treturn os.WriteFile(s.path(), []byte(cursor), 0o600)\n+}\n+\n+func (s *FileCursorStore) LoadCursor() (string, error) {\n+\tb, err := os.ReadFile(s.path())\n+\tif os.IsNotExist(err) {\n+\t\treturn \"\", nil\n+\t}\n+\treturn string(b), err\n+}\n+\n+// IsKnownTopic reports whether topic is configured.\n+func IsKnownTopic(topic string) bool {\n+\tfor i := 0; i < len(Topics); i++ {\n+\t\tif Topics[i] == topic {\n+\t\t\treturn true\n+\t\t}\n+\t}\n+\treturn false\n+}\n",
+    "test_evidence": "ok  \tinternal/poll\t0.012s"
+  },
+  "expectations": [
+    {"call": "validate_completion", "any_of_keywords": ["CursorStore", "interface", "yagni"], "criterion": "over_building"},
+    {"call": "validate_completion", "any_of_keywords": ["slices.Contains", "IsKnownTopic", "stdlib"], "criterion": "over_building"},
+    {"call": "validate_completion", "any_of_keywords": ["CursorConfig", "config", "FileName"], "criterion": "over_building"}
+  ]
+}
