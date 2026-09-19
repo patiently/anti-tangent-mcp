@@ -62,6 +62,16 @@ type Envelope struct {
 	// applied, including the ones that waived nothing because the reviewer
 	// obeyed them. Only a call that reached the reviewer on a session sets it.
 	ControllerRulings []AppliedRuling `json:"controller_rulings,omitempty"`
+	// Lightweight marks a validate_completion invoked with no task session —
+	// an empty session_id, not the outcome of the call. It is set on every
+	// envelope such a call can return: one from the reviewer, which in
+	// lightweight mode used a synthesized spec (Goal only, no acceptance
+	// criteria), and one from a pre-review rejection (payload too large,
+	// malformed evidence) where no reviewer ran at all. A controller reading
+	// the DONE report can tell any of these apart from a session-backed
+	// review on any host. formatEnvelopeSummary prints it as a
+	// `mode: lightweight` header line.
+	Lightweight bool `json:"lightweight,omitempty"`
 }
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
@@ -1532,6 +1542,11 @@ func hasNonEmptyEvidence(args *ValidateCompletionArgs, resolvedFiles []FileArg) 
 //     2c. effectiveMaxTokens and the clamp finding are computed before path
 //     resolution, so an oversized path input renders through the same
 //     clamped tooLargeEnvelope as an oversized inline payload.
+//     2c2. An empty session_id selects lightweight mode. Computed here,
+//     before 2d, so every rejection from here through the payload cap at 5
+//     can set Envelope.Lightweight too: the flag describes the call, not the
+//     review, so it applies equally to a call rejected before the reviewer
+//     is ever invoked.
 //     2d. resolveCompletionInputs materializes final_diff_path and every
 //     final_files[].path before the payload cap, the evidence-shape guard and
 //     the evidence cache key see them. An oversized path input returns that
@@ -1543,7 +1558,6 @@ func hasNonEmptyEvidence(args *ValidateCompletionArgs, resolvedFiles []FileArg) 
 //     malformed_evidence and no reviewer call is made; otherwise the review
 //     proceeds and carries an insufficient_evidence finding naming the path.
 //     See resolvedEmptyPathInputs and hasNonEmptyEvidence.
-//  3. An empty session_id selects lightweight mode.
 //  5. The payload cap.
 //     5b. exit_contracts normalization.
 //     5c. finding_responses and controller_rulings normalization; their
@@ -1604,6 +1618,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, err
 	}
 
+	// 2c2. lightweight marker: an empty session_id. Computed here so the 2d,
+	// 2e and 5 rejections below can each set Envelope.Lightweight on their
+	// way out too.
+	lightweight := args.SessionID == ""
+
 	// 2d. Resolve path inputs BEFORE the payload cap, the evidence-shape
 	// guard, and the evidence cache key. checkEvidenceShape must see resolved
 	// content: otherwise a caller could bypass the truncation guard entirely
@@ -1624,6 +1643,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			env := prependClamp(tooLargeEnvelope("validate_completion", args.SessionID, h.deps.Cfg.PostModel, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes,
 				fmt.Sprintf("%s is %d bytes, over the %d-byte cap. %s",
 					tooLarge.field, tooLarge.bytes, h.deps.Cfg.MaxPayloadBytes, completionShrinkAdvice)), clamp)
+			env.Lightweight = lightweight
 			h.recordStat(statParams{
 				tool:         "validate_completion",
 				verdict:      env.Verdict,
@@ -1647,6 +1667,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			// hard reject, with no paid reviewer call when there is nothing
 			// to review.
 			env := malformedEvidenceEnvelope("validate_completion", args.SessionID, emptyPathReasons[0], h.deps.Cfg.PostModel.String())
+			env.Lightweight = lightweight
 			clamped := prependClamp(env, clamp)
 			h.recordStat(statParams{
 				tool:         "validate_completion",
@@ -1679,14 +1700,12 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		args.Codescene.Normalize()
 	}
 
-	// 3. lightweight marker.
-	lightweight := args.SessionID == ""
-
 	// 5. payload-cap check. In lightweight mode the surfaced session_id stays
 	// empty; otherwise we don't have the session yet, so use args.SessionID.
 	if size := totalCompletionBytes(resolvedFiles, args.FinalDiff); size > h.deps.Cfg.MaxPayloadBytes {
 		env := prependClamp(tooLargeEnvelope("validate_completion", args.SessionID, h.deps.Cfg.PostModel, size, h.deps.Cfg.MaxPayloadBytes,
 			"Send a unified diff via final_diff rather than whole files. "+completionShrinkAdvice), clamp)
+		env.Lightweight = lightweight
 		h.recordStat(statParams{
 			tool:         "validate_completion",
 			verdict:      env.Verdict,
@@ -1724,6 +1743,12 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	cacheKey := evidenceCacheKey(args.SessionID, args.FinalDiff, resolvedFiles, args.TestEvidence)
 	if cached, ok := lookupCachedRejection(cacheKey); ok {
 		c := prependClamp(cached, clamp)
+		// Set from THIS call's lightweight value, not trusted from the
+		// cached copy: cacheKey folds in args.SessionID, so a hit is always
+		// for the same session_id the cached envelope was stored under, but
+		// deriving Lightweight here keeps that independent of the cache
+		// key's shape rather than relying on it.
+		c.Lightweight = lightweight
 		h.recordStat(statParams{
 			tool:         "validate_completion",
 			verdict:      c.Verdict,
@@ -1737,6 +1762,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	}
 	if reason := checkEvidenceShape(args.FinalDiff, resolvedFiles); reason != "" {
 		env := malformedEvidenceEnvelope("validate_completion", args.SessionID, reason, h.deps.Cfg.PostModel.String())
+		env.Lightweight = lightweight
 		storeRejection(cacheKey, env)
 		clamped := prependClamp(env, clamp)
 		h.recordStat(statParams{
@@ -1853,6 +1879,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		Escalate:          len(escalateIDs) > 0,
 		WaivedFindings:    waived,
 		ControllerRulings: appliedRulings(review.rulings),
+		Lightweight:       lightweight,
 	}
 	env.Findings = append(env.Findings, review.advisories...)
 	env.Findings = append(env.Findings, repoRootAdvisories...)

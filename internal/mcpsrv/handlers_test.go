@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1829,6 +1830,110 @@ func TestValidateCompletion_LightweightMode_EmptySessionAccepted(t *testing.T) {
 	if env.Verdict != "pass" {
 		t.Errorf("lightweight mode reviewer call should pass with stub response, got %s", env.Verdict)
 	}
+}
+
+func TestValidateCompletion_LightweightMode_FlagsEnvelopeAndSummary(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n")}},
+	})
+	require.NoError(t, err)
+	assert.True(t, env.Lightweight, "an empty-session completion is lightweight")
+	modeRe := regexp.MustCompile(`(?m)^\s*verdict:\s*\w+\s*\n\s*mode:\s*lightweight\s*$`)
+	assert.True(t, modeRe.MatchString(env.SummaryBlock),
+		"summary_block must carry mode: lightweight right after verdict:\n%s", env.SummaryBlock)
+}
+
+func TestValidateCompletion_SessionBacked_IsNotLightweight(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "g", AcceptanceCriteria: []string{"a"},
+	})
+	require.NoError(t, err)
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n")}},
+	})
+	require.NoError(t, err)
+	assert.False(t, env.Lightweight)
+	assert.NotContains(t, env.SummaryBlock, "mode:")
+}
+
+func TestValidateCompletion_LightweightMode_TooLargeStillFlagged(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	d.Cfg.MaxPayloadBytes = 200
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr(strings.Repeat("x", 300))}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "fail", env.Verdict, "over the cap is a payload_too_large rejection")
+	assert.True(t, env.Lightweight, "the rejection of an empty-session completion is still lightweight")
+	assert.Contains(t, env.SummaryBlock, "mode:          lightweight")
+}
+
+// TestValidateCompletion_LightweightMode_MalformedEvidenceStillFlagged pins
+// that Lightweight describes the CALL, not the review, so it must also be
+// set on a pre-review rejection that has nothing to do with payload size —
+// here, the evidence-shape guard's truncation-marker check
+// (checkEvidenceShape) firing on an empty-session call.
+func TestValidateCompletion_LightweightMode_MalformedEvidenceStillFlagged(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	// Built by concatenation, not a plain literal: this file's own diff is
+	// what gets submitted as validate_completion review evidence, and one
+	// of evidenceTruncationPatterns spelled out whole here would trip that
+	// same guard on the submission itself, rejecting honest evidence as if
+	// it were the truncated kind.
+	marker := "// " + "snip"
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n" + marker + "\nmore\n")}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "fail", env.Verdict, "a truncation marker triggers a malformed_evidence rejection")
+	assert.True(t, env.Lightweight, "the malformed_evidence rejection of an empty-session completion is still lightweight")
+	assert.Contains(t, env.SummaryBlock, "mode:          lightweight")
+}
+
+// TestValidateCompletion_LightweightMode_MalformedEvidenceCacheHitStillFlagged
+// repeats the same call to hit rejectionCache: the second call must set
+// Lightweight and render mode: lightweight from ITS OWN session_id, not by
+// trusting whatever the cached envelope happened to carry.
+func TestValidateCompletion_LightweightMode_MalformedEvidenceCacheHitStillFlagged(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	marker := "// " + "snip"
+	args := ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n" + marker + "\nmore\n")}},
+	}
+	_, env1, err := h.ValidateCompletion(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.Equal(t, "fail", env1.Verdict, "first call rejects fresh, via checkEvidenceShape")
+	assert.True(t, env1.Lightweight)
+
+	callsAfterFirst := rv.Calls
+	_, env2, err := h.ValidateCompletion(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.Equal(t, "fail", env2.Verdict, "second call rejects from the rejection cache")
+	assert.Equal(t, callsAfterFirst, rv.Calls, "the cache hit must not invoke the reviewer")
+	assert.True(t, env2.Lightweight, "a cache-hit rejection of an empty-session call is still lightweight")
+	assert.Contains(t, env2.SummaryBlock, "mode:          lightweight")
 }
 
 func TestValidateCompletion_LightweightMode_OmitsPreFindingsToVerify(t *testing.T) {

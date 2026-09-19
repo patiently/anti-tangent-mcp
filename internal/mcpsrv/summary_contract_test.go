@@ -384,3 +384,37 @@ func TestSummaryBlockContractEscalateWaivedAndRulingLinesLeaveTheMarkersAlone(t 
 		assert.Greater(t, loc[0], findings, "a ruling: line sits below the header and the findings count\ngot:\n%s", got)
 	}
 }
+
+// TestSummaryBlockContractModeLineDoesNotDisturbMarkers pins that the
+// lightweight mode line is an extra header key the guard's per-key regexes
+// step over: tool:, session_id: and verdict: still match, and the line sits
+// between verdict: and model_used: so a block reads the same to a guard that
+// has never heard of it.
+func TestSummaryBlockContractModeLineDoesNotDisturbMarkers(t *testing.T) {
+	got := formatEnvelopeSummary(Envelope{
+		Tool:        "validate_completion",
+		SessionID:   "",
+		Verdict:     string(verdict.VerdictPass),
+		Lightweight: true,
+		NextAction:  "proceed",
+		ModelUsed:   "anthropic:claude-opus-4-7",
+	})
+	require.True(t, regexp.MustCompile(`(?m)^\s*tool:\s*validate_completion\s*$`).MatchString(got), got)
+	require.Contains(t, got, "session_id:")
+	require.True(t, regexp.MustCompile(`(?m)^\s*verdict:\s*(\w+)`).MatchString(got), got)
+	seq := regexp.MustCompile(`(?s)verdict:.*\n\s*mode:\s*lightweight\s*\n\s*model_used:`)
+	require.True(t, seq.MatchString(got), "mode: must sit between verdict: and model_used:\n%s", got)
+
+	plain := formatEnvelopeSummary(Envelope{Tool: "validate_completion", SessionID: "s", Verdict: "pass", NextAction: "x", ModelUsed: "m"})
+	require.Equal(t, "anti-tangent envelope\n"+
+		"  tool:          validate_completion\n"+
+		"  session_id:    s\n"+
+		"  verdict:       pass\n"+
+		"  model_used:    m\n"+
+		"  review_ms:     0\n"+
+		"  findings:      0 total (0 critical, 0 major, 0 minor)\n"+
+		"  next_action:   x\n", plain, "a session-backed block carries no mode line and no other change")
+	lite := formatEnvelopeSummary(Envelope{Tool: "validate_completion", SessionID: "s", Verdict: "pass", Lightweight: true, NextAction: "x", ModelUsed: "m"})
+	require.Equal(t, plain, strings.Replace(lite, "  mode:          lightweight\n", "", 1),
+		"the mode line is the only difference the flag makes")
+}
