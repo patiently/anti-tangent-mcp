@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `validate_task_spec` returns `implementation_guidance`: a lean build ruleset adapted from
   DietrichGebert's MIT-licensed ponytail (attributed in `THIRD_PARTY_NOTICES.md`). It reaches
-  implementers on every MCP host, once per task, and is the same text the reviewer holds the
-  diff to.
+  implementers on every MCP host, once per task that calls `validate_task_spec` — a lightweight
+  dispatch skips that call and gets none — and is the same text the reviewer holds the diff to.
 - A new `quality` / `over_building` criterion, always `minor` and rolled up — one finding per
   call, or per task plus one cross-task finding in `validate_plan`: `validate_plan` and
   `validate_task_spec` flag plan text that mandates over-building (an interface with one
