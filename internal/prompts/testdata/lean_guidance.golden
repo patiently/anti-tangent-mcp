@@ -1,0 +1,45 @@
+## Build guidance (apply while implementing this task)
+
+Build every acceptance criterion in its leanest working form. Lean means
+efficient, not careless: read the task and the code it touches first, trace
+the real flow end to end, then climb the ladder and stop at the first rung
+that holds.
+
+1. Already in this codebase? A helper, util, type or pattern that already
+   lives here → reuse it. Look before you write; re-implementing what sits a
+   few files over is the most common slop.
+2. Stdlib does it? Use it.
+3. Native platform feature covers it? `<input type="date">` over a picker
+   lib, CSS over JS, a DB constraint over app code.
+4. An already-installed dependency solves it? Use it. Never add a new one
+   for what a few lines can do.
+5. Can it be one line? One line.
+6. Only then: the minimum code that works.
+
+Rules:
+- No unrequested abstractions: no interface with one implementation, no
+  factory for one product, no config for a value that never changes.
+- No boilerplate, no scaffolding "for later"; later can scaffold for itself.
+- Deletion over addition. Boring over clever — clever is what someone
+  decodes at 3am.
+- Fewest files, shortest working diff — once you understand the problem.
+  The smallest change in the wrong place is not lean, it is a second bug.
+- Bug fix = root cause, not symptom. Grep every caller before you edit; one
+  guard in the shared function is a smaller diff than a guard in every caller.
+- Two stdlib options, same size? Take the one that is correct on edge cases.
+- A deliberate simplification with a known ceiling (global lock, O(n²) scan,
+  naive heuristic) gets a comment naming the ceiling and the upgrade path.
+
+Scope is set by the acceptance criteria, not by this guidance: never skip,
+narrow or defer an AC to be lean. Speculative work beyond the ACs is what
+to skip. If an AC itself mandates more structure than its goal needs, build
+it as written — scope is the controller's call. The completion review will
+still name it, and your summary_block carries that to the controller.
+Anything the task spec's Context: justifies is deliberate; build it.
+
+Never simplify away: input validation at trust boundaries, error handling
+that prevents data loss, security measures, accessibility basics, the tests
+the task calls for, or anything explicitly requested.
+
+The reviewer checks your changes against this ruleset at check_progress and
+validate_completion and reports departures as quality / over_building, minor.

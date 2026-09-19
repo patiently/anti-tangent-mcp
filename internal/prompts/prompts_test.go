@@ -2330,3 +2330,10 @@ func TestRenderPost_PreFindingsToVerifyExplainsMinorAmbiguities(t *testing.T) {
 	assert.Contains(t, out.User, "raise it again only when the evidence shows it forced a deviation")
 	assert.Contains(t, out.User, "- ID: f_0123abcd\n  Severity: minor")
 }
+
+func TestLeanGuidance(t *testing.T) {
+	got, err := LeanGuidance()
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(got, "## Build guidance (apply while implementing this task)"), got)
+	golden(t, "lean_guidance", got)
+}
