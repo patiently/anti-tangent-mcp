@@ -53,6 +53,12 @@ type replayFixture struct {
 type replayExpectation struct {
 	Call          string   `json:"call"`
 	AnyOfKeywords []string `json:"any_of_keywords"`
+	// Criterion, when non-empty, restricts a match to findings whose own
+	// Criterion equals it (case-insensitive, trimmed): a keyword an
+	// expectation looks for can also appear in an unrelated finding — one
+	// from a different check entirely — and that finding must not stand in
+	// for the one this expectation is actually measuring.
+	Criterion string `json:"criterion,omitempty"`
 }
 
 const (
@@ -362,7 +368,7 @@ func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, report *r
 func tallyExpectations(report *replayReport, run int, findings map[string][]verdict.Finding) {
 	for i := range report.Expectations {
 		tally := &report.Expectations[i]
-		f, ok := firstMatchingFinding(findings[tally.Call], tally.AnyOfKeywords)
+		f, ok := firstMatchingFinding(findings[tally.Call], tally.AnyOfKeywords, tally.Criterion)
 		if !ok {
 			continue
 		}
@@ -416,16 +422,35 @@ func isAdvisory(f verdict.Finding) bool {
 	return f.Severity == verdict.SeverityMinor && f.Category == verdict.CategoryOther
 }
 
-func firstMatchingFinding(findings []verdict.Finding, keywords []string) (verdict.Finding, bool) {
+// firstMatchingFinding returns the first finding in findings whose keyword
+// text contains any of keywords, ignoring case. When criterion is non-empty,
+// a finding must also carry that exact Criterion (trimmed, case-insensitive)
+// to be eligible — otherwise an earlier, unrelated finding that happens to
+// share a keyword would be recorded instead of the one being measured.
+func firstMatchingFinding(findings []verdict.Finding, keywords []string, criterion string) (verdict.Finding, bool) {
+	criterion = strings.ToLower(strings.TrimSpace(criterion))
 	for _, f := range findings {
-		text := strings.ToLower(strings.Join([]string{string(f.Category), f.Criterion, f.Evidence, f.Suggestion}, "\n"))
-		for _, k := range keywords {
-			if k != "" && strings.Contains(text, strings.ToLower(k)) {
-				return f, true
-			}
+		if findingMatches(f, keywords, criterion) {
+			return f, true
 		}
 	}
 	return verdict.Finding{}, false
+}
+
+// findingMatches reports whether f meets criterion (already trimmed and
+// lower-cased by the caller; empty means unrestricted) and contains any
+// keyword, ignoring case, in its category, criterion, evidence or suggestion.
+func findingMatches(f verdict.Finding, keywords []string, criterion string) bool {
+	if criterion != "" && strings.ToLower(strings.TrimSpace(f.Criterion)) != criterion {
+		return false
+	}
+	text := strings.ToLower(strings.Join([]string{string(f.Category), f.Criterion, f.Evidence, f.Suggestion}, "\n"))
+	for _, k := range keywords {
+		if k != "" && strings.Contains(text, strings.ToLower(k)) {
+			return true
+		}
+	}
+	return false
 }
 
 // String renders the report for a test log.
