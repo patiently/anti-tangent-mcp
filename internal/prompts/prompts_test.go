@@ -2375,3 +2375,29 @@ func TestLeanRulesPlacement(t *testing.T) {
 	// because the over-building sections sit in the per-call suffix.
 	assert.Equal(t, only.UserPrefix, chunk.UserPrefix)
 }
+
+func TestOverBuildingSectionsIncludeTheOneRuleset(t *testing.T) {
+	lean, err := LeanGuidance()
+	require.NoError(t, err)
+
+	post, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", FinalDiff: "--- a\n+++ b\n"})
+	require.NoError(t, err)
+	assert.Contains(t, post.User, "### Over-building")
+	assert.Contains(t, post.User, lean, "post.tmpl must include lean.tmpl verbatim")
+	for _, tag := range []string{"`reuse:`", "`stdlib:`", "`native:`", "`yagni:`", "`delete:`", "`shrink:`"} {
+		assert.Contains(t, post.User, tag)
+	}
+	assert.Contains(t, post.User, "net: -N lines")
+	assert.Contains(t, post.User, "ONLY when a diff is present")
+
+	mid, err := RenderMid(MidInput{Spec: sampleSpec(), WorkingOn: "w", Files: []File{{Path: "a.go", Content: "package a\n"}}})
+	require.NoError(t, err)
+	assert.Contains(t, mid.User, "### Over-building")
+	assert.Contains(t, mid.User, lean, "mid.tmpl must include lean.tmpl verbatim")
+	assert.Contains(t, mid.User, "Not `shrink:`")
+	// The backticked tag words appear only in the over-building sections, so
+	// these assertions are scoped to them without slicing the prompt.
+	for _, tag := range []string{"`reuse:`", "`stdlib:`", "`native:`", "`yagni:`", "`delete:`"} {
+		assert.Contains(t, mid.User, tag)
+	}
+}

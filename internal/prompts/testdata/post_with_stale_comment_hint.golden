@@ -93,6 +93,72 @@ Like comment hygiene, apply this ONLY when a diff is present: without one, the e
 
 Report every stale comment in ONE finding, however many there are: `category: quality`, `criterion: stale_comments`, `severity: minor`. Quote each stale comment in `evidence` with its path, and with its line when the evidence gives you one — the server hint and a diff's hunk headers do, whole `final_files` contents do not. Never invent a line number, and never leave a stale comment out for want of one. Give each comment's rewrite or removal in `suggestion`.
 
+### Over-building
+
+The implementer was handed this ruleset when the task started:
+
+## Build guidance (apply while implementing this task)
+
+Build every acceptance criterion in its leanest working form. Lean means
+efficient, not careless: read the task and the code it touches first, trace
+the real flow end to end, then climb the ladder and stop at the first rung
+that holds.
+
+1. Already in this codebase? A helper, util, type or pattern that already
+   lives here → reuse it. Look before you write; re-implementing what sits a
+   few files over is the most common slop.
+2. Stdlib does it? Use it.
+3. Native platform feature covers it? `<input type="date">` over a picker
+   lib, CSS over JS, a DB constraint over app code.
+4. An already-installed dependency solves it? Use it. Never add a new one
+   for what a few lines can do.
+5. Can it be one line? One line.
+6. Only then: the minimum code that works.
+
+Rules:
+- No unrequested abstractions: no interface with one implementation, no
+  factory for one product, no config for a value that never changes.
+- No boilerplate, no scaffolding "for later"; later can scaffold for itself.
+- Deletion over addition. Boring over clever — clever is what someone
+  decodes at 3am.
+- Fewest files, shortest working diff — once you understand the problem.
+  The smallest change in the wrong place is not lean, it is a second bug.
+- Bug fix = root cause, not symptom. Grep every caller before you edit; one
+  guard in the shared function is a smaller diff than a guard in every caller.
+- Two stdlib options, same size? Take the one that is correct on edge cases.
+- A deliberate simplification with a known ceiling (global lock, O(n²) scan,
+  naive heuristic) gets a comment naming the ceiling and the upgrade path.
+
+Scope is set by the acceptance criteria, not by this guidance: never skip,
+narrow or defer an AC to be lean. Speculative work beyond the ACs is what
+to skip. If an AC itself mandates more structure than its goal needs, build
+it as written — scope is the controller's call. The completion review will
+still name it, and your summary_block carries that to the controller.
+Anything the task spec's Context: justifies is deliberate; build it.
+
+Never simplify away: input validation at trust boundaries, error handling
+that prevents data loss, security measures, accessibility basics, the tests
+the task calls for, or anything explicitly requested.
+
+The reviewer checks your changes against this ruleset at check_progress and
+validate_completion and reports departures as quality / over_building, minor.
+
+
+Check the change against it. Judge ONLY what this change adds, and ONLY when a diff is present: with `final_files` and no diff you cannot tell a new interface from one that was already there, and the summary is not evidence — emit no over-building finding at all. Tag each instance:
+
+- `reuse:` the diff adds a helper that a submitted file already has, or that the task spec's `Context:` or pinned-by entries name. Only from the evidence in front of you: you never see the rest of the codebase, and absence there is silence, not approval.
+- `stdlib:` a hand-rolled utility, or a new dependency, for what the language's standard library covers. Language from the paths; general knowledge, not a codebase claim.
+- `native:` application code for what the platform provides — a uniqueness check in a service instead of a database constraint, a date-picker library over `<input type="date">`, JavaScript over CSS.
+- `yagni:` an interface with one implementation, a factory for one product, a config value nothing varies, a layer with one caller — within the evidence.
+- `delete:` scaffolding for later: placeholder modules, unused flexibility, empty hooks, retry around an idempotent local call.
+- `shrink:` the same logic in fewer lines; show the shorter form. Test code is exempt from `shrink`; the other tags apply to it — a mocking dependency for what a stub does is still `native`.
+
+Never flag: validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, tests the task calls for, or anything explicitly requested. Anything the task spec's `Context:` justifies is deliberate and draws no finding.
+
+A structure an acceptance criterion itself mandated is still reported: say in `evidence` which criterion mandated it, address `suggestion` to the plan author ("drop the interface from the AC, or justify it in `Context:`"), and set `same_as` to the pre-task `over_building` finding when there is one. The implementer is not expected to act on it; the summary block carries it to the controller.
+
+Report every instance in ONE finding: `category: quality`, `criterion: over_building`, `severity: minor`. `evidence` lists each instance as `path:line: <tag>: <what>. <replacement>.` — line numbers from the diff's hunk headers, never invented — and ends with `net: -N lines`, your estimate of what the replacements remove. `suggestion` gives the replacement code or the removal. If there is nothing to cut, emit no over-building finding.
+
 Every finding carries `same_as`: the ID of the prior finding or pre-task finding it raises again, or null when it raises none of them.
 
 Respond with the verdict JSON only.
