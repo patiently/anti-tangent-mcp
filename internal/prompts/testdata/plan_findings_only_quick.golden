@@ -59,6 +59,10 @@ still misimplement; minor = nit.
 
 **Quick mode.** Surface only the most-severe findings — at most 3 plan-level findings. Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
 
+### Over-building across tasks
+
+Over-building that only shows when tasks are read together and belongs to no single task — three tasks each writing their own config loader, a helper re-implemented in two tasks — is ONE plan-level finding: `category: quality`, `criterion: over_building`, `severity: minor`, with `evidence` naming the tasks and each instance as `<tag>: <what>. <replacement>.` using the tags `reuse`, `stdlib`, `native`, `yagni`, `delete`, `shrink`. A structure one task introduces — an interface no other task implements, say — is that task's `yagni:` instance and is never repeated here; over-building inside a single task is judged per task, not here. A structure a task's `Context:` justifies draws no finding. This finding is exempt from any cap on minor findings elsewhere in this prompt.
+
 ### Comment hygiene in normative code
 
 Code inside a fence in this plan is transcribed into the repository as written, so a comment in a fence becomes a comment in the codebase. Flag a comment that carries a tracker key (`ABC-1234:`), an issue or pull-request reference, or change narration — "added in v0.5.0", "previously", "no longer", "this replaced". A comment must read correctly to someone who never saw the change that introduced it; a version reference stating a live compatibility contract ("reads the v0.10.0 output") is not a defect.

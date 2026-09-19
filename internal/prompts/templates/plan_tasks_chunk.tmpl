@@ -59,7 +59,7 @@ still misimplement; minor = nit.
 **Quick mode.** For each task in the list above, surface only the most-severe findings — at most 3 per task. Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
 
 {{ end -}}
-## Output
+{{template "plan_lean_rules" .}}## Output
 
 Respond with a JSON object matching the provided schema. The `tasks` array
 must contain exactly one entry per task in the list above, **in the same

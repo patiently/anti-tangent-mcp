@@ -101,6 +101,23 @@ leave both empty.
 Severity: critical = unimplementable as written; major = implementer would
 still misimplement; minor = nit.
 
+### Over-building
+
+Plans — and the single task specs drawn from them — over-build in six ways. Report each as `category: quality`, `criterion: over_building`, always `severity: minor`, tagging every instance with one of these words:
+
+- `reuse:` a task writes a helper that an attached file or the Project knowledge section already provides. Cite the attached path and the symbol. Never infer this from the black box: a helper you cannot see is silence, not approval.
+- `stdlib:` a task adds a dependency, or hand-writes a utility, for what the language's standard library covers. Read the language from the paths and fences; this is general knowledge, not a codebase claim. Say an installed dependency already covers it only when a manifest (`go.mod`, `package.json`, `pyproject.toml`, …) is attached.
+- `native:` a task builds in application code what the platform provides — uniqueness enforced in a service instead of a database constraint, a date-picker library over `<input type="date">`, JavaScript over CSS.
+- `yagni:` a task mandates an interface or abstract type with one implementation, a factory or registry for one product, a configuration value or flag no task varies, or a layer with one caller — judged across the whole plan (or, when a single task spec is all you have, across that spec). Cite the introducing task and the absence of a second consumer.
+- `delete:` a task scaffolds for a phase this plan (or this task) does not deliver: placeholder modules, "extension points", empty hooks, stubs for later. A whole task outside the plan's goal is scope drift, not this.
+- `shrink:` fenced code — transcribed into the repository verbatim — does in many lines what a shorter form does in few. Test fences are exempt from `shrink` only; arrange/act/assert is verbose by nature.
+
+Never flag: validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, tests an acceptance criterion calls for, normative test bodies, or anything the plan's or the task's Goal explicitly asks for. A structure the task's `Context:` justifies — a second implementation named in a later task, a dependency chosen for edge cases the standard library mishandles, a decision quoted from Project knowledge — is deliberate and draws no finding.
+
+Emit at most ONE `over_building` finding per task, in that task's findings (for a single task spec, one finding in all). `evidence` lists every instance on its own line as `<tag>: <what>. <replacement>.`; `suggestion` is the rewritten acceptance criterion or step, or the `Context:` line to add when the structure is deliberate.
+
+This finding is minor because that is the severity it is worth, not because it is discretionary: an instruction elsewhere in this prompt to surface only the most-severe findings or to omit minor ones does not reach it. Emit it in addition to any such cap.
+
 ## Output
 
 Respond with a JSON object matching the provided schema. The `tasks` array
