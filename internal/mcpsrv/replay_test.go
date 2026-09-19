@@ -92,13 +92,12 @@ func TestRunReplayFixture_TalliesEachExpectationAcrossRuns(t *testing.T) {
 	assert.Contains(t, report.String(), "advisory repo_root in 2/2")
 }
 
-// TestRunReplayFixture_CriterionRestrictsTheMatch pins R18: an expectation's
-// AnyOfKeywords can share a keyword with an unrelated, earlier finding (here
-// a missing_acceptance_criterion finding whose evidence happens to name
-// "CursorStore"). Without a Criterion, the first keyword match wins, exactly
-// as before. With Criterion set to "over_building", only a finding whose own
-// Criterion matches can meet the expectation, so the later over_building
-// finding is the one recorded instead.
+// TestRunReplayFixture_CriterionRestrictsTheMatch: an expectation's keywords
+// can also appear in an unrelated, earlier finding (here a
+// missing_acceptance_criterion finding whose evidence names "CursorStore").
+// Without a Criterion the first keyword match is recorded; with Criterion
+// "over_building" only a finding with that criterion can meet the
+// expectation, so the later over_building finding is recorded instead.
 func TestRunReplayFixture_CriterionRestrictsTheMatch(t *testing.T) {
 	unrelated := findingObj("major", "missing_acceptance_criterion", "spec", "CursorStore is not wired to the poller", "")
 	overBuilding := findingObj("minor", "quality", "over_building", "CursorStore is an unrequested interface", "")
