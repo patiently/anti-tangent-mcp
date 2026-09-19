@@ -61,3 +61,26 @@ func TestThirdPartyNoticesPresent(t *testing.T) {
 			"The full, unmodified Apache License Version 2.0 is required by Apache-2.0 §4.")
 	}
 }
+
+// The ponytail ruleset adapted into lean.tmpl and plan_lean_rules.tmpl is
+// MIT-licensed; the notice must survive alongside the shunt entry.
+func TestThirdPartyNoticesListPonytail(t *testing.T) {
+	b, err := os.ReadFile(noticesPath)
+	if err != nil {
+		t.Fatalf("THIRD_PARTY_NOTICES.md is required: %v", err)
+	}
+	body := string(b)
+	for _, want := range []string{
+		"## ponytail",
+		"https://github.com/DietrichGebert/ponytail",
+		"Copyright (c) 2026 DietrichGebert",
+		"MIT",
+		"e3ba2aa6f1e6f0bc4d69eb09c9f0d0a93af56156",
+		"internal/prompts/templates/lean.tmpl",
+		"internal/prompts/templates/plan_lean_rules.tmpl",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("THIRD_PARTY_NOTICES.md must contain %q", want)
+		}
+	}
+}

@@ -320,6 +320,14 @@ func RenderPost(in PostInput) (Output, error) {
 	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
 }
 
+// LeanGuidance renders the build ruleset validate_task_spec hands an
+// implementer. mid.tmpl and post.tmpl include the same file, so the reviewer
+// judges the diff against the text the implementer was given rather than a
+// second copy that could drift.
+func LeanGuidance() (string, error) {
+	return render("lean.tmpl", nil)
+}
+
 // NewContextFilesNonce returns a fresh random hex token (crypto/rand-backed).
 // The production render path does NOT call this: RenderPlan,
 // RenderPlanFindingsOnly, and RenderPlanTasksChunk derive a DETERMINISTIC

@@ -516,11 +516,15 @@ The middle three (`validate_task_spec`, `check_progress`, `validate_completion`)
   "model_used": "anthropic:claude-sonnet-4-6",
   "review_ms": 2341,
   "session_expires_at": "2026-05-12T18:30:00Z",
-  "session_ttl_remaining_seconds": 14399
+  "session_ttl_remaining_seconds": 14399,
+  "implementation_guidance": "## Build guidance (apply while implementing this task)\n…",
+  "lightweight": true
 }
 ```
 
 `session_expires_at` and `session_ttl_remaining_seconds` are included in stateful-hook responses (v0.2.0+). If a stateful hook returns a `category: other` finding with `criterion: reviewer_response`, the reviewer response was cut off at the token budget — raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` and retry.
+
+`implementation_guidance` (v0.23.0+) is set only by `validate_task_spec`: the lean build ruleset the implementer applies, the same text `check_progress` holds the changed files to and `validate_completion` holds the diff to as `quality` / `over_building` (always `minor`). The example above shows every field at once; `implementation_guidance` appears only on `validate_task_spec` responses and `lightweight` only on empty-session `validate_completion` responses. `lightweight: true` (v0.23.0+) is set by a `validate_completion` that ran with an empty `session_id`; its `summary_block` carries a `mode: lightweight` line, so a controller can tell a call that had no acceptance criteria — reviewed or rejected before review — from a session-backed one.
 
 `validate_completion` (v0.2.0+) accepts `final_diff` as an alternative or supplement to `final_files`. Pass a unified diff when the changed files are too large to inline. At least one of `final_files`, `final_diff`, or `test_evidence` must be non-empty — summary-only requests are rejected. Timeout errors (default 180s, configurable via `ANTI_TANGENT_REQUEST_TIMEOUT`) include the configured timeout value and the env-var name for self-diagnosis.
 

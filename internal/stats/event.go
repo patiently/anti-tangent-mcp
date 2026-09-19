@@ -58,6 +58,7 @@ type Event struct {
 // bucket rather than vanishing from the metric.
 var countedCriteria = map[string]bool{
 	"comment_hygiene":              true,
+	"over_building":                true,
 	"comment_policy_absent":        true,
 	"test_evidence":                true,
 	"codescene_adoption":           true,

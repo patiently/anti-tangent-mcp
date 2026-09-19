@@ -2330,3 +2330,74 @@ func TestRenderPost_PreFindingsToVerifyExplainsMinorAmbiguities(t *testing.T) {
 	assert.Contains(t, out.User, "raise it again only when the evidence shows it forced a deviation")
 	assert.Contains(t, out.User, "- ID: f_0123abcd\n  Severity: minor")
 }
+
+func TestLeanGuidance(t *testing.T) {
+	got, err := LeanGuidance()
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(got, "## Build guidance (apply while implementing this task)"), got)
+	golden(t, "lean_guidance", got)
+}
+
+func TestLeanRulesPlacement(t *testing.T) {
+	pre, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.Contains(t, pre.User, "### Over-building")
+
+	plan, err := RenderPlan(PlanInput{PlanText: "### Task 1: x\n\n**Goal:** g\n"})
+	require.NoError(t, err)
+	// "### Over-building" is a prefix of the cross-task heading, so the
+	// per-task section is pinned by its own emission sentence instead.
+	assert.Contains(t, plan.User, "at most ONE `over_building` finding per task")
+	assert.Contains(t, plan.User, "### Over-building across tasks")
+
+	chunk, err := RenderPlanTasksChunk(PlanChunkInput{PlanText: "### Task 1: x\n", ChunkTasks: []planparser.RawTask{{Title: "Task 1: x"}}})
+	require.NoError(t, err)
+	assert.Contains(t, chunk.User, "### Over-building")
+	assert.NotContains(t, chunk.User, "plan-level finding")
+
+	only, err := RenderPlanFindingsOnly(PlanInput{PlanText: "### Task 1: x\n"})
+	require.NoError(t, err)
+	assert.Contains(t, only.User, "### Over-building across tasks")
+	// One structure is reported once: a single task's interface is that task's
+	// yagni instance, and the cross-task finding is for patterns no task owns.
+	assert.Contains(t, only.User, "is never repeated here")
+	assert.NotContains(t, only.User, "at most ONE `over_building` finding per task")
+
+	assert.Contains(t, pre.User, "for a single task spec, one finding in all",
+		"validate_task_spec reviews one spec, so the emission rule must read for it too")
+
+	for _, tag := range []string{"`reuse:`", "`stdlib:`", "`native:`", "`yagni:`", "`delete:`", "`shrink:`"} {
+		assert.Contains(t, pre.User, tag)
+		assert.Contains(t, plan.User, tag)
+		assert.Contains(t, chunk.User, tag)
+	}
+	// The shared cacheable head is identical across the chunked templates
+	// because the over-building sections sit in the per-call suffix.
+	assert.Equal(t, only.UserPrefix, chunk.UserPrefix)
+}
+
+func TestOverBuildingSectionsIncludeTheOneRuleset(t *testing.T) {
+	lean, err := LeanGuidance()
+	require.NoError(t, err)
+
+	post, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", FinalDiff: "--- a\n+++ b\n"})
+	require.NoError(t, err)
+	assert.Contains(t, post.User, "### Over-building")
+	assert.Contains(t, post.User, lean, "post.tmpl must include lean.tmpl verbatim")
+	for _, tag := range []string{"`reuse:`", "`stdlib:`", "`native:`", "`yagni:`", "`delete:`", "`shrink:`"} {
+		assert.Contains(t, post.User, tag)
+	}
+	assert.Contains(t, post.User, "net: -N lines")
+	assert.Contains(t, post.User, "ONLY when a diff is present")
+
+	mid, err := RenderMid(MidInput{Spec: sampleSpec(), WorkingOn: "w", Files: []File{{Path: "a.go", Content: "package a\n"}}})
+	require.NoError(t, err)
+	assert.Contains(t, mid.User, "### Over-building")
+	assert.Contains(t, mid.User, lean, "mid.tmpl must include lean.tmpl verbatim")
+	assert.Contains(t, mid.User, "Not `shrink:`")
+	// The backticked tag words appear only in the over-building sections, so
+	// these assertions are scoped to them without slicing the prompt.
+	for _, tag := range []string{"`reuse:`", "`stdlib:`", "`native:`", "`yagni:`", "`delete:`"} {
+		assert.Contains(t, mid.User, tag)
+	}
+}

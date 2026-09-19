@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `validate_task_spec` returns `implementation_guidance`: a lean build ruleset adapted from
+  DietrichGebert's MIT-licensed ponytail (attributed in `THIRD_PARTY_NOTICES.md`). It reaches
+  implementers on every MCP host, once per task that calls `validate_task_spec` — a lightweight
+  dispatch skips that call and gets none — and is the same text the reviewer holds the diff to.
+- A new `quality` / `over_building` criterion, always `minor` and rolled up — one finding per
+  call, or per task plus one cross-task finding in `validate_plan`: `validate_plan` and
+  `validate_task_spec` flag plan text that mandates over-building (an interface with one
+  implementation, a dependency for what the stdlib does, scaffolding for a later phase),
+  `check_progress` flags structure the acceptance criteria do not call for, and
+  `validate_completion` judges the diff's added lines against the ruleset, tagging each instance
+  `reuse` / `stdlib` / `native` / `yagni` / `delete` / `shrink`. A structure the task's
+  `Context:` justifies draws no finding at any of the four. `authoring.md` §3.10 tells plan
+  authors what is flagged and how one `Context:` line pre-empts it.
+- An empty-session `validate_completion` sets `lightweight: true` on the envelope and prints
+  `mode: lightweight` in its `summary_block`, so a DONE report shows when a review had no
+  acceptance criteria to check.
+- Synthetic replay fixtures under `internal/mcpsrv/testdata/replay/lean/` for the
+  `over_building` check.
+- The stats ledger counts `over_building` in its criterion histogram.
+- An e2e replay expectation takes an optional `criterion`, restricting its match to findings
+  with that criterion.
 - `anti-tangent-guard` 0.5.0 gains a session guard under one new kill switch,
   `ANTI_TANGENT_SESSION_GUARD=0`. A `PreToolUse` hook on `Edit`/`Write`/`NotebookEdit`
   (`check-task-start`) refuses a dispatched implementer's first edit until
@@ -24,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A `validate_completion` finding that raises a pre-task finding again returns `same_as` with
+  that finding's ID. `same_as` is otherwise still never returned; a repeat of an earlier
+  completion finding stays `repeat_of`.
+- `over_building` findings are exempt from `validate_plan` quick mode's cap of three findings
+  per scope, and a minor `over_building` finding counts toward the three minor findings that
+  lift a verdict from `pass` to `warn`.
+- Reviewer prompts carry the over-building sections and the lean ruleset, so each reviewer
+  call's prompt grows by roughly 3–5 KB.
 - The guard README counts four block conditions and three kill switches;
   `examples/lightweight-dispatch.md` names its heading as the guard's marker.
 

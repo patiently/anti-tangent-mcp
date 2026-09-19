@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
+	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -1831,6 +1833,110 @@ func TestValidateCompletion_LightweightMode_EmptySessionAccepted(t *testing.T) {
 	}
 }
 
+func TestValidateCompletion_LightweightMode_FlagsEnvelopeAndSummary(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n")}},
+	})
+	require.NoError(t, err)
+	assert.True(t, env.Lightweight, "an empty-session completion is lightweight")
+	modeRe := regexp.MustCompile(`(?m)^\s*verdict:\s*\w+\s*\n\s*mode:\s*lightweight\s*$`)
+	assert.True(t, modeRe.MatchString(env.SummaryBlock),
+		"summary_block must carry mode: lightweight right after verdict:\n%s", env.SummaryBlock)
+}
+
+func TestValidateCompletion_SessionBacked_IsNotLightweight(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "g", AcceptanceCriteria: []string{"a"},
+	})
+	require.NoError(t, err)
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  pre.SessionID,
+		Summary:    "done",
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n")}},
+	})
+	require.NoError(t, err)
+	assert.False(t, env.Lightweight)
+	assert.NotContains(t, env.SummaryBlock, "mode:")
+}
+
+func TestValidateCompletion_LightweightMode_TooLargeStillFlagged(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	d.Cfg.MaxPayloadBytes = 200
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr(strings.Repeat("x", 300))}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "fail", env.Verdict, "over the cap is a payload_too_large rejection")
+	assert.True(t, env.Lightweight, "the rejection of an empty-session completion is still lightweight")
+	assert.Contains(t, env.SummaryBlock, "mode:          lightweight")
+}
+
+// TestValidateCompletion_LightweightMode_MalformedEvidenceStillFlagged pins
+// that Lightweight describes the CALL, not the review, so it must also be
+// set on a pre-review rejection that has nothing to do with payload size —
+// here, the evidence-shape guard's truncation-marker check
+// (checkEvidenceShape) firing on an empty-session call.
+func TestValidateCompletion_LightweightMode_MalformedEvidenceStillFlagged(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	// Built by concatenation, not a plain literal: this file's own diff is
+	// what gets submitted as validate_completion review evidence, and one
+	// of evidenceTruncationPatterns spelled out whole here would trip that
+	// same guard on the submission itself, rejecting honest evidence as if
+	// it were the truncated kind.
+	marker := "// " + "snip"
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n" + marker + "\nmore\n")}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "fail", env.Verdict, "a truncation marker triggers a malformed_evidence rejection")
+	assert.True(t, env.Lightweight, "the malformed_evidence rejection of an empty-session completion is still lightweight")
+	assert.Contains(t, env.SummaryBlock, "mode:          lightweight")
+}
+
+// TestValidateCompletion_LightweightMode_MalformedEvidenceCacheHitStillFlagged
+// repeats the same call to hit rejectionCache: the second call must set
+// Lightweight and render mode: lightweight from ITS OWN session_id, not by
+// trusting whatever the cached envelope happened to carry.
+func TestValidateCompletion_LightweightMode_MalformedEvidenceCacheHitStillFlagged(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	marker := "// " + "snip"
+	args := ValidateCompletionArgs{
+		SessionID:  "",
+		Summary:    "trivial doc change",
+		FinalFiles: []CompletionFileArg{{Path: "doc.md", Content: strPtr("updated\n" + marker + "\nmore\n")}},
+	}
+	_, env1, err := h.ValidateCompletion(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.Equal(t, "fail", env1.Verdict, "first call rejects fresh, via checkEvidenceShape")
+	assert.True(t, env1.Lightweight)
+
+	callsAfterFirst := rv.Calls
+	_, env2, err := h.ValidateCompletion(context.Background(), nil, args)
+	require.NoError(t, err)
+	require.Equal(t, "fail", env2.Verdict, "second call rejects from the rejection cache")
+	assert.Equal(t, callsAfterFirst, rv.Calls, "the cache hit must not invoke the reviewer")
+	assert.True(t, env2.Lightweight, "a cache-hit rejection of an empty-session call is still lightweight")
+	assert.Contains(t, env2.SummaryBlock, "mode:          lightweight")
+}
+
 func TestValidateCompletion_LightweightMode_OmitsPreFindingsToVerify(t *testing.T) {
 	cap := &reviewerCapture{fakeReviewer: fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}}
 	d := newDeps(t, &cap.fakeReviewer)
@@ -1956,6 +2062,70 @@ func TestValidateCompletion_RendersPreTaskFindingsToVerify(t *testing.T) {
 	assert.Contains(t, cap.LastRequest.User, "Pre-task review found AC did not specify load.")
 	assert.Contains(t, cap.LastRequest.User, "The no-new-warnings gate contradicts the lint Non-goal.")
 	assert.NotContains(t, cap.LastRequest.User, "Minor pre-finding should not render.")
+}
+
+// TestValidateCompletion_SameAsLinksPreTaskOverBuilding covers a completion
+// over_building finding whose same_as names the pre-task over_building
+// finding: the pre-task finding appears in the completion prompt, and the
+// returned finding's same_as survives instead of being nulled like every
+// other same_as.
+func TestValidateCompletion_SameAsLinksPreTaskOverBuilding(t *testing.T) {
+	preID := verdict.Fingerprint(verdict.CategoryQuality, "", "over_building")
+	rv := &scriptedReviewer{responses: []providers.Response{
+		{
+			RawJSON: []byte(`{
+				"verdict":"warn",
+				"findings":[
+					{"severity":"minor","category":"quality","criterion":"over_building","evidence":"AC 1 mandates a CursorStore interface with a single implementation.","suggestion":"Drop the interface from the AC, or justify it in Context."}
+				],
+				"next_action":"continue"
+			}`),
+			Model: "claude-sonnet-4-6",
+		},
+		{
+			RawJSON: []byte(fmt.Sprintf(`{
+				"verdict":"warn",
+				"findings":[
+					{"severity":"minor","category":"quality","criterion":"over_building","evidence":"cursor.go:12: yagni: CursorStore interface with a single implementation. Inline FileCursorStore's methods.","suggestion":"Drop CursorStore.","same_as":%q}
+				],
+				"next_action":"continue"
+			}`, preID)),
+			Model: "claude-sonnet-4-6",
+		},
+	}}
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	require.NoError(t, err)
+	h := &handlers{deps: Deps{
+		Cfg:      cfg,
+		Sessions: session.NewStore(1 * time.Hour),
+		Reviews:  providers.Registry{"anthropic": rv},
+	}}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC 1"},
+	})
+	require.NoError(t, err)
+	require.Len(t, pre.Findings, 1)
+	require.Equal(t, preID, pre.Findings[0].ID)
+
+	_, post, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:    pre.SessionID,
+		Summary:      "Added CursorStore per AC 1.",
+		TestEvidence: "ok",
+	})
+	require.NoError(t, err)
+	require.Len(t, rv.requests, 2)
+	assert.Contains(t, rv.requests[1].User, "## Pre-task findings to verify")
+	assert.Contains(t, rv.requests[1].User, preID)
+
+	require.Len(t, post.Findings, 1)
+	require.NotNil(t, post.Findings[0].SameAs, "same_as naming the pre-task finding must survive")
+	assert.Equal(t, preID, *post.Findings[0].SameAs)
 }
 
 func TestValidateCompletion_LightweightMode_NoEvidenceErrors(t *testing.T) {
@@ -3333,6 +3503,7 @@ func TestValidateCompletionPathInputs(t *testing.T) {
 			}
 		}
 		assert.Empty(t, cap.LastRequest.User, "reviewer must not have been called")
+		assert.True(t, env.Lightweight, "an empty session_id call is lightweight even when rejected")
 	})
 
 	// Same bug, via final_files: a path-only entry (content omitted, so it
@@ -3361,6 +3532,7 @@ func TestValidateCompletionPathInputs(t *testing.T) {
 			}
 		}
 		assert.Empty(t, cap.LastRequest.User, "reviewer must not have been called")
+		assert.True(t, env.Lightweight, "an empty session_id call is lightweight even when rejected")
 	})
 
 	// An EXPLICIT final_files content of "" (CompletionFileArg's documented
@@ -3512,6 +3684,7 @@ func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
 				assert.Contains(t, f.Evidence, fmt.Sprintf("%d", len(body)), "evidence must name the true byte count")
 			}
 		}
+		assert.True(t, env.Lightweight, "an empty session_id call is lightweight even when rejected")
 	})
 
 	t.Run("oversized final_files path-only entry returns a structured too-large envelope, not an error", func(t *testing.T) {
@@ -3535,6 +3708,7 @@ func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
 				assert.Contains(t, f.Evidence, fmt.Sprintf("%d", len(body)), "evidence must name the true byte count")
 			}
 		}
+		assert.True(t, env.Lightweight, "an empty session_id call is lightweight even when rejected")
 	})
 
 	t.Run("path outside ANTI_TANGENT_PLAN_ROOTS stays a plain transport error", func(t *testing.T) {
@@ -3615,4 +3789,55 @@ func TestResolveCompletionInputs_AggregateCapDuringResolution(t *testing.T) {
 		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
 		require.True(t, hasCategory(env.Findings, verdict.CategoryTooLarge), "expected a payload_too_large finding")
 	})
+}
+
+func TestValidateTaskSpec_ReturnsImplementationGuidance(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "g", AcceptanceCriteria: []string{"a"},
+	})
+	require.NoError(t, err)
+	want, err := prompts.LeanGuidance()
+	require.NoError(t, err)
+	assert.Equal(t, want, env.ImplementationGuidance)
+	assert.True(t, strings.HasPrefix(env.ImplementationGuidance, "## Build guidance"))
+	assert.NotContains(t, env.SummaryBlock, "Build guidance",
+		"the ruleset is for the implementer, not for the pasted DONE report")
+}
+
+func TestCheckProgressAndCompletion_NoImplementationGuidance(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "g", AcceptanceCriteria: []string{"a"},
+	})
+	require.NoError(t, err)
+	_, mid, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID: pre.SessionID, WorkingOn: "x",
+		ChangedFiles: []FileArg{{Path: "a.go", Content: "package a\n"}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, mid.ImplementationGuidance)
+	_, post, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: pre.SessionID, Summary: "done",
+		FinalFiles: []CompletionFileArg{{Path: "a.go", Content: strPtr("package a\n")}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, post.ImplementationGuidance)
+}
+
+func TestValidateTaskSpec_PayloadTooLarge_NoImplementationGuidance(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	d.Cfg.MaxPayloadBytes = 200
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "g", AcceptanceCriteria: []string{"a"},
+		ProjectKnowledge: strings.Repeat("p", 300),
+	})
+	require.Error(t, err, "over the cap is rejected before review")
+	assert.Empty(t, env.ImplementationGuidance)
 }

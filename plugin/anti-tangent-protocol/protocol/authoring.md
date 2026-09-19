@@ -130,6 +130,31 @@ Comments: anti-tangent-protocol implementer.md §4.4
 `validate_plan` emits a plan-level `major` (`criterion: comment_policy_absent`) when a plan carries
 neither. Equivalent wordings are accepted, but this is the line to paste.
 
+### 3.10 Lean by default
+
+`validate_plan` flags a plan that mandates over-building, as one `quality` / `over_building`
+finding per task plus one plan-level finding for a pattern that spans tasks, always `minor`,
+each instance tagged:
+
+- `reuse:` a task re-writes a helper an attached file or Project knowledge already provides.
+- `stdlib:` a dependency, or a hand-written utility, for what the standard library covers.
+- `native:` application code for what the platform provides (a DB constraint, `<input type="date">`, CSS).
+- `yagni:` an interface with one implementation, a factory for one product, a config value no
+  task varies, a layer with one caller — judged across the whole plan.
+- `delete:` scaffolding for a phase this plan does not deliver.
+- `shrink:` fenced code a shorter form replaces; test fences are exempt.
+
+**Justify deliberate structure in `Context:`, not in the dispatch conversation.** The same check
+runs at task start (`validate_task_spec`) and on the built code (`validate_completion`), and only
+`Context:` reaches them: "Task 9 adds the S3 backend", "chosen for the TZ edge cases the stdlib
+mishandles". A controller ruling waives the finding at plan level only.
+
+**Attach what a task might duplicate.** A helper the reviewer can see in `context_paths` is a
+`reuse` finding; one it cannot see is silence, not approval.
+
+An acceptance criterion that names an interface is an implementation step in disguise (§3.5):
+state the outcome and let the implementer pick the leanest structure that delivers it.
+
 ### Write-time comment guard (if `anti-tangent-guard` is installed)
 
 The comment policy (`implementer.md` §4.4) can be enforced, not just stated. If the

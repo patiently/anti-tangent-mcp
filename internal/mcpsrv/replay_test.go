@@ -92,6 +92,39 @@ func TestRunReplayFixture_TalliesEachExpectationAcrossRuns(t *testing.T) {
 	assert.Contains(t, report.String(), "advisory repo_root in 2/2")
 }
 
+// TestRunReplayFixture_CriterionRestrictsTheMatch: an expectation's keywords
+// can also appear in an unrelated, earlier finding (here a
+// missing_acceptance_criterion finding whose evidence names "CursorStore").
+// Without a Criterion the first keyword match is recorded; with Criterion
+// "over_building" only a finding with that criterion can meet the
+// expectation, so the later over_building finding is recorded instead.
+func TestRunReplayFixture_CriterionRestrictsTheMatch(t *testing.T) {
+	unrelated := findingObj("major", "missing_acceptance_criterion", "spec", "CursorStore is not wired to the poller", "")
+	overBuilding := findingObj("minor", "quality", "over_building", "CursorStore is an unrequested interface", "")
+	sr := &scriptedReviewer{responses: []providers.Response{reviewerFindingsResp(unrelated, overBuilding)}}
+	cfg := newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg
+	fx := replayFixture{
+		Name: "criterion",
+		ValidateCompletion: &ValidateCompletionArgs{
+			Summary:   "done",
+			FinalDiff: replayTestDiff,
+			RepoRoot:  "relative/path", // resolveDirInput rejects a relative repo_root
+		},
+		Expectations: []replayExpectation{
+			{Call: replayCallCompletion, AnyOfKeywords: []string{"CursorStore"}},
+			{Call: replayCallCompletion, AnyOfKeywords: []string{"CursorStore"}, Criterion: "over_building"},
+		},
+	}
+
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 1)
+
+	require.Equal(t, 1, sr.calls)
+	assert.Equal(t, 1, report.Expectations[0].Matched)
+	assert.Equal(t, []string{"run 1: missing_acceptance_criterion spec: CursorStore is not wired to the poller"}, report.Expectations[0].Matches, "without Criterion, the first keyword match wins")
+	assert.Equal(t, 1, report.Expectations[1].Matched)
+	assert.Equal(t, []string{"run 1: quality over_building: CursorStore is an unrequested interface"}, report.Expectations[1].Matches, "with Criterion set, only the over_building finding can meet the expectation")
+}
+
 // TestRunReplayFixture_MatchesOnlyTheReviewersOwnFindings pins A1: a keyword
 // that only appears in a server-added advisory (never in anything the
 // reviewer itself said) must not count as a match, or the replay's recall
@@ -194,4 +227,23 @@ func TestLoadReplayFixtures_RejectsBlankKeywords(t *testing.T) {
 	_, err := loadReplayFixtures(dir)
 
 	require.ErrorContains(t, err, "expectations[0] has no any_of_keywords that are not blank")
+}
+
+func TestLoadReplayFixtures_LeanFixtures(t *testing.T) {
+	fixtures, err := loadReplayFixtures("testdata/replay/lean")
+	require.NoError(t, err)
+	require.Len(t, fixtures, 2)
+
+	names := []string{fixtures[0].Name, fixtures[1].Name}
+	assert.ElementsMatch(t, []string{"lean", "over-built"}, names)
+
+	for _, fx := range fixtures {
+		require.NotNil(t, fx.ValidateTaskSpec, "fixture %q", fx.Name)
+		require.NotNil(t, fx.ValidateCompletion, "fixture %q", fx.Name)
+		require.NotEmpty(t, fx.Expectations, "fixture %q", fx.Name)
+		for _, e := range fx.Expectations {
+			assert.Equal(t, replayCallCompletion, e.Call, "fixture %q", fx.Name)
+			assert.Equal(t, "over_building", e.Criterion, "fixture %q", fx.Name)
+		}
+	}
 }

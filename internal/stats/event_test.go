@@ -115,3 +115,15 @@ func TestCountFindings_CriterionCaseAndWhitespaceNormalised(t *testing.T) {
 	assert.Equal(t, 1, crit["noise_cluster"])
 	assert.Len(t, crit, 2, "normalisation must fold onto the lower-case allowlist key, not add a second bucket")
 }
+
+func TestCountFindings_OverBuildingIsCounted(t *testing.T) {
+	findings := []verdict.Finding{
+		{Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
+			Criterion: "over_building", Evidence: "e", Suggestion: "s"},
+		{Severity: verdict.SeverityMinor, Category: verdict.CategoryQuality,
+			Criterion: " Over_Building ", Evidence: "e", Suggestion: "s"},
+	}
+	_, _, crit, total := CountFindings(findings)
+	require.Equal(t, 2, total)
+	assert.Equal(t, 2, crit["over_building"])
+}

@@ -22,7 +22,8 @@ const waivedRulingSummaryMax = 200
 // formatEnvelopeSummary renders a deterministic, paste-ready text block for a
 // per-task Envelope (validate_task_spec / check_progress / validate_completion).
 // It includes the originating tool name (when set), the session id, verdict,
-// partial flag (when set), escalate flag (when set), model + review timing,
+// a `mode: lightweight` line (when set) right after verdict, partial flag
+// (when set), escalate flag (when set), model + review timing,
 // optional session TTL line, findings counts plus per-finding lines, one
 // ruling: line per controller ruling applied, one waived: line per waived
 // finding, and the next_action. Output is plain text and intentionally stable
@@ -41,6 +42,9 @@ func formatEnvelopeSummary(env Envelope) string {
 	}
 	fmt.Fprintf(&b, "  session_id:    %s\n", escapeBlockValue(env.SessionID))
 	fmt.Fprintf(&b, "  verdict:       %s\n", escapeBlockValue(env.Verdict))
+	if env.Lightweight {
+		b.WriteString("  mode:          lightweight\n")
+	}
 	if env.Partial {
 		b.WriteString("  partial:       true\n")
 	}
