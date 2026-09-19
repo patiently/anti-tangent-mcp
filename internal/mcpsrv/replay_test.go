@@ -228,3 +228,22 @@ func TestLoadReplayFixtures_RejectsBlankKeywords(t *testing.T) {
 
 	require.ErrorContains(t, err, "expectations[0] has no any_of_keywords that are not blank")
 }
+
+func TestLoadReplayFixtures_LeanFixtures(t *testing.T) {
+	fixtures, err := loadReplayFixtures("testdata/replay/lean")
+	require.NoError(t, err)
+	require.Len(t, fixtures, 2)
+
+	names := []string{fixtures[0].Name, fixtures[1].Name}
+	assert.ElementsMatch(t, []string{"lean", "over-built"}, names)
+
+	for _, fx := range fixtures {
+		require.NotNil(t, fx.ValidateTaskSpec, "fixture %q", fx.Name)
+		require.NotNil(t, fx.ValidateCompletion, "fixture %q", fx.Name)
+		require.NotEmpty(t, fx.Expectations, "fixture %q", fx.Name)
+		for _, e := range fx.Expectations {
+			assert.Equal(t, replayCallCompletion, e.Call, "fixture %q", fx.Name)
+			assert.Equal(t, "over_building", e.Criterion, "fixture %q", fx.Name)
+		}
+	}
+}

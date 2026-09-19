@@ -2064,6 +2064,70 @@ func TestValidateCompletion_RendersPreTaskFindingsToVerify(t *testing.T) {
 	assert.NotContains(t, cap.LastRequest.User, "Minor pre-finding should not render.")
 }
 
+// TestValidateCompletion_SameAsLinksPreTaskOverBuilding covers a completion
+// over_building finding whose same_as names the pre-task over_building
+// finding: the pre-task finding appears in the completion prompt, and the
+// returned finding's same_as survives instead of being nulled like every
+// other same_as.
+func TestValidateCompletion_SameAsLinksPreTaskOverBuilding(t *testing.T) {
+	preID := verdict.Fingerprint(verdict.CategoryQuality, "", "over_building")
+	rv := &scriptedReviewer{responses: []providers.Response{
+		{
+			RawJSON: []byte(`{
+				"verdict":"warn",
+				"findings":[
+					{"severity":"minor","category":"quality","criterion":"over_building","evidence":"AC 1 mandates a CursorStore interface with a single implementation.","suggestion":"Drop the interface from the AC, or justify it in Context."}
+				],
+				"next_action":"continue"
+			}`),
+			Model: "claude-sonnet-4-6",
+		},
+		{
+			RawJSON: []byte(fmt.Sprintf(`{
+				"verdict":"warn",
+				"findings":[
+					{"severity":"minor","category":"quality","criterion":"over_building","evidence":"cursor.go:12: yagni: CursorStore interface with a single implementation. Inline FileCursorStore's methods.","suggestion":"Drop CursorStore.","same_as":%q}
+				],
+				"next_action":"continue"
+			}`, preID)),
+			Model: "claude-sonnet-4-6",
+		},
+	}}
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	require.NoError(t, err)
+	h := &handlers{deps: Deps{
+		Cfg:      cfg,
+		Sessions: session.NewStore(1 * time.Hour),
+		Reviews:  providers.Registry{"anthropic": rv},
+	}}
+
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", AcceptanceCriteria: []string{"AC 1"},
+	})
+	require.NoError(t, err)
+	require.Len(t, pre.Findings, 1)
+	require.Equal(t, preID, pre.Findings[0].ID)
+
+	_, post, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID:    pre.SessionID,
+		Summary:      "Added CursorStore per AC 1.",
+		TestEvidence: "ok",
+	})
+	require.NoError(t, err)
+	require.Len(t, rv.requests, 2)
+	assert.Contains(t, rv.requests[1].User, "## Pre-task findings to verify")
+	assert.Contains(t, rv.requests[1].User, preID)
+
+	require.Len(t, post.Findings, 1)
+	require.NotNil(t, post.Findings[0].SameAs, "same_as naming the pre-task finding must survive")
+	assert.Equal(t, preID, *post.Findings[0].SameAs)
+}
+
 func TestValidateCompletion_LightweightMode_NoEvidenceErrors(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
 	d := newDeps(t, rv)
@@ -3439,6 +3503,7 @@ func TestValidateCompletionPathInputs(t *testing.T) {
 			}
 		}
 		assert.Empty(t, cap.LastRequest.User, "reviewer must not have been called")
+		assert.True(t, env.Lightweight, "an empty session_id call is lightweight even when rejected")
 	})
 
 	// Same bug, via final_files: a path-only entry (content omitted, so it
@@ -3467,6 +3532,7 @@ func TestValidateCompletionPathInputs(t *testing.T) {
 			}
 		}
 		assert.Empty(t, cap.LastRequest.User, "reviewer must not have been called")
+		assert.True(t, env.Lightweight, "an empty session_id call is lightweight even when rejected")
 	})
 
 	// An EXPLICIT final_files content of "" (CompletionFileArg's documented
@@ -3618,6 +3684,7 @@ func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
 				assert.Contains(t, f.Evidence, fmt.Sprintf("%d", len(body)), "evidence must name the true byte count")
 			}
 		}
+		assert.True(t, env.Lightweight, "an empty session_id call is lightweight even when rejected")
 	})
 
 	t.Run("oversized final_files path-only entry returns a structured too-large envelope, not an error", func(t *testing.T) {
@@ -3641,6 +3708,7 @@ func TestValidateCompletionPathInputs_TooLarge(t *testing.T) {
 				assert.Contains(t, f.Evidence, fmt.Sprintf("%d", len(body)), "evidence must name the true byte count")
 			}
 		}
+		assert.True(t, env.Lightweight, "an empty session_id call is lightweight even when rejected")
 	})
 
 	t.Run("path outside ANTI_TANGENT_PLAN_ROOTS stays a plain transport error", func(t *testing.T) {

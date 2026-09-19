@@ -133,7 +133,8 @@ neither. Equivalent wordings are accepted, but this is the line to paste.
 ### 3.10 Lean by default
 
 `validate_plan` flags a plan that mandates over-building, as one `quality` / `over_building`
-finding per task, always `minor`, each instance tagged:
+finding per task plus one plan-level finding for a pattern that spans tasks, always `minor`,
+each instance tagged:
 
 - `reuse:` a task re-writes a helper an attached file or Project knowledge already provides.
 - `stdlib:` a dependency, or a hand-written utility, for what the standard library covers.

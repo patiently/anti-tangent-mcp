@@ -1870,6 +1870,16 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// Rulings and repeats see the reviewer's findings alone, before any server
 	// finding joins them.
 	reviewer, waived := waiveRuled(out.Result.Findings, "", review.rulings, review.shown)
+	// A same_as naming a pre-task finding is captured here, before markRepeats
+	// clears same_as from every finding: the implementer never "answered" a
+	// pre-task finding, so markRepeats has no way to tell that link apart from
+	// the same_as it always suppresses, and it would be lost otherwise.
+	preTaskLinks := make(map[int]string, len(reviewer))
+	for i, f := range reviewer {
+		if id := sameAsID(f, review.shown); id != "" && review.preShown[id] {
+			preTaskLinks[i] = id
+		}
+	}
 	escalateIDs := markRepeats(reviewer, review.prior, review.shown)
 	findings := make([]verdict.Finding, 0, len(head)+len(reviewer)+len(out.Server))
 	findings = append(findings, head...)
@@ -1910,6 +1920,13 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		env.NextAction = resubmitNextAction + env.NextAction
 	}
 	assignEnvelopeIDs(&env)
+	// Restored after assignEnvelopeIDs, which clears same_as unconditionally:
+	// this is the one case where the reviewer's same_as is the actual answer,
+	// not a reviewer claim the server ignores.
+	for i, id := range preTaskLinks {
+		idCopy := id
+		env.Findings[len(head)+i].SameAs = &idCopy
+	}
 
 	if !lightweight {
 		update := session.ReviewUpdate{

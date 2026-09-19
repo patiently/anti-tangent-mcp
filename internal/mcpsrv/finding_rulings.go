@@ -164,9 +164,12 @@ type completionReview struct {
 	// call's answer to it.
 	prior []prompts.PriorFinding
 	// preToVerify is the pre-task findings the final review verifies, every
-	// major one and every ambiguous_spec one, that no ruling covers. A minor
-	// ambiguous_spec finding is there so the reviewer can tell a known spec
-	// ambiguity from a deviation the implementer chose.
+	// major one, every ambiguous_spec one, and every quality/over_building
+	// one, that no ruling covers. A minor ambiguous_spec finding is there so
+	// the reviewer can tell a known spec ambiguity from a deviation the
+	// implementer chose; a minor over_building finding is there so a
+	// completion over_building finding can name it in same_as when the
+	// structure it named got built.
 	preToVerify []verdict.Finding
 	// rulings is every ruling in force for this review, by fingerprint.
 	rulings map[string]session.Ruling
@@ -175,19 +178,31 @@ type completionReview struct {
 	// shown is every ID the prompt shows — prior and pre-task findings,
 	// and every ruling — so a same_as naming any other ID is ignored.
 	shown map[string]bool
+	// preShown is the subset of shown that names a pre-task finding rather
+	// than a prior completion-round finding or a ruling. A same_as naming an
+	// ID in preShown identifies a genuine pre-task link rather than a repeat
+	// the implementer answered, so it survives to the response instead of
+	// being cleared with every other same_as.
+	preShown map[string]bool
 	// advisories report argument entries the server ignored.
 	advisories []verdict.Finding
 }
 
 // verifiedAtCompletion reports whether a pre-task finding is one the final
-// review verifies: every major finding, and every ambiguous_spec finding
+// review verifies: every major finding, every ambiguous_spec finding
 // regardless of severity — a minor ambiguous_spec finding lets the reviewer
-// tell a known spec ambiguity from a deviation the implementer chose.
+// tell a known spec ambiguity from a deviation the implementer chose — and
+// every quality/over_building finding regardless of severity, so a
+// completion over_building finding can name it in same_as when the
+// structure it named got built.
 func verifiedAtCompletion(f verdict.Finding) bool {
 	if f.Severity == verdict.SeverityMajor {
 		return true
 	}
 	if f.Category == verdict.CategoryAmbiguousSpec {
+		return true
+	}
+	if f.Category == verdict.CategoryQuality && strings.ToLower(strings.TrimSpace(f.Criterion)) == "over_building" {
 		return true
 	}
 	return false
@@ -202,6 +217,7 @@ func buildCompletionReview(state session.ReviewState, preFindings, known []verdi
 		rulings:    make(map[string]session.Ruling, len(state.Rulings)),
 		newRulings: map[string]session.Ruling{},
 		shown:      map[string]bool{},
+		preShown:   map[string]bool{},
 	}
 	for fp, r := range state.Rulings {
 		cr.rulings[fp] = r
@@ -272,6 +288,7 @@ func buildCompletionReview(state session.ReviewState, preFindings, known []verdi
 		}
 		cr.preToVerify = append(cr.preToVerify, f)
 		cr.shown[f.ID] = true
+		cr.preShown[f.ID] = true
 	}
 
 	if len(unknownResponses) > 0 {
