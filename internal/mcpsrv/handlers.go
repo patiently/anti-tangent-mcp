@@ -72,6 +72,12 @@ type Envelope struct {
 	// review on any host. formatEnvelopeSummary prints it as a
 	// `mode: lightweight` header line.
 	Lightweight bool `json:"lightweight,omitempty"`
+	// ImplementationGuidance is the build ruleset the implementer applies
+	// while working: lean.tmpl, which mid.tmpl and post.tmpl also include as
+	// the reviewer's definition of over-building. Only validate_task_spec sets
+	// it, because only implementers call that tool; it is not part of the
+	// summary block, which is what gets pasted into DONE reports.
+	ImplementationGuidance string `json:"implementation_guidance,omitempty"`
 }
 
 // ValidateTaskSpecArgs is the input schema for the pre-hook.
@@ -183,6 +189,13 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		ReviewMS:   out.ReviewMS,
 		Partial:    result.Partial,
 	}
+
+	guidance, err := prompts.LeanGuidance()
+	if err != nil {
+		return nil, Envelope{}, fmt.Errorf("render lean guidance: %w", err)
+	}
+	env.ImplementationGuidance = guidance
+
 	if args.PlanRunID == "" {
 		if run, ok := h.deps.PlanRuns.Latest(); ok {
 			env.Findings = append(env.Findings, planRunIDAdvisory(run.ID))

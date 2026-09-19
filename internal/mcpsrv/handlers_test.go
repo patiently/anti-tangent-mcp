@@ -20,6 +20,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
+	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -3720,4 +3721,55 @@ func TestResolveCompletionInputs_AggregateCapDuringResolution(t *testing.T) {
 		assert.Equal(t, string(verdict.VerdictFail), env.Verdict)
 		require.True(t, hasCategory(env.Findings, verdict.CategoryTooLarge), "expected a payload_too_large finding")
 	})
+}
+
+func TestValidateTaskSpec_ReturnsImplementationGuidance(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "g", AcceptanceCriteria: []string{"a"},
+	})
+	require.NoError(t, err)
+	want, err := prompts.LeanGuidance()
+	require.NoError(t, err)
+	assert.Equal(t, want, env.ImplementationGuidance)
+	assert.True(t, strings.HasPrefix(env.ImplementationGuidance, "## Build guidance"))
+	assert.NotContains(t, env.SummaryBlock, "Build guidance",
+		"the ruleset is for the implementer, not for the pasted DONE report")
+}
+
+func TestCheckProgressAndCompletion_NoImplementationGuidance(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "g", AcceptanceCriteria: []string{"a"},
+	})
+	require.NoError(t, err)
+	_, mid, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
+		SessionID: pre.SessionID, WorkingOn: "x",
+		ChangedFiles: []FileArg{{Path: "a.go", Content: "package a\n"}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, mid.ImplementationGuidance)
+	_, post, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		SessionID: pre.SessionID, Summary: "done",
+		FinalFiles: []CompletionFileArg{{Path: "a.go", Content: strPtr("package a\n")}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, post.ImplementationGuidance)
+}
+
+func TestValidateTaskSpec_PayloadTooLarge_NoImplementationGuidance(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	d := newDeps(t, rv)
+	d.Cfg.MaxPayloadBytes = 200
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "g", AcceptanceCriteria: []string{"a"},
+		ProjectKnowledge: strings.Repeat("p", 300),
+	})
+	require.Error(t, err, "over the cap is rejected before review")
+	assert.Empty(t, env.ImplementationGuidance)
 }
