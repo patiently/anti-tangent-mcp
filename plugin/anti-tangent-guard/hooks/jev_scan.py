@@ -608,10 +608,16 @@ def _warn_once(trace_dir, session, detail):
         return ""
 
 
-def _failed(trace_dir, session, detail):
-    """One exit for every failure: allow the write, open the breaker, warn once."""
+def _failed(trace_dir, session, detail, note=""):
+    """One exit for every failure: allow the write, open the breaker, warn once.
+
+    note is appended only to the trace event's detail, never to what
+    _warn_once keys its once-per-session stamp and message choice on -- so an
+    overridden URL shows up in the log without changing which stderr message
+    a failure prints.
+    """
     breaker_trip(trace_dir)
-    return 0, "jev-error|%s" % detail, _warn_once(trace_dir, session, detail)
+    return 0, "jev-error|%s%s" % (detail, note), _warn_once(trace_dir, session, detail)
 
 
 def run(path, touched, context, env, session, trace_dir):
@@ -626,33 +632,41 @@ def run(path, touched, context, env, session, trace_dir):
     # inside judge(): building blocks for a large write is not free, and a
     # deadline that only bounds the waiting is not the one the hook promises.
     until = time.monotonic() + DEADLINE_S
+    # Set before config() so a raise inside it still leaves this defined for
+    # the outer handler below, rather than trading one NameError for another.
+    url_note = ""
     try:
         cfg = config(env, path)
+        # cfg.url_reason is set only when the configured URL was rejected and
+        # silently swapped for the default -- a security-relevant fallback
+        # that otherwise leaves no trace of ever having happened.
+        url_note = ",url=%s" % cfg.url_reason if cfg.url_reason else ""
         if not cfg.enabled:
-            return 0, "jev-skip|%s" % cfg.reason, ""
+            return 0, "jev-skip|%s%s" % (cfg.reason, url_note), ""
         if breaker_open(trace_dir):
-            return 0, "jev-skip|breaker", ""
+            return 0, "jev-skip|breaker%s" % url_note, ""
         blocks, capped = build_blocks(path, touched, context, report=True)
         if not blocks:
-            return 0, "jev-skip|no-blocks", ""
+            return 0, "jev-skip|no-blocks%s" % url_note, ""
         if time.monotonic() >= until:
-            return _failed(trace_dir, session, "deadline-before-request")
+            return _failed(trace_dir, session, "deadline-before-request", url_note)
         verdict = judge(blocks, cfg, deadline=until)
         if verdict.event == "jev-error":
-            return _failed(trace_dir, session, verdict.detail)
+            return _failed(trace_dir, session, verdict.detail, url_note)
         if verdict.flagged is None:
-            return 0, "jev-pass|blocks=%d%s" % (len(blocks), ",capped" if capped else ""), ""
+            return 0, "jev-pass|blocks=%d%s%s" % (
+                len(blocks), ",capped" if capped else "", url_note), ""
         count = strike(trace_dir, session, path)
         quoted = verdict.flagged.text[:400]
         if count > STRIKE_LIMIT:
-            return 0, "jev-yield|%s" % path, YIELD_MESSAGE % quoted
-        return 4, "jev-block|p=%.2f" % verdict.probability, \
+            return 0, "jev-yield|%s%s" % (path, url_note), YIELD_MESSAGE % quoted
+        return 4, "jev-block|p=%.2f%s" % (verdict.probability, url_note), \
             BLOCK_MESSAGE % (quoted, verdict.probability)
     except Exception as exc:
         # Through the same door as every other failure: an unexpected error is
         # the one most likely to repeat on the next edit, so it must open the
         # breaker rather than be paid for again immediately.
         try:
-            return _failed(trace_dir, session, type(exc).__name__)
+            return _failed(trace_dir, session, type(exc).__name__, url_note)
         except Exception:
-            return 0, "jev-error|%s" % type(exc).__name__, ""
+            return 0, "jev-error|%s%s" % (type(exc).__name__, url_note), ""

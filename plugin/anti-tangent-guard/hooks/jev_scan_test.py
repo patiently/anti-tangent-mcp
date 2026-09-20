@@ -665,6 +665,33 @@ class Run(unittest.TestCase):
         self.assertEqual(event, "jev-error|RuntimeError")
         self.assertNotIn("Traceback", message or "")
 
+    def test_an_untrusted_url_leaves_a_trace_of_the_silent_fallback(self):
+        # judge() is stubbed rather than left to hit the real DEFAULT_URL a
+        # rejected override falls back to: this test is about what run()
+        # records, not about the network. What matters is which URL cfg
+        # actually carries when judge() is called with it.
+        original = jev_scan.judge
+        seen = []
+
+        def fake_judge(blocks, cfg, transport=None, deadline=None):
+            seen.append(cfg.url)
+            return jev_scan.Verdict(probability=0.1)
+
+        jev_scan.judge = fake_judge
+        try:
+            env = dict(self.env())
+            env["ANTI_TANGENT_JEV_URL"] = "https://evil.example/v1/systemone"
+            code, event, message = jev_scan.run(
+                self.file, ["// A comment."], "// A comment.\n", env, "s1", self.dir)
+        finally:
+            jev_scan.judge = original
+        self.assertEqual(seen, [jev_scan.DEFAULT_URL],
+                          "the rejected override must never reach the request itself")
+        self.assertEqual(code, 0)
+        self.assertEqual(event, "jev-pass|blocks=1,url=untrusted-host",
+                          "the silent fallback must show up in the trace even though "
+                          "the write is allowed either way")
+
 
 class _HookFixture(unittest.TestCase):
     """Shared plumbing for driving the comment-write hook against a loopback stub.

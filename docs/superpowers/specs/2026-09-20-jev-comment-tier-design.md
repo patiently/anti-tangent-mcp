@@ -295,11 +295,21 @@ inspect every flag by hand. It needs no labels and it is the only evidence avail
   setting is on. TypeSafe offers zero data retention only on enterprise plans.
 - **Model drift.** `jev-1.13.0` is pinned, but the pin only defers the question; the calibration
   suite is what answers it at upgrade time.
-- **Windows.** `read_text_capped` returns None without `O_NOFOLLOW`, so a Write over an existing
-  file exits 3 and this tier never runs; an Edit takes the no-context path. Documented, not fixed.
+- **Windows.** `os.O_NOFOLLOW` and `os.O_NONBLOCK` don't exist there, and `read_text_capped` ORs
+  them into its `os.open` flags unconditionally, so that expression raises building the call's own
+  arguments — before `os.open` runs at all, for every path, existing or not. Only
+  `FileNotFoundError` is caught separately; everything else, including this, falls through to the
+  handler that returns `None`, so a brand-new file is no more scannable than an existing one.
+  Concretely: every Write exits 3 unscanned there, by the pattern tier as well as this one, since
+  both read the file the same way for a Write; an Edit still scans its added lines but takes the
+  no-context path. Documented, not fixed — dropping `O_NOFOLLOW` would remove a symlink guard on a
+  platform this project cannot test against.
 - **Measurement limits.** 162 scored comments from one public Go repository, labeled by Claude and
   not reviewed by a second judge, one run, six questions per request through a proxy. The rules
-  were written knowing which kinds of comment the set holds.
+  were written knowing which kinds of comment the set holds. The measurement of record as shipped
+  is `plugin/anti-tangent-guard/evals/jev-comments.jsonl` — 124 rows, 49 of them carrying labels an
+  operator personally confirmed — which supersedes this bullet's sample without invalidating what
+  the design was decided on.
 
 ## Open at implementation time
 

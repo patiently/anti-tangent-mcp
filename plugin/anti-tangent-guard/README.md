@@ -454,9 +454,15 @@ Under `python3 -I` the user site directory is dropped, so a Python whose certifi
 allow the write. The per-session warning is how you notice; the trace log names the class. Set
 `SSL_CERT_FILE` for a corporate CA.
 
-On Windows there is no `O_NOFOLLOW` — `comment_scan.py`'s capped read asks for it unconditionally
-— so a `Write` over an existing file is not scanned at all and this tier never runs for it. An
-`Edit` is judged without the post-edit text.
+On Windows there is no `O_NOFOLLOW` or `O_NONBLOCK` — `comment_scan.py`'s capped read ORs both
+into its `os.open` flags unconditionally, so that expression raises building the call's own
+arguments, before `os.open` runs at all, for every path, existing or not. Only `FileNotFoundError`
+is caught separately; this exception falls through to the general handler that returns `None`, so
+a brand-new file is no more scannable than an existing one. In practice: every `Write` exits
+unscanned there — by the pattern tier as well as this one, since both read the file the same way
+for a `Write` — while an `Edit` still scans its added lines, since those come from the tool call's
+own operands rather than a file read, but with no post-edit file context, so this tier's
+block-comment continuation falls back to the touched fragments alone.
 
 ## Comment-hygiene scan at close
 
