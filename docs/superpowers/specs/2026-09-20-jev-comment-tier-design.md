@@ -65,8 +65,8 @@ with either Noul variant at any threshold leaves it flagged.
 5. A comment describing an earlier version's bug is change history, including in a test.
 6. A touched comment block is judged **whole**, pre-existing lines included. History already in a
    block the edit touches is to be cleaned up, not stepped around.
-7. The tier blocks at most twice for the same file in a session, then yields to the close-time
-   reviewer.
+7. The tier blocks at most twice for the same file within a 30-minute window in a session, then
+   yields to the close-time reviewer.
 
 ## Non-goals
 
@@ -188,7 +188,10 @@ not name the off switch; the README documents that for the operator.
 
 A block that cannot be satisfied is a real outcome: the known false flag scores 1.00, and no
 threshold or ensemble clears it, so an agent can rewrite, be refused, and rewrite again with
-nothing to learn from. The tier therefore blocks at most twice for the same file in a session. On
+nothing to learn from. The tier therefore blocks at most twice for the same file within a
+30-minute window in a session — the window keeps a stamp from an abandoned sitting of work
+spending a later edit's refusals, and a lost race between two concurrent hooks can cost one extra
+refusal, never a missing one. On
 the third attempt it allows the write and tells the agent the check could not be satisfied, that
 the comment will be judged again at task close, and to raise it with the operator if the verdict
 looks wrong.
