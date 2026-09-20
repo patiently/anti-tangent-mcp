@@ -293,6 +293,38 @@ def block_comment_lines(text, interpolates, backticks=False):
     return inside
 
 
+_TRIPLE = ('"""', "'''")
+
+
+def hash_string_lines(path, text):
+    """Indexes of lines sitting inside an open triple-quoted string, as a set.
+
+    A column-zero `#` is read as a comment by comment_spans, which is right
+    in code and wrong inside a docstring. Only hash-family files have the
+    shape, and only a caller with the whole file can tell the two apart.
+
+    Indexed by position rather than text: text has no way to tell a docstring
+    line from an unrelated comment elsewhere in the file that happens to read
+    the same, and would hide the second one along with the first.
+    """
+    # `text` is None on the no-context fallback path, where there is no file
+    # to ask about strings at all.
+    if not text or "#" not in openers(path):
+        return set()
+    inside, delim, out = False, None, set()
+    for i, line in enumerate(text.splitlines()):
+        if inside:
+            out.add(i)
+            if delim in line:
+                inside, delim = False, None
+            continue
+        for d in _TRIPLE:
+            if line.count(d) % 2 == 1:
+                inside, delim = True, d
+                break
+    return out
+
+
 def starred_candidate(path, raw):
     """True when raw is the shape the block-continuation branch would claim."""
     line = raw.strip()
