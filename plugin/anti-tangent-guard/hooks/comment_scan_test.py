@@ -48,6 +48,18 @@ class CommentSpanExtraction(unittest.TestCase):
                            text=True, timeout=30)
         self.assertEqual(json.loads(r.stdout), [], r.stderr)
 
+    def test_a_bare_marker_still_yields_no_span_by_default(self):
+        # keep_empty defaults to False, so a bare marker carrying no text
+        # yields no span under it. violations() and every eval case call
+        # comment_spans without the flag, so this default is the contract
+        # both depend on.
+        code = ("import sys, json; sys.path.insert(0, %r);"
+                "from comment_scan import comment_spans;"
+                "print(json.dumps(comment_spans('x.go', '//')))" % HOOKS)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(json.loads(r.stdout), [], r.stderr)
+
 
 class TicketPatternLength(unittest.TestCase):
     # Exactly at the cap is accepted, one character more is refused. Both
@@ -1244,6 +1256,70 @@ class EditReconstruction(unittest.TestCase):
         disk = 'package x\nfunc F() {}\n'
         rc = self._run({"old_string": "", "new_string": " * fixes #1"}, disk)
         self.assertEqual(rc, 2, "an empty old_string must not fabricate a context")
+
+
+class BlockStateHelper(unittest.TestCase):
+    # A starred line inside a real KDoc block is a comment; the same bytes
+    # inside a raw string are string content. Only the file separates them,
+    # which is what block_state answers and allow_star applies.
+    GO_RAW = 'package x\n\nconst s = `\n * Previously the parser rejected tabs.\n`\n'
+    KDOC = '/**\n * Previously the parser rejected tabs.\n */\nfun a() {}\n'
+
+    def _call(self, path, context, raw):
+        code = ("import sys, json; sys.path.insert(0, %r);"
+                "from comment_scan import block_state, allow_star;"
+                "print(json.dumps(allow_star(block_state(%r, %r), %r)))"
+                % (HOOKS, path, context, raw))
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_star_in_raw_string_is_declined(self):
+        self.assertFalse(self._call("X.go", self.GO_RAW,
+                                    " * Previously the parser rejected tabs."))
+
+    def test_star_in_kdoc_is_allowed(self):
+        self.assertTrue(self._call("X.kt", self.KDOC,
+                                   " * Previously the parser rejected tabs."))
+
+    def test_no_context_allows_shape_only(self):
+        self.assertTrue(self._call("X.kt", None, " * anything"))
+
+    def test_line_absent_from_context_allows_shape_only(self):
+        self.assertTrue(self._call("X.go", self.GO_RAW, " * a fragment"))
+
+    # Assert both hazards directly: eager context walks add needless
+    # tokenization, and swallowing _ScanTimeout leaves a scan unbounded.
+    def test_context_is_not_tokenized_without_a_starred_candidate(self):
+        code = ("import sys; sys.path.insert(0, %r);"
+                "import comment_scan as cs;"
+                "cs.block_comment_lines = lambda *a, **k: (_ for _ in ()).throw("
+                "AssertionError('tokenized'));"
+                "print(cs.violations('X.go', ['// plain line'], 'ctx\\n', strict=True))"
+                % HOOKS)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_tokenizer_failure_falls_back_to_shape_only(self):
+        code = ("import sys; sys.path.insert(0, %r);"
+                "import comment_scan as cs;"
+                "cs.block_comment_lines = lambda *a, **k: (_ for _ in ()).throw(ValueError('x'));"
+                "print(cs.block_state('X.kt', 'ctx'))" % HOOKS)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(r.stdout.strip(), "True", r.stderr)
+
+    def test_scan_timeout_is_not_absorbed(self):
+        code = ("import sys; sys.path.insert(0, %r);"
+                "import comment_scan as cs;"
+                "cs.block_comment_lines = lambda *a, **k: (_ for _ in ()).throw(cs._ScanTimeout());"
+                "cs.block_state('X.kt', 'ctx')" % HOOKS)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=30)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("_ScanTimeout", r.stderr)
 
 
 if __name__ == "__main__":

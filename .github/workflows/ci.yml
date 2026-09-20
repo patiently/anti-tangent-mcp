@@ -154,6 +154,55 @@ jobs:
               plugin/anti-tangent-shunt/hooks plugin/anti-tangent-guard/hooks \
               --exclude=bench.sh --exclude=benchmarks.md --exclude=benchmarks.tsv
 
+  python-suites:
+    name: Plugin Python suites
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          # build-jev-comments-test.py rebuilds the calibration corpus from
+          # git at a pinned commit and reads both sides of older cleanup
+          # commits, so it needs the history a shallow clone leaves out.
+          fetch-depth: 0
+
+      - name: Install jq
+        # The wrapper tests drive the real bash hook, which reads the payload
+        # with jq. See the hook-evals job for why apt is reached only when the
+        # image lacks it.
+        run: command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
+
+      - name: Comment scanner
+        run: python3 -B plugin/anti-tangent-guard/hooks/comment_scan_test.py
+
+      - name: Semantic tier
+        run: python3 -B plugin/anti-tangent-guard/hooks/jev_scan_test.py
+
+      - name: Session guard
+        run: python3 -B plugin/anti-tangent-guard/hooks/check_task_start_test.py
+
+      - name: Calibration corpus builder
+        run: python3 -B plugin/anti-tangent-guard/evals/build-jev-comments-test.py
+
+      - name: Calibration runner, offline invariants
+        run: python3 -B plugin/anti-tangent-guard/evals/jev-eval-test.py
+
+      - name: The calibration runner refuses to run here even when handed a key
+        # Every suite above answers its requests from a loopback stub or a
+        # fake; the one script that dials the real endpoint is gated on the
+        # absence of CI markers. This proves the gate holds in this
+        # environment rather than only in the unit test's synthetic one.
+        env:
+          ANTI_TANGENT_JEV: "1"
+          TYPESAFE_API_KEY: not-a-key
+        run: |
+          if python3 -B plugin/anti-tangent-guard/evals/jev-eval.py 2> refusal.txt; then
+            echo "::error file=plugin/anti-tangent-guard/evals/jev-eval.py::the calibration runner ran under CI"
+            exit 1
+          fi
+          grep -q "the calibration suite is manual" refusal.txt
+
   workflow-lint:
     name: Workflow lint (actionlint)
     runs-on: ubuntu-latest
@@ -188,7 +237,7 @@ jobs:
 
   build-test:
     name: Build & Test (Go)
-    needs: [changelog, protocol-docs, hook-evals, workflow-lint]
+    needs: [changelog, protocol-docs, hook-evals, python-suites, workflow-lint]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

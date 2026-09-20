@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (145 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook, the check-comment-write PreToolUse hook, and the check-task-start PreToolUse hook (179 cases)",
   "evals": [
     {
       "id": 1,
@@ -2845,6 +2845,85 @@
       ],
       "expected_exit": 0,
       "reason": "a controller that dispatched this task lightweight, then reopened it (a second in_progress) and resumed the same implementer, must keep passing on the empty-session close; computing the lightweight marker from the task LAST in_progress instead of its FIRST would put the marker before scan_from and wrongly block this re-close under Rule B"
+    },
+    {
+      "id": 174,
+      "name": "jev-off-by-default",
+      "hook": "check-comment-write",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j1\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// OFF-BY-DEFAULT-MARKER: the count cap used to return a plain error.\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "the tier is opt-in: without ANTI_TANGENT_JEV=1 a prose-history comment is not sent anywhere"
+    },
+    {
+      "id": 175,
+      "name": "jev-needs-a-key",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_JEV": "1"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j2\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// NEEDS-A-KEY-MARKER: the count cap used to return a plain error.\\npackage x\\n\"}}",
+      "expected_exit": 0,
+      "reason": "the setting alone does not enable the tier; without a key there is nothing to call with"
+    },
+    {
+      "id": 176,
+      "name": "jev-flag-blocks",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_JEV": "1",
+        "TYPESAFE_API_KEY": "eval-key"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j3\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// The count cap used to return a plain error.\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "reads as change history",
+        "change_history"
+      ],
+      "reason": "a block the stub scores above the threshold is refused, through the real hook binary"
+    },
+    {
+      "id": 177,
+      "name": "jev-regex-hit-short-circuits",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_JEV": "1",
+        "TYPESAFE_API_KEY": "eval-key"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j4\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// fixes #58\\npackage x\\n\"}}",
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "an issue or pull-request reference"
+      ],
+      "reason": "a tell already refuses this write, so the tier must not spend a request or an egress on it"
+    },
+    {
+      "id": 178,
+      "name": "jev-third-attempt-yields",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_JEV": "1",
+        "TYPESAFE_API_KEY": "eval-key"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j6\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval-yield.go\",\"content\":\"// YIELD-CASE-MARKER: the count cap used to return a plain error.\\npackage x\\n\"}}",
+      "expected_exits": [2, 2, 0],
+      "expected_stderr_contains": [
+        "reads as change history",
+        "change_history"
+      ],
+      "reason": "two refusals then a yield, each invocation graded on its own: the first two attempts on one path are refused, and the third allows the write and hands the comment to the close-time reviewer"
+    },
+    {
+      "id": 179,
+      "name": "jev-unanswered-request-allows",
+      "hook": "check-comment-write",
+      "env": {
+        "ANTI_TANGENT_JEV": "1",
+        "TYPESAFE_API_KEY": "eval-key"
+      },
+      "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j5\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// HANG-THIS-REQUEST the count cap used to return a plain error.\\npackage x\\n\"}}",
+      "case_timeout_seconds": 10,
+      "expected_exit": 0,
+      "reason": "the stub never answers this one: the deadline must expire and the write must proceed, because a service that cannot answer must not stop an edit; the case timeout sits above the tier's four-second deadline so a deadline that stops firing fails this case instead of stalling the suite"
     }
   ]
 }

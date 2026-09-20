@@ -5,6 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2026-09-20
+
+### Added
+
+- `anti-tangent-guard` 0.6.0's write-time comment hook gains a second, optional tier: with
+  `ANTI_TANGENT_JEV=1` and `TYPESAFE_API_KEY` set, the whole comment block an edit touches —
+  pre-existing lines included, not only the ones added — is sent to TypeSafe's Jev, and a block
+  that reads as change history is refused. The regex tells run first and unchanged; the tier never
+  runs when they already refuse the write, so a repository can turn this on without changing what
+  the pattern tier already catches. Every failure (no network, DNS, TLS, a timeout, a malformed
+  response, an unexpected error) allows the write, trips a 60-second breaker so a dead service
+  costs one slow edit rather than every edit, and warns once per session; missing configuration
+  (the setting off, no key) is a silent skip rather than a failure and neither trips the breaker
+  nor warns. A refusal the tier cannot resolve is bounded too: it blocks a given file at most
+  twice within a session, then yields and allows the write, leaving the comment for
+  `validate_completion` to catch at task close — the enforcement that exists without this tier at
+  all. A refusal the tier cannot count — the directory beside the trace log is not writable, so no
+  strike stamp lands — is never spent: every such write is allowed, the first included, traced as
+  `jev-yield | <path>,untracked` and explained on stderr each time, because a count that cannot be
+  recorded would otherwise make every attempt the first and the yield unreachable. The wrapper
+  honours a blocking exit status only together with the event the body writes to stdout for it
+  (`block|comment-hygiene`, `jev-block|…`): `python3` itself exits 2 when it cannot open the
+  script it was handed, and that status with no event is now traced as `error | python-exit=2`
+  and allows the write instead of refusing it as a hygiene block.
+- The calibration corpus builder (`evals/build-jev-comments.py`) harvests from git at one pinned
+  commit (`HARVEST_REV`) rather than from the working tree, so a rebuild reproduces the committed
+  `evals/jev-comments.jsonl` byte for byte on any later checkout and the parity test reports a
+  change to the hook's block builder rather than every commit that touches a harvested file.
+  Refreshing the corpus means moving the pin and answering the judgement calls it surfaces. The
+  cleanup-pair commits are pinned by full hash too, and a revision git cannot read, a pair whose
+  commit does not touch its path, or a `HARVEST_REV` the repository no longer holds stops the
+  build outright instead of silently writing a shorter fixture.
+- The guard's eval runner grades a multi-invocation case on every invocation (`expected_exits`,
+  one exit code per attempt, each checked before the next attempt starts), so the third-attempt
+  yield case fails if either of the first two attempts wrongly allows the write. A case that
+  declares `case_timeout_seconds` fails loudly on expiry, and fails rather than running unbounded
+  when no `timeout` binary exists to enforce it; the never-answered-request case now declares one,
+  above the tier's own deadline.
+
+### Security
+
+- The semantic tier's endpoint override is approved by a file the operator owns, never by the
+  environment. `ANTI_TANGENT_JEV_URL` may name a host other than the default or loopback only when
+  that host is listed in `~/.claude/anti-tangent-guard/jev-hosts` — a regular file under the
+  operator's home (resolved from the password database, not `$HOME`), owned by the operator and
+  writable by nobody else — and only over `https`. The earlier `ANTI_TANGENT_JEV_URL_TRUSTED=1`
+  variable is gone: a repository's checked-in `.claude/settings.json` populates the hook's
+  environment, so it could set that flag alongside the URL it wanted approved and receive the
+  operator's `TYPESAFE_API_KEY` together with the comment text. A rejected override still falls
+  back to the default host and is recorded on the trace line (`url=untrusted-host`,
+  `url=insecure-scheme`, `url=unparsable-url`).
+- The semantic tier's `,capped` trace suffix is carried on every verdict (`jev-block`, `jev-yield`
+  and `jev-error` as well as `jev-pass`), so a refusal decided over a truncated block set is
+  readable as such. A response body past 64 KiB is refused unparsed as `jev-error |
+  ResponseTooLarge` (the write is allowed). A relative `ANTI_TANGENT_GUARD_TRACE_LOG` is resolved
+  to an absolute path before the tier's state files are addressed beside it.
+- CI runs the guard plugin's Python suites (`comment_scan_test.py`, `jev_scan_test.py`,
+  `check_task_start_test.py`, `build-jev-comments-test.py`, `jev-eval-test.py`) in a
+  `python-suites` job the Go build depends on, and asserts in the same job that
+  `evals/jev-eval.py` refuses to run there even when handed the setting and a key.
+- `docs/protocol/controller.md` (mirrored to `plugin/anti-tangent-protocol/protocol/controller.md`)
+  gains a "Which tier a review earns" subsection under the dispatch addendum: a spec or
+  code-quality reviewer defaults to superpowers' `standard` model-routing tier, escalates to
+  `frontier` only for the same bar as COMPLEX implementation work (a named failure mode reaching a
+  real user, combined with reasoning a cheaper model is measurably weaker at, recorded as a written
+  `tierReason`), and a HIGH RISK review is a `model` pin rather than a tier, which makes the routing
+  guard allow any model for that task's dispatches.
+
 ## [0.23.0] - 2026-09-18
 
 ### Added

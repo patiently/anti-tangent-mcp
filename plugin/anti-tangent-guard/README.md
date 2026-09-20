@@ -283,6 +283,7 @@ the log distinguishes a write the scanner cleared from one it never looked at:
 | `python3` absent from `PATH` | `skip \| no-python3` |
 | the scanner body unreadable under `$CLAUDE_PLUGIN_ROOT/hooks/` | `skip \| no-body` |
 | the `Write` target cannot be read: a symlink, a FIFO, a directory, or a file past the 2,000,000-byte read cap | `skip \| unreadable-target` |
+| the body exited with a blocking status but wrote no matching event — `python3` itself exits 2 when the script vanished between the readability check and the interpreter start | `error \| python-exit=2` (or `=4`) |
 | any other unexpected internal error | `error \| python-exit=N` |
 
 The unreadable-target row is the one worth understanding. A `Write` over an
@@ -374,6 +375,116 @@ Set `ANTI_TANGENT_COMMENT_GUARD=0` to disable the comment-hygiene scan at both
 write time (PreToolUse on `Edit`/`Write`) and close time (part of the
 PostToolUse scan), while leaving the completion-gate check active.
 
+## The semantic tier (optional, off by default)
+
+The pattern set catches change history that carries a token: a task id, an issue or pull-request
+reference, a version a change verb governs, your configured tracker key. History written as
+ordinary prose — "the count cap used to return a plain error" — carries none, and no pattern
+decides it, because the ambiguity is in what the sentence means.
+
+Set `ANTI_TANGENT_JEV=1` and provide `TYPESAFE_API_KEY`, and the write-time hook asks TypeSafe's
+Jev about the comment when the patterns find nothing. **While it is on, comment text from every
+repository you edit is sent to TypeSafe**, redacted for anything shaped like a credential.
+TypeSafe offers zero data retention on enterprise plans only.
+
+**Order.** The two tiers run inside the same `PreToolUse` hook, in a fixed order: the pattern
+tier's regex tells always run first, and a match there refuses the write immediately with no Jev
+call at all. Only when the pattern tier finds nothing to block on does the hook go on to ask Jev —
+so a clean write is judged by both tiers in turn, while a write the pattern tier already refuses
+never reaches the second.
+
+### What it judges
+
+The whole comment block your edit touches, not only the line you added — including lines that were
+already there. That is deliberate and it differs from the pattern tier, which judges added lines
+alone: this project's comment policy says history in a comment you touch gets rewritten as part of
+the change.
+
+The file you are editing is scanned locally to find where comment blocks begin and end, so every
+line passes through the hook on your own machine. Only the blocks your edit touched are sent, and
+only after credential redaction; a comment elsewhere in the file leaves no trace and never reaches
+TypeSafe.
+
+### Settings
+
+A summary; each variable also has its own `###` subsection under "Configuration" below, beside
+`ANTI_TANGENT_TICKET_PATTERN`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ANTI_TANGENT_JEV` | unset | Must be exactly `1`. |
+| `TYPESAFE_API_KEY` | unset | Required. |
+| `ANTI_TANGENT_JEV_THRESHOLD` | `0.7` | Flag at or above. Anything outside (0, 1] falls back. |
+| `ANTI_TANGENT_JEV_MODEL` | `jev-1.13.0` | Pinned: an alias moves under a tuned threshold. |
+| `ANTI_TANGENT_JEV_URL` | the TypeSafe endpoint | Honoured for loopback, or for an `https` host listed in `~/.claude/anti-tangent-guard/jev-hosts`. |
+| `ANTI_TANGENT_JEV_EXCLUDE` | unset | Colon-separated globs never sent. |
+
+**Why the URL is restricted.** Environment reaches these hooks from several places — your shell,
+a CI job, and a repository's own checked-in settings — and an arbitrary endpoint would be handed
+your key along with the comment text. The default host and loopback are the only ones that get it
+on the strength of the environment alone. Any other host has to be named in
+`~/.claude/anti-tangent-guard/jev-hosts`, a file in your own home directory: one hostname per line,
+`#` comments allowed, and a line written as a URL contributes its host. A file, not a variable, is
+the approval on purpose: a variable would arrive through the same environment a repository
+controls, and a repository that can set the URL can set anything beside it. The hook resolves `~`
+from the account's password-database entry rather than from `$HOME`, so a `HOME` set in that
+environment cannot point it at a file a repository wrote. The file must be a regular file (not a
+symlink) owned by you and writable by nobody else; anything less approves nothing. An approved host
+is reached over `https` only — the approval names a host, not a plaintext wire your key may cross.
+With no file at all, the key goes to the default host and to loopback, and nowhere else.
+
+A rejected URL is silently swapped for the default rather than refused outright, so it never costs
+you an edit — but that silence is worth being able to see. Every trace event this call produces
+carries a `,url=untrusted-host`, `,url=insecure-scheme` or `,url=unparsable-url` suffix when the
+override was rejected — for example `jev-pass|blocks=1,url=untrusted-host` — so you can tell your
+proxy was never actually used from the trace log alone, without reading `ANTI_TANGENT_JEV_URL` back
+out of your settings. No suffix at all means the configured URL, if any, was used as given.
+
+**What this rule does not defend against.** A repository whose settings you have trusted can
+define hook *commands*, not only environment — at which point it can read your key directly, and
+no rule here changes that. This restriction is for the accidental and the partially-trusted case:
+an endpoint inherited from a shell profile or a CI job, or a repository that sets one for its own
+tooling. Trusting a repository's settings is still the decision that matters.
+
+### When it cannot answer
+
+Every failure allows the write: no network, a DNS failure, a TLS failure, a timeout, a malformed
+response, an unexpected error. After one failure the tier steps aside for 60 seconds, so a dead
+service costs one slow edit rather than every edit, and prints one warning per session.
+
+Missing configuration is not a failure and does not touch either of those: `ANTI_TANGENT_JEV` not
+exactly `1`, no `TYPESAFE_API_KEY`, or a path matching `ANTI_TANGENT_JEV_EXCLUDE` all mean the
+tier never places a call at all, traced as `jev-skip` with its reason, so a repository that simply
+hasn't turned this on never trips the breaker or the once-per-session warning either.
+
+A refusal you disagree with is bounded too: the tier blocks a given file at most twice within a
+session — a 30-minute window, so a stamp from an abandoned sitting of work does not spend a later
+edit's refusals — then allows the write and says so. That comment still reaches
+`validate_completion` at task close, which is the enforcement that exists without this tier at
+all.
+
+### Two failure modes worth knowing
+
+Under `python3 -I` the user site directory is dropped, so a Python whose certificates live there
+(a python.org install on macOS) cannot verify TLS and every call fails — silently, since failures
+allow the write. The per-session warning is how you notice; the trace log names the class. Set
+`SSL_CERT_FILE` for a corporate CA.
+
+On Windows there is no `O_NOFOLLOW` or `O_NONBLOCK` — `comment_scan.py`'s capped read ORs both
+into its `os.open` flags unconditionally, so that expression raises building the call's own
+arguments, before `os.open` runs at all, for every path, existing or not. Only `FileNotFoundError`
+is caught separately; this exception falls through to the general handler that returns `None`, so
+a brand-new file is no more scannable than an existing one. In practice: every `Write` exits
+unscanned there — by the pattern tier as well as this one, since both read the file the same way
+for a `Write` — while an `Edit` still scans its added lines, since those come from the tool call's
+own operands rather than a file read, but with no post-edit file context, so this tier's
+block-comment continuation falls back to the touched fragments alone.
+
+Tracked as [#87](https://github.com/patiently/anti-tangent-mcp/issues/87), which also covers the
+close-time hook and carries a reproduction that needs no Windows machine. Every failure here is
+silent by design — each caller fails open so an unreadable file can never block a write — so on
+Windows a clean hook run is not evidence that anything was scanned.
+
 ## Comment-hygiene scan at close
 
 Beyond the first two block conditions above, every close gets one more check,
@@ -457,6 +568,55 @@ Both hooks honour it: the tell is appended to the scanner's set when `comment_sc
 
 **There is no default, and without it a comment like `// ABC-1234: the keyword` is not detected.** A generic pattern cannot be made safe: measured over real comment lines, `[A-Z]+-\d+` matches hardware identifiers (`HDMI-0`, `DP-0`) and prose labels (`ROUND-1`) far more often than tracker keys, and the write-time hook blocks writes. An uncompilable or over-long pattern is ignored, and each file's scan runs under a two-second deadline that fails open. The close-time walk over every file a completion named is bounded in turn — a twenty-second budget over the git questions and another over the scans — so neither a stalled git nor a slow pattern can hold the session for minutes. What a budget cuts short is recorded on the trace line rather than reported as a clean scan.
 
+### `ANTI_TANGENT_JEV`
+
+Turns the semantic tier on. Must be exactly `1` — any other value, including unset, leaves the
+write-time hook running the pattern tier alone. Also requires `TYPESAFE_API_KEY`; the two are
+independent switches, and either one missing keeps the tier off.
+
+### `ANTI_TANGENT_JEV_THRESHOLD`
+
+The `change_history` probability at or above which a judged block flags. Default `0.7`. A value
+outside `(0, 1]` — including something unparsable, or `nan` — falls back to the default rather
+than silently disabling the check: `0` would flag every block and `nan` compares `False` against
+every probability, and neither is a stricter or looser policy, just a broken one.
+
+### `TYPESAFE_API_KEY`
+
+The TypeSafe API key the semantic tier authenticates with. Required for the tier to run; unset or
+empty leaves it off (`jev-skip | no-key`) even with `ANTI_TANGENT_JEV=1`.
+
+### `ANTI_TANGENT_JEV_MODEL`
+
+The Jev model id sent with every request. Default `jev-1.13.0`, pinned deliberately: the model's
+behaviour on this question was calibrated against that exact id, and an alias could move under a
+threshold nobody re-tuned for it.
+
+### `ANTI_TANGENT_JEV_URL`
+
+The TypeSafe endpoint. Default `https://api.typesafe.ai/v1/systemone`. Any other value is honoured
+only for a loopback host (`127.0.0.1`, `localhost`, `::1`) or for an `https` URL whose host is
+listed in `~/.claude/anti-tangent-guard/jev-hosts` — see "Why the URL is restricted" under the
+semantic tier above.
+
+### `~/.claude/anti-tangent-guard/jev-hosts`
+
+Not a variable: a file in your home directory listing the hosts, one per line, that
+`ANTI_TANGENT_JEV_URL` may name besides the default host and loopback — a corporate proxy, say.
+It lives under `~/.claude/` beside your own global settings and is read from there whatever
+`CLAUDE_CONFIG_DIR` or `HOME` say: the path is fixed and the home directory comes from the
+password database, because the environment is what this file exists to distrust. Create it with
+`chmod 600`; a symlink, a file owned by another account, or one writable by group or other is
+ignored, and an approved host is only ever reached over `https`. See "Why the URL is restricted"
+and "What this rule does not defend against" under the semantic tier above for what this does and
+does not protect.
+
+### `ANTI_TANGENT_JEV_EXCLUDE`
+
+Colon-separated glob patterns (`fnmatch` syntax), matched against the edited file's path as the
+tool call names it. A match disables the semantic tier for that write (`jev-skip | excluded`)
+while leaving the pattern tier running. Unset by default — nothing is excluded.
+
 ## Kill switches
 
 - `ANTI_TANGENT_COMPLETION_GUARD=0` disables the completion-gate check in the
@@ -470,6 +630,10 @@ Both hooks honour it: the tell is appended to the scanner's set when `comment_sc
 - Setting all three to `0` is what short-circuits the `PostToolUse` hook to
   `exit 0` before it reads stdin. With any one still on, the hook reads stdin
   and runs the rules that are still enabled.
+- `ANTI_TANGENT_JEV` unset or not exactly `1` disables the semantic tier alone,
+  leaving the pattern tier, the completion gate and the start gate untouched.
+  It has no bearing on the `PostToolUse` hook or the three switches above:
+  the semantic tier runs only inside the write-time `PreToolUse` hook.
 
 ## Fail-open policy
 
@@ -500,6 +664,15 @@ single unparsable JSONL line and lets the remaining lines decide the verdict
 as usual, so one corrupt line elsewhere in a long transcript doesn't erase
 the block that should fire.
 
+**The semantic tier's own row.** Every failure — no network, DNS, TLS, a timeout, a malformed
+response, an unexpected exception — allows the write; only a flag above threshold blocks. A
+failure also trips a 60-second breaker so a dead service costs one slow edit rather than every
+edit, and prints one warning on stderr per session so a silent, permanent fail-open (an expired CA
+bundle, a proxy that refuses `CONNECT`) does not go unnoticed. Missing configuration — the setting
+off, no key, an excluded path — is a separate, silent skip: the tier never places a call, so it
+trips neither the breaker nor the warning. See "When it cannot answer" under the semantic tier
+above.
+
 ## Trace log
 
 Every decision — skip, pass, or block — is appended as one line to a trace
@@ -522,8 +695,12 @@ symlink, so a link planted there cannot redirect the trace into a file of
 someone else's choosing. Both checks are best-effort: a trace that cannot be
 written is dropped and never changes a hook's exit status.
 
-Override the location with `ANTI_TANGENT_GUARD_TRACE_LOG`. Tail it while
-debugging:
+Override the location with `ANTI_TANGENT_GUARD_TRACE_LOG`, as an absolute
+path. A relative one is resolved against the hook's working directory — the
+project root under Claude Code — and the semantic tier's state files (its
+breaker, strike and warning stamps) live in the log's directory, so a bare
+filename puts the log and those stamps at the root of the repository being
+edited, as untracked files. Tail it while debugging:
 
 ```bash
 tail -f /tmp/claude-hooks/anti-tangent-guard.log
@@ -544,6 +721,41 @@ since it has no task id to report, and its own event set: `pass | spec-called`
 `skip | not-gated` (not a dispatched full-protocol subagent, or its transcript
 could not be read), `skip | guard=0`, `skip | no-python3`, `skip | no-body`,
 and `error | python-exit=N`.
+
+The semantic tier adds five events of its own to `check-comment-write`'s trace line, reached only
+after a clean pattern-tier pass: `jev-block | p=<probability>` when a touched block scores at or
+above the threshold (the write is refused); `jev-pass | blocks=<n>` when every scored block cleared
+it; `jev-skip | <reason>` when the tier did not run at all — `setting` (not exactly `1`),
+`no-key`, `excluded`, `breaker` (a recent failure's 60-second pause), or `no-blocks` (the edit
+touched no comment); `jev-yield | <path>` on the third refusal for the same file within the
+session's 30-minute window, when the tier allows the write instead of blocking again — or
+`jev-yield | <path>,untracked` when a block was flagged but the refusal count could not be written
+(the directory beside the trace log is not writable): a refusal the tier cannot count is one it
+could never bound, so it allows every such write, the first included, and says so on stderr each
+time, since the stamp that would make that warning once-per-session lives in the same directory;
+and `jev-error | <failure class>` on a failure — an exception type name (`ResponseTooLarge` when
+the endpoint answered with more than 64 KiB, which is not parsed), or `deadline` /
+`deadline-before-request` / `no-question-file` for a budget or configuration problem — which
+always allows the write. Every one of these but `jev-block` lets the write through. Any of them
+but `jev-skip` carries a `,capped` suffix when the edit touched more comment blocks than the tier
+judges in one write, so a verdict reached over a truncated set — a refusal as much as a pass —
+reads as such in the trace.
+
+`ANTI_TANGENT_COMMENT_GUARD=0` never produces any of these five: `check-comment-write` short-circuits
+on it in bash, before Python ever starts, tracing the wrapper's own `skip | guard=0` line instead
+(see "Kill switches" above). The tier's own `config()` checks the same setting again, and from the
+write-time hook that branch is unreachable, since the wrapper's check always runs first. It is kept
+as defence in depth for a caller that reaches `config()` without the wrapper: `config()` is the one
+place that decides whether the tier may send anything at all, and `run()` consults nothing else, so
+a host that invoked the Python body directly would get the kill switch from there or not at all.
+Nothing shipped depends on that branch today — the calibration suite below calls `config()` only
+for the model, threshold, key and URL, and gates itself separately.
+
+Any of these five, when the tier reached its decision using an overridden URL, carries an extra
+`,url=untrusted-host`, `,url=insecure-scheme` or `,url=unparsable-url` suffix — for example
+`jev-error|URLError,url=untrusted-host` — naming why `ANTI_TANGENT_JEV_URL` was rejected and
+swapped for the default; see "Why the URL is restricted" above. No such suffix means the
+configured URL, if any, was used as given.
 
 A close whose comment scan ran also emits a `scan` line — for example
 `scan | src=final_files submitted=3 scanned=0 lines=0` — naming which
@@ -579,11 +791,13 @@ bash evals/run.sh
 ```
 
 Runs the hooks' own unit tests (`hooks/*_test.py`) first, then the full eval
-suite (172 cases) against all three hooks, and exits non-zero on either — the
+suite (179 cases) against all three hooks, and exits non-zero on either — the
 cases cover check-task-complete's four block conditions (the third being its
 own close-time comment-hygiene scan, the fourth being the no-session rule),
-check-comment-write's write-time comment-hygiene guard, and check-task-start's
-start gate. See `evals/run.sh`'s header comment for the
+check-comment-write's write-time comment-hygiene guard — both the pattern
+tier and, behind a loopback stub server the suite starts and tears down
+itself, the semantic tier — and check-task-start's start gate. See
+`evals/run.sh`'s header comment for the
 full breakdown by case. Cases 18/19 are deliberately un-escaped fixtures — they
 test positional extraction against an older server. Cases 20/21 are the
 current server's own rendering, pinned byte-for-byte to the formatters by
@@ -593,6 +807,23 @@ mirror of its regexes. Case 22 pairs a validate_completion tool_use with its
 tool_result exactly as the server's `envelopeResult` marshals it, so the
 direct-call verdict read (see "The four block conditions" above) is
 exercised end-to-end too.
+
+### The semantic tier's calibration suite
+
+```bash
+ANTI_TANGENT_JEV=1 TYPESAFE_API_KEY=... python3 evals/jev-eval.py
+```
+
+Separate again, and never run by CI or by `evals/run.sh`: it spends a real request per row against
+the live TypeSafe endpoint, so it needs the key and the setting and refuses to run without both.
+It scores `evals/jev-comments.jsonl` — 124 labelled comment blocks built by the hook's own block
+builder — and prints recall and precision per source group. Read its output with the same care the
+design measurement needed. Against that set the pattern tier catches **1 of the 38** `history`-labelled
+rows it did not itself select, and **0 of the 30** prose-narrated ones (the `head-history-wording`
+group, every label operator-confirmed) — the gap the semantic tier exists to close. A naive count
+across all 57 reads 20, but 19 of those come from `fp-class`, a source generated by running the
+pattern tier over this repository: those rows exist because the pattern tier already matched them,
+so counting them as its own successes measures nothing.
 
 ### The false-positive gate
 

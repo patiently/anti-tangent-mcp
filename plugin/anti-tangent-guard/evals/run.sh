@@ -275,6 +275,11 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # case here cannot express, because the walk builds that environment itself
 # rather than inheriting it; comment_scan_test.py takes them apart.
 #
+# A group covers the semantic tier: off by default, off without a key,
+# a flag refusing the write through the real binary, a tell refusing it first
+# without the tier ever being asked, a request the stub never answers, and a
+# third attempt on one path yielding.
+#
 # The per-group counts above PARTITION this table: every case belongs to
 # exactly one group, and they sum to EXPECTED_CASE_COUNT. Adding a case means
 # growing the group that describes it, or writing a new group; a breakdown
@@ -284,7 +289,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=173
+EXPECTED_CASE_COUNT=179
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
@@ -294,14 +299,6 @@ WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # file instead; a case that sets ANTI_TANGENT_GUARD_TRACE_LOG in its own "env"
 # block still wins, since `env` applies after this export.
 export ANTI_TANGENT_GUARD_TRACE_LOG="$WORKDIR/trace.log"
-# The suite must not inherit ambient values of the variables its own cases
-# exercise: a case that sets no "env" block would otherwise test the
-# invoking developer's shell rather than the behaviour it names. A case that
-# sets one of these in its own "env" block still wins, since `env` applies
-# after this unset.
-unset ANTI_TANGENT_TICKET_PATTERN
-unset ANTI_TANGENT_COMPLETION_GUARD
-unset ANTI_TANGENT_COMMENT_GUARD
 # Every hook invocation below runs with this as its cwd, run-scoped (inside
 # WORKDIR, so isolated from a concurrent run.sh invocation) rather than
 # per-case, so a "cwd_fixture" case can place a real file at a RELATIVE path
@@ -311,9 +308,57 @@ unset ANTI_TANGENT_COMMENT_GUARD
 HOOK_CWD="$WORKDIR/hook-cwd"
 mkdir -p "$HOOK_CWD"
 cleanup() {
+    if [[ -n "${JEV_PID:-}" ]]; then
+        kill "$JEV_PID" 2>/dev/null
+        wait "$JEV_PID" 2>/dev/null
+    fi
     rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
+
+# A loopback stub stands in for the endpoint. Loopback is the one non-default
+# host the hook will talk to without an entry in the operator's approved-host
+# file, which is what makes this possible without touching that file or
+# weakening the rule for everyone else.
+JEV_LOG="$WORKDIR/jev-requests.log"
+JEV_PORT_FILE="$WORKDIR/jev-port"
+: > "$JEV_LOG"
+# An ordinary background job, so $! is the PID of the process this run owns.
+# pgrep would match a concurrent run's stub, and killing that one breaks a
+# suite nobody is looking at. Its stdout is redirected: the stub prints its
+# own port line there too (the port file is what this script actually reads),
+# and left connected to this script's stdout it can land mid-line inside
+# whatever the suite prints next. stderr is left alone so a stub crash still
+# surfaces.
+python3 -B "$(dirname "${BASH_SOURCE[0]}")/jev-stub.py" \
+    --prob 0.95 --log "$JEV_LOG" --port-file "$JEV_PORT_FILE" >/dev/null &
+JEV_PID=$!
+for _ in $(seq 1 50); do
+    [[ -s "$JEV_PORT_FILE" ]] && break
+    sleep 0.1
+done
+JEV_PORT=$(cat "$JEV_PORT_FILE" 2>/dev/null)
+[[ -n "$JEV_PORT" ]] || { echo "FAIL: the Jev stub never reported a port"; exit 1; }
+
+# The suite must not inherit ambient values of the variables its own cases
+# exercise: a case that sets no "env" block would otherwise test the
+# invoking developer's shell rather than the behaviour it names. A case that
+# sets one of these in its own "env" block still wins, since `env` applies
+# after this unset.
+#
+# Order matters for the Jev variables: clear everything inherited, INCLUDING
+# the URL, and only then export the one this run owns. A developer with a
+# real endpoint in their environment must not have the suite spend their key.
+unset ANTI_TANGENT_TICKET_PATTERN
+unset ANTI_TANGENT_COMPLETION_GUARD
+unset ANTI_TANGENT_COMMENT_GUARD
+unset ANTI_TANGENT_JEV
+unset ANTI_TANGENT_JEV_URL
+unset ANTI_TANGENT_JEV_MODEL
+unset ANTI_TANGENT_JEV_THRESHOLD
+unset ANTI_TANGENT_JEV_EXCLUDE
+unset TYPESAFE_API_KEY
+export ANTI_TANGENT_JEV_URL="http://127.0.0.1:$JEV_PORT/v1/systemone"
 
 PASSED=0
 FAILED=0
@@ -345,7 +390,9 @@ build_stub_dir() {
 # {{TRANSCRIPT}} substituted into input.transcript_path, then invokes the
 # case's hook (default check-task-complete; "hook" field selects another,
 # e.g. check-comment-write) and checks its exit code and (for blocks) its
-# stderr message.
+# stderr message. An optional "expected_exits" array replaces "expected_exit"
+# for a case that must be invoked several times: one entry per invocation,
+# each graded before the next invocation starts.
 #
 # Every case gets its own {{TMPDIR}} — a fresh, case-scoped directory
 # substituted for the literal "{{TMPDIR}}" token wherever it appears in
@@ -588,59 +635,131 @@ run_case() {
     path_exclude=$(jq -r ".evals[$idx].path_stub_exclude // empty" "$EVALS_FILE")
     bash_path=$(command -v bash)
 
-    # Optional "case_timeout_seconds": wrap the hook in `timeout` so a case
-    # whose failure mode is a hang fails as a case instead of stalling the
-    # suite. `timeout` returns 124 on expiry, which no hook uses, so a
-    # timeout is distinguishable from every real exit status below.
-    local case_timeout
+    # Optional "case_timeout_seconds": wrap every invocation in timeout(1) so
+    # a case whose failure mode is a hang fails as a case instead of stalling
+    # the suite. The hook is invoked directly here, so the timeout hooks.json
+    # declares for the host never applies. timeout returns 124 on expiry,
+    # which no hook uses, so an expiry is distinguishable from every real
+    # exit status. The binary is resolved to an absolute path because a
+    # path_stub_exclude case runs under a PATH holding only the hook's own
+    # utilities. A declared bound can evaporate two ways, and both are
+    # FAILED rather than run unbounded: a machine with neither timeout nor
+    # gtimeout (coreutils on macOS) cannot enforce any bound, and a value of
+    # 0 asks GNU/BSD timeout to disable the bound outright — timeout(1)
+    # documents "A duration of 0 disables the associated timeout" — so 0 is
+    # rejected at validation rather than accepted as a number. Either way,
+    # the hang this timeout exists to catch would otherwise become a
+    # stalled suite.
+    local case_timeout timeout_bin=""
     case_timeout=$(jq -r ".evals[$idx].case_timeout_seconds // empty" "$EVALS_FILE")
-    if [[ -n "$case_timeout" && "$case_timeout" =~ ^[0-9]+$ ]] && command -v timeout >/dev/null 2>&1; then
-        timeout_prefix=(timeout "$case_timeout")
-    fi
-
-    local exit_code=0
-    if [[ -n "$path_exclude" ]]; then
-        local stub
-        stub=$(build_stub_dir "$path_exclude")
-        ( cd "$case_cwd" && PATH="$stub" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
-    elif [[ ${#env_assignments[@]} -gt 0 ]]; then
-        ( cd "$case_cwd" && env "${env_assignments[@]}" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
-    else
-        ( cd "$case_cwd" && "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
-    fi
-
-    if [[ "$exit_code" == "124" ]]; then
-        echo "  TIMED OUT after ${case_timeout}s — the case hung rather than returning" >&2
-        return 1
-    fi
-
-    TOTAL=$((TOTAL + 1))
-
-    if [[ "$exit_code" != "$expected_exit" ]]; then
-        printf '  \033[31mFAIL\033[0m  [%s] %-45s expected exit=%s got=%s\n' "$id" "$name" "$expected_exit" "$exit_code"
-        echo "         reason: $reason"
-        echo "         stderr:"
-        sed 's/^/           /' "$stderr_file"
-        FAILED=$((FAILED + 1))
-        return
-    fi
-
-    if [[ "$expected_exit" == "2" ]]; then
-        local expect_count ei missing=0
-        expect_count=$(jq -r ".evals[$idx].expected_stderr_contains | length" "$EVALS_FILE")
-        for ((ei = 0; ei < expect_count; ei++)); do
-            local needle
-            needle=$(jq -r ".evals[$idx].expected_stderr_contains[$ei]" "$EVALS_FILE")
-            if ! grep -qF -- "$needle" "$stderr_file"; then
-                printf '  \033[31mFAIL\033[0m  [%s] %-45s exit code matched, but stderr missing: %s\n' "$id" "$name" "$needle"
-                missing=1
-            fi
-        done
-        if [[ "$missing" == "1" ]]; then
-            FAILED=$((FAILED + 1))
+    if [[ -n "$case_timeout" ]]; then
+        if [[ ! "$case_timeout" =~ ^[1-9][0-9]*$ ]]; then
+            TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+            printf '  \033[31mFAIL\033[0m  [%s] %-45s case_timeout_seconds is not a positive whole number: %s\n' "$id" "$name" "$case_timeout"
             return
         fi
+        timeout_bin=$(command -v timeout || command -v gtimeout || true)
+        if [[ -z "$timeout_bin" ]]; then
+            TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+            printf '  \033[31mFAIL\033[0m  [%s] %-45s declares case_timeout_seconds but neither timeout nor gtimeout is installed, so the case cannot be bounded\n' "$id" "$name"
+            return
+        fi
+        timeout_prefix=("$timeout_bin" "$case_timeout")
     fi
+
+    # Optional "expected_exits": one exit code per invocation, in place of
+    # "expected_exit". The hook is invoked once per entry against the same
+    # stdin and case directory, and each invocation is graded on its own exit
+    # code — and, when it is expected to block, on expected_stderr_contains —
+    # before the next one starts. Only the third-attempt yield case uses
+    # this: the strike count that decides jev-block vs. jev-yield lives in a
+    # file keyed by session and path, so the yield is reachable only after
+    # two refusals against the same case_tmp and session_id. Grading the
+    # last exit code alone would pass a ladder whose first two rungs wrongly
+    # allowed the write and whose third yielded for the wrong reason.
+    local -a expected_exits=()
+    local has_exits
+    has_exits=$(jq -r ".evals[$idx] | has(\"expected_exits\")" "$EVALS_FILE")
+    if [[ "$has_exits" == "true" ]]; then
+        if [[ "$expected_exit" != "null" ]]; then
+            echo "case $id declares both expected_exit and expected_exits — it must declare one or the other."
+            exit 1
+        fi
+        local code
+        while IFS= read -r code; do
+            expected_exits+=("$code")
+        done < <(jq -r ".evals[$idx].expected_exits[]" "$EVALS_FILE")
+        if [[ ${#expected_exits[@]} -eq 0 ]]; then
+            echo "case $id declares an empty expected_exits — nothing would be graded."
+            exit 1
+        fi
+    else
+        expected_exits=("$expected_exit")
+    fi
+
+    local exit_code=0 attempt want total_attempts=${#expected_exits[@]}
+    for ((attempt = 0; attempt < total_attempts; attempt++)); do
+        # Reset every iteration: the `||` below only fires on a NON-ZERO exit,
+        # so a passing invocation after a failing earlier one would otherwise
+        # be graded on the stale exit code the earlier one left behind.
+        exit_code=0
+        if [[ -n "$path_exclude" ]]; then
+            local stub
+            stub=$(build_stub_dir "$path_exclude")
+            ( cd "$case_cwd" && PATH="$stub" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        elif [[ ${#env_assignments[@]} -gt 0 ]]; then
+            ( cd "$case_cwd" && env "${env_assignments[@]}" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        else
+            ( cd "$case_cwd" && "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        fi
+
+        if [[ ${#timeout_prefix[@]} -gt 0 && "$exit_code" == "124" ]]; then
+            TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+            printf '  \033[31mFAIL\033[0m  [%s] %-45s timed out after %ss on invocation %d of %d — the hook hung rather than returning\n' \
+                "$id" "$name" "$case_timeout" "$((attempt + 1))" "$total_attempts"
+            echo "         reason: $reason"
+            return
+        fi
+
+        want="${expected_exits[$attempt]}"
+        if [[ "$exit_code" != "$want" ]]; then
+            TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+            if [[ "$total_attempts" -gt 1 ]]; then
+                printf '  \033[31mFAIL\033[0m  [%s] %-45s invocation %d of %d: expected exit=%s got=%s\n' \
+                    "$id" "$name" "$((attempt + 1))" "$total_attempts" "$want" "$exit_code"
+            else
+                printf '  \033[31mFAIL\033[0m  [%s] %-45s expected exit=%s got=%s\n' "$id" "$name" "$want" "$exit_code"
+            fi
+            echo "         reason: $reason"
+            echo "         stderr:"
+            sed 's/^/           /' "$stderr_file"
+            return
+        fi
+
+        if [[ "$want" == "2" ]]; then
+            local expect_count ei missing=0
+            expect_count=$(jq -r ".evals[$idx].expected_stderr_contains | length" "$EVALS_FILE")
+            for ((ei = 0; ei < expect_count; ei++)); do
+                local needle
+                needle=$(jq -r ".evals[$idx].expected_stderr_contains[$ei]" "$EVALS_FILE")
+                if ! grep -qF -- "$needle" "$stderr_file"; then
+                    if [[ "$total_attempts" -gt 1 ]]; then
+                        printf '  \033[31mFAIL\033[0m  [%s] %-45s invocation %d of %d: exit code matched, but stderr missing: %s\n' \
+                            "$id" "$name" "$((attempt + 1))" "$total_attempts" "$needle"
+                    else
+                        printf '  \033[31mFAIL\033[0m  [%s] %-45s exit code matched, but stderr missing: %s\n' "$id" "$name" "$needle"
+                    fi
+                    missing=1
+                fi
+            done
+            if [[ "$missing" == "1" ]]; then
+                TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+                return
+            fi
+        fi
+    done
+
+    TOTAL=$((TOTAL + 1))
 
     # Optional "expected_file_contains": {path: [substrings]} — checked after
     # the case has already passed on exit code (and stderr, if a block).
@@ -734,18 +853,86 @@ if [[ "$hook_exts" != "$py_exts" ]]; then
     exit 1
 fi
 
+# case_timeout_seconds: 0 must FAIL validation, not run: GNU/BSD `timeout 0`
+# disables the timeout rather than expiring immediately (verified against
+# coreutils: `timeout 0 sleep 3` runs the full three seconds and exits 0;
+# timeout(1) itself documents "A duration of 0 disables the associated
+# timeout"), so a case declaring one would run unbounded — exactly the
+# stalled suite this timeout was added to prevent. Exercised through the
+# real run_case function against a synthetic one-case table, inside a
+# command substitution subshell so its TOTAL/FAILED/PASSED bookkeeping and
+# its EVALS_FILE override never touch the real suite's counters or table.
+zero_timeout_evals="$WORKDIR/zero-timeout-eval.json"
+cat > "$zero_timeout_evals" <<'EOF'
+{
+  "evals": [
+    {
+      "id": 9001,
+      "name": "case-timeout-seconds-zero-self-test",
+      "hook": "check-task-complete",
+      "reason": "case_timeout_seconds: 0 must be rejected at validation, not run with timeout(1) disabled",
+      "expected_exit": 0,
+      "stdin_raw": "{}",
+      "case_timeout_seconds": 0
+    }
+  ]
+}
+EOF
+zero_timeout_output=$(EVALS_FILE="$zero_timeout_evals" run_case 0 2>&1)
+if [[ "$zero_timeout_output" != *"case_timeout_seconds is not a positive whole number"* ]]; then
+    echo "FAIL: a case declaring case_timeout_seconds: 0 was accepted by validation instead of rejected — GNU timeout 0 disables the bound entirely, so the case would run unbounded"
+    FAILED=$((FAILED + 1))
+fi
+
 json_count=$(jq -r '.evals | length' "$EVALS_FILE")
 if [[ "$json_count" -ne "$EXPECTED_CASE_COUNT" ]]; then
     echo "guard-evals.json declares $json_count case(s), expected exactly $EXPECTED_CASE_COUNT — update run.sh's EXPECTED_CASE_COUNT if this table grew on purpose."
     exit 1
 fi
 
-echo "anti-tangent-guard hook evals (check-task-complete + check-comment-write)"
+echo "anti-tangent-guard hook evals (check-task-complete + check-comment-write, pattern and semantic tiers + check-task-start)"
 echo "────────────────────────────────────────────────────────────────"
 
 for ((i = 0; i < json_count; i++)); do
     run_case "$i"
 done
+
+# The stub logs request BODIES, which carry the comment text but not the file
+# path, so the marker has to live in the comment itself.
+if [[ "$(grep -c 'YIELD-CASE-MARKER' "$JEV_LOG")" != "3" ]]; then
+    echo "FAIL: the yield case did not make three requests"
+    FAILED=$((FAILED + 1))
+fi
+
+# Case 177 is only meaningful if nothing was sent. The stub logs every request
+# body it receives, so an empty log for that case's comment text is the proof
+# an exit code cannot give.
+if grep -q "fixes #58" "$JEV_LOG" 2>/dev/null; then
+    echo "FAIL: a regex-refused write reached the endpoint"
+    FAILED=$((FAILED + 1))
+fi
+# Cases 174 and 175 assert only expected_exit=0, which a tier that ran, sent
+# the comment, and failed open would also produce -- an exit code alone
+# cannot tell "the tier stayed off" from "the tier ran and allowed it". Each
+# case's own marker is what proves it never reached the stub.
+if grep -q "OFF-BY-DEFAULT-MARKER" "$JEV_LOG" 2>/dev/null; then
+    echo "FAIL: the tier ran with no setting"
+    FAILED=$((FAILED + 1))
+fi
+if grep -q "NEEDS-A-KEY-MARKER" "$JEV_LOG" 2>/dev/null; then
+    echo "FAIL: the tier ran with no key"
+    FAILED=$((FAILED + 1))
+fi
+# The exit codes for 176 and 178 are 2 and 0, which several other outcomes
+# also produce. The trace line is what says WHICH path ran.
+if ! grep -q "comment-write | jev-block | p=0.95" "$ANTI_TANGENT_GUARD_TRACE_LOG"; then
+    echo "FAIL: no jev-block trace line with its probability"
+    FAILED=$((FAILED + 1))
+fi
+if ! grep -q "comment-write | jev-yield" "$ANTI_TANGENT_GUARD_TRACE_LOG"; then
+    echo "FAIL: no jev-yield trace line"
+    FAILED=$((FAILED + 1))
+fi
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"

@@ -112,7 +112,7 @@ _HASH_DELIM = re.compile(r"(?<=\s)#")
 _SLASH_DELIM = re.compile(r"//|/\*")
 
 
-def _line_comment_spans(opens, raw):
+def _line_comment_spans(opens, raw, keep_empty=False):
     """Every comment span on a code line, as a list; empty when there are none.
 
     Walks delimiters LEFT TO RIGHT and takes the first whose preceding quote
@@ -130,6 +130,10 @@ def _line_comment_spans(opens, raw):
     genuine comment but will not promote code to comment. In hash-family files
     the delimiter must be whitespace-preceded, so shell parameter expansion
     (`${url#https://…}`) is not a comment.
+
+    keep_empty controls only whether a found span with no text is kept or
+    dropped; it never manufactures a span where the walk found no delimiter at
+    all. A line with no comment marker returns `[]` either way.
     """
     delim = _HASH_DELIM if "#" in opens else _SLASH_DELIM
     out, pos, seg = [], 0, 0
@@ -157,7 +161,7 @@ def _line_comment_spans(opens, raw):
             continue
         out.append(raw[m.end():])
         break
-    return [t for t in out if t.strip()]
+    return out if keep_empty else [t for t in out if t.strip()]
 
 
 # Quote forms that genuinely cross a newline. A single or double quote does
@@ -293,6 +297,38 @@ def block_comment_lines(text, interpolates, backticks=False):
     return inside
 
 
+_TRIPLE = ('"""', "'''")
+
+
+def hash_string_lines(path, text):
+    """Indexes of lines sitting inside an open triple-quoted string, as a set.
+
+    A column-zero `#` is read as a comment by comment_spans, which is right
+    in code and wrong inside a docstring. Only hash-family files have the
+    shape, and only a caller with the whole file can tell the two apart.
+
+    Indexed by position rather than text: text has no way to tell a docstring
+    line from an unrelated comment elsewhere in the file that happens to read
+    the same, and would hide the second one along with the first.
+    """
+    # `text` is None on the no-context fallback path, where there is no file
+    # to ask about strings at all.
+    if not text or "#" not in openers(path):
+        return set()
+    inside, delim, out = False, None, set()
+    for i, line in enumerate(text.splitlines()):
+        if inside:
+            out.add(i)
+            if delim in line:
+                inside, delim = False, None
+            continue
+        for d in _TRIPLE:
+            if line.count(d) % 2 == 1:
+                inside, delim = True, d
+                break
+    return out
+
+
 def starred_candidate(path, raw):
     """True when raw is the shape the block-continuation branch would claim."""
     line = raw.strip()
@@ -300,7 +336,7 @@ def starred_candidate(path, raw):
             and not line.startswith("*/"))
 
 
-def comment_spans(path, raw, allow_star=True):
+def comment_spans(path, raw, allow_star=True, keep_empty=False):
     """Every comment span on one line, as a list; empty when there are none.
 
     A LIST, not one joined string. Tells are matched per span, because joining
@@ -316,6 +352,12 @@ def comment_spans(path, raw, allow_star=True):
     through the ordinary left-to-right walk instead. The caller uses it when
     it can see the whole file and the file says this line is not inside an
     open block.
+
+    keep_empty distinguishes "a comment line with nothing after the marker"
+    from "not a comment line at all" -- both would otherwise collapse to the
+    same `[]`. A caller that needs to tell those apart (the shape of an open
+    doc-comment's blank separator line) sets it; violations() uses the
+    default, so a blank comment yields no span for a tell to match.
     """
     opens = openers(path)
     line = raw.strip()
@@ -334,11 +376,11 @@ def comment_spans(path, raw, allow_star=True):
         end = rest.find("*/")
         if end >= 0:
             rest = rest[:end]
-        return [rest] if rest.strip() else []
+        return [rest] if (keep_empty or rest.strip()) else []
     if "#" in opens and line.startswith("#"):
         rest = line[1:]
-        return [rest] if rest.strip() else []
-    return _line_comment_spans(opens, raw)
+        return [rest] if (keep_empty or rest.strip()) else []
+    return _line_comment_spans(opens, raw, keep_empty)
 
 TELLS = (
     # Anchored on both sides: bare `\bboundary` still let a digit run straight
@@ -526,6 +568,38 @@ def scannable(path):
     return os.path.splitext(path)[1].lower() in SCAN_EXTS
 
 
+def block_state(path, context):
+    """What `context` says about `*`-led lines, or None when it says nothing.
+
+    Returns None when there is no context to ask, True when the context
+    cannot be tokenized (callers then fall back to the shape-only answer),
+    and otherwise the pair allow_star() needs. Only _ScanTimeout escapes: it
+    bounds the whole call and must not be absorbed here.
+    """
+    if context is None:
+        return None
+    try:
+        return (block_comment_lines(context, _interpolates(path), _backticks(path)),
+                set(context.splitlines()))
+    except _ScanTimeout:
+        raise
+    except Exception:
+        return True
+
+
+def allow_star(state, raw):
+    """Whether comment_spans may read raw as a block continuation.
+
+    A line the context does not contain is one the context cannot speak for:
+    an edit's operands can hand over a fragment of a file line, and reading
+    that absence as "outside a block" would decline a genuine continuation.
+    """
+    if state is None or state is True:
+        return True
+    block_lines, context_lines = state
+    return raw in block_lines or raw not in context_lines
+
+
 def violations(path, added_lines, context=None, strict=False):
     """Return [(line, why)] for added comment lines carrying change history.
 
@@ -559,42 +633,18 @@ def violations(path, added_lines, context=None, strict=False):
     if not scannable(path):
         return []
     out = []
-    block_lines = None
-    context_lines = None
+    state = None
+    computed = False
     try:
         with scan_deadline():
             for raw in added_lines:
-                allow_star = True
+                star_ok = True
                 if context is not None and starred_candidate(path, raw):
-                    if block_lines is None:
-                        try:
-                            block_lines = block_comment_lines(
-                                context, _interpolates(path),
-                                _backticks(path))
-                            context_lines = set(context.splitlines())
-                        except _ScanTimeout:
-                            # ITIMER_REAL is one-shot: absorbing the deadline
-                            # here would leave every remaining line scanned
-                            # with no bound at all, which is the only thing
-                            # standing between a backtracking operator pattern
-                            # and a hung session.
-                            raise
-                        except Exception:
-                            block_lines = True
-                    if block_lines is not True:
-                        # An added line the context does not contain is one
-                        # the context cannot speak for. An Edit's added lines
-                        # come from old_string/new_string, which may start
-                        # part-way through a file line, so the fragment
-                        # appears in no line of the reconstructed text.
-                        # Reading that absence as "outside a block" would
-                        # decline a genuine block continuation; leaving the
-                        # shape-only answer standing is the fallback the rest
-                        # of this module takes whenever the premise cannot be
-                        # checked.
-                        allow_star = (raw in block_lines
-                                      or raw not in context_lines)
-                for span in comment_spans(path, raw, allow_star):
+                    if not computed:
+                        state = block_state(path, context)
+                        computed = True
+                    star_ok = allow_star(state, raw)
+                for span in comment_spans(path, raw, star_ok):
                     hit = next((why for pat, why in TELLS if pat.search(span)), None)
                     if hit is not None:
                         out.append((raw.strip(), hit))
