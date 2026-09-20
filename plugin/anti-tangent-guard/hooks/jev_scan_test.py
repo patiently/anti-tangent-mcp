@@ -570,16 +570,27 @@ class HookBody(unittest.TestCase):
         self.port = self.start_stub("0.95")
 
     def tearDown(self):
-        self.stub.terminate()
-        self.stub.wait(timeout=10)
+        self.stop_stub()
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def start_stub(self, prob):
+        self.stop_stub()
         stub = os.path.join(os.path.dirname(HOOKS), "evals", "jev-stub.py")
         self.stub = subprocess.Popen(
             [sys.executable, "-B", stub, "--prob", prob, "--log", self.requests],
             stdout=subprocess.PIPE, text=True)
         return int(self.stub.stdout.readline().strip())
+
+    def stop_stub(self):
+        # getattr with a default, not self.stub directly: a setUp that fails
+        # before its own start_stub call still runs tearDown, which must not
+        # raise AttributeError on top of whatever setUp already failed on.
+        if getattr(self, "stub", None) is None:
+            return
+        self.stub.terminate()
+        self.stub.wait(timeout=10)
+        self.stub.stdout.close()
+        self.stub = None
 
     def run_body(self, content, session="s1", **env_over):
         with open(self.file, "w") as fh:
@@ -667,6 +678,95 @@ class HookBody(unittest.TestCase):
         self.assertTrue(second.stdout.startswith("jev-skip|breaker"), second.stdout)
         self.assertEqual(self.requests_made(), before, "the breaker must stop the request")
         self.assertEqual(second.stderr.strip(), "", "only the first failure warns")
+
+
+class Wrapper(HookBody):
+    """The bash wrapper's own contract, driven through the real binary."""
+
+    WRAPPER = os.path.join(HOOKS, "check-comment-write")
+
+    def run_wrapper(self, content, extra_path="", **env_over):
+        with open(self.file, "w") as fh:
+            fh.write("package x\n")
+        payload = json.dumps({"tool_name": "Write", "session_id": "w1",
+                              "tool_input": {"file_path": self.file, "content": content}})
+        env = dict(os.environ)
+        env.update({"CLAUDE_PLUGIN_ROOT": os.path.dirname(HOOKS),
+                    "ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "k",
+                    "ANTI_TANGENT_JEV_URL": "http://127.0.0.1:%d/v1/systemone" % self.port,
+                    "ANTI_TANGENT_GUARD_TRACE_LOG": os.path.join(self.dir, "trace.log")})
+        env.pop("ANTI_TANGENT_TICKET_PATTERN", None)
+        if extra_path:
+            env["PATH"] = extra_path
+        env.update(env_over)
+        return subprocess.run([self.WRAPPER], input=payload, capture_output=True,
+                              text=True, env=env, timeout=30)
+
+    def trace(self):
+        with open(os.path.join(self.dir, "trace.log")) as fh:
+            return fh.read()
+
+    def test_flag_maps_to_exit_two_with_its_probability(self):
+        r = self.run_wrapper("// The count cap used to return a plain error.\npackage x\n")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stdout, "", "the body's event must not reach the transcript")
+        self.assertIn("jev-block | p=0.95", self.trace())
+
+    def test_pass_traces_the_reported_event(self):
+        # A second stub, scoring below the threshold: the inherited setUp
+        # starts one at 0.95, so a comment sent there flags and this test
+        # would pass on the wrong outcome.
+        self.port = self.start_stub("0.05")
+        r = self.run_wrapper("// Returns nil when the file is absent.\npackage x\n")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("jev-pass", self.trace())
+
+    def test_disabled_tier_traces_its_reason(self):
+        r = self.run_wrapper("// A plain comment.\n", ANTI_TANGENT_JEV="0")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("jev-skip | setting", self.trace())
+
+    def test_no_temp_files_are_left_behind(self):
+        before = set(os.listdir(tempfile.gettempdir()))
+        self.run_wrapper("// A plain comment.\npackage x\n")
+        left = {n for n in set(os.listdir(tempfile.gettempdir())) - before
+                if n.startswith("atg-comment-write.")}
+        self.assertEqual(left, set())
+
+    def test_a_failed_mktemp_allows_the_write(self):
+        # Every dependency present EXCEPT a working mktemp. An empty PATH
+        # would not test this: the wrapper checks for python3 first and would
+        # exit on that instead, never reaching the branch under test.
+        shim = os.path.join(self.dir, "bin")
+        os.makedirs(shim, exist_ok=True)
+        # bash itself must be reachable too: the wrapper's shebang is
+        # `#!/usr/bin/env bash`, and /usr/bin/env resolves "bash" through the
+        # subprocess's own PATH (the kernel invokes env by its absolute path,
+        # but env's own lookup is not exempt from the replaced PATH).
+        for tool in ("bash", "python3", "jq", "cat", "tr", "mkdir", "date", "dirname",
+                     "wc", "mv", "rm", "head", "printf", "seq", "sleep"):
+            found = shutil.which(tool)
+            if found:
+                os.symlink(found, os.path.join(shim, tool))
+        with open(os.path.join(shim, "mktemp"), "w") as fh:
+            fh.write("#!/bin/sh\nexit 1\n")
+        os.chmod(os.path.join(shim, "mktemp"), 0o755)
+
+        r = self.run_wrapper("// The count cap used to return a plain error.\npackage x\n",
+                             extra_path=shim)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no-tmp", self.trace())
+
+    def test_hooks_json_declares_the_timeout(self):
+        # Selected by command, not by position: the plugin registers more
+        # than one PreToolUse matcher, and their order is not a contract.
+        with open(os.path.join(HOOKS, "hooks.json")) as fh:
+            hooks = json.load(fh)
+        entries = [h for matcher in hooks["hooks"]["PreToolUse"]
+                   for h in matcher["hooks"] if "check-comment-write" in h["command"]]
+        self.assertEqual(len(entries), 1, "expected exactly one comment-write hook entry")
+        self.assertEqual(entries[0]["timeout"], 10)
 
 
 if __name__ == "__main__":
