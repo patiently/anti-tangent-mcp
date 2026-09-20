@@ -44,6 +44,18 @@ class BlockBuilder(unittest.TestCase):
             "x.go", ["foo() // this used to panic on nil"], context)
         self.assertEqual([b.text for b in blocks], ["this used to panic on nil"])
 
+    def test_an_exact_hit_does_not_excuse_a_fragment_from_the_containment_check(self):
+        # "foo()" exact-matches line 0 and is ALSO a substring of lines 1 and
+        # 2. The dict fast path alone would stop at the exact hit and miss
+        # the other two; every touched fragment must still be checked for
+        # containment everywhere, not only the fragments the dict missed.
+        lines = ["foo()", "x := foo()", "foo() // c", "unrelated"]
+        self.assertEqual(jev_scan._touched_indexes(lines, ["foo()"]), {0, 1, 2})
+
+    def test_a_fragment_with_no_exact_line_still_marks_every_containing_line(self):
+        lines = ["fooBar()", "x := fooBar()", "fooBar() // c", "unrelated"]
+        self.assertEqual(jev_scan._touched_indexes(lines, ["fooBar"]), {0, 1, 2})
+
     def test_no_match_falls_back_to_touched_lines(self):
         blocks = jev_scan.build_blocks(
             "x.go", ["// this used to panic on nil"], "unrelated file text\n")

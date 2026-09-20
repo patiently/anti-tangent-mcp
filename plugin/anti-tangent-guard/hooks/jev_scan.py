@@ -158,32 +158,47 @@ def _touched_indexes(lines, touched):
     """Indexes of context lines this edit wrote, matched by containment.
 
     An Edit's operands can add a fragment of a file line, which equals no
-    line of the post-edit text; the fragment is still what was written.
+    line of the post-edit text; the fragment is still what was written. A
+    fragment that exact-matches one line can still be a substring of other
+    lines too (a duplicated call, a name nested inside a longer line), so an
+    exact hit does not excuse a fragment from the substring check -- every
+    touched fragment is checked against every line below, not only the ones
+    the dict missed.
 
-    A fresh Write touches every line of the file, and each touched entry is
-    then the whole line it names -- an exact match once both sides are
-    stripped the same way. Resolving those through a dict first keeps that
-    common case linear; only a fragment with no exact hit (an Edit's partial
-    line) pays for the O(lines) substring scan below, and only once per such
-    fragment rather than once per touched entry.
+    The dict pass resolves exact matches in one linear sweep, which is what
+    keeps a fresh Write's touched set -- every line of the file, each entry
+    equal to its own line once both sides are stripped -- out of the
+    substring scan entirely: that pass alone marks every line the scan
+    could ever mark. A blank line's stripped text is "", which is never a
+    real fragment (`if not frag` drops it before it can match anything) and
+    can never contain a non-empty fragment as a substring either, so no
+    scan can ever add a blank line to hit. Once hit already covers every
+    non-blank line, the scan below is a proven no-op -- hit cannot grow --
+    so it is skipped; that is an upper bound on hit, not an assumption
+    about which files reach it. Where it does not hold, the touched set is
+    an Edit's handful of fragments against a much larger file, and the
+    scan runs over that handful, which stays cheap.
     """
     by_stripped = {}
+    markable = 0
     for i, line in enumerate(lines):
-        by_stripped.setdefault(line.strip(), []).append(i)
+        stripped = line.strip()
+        by_stripped.setdefault(stripped, []).append(i)
+        if stripped:
+            markable += 1
     hit = set()
-    remaining = []
+    frags = []
     for frag in touched:
         frag = frag.strip()
         if not frag:
             continue
+        frags.append(frag)
         exact = by_stripped.get(frag)
         if exact:
             hit.update(exact)
-        else:
-            remaining.append(frag)
-    if remaining:
+    if frags and len(hit) < markable:
         for i, line in enumerate(lines):
-            if any(frag in line for frag in remaining):
+            if any(frag in line for frag in frags):
                 hit.add(i)
     return hit
 
