@@ -65,6 +65,8 @@ with either Noul variant at any threshold leaves it flagged.
 5. A comment describing an earlier version's bug is change history, including in a test.
 6. A touched comment block is judged **whole**, pre-existing lines included. History already in a
    block the edit touches is to be cleaned up, not stepped around.
+7. The tier blocks at most twice for the same file in a session, then yields to the close-time
+   reviewer.
 
 ## Non-goals
 
@@ -182,9 +184,26 @@ block actionable: told only that "this reads as change history", an agent facing
 1.00 false flag rewrites, is refused again, and loops until a human intervenes. The message does
 not name the off switch; the README documents that for the operator.
 
-**Open:** whether a second consecutive Jev block on the same path within a session should degrade
-to a non-blocking warning. It bounds the loop, and it weakens enforcement exactly where a wrong
-verdict is most likely. Decide before implementation.
+### Yielding after two blocks
+
+A block that cannot be satisfied is a real outcome: the known false flag scores 1.00, and no
+threshold or ensemble clears it, so an agent can rewrite, be refused, and rewrite again with
+nothing to learn from. The tier therefore blocks at most twice for the same file in a session. On
+the third attempt it allows the write and tells the agent the check could not be satisfied, that
+the comment will be judged again at task close, and to raise it with the operator if the verdict
+looks wrong.
+
+This is not a hole in enforcement: `validate_completion` already reads added comments and raises
+`comment_hygiene`, which is precisely the enforcement that exists without this tier. A yield
+returns that one comment to it, and the v0.19.0 asymmetry — a miss caught later is cheaper than a
+block that stops work — is what makes that the right direction. It is also the escalation shape the
+server already uses when an answered finding is raised again: stop, and put it to the human.
+
+The counter is a stamp file in the trace directory keyed by session and path, with a short expiry
+so stale state cannot grant a free pass to a later edit. A yield records `jev-yield` and prints one
+warning on stderr, so it is never silent. An agent could rewrite carelessly twice to get through;
+it could equally unset the variable. This guard has never been an adversarial control, and its
+README says as much about the close-time pass signal.
 
 ### Failure
 
@@ -203,7 +222,7 @@ under `python3 -I`, a proxy that refuses CONNECT — is visible without reading 
 ### Trace
 
 New events: `jev-block` (with the probability), `jev-pass`, `jev-skip` (with the reason it was
-off), `jev-error` (with the failure class and the host), and `jev-capped`. The wrapper today runs
+off), `jev-error` (with the failure class and the host), `jev-yield` and `jev-capped`. The wrapper today runs
 the body as a bare pipeline and reads `PIPESTATUS`, so it captures no stdout: it gains a redirect
 of the body's stdout to a temp file, reads one `event|detail` line back, and a new status arm that
 maps a Jev flag to exit 2 with its own trace event. Command substitution is not usable here — it
@@ -239,7 +258,8 @@ every failure path allowing the write.
 
 **Eval cases** (`guard-evals.json`, driving the real hook binary against a stub server through
 `ANTI_TANGENT_JEV_URL`): setting off; key absent; a flag blocking with the probability in the trace
-and empty hook stdout; a timeout allowing; and a regex hit short-circuiting before any call. The
+and empty hook stdout; a timeout allowing; a third attempt on one path yielding with `jev-yield` in the trace; and a
+regex hit short-circuiting before any call. The
 suite needs three things it does not have today: a stub-server facility (port allocation,
 background lifetime under the existing EXIT trap, safe under concurrent runs), `EXPECTED_CASE_COUNT`
 and the header's group partition grown for a named Jev group, and `ANTI_TANGENT_JEV`,
@@ -281,13 +301,12 @@ inspect every flag by hand. It needs no labels and it is the only evidence avail
 ## Open at implementation time
 
 - Confirmation of the calibration set's labels before it is committed.
-- The loop-breaker question under "Verdict, message, exit codes".
-- The exact block-message wording.
+- The exact block-message wording, and the yield message's.
 
 ## Shipping
 
 Rebase onto main (0.23.0), branch `version/0.24.0`, matching `CHANGELOG.md` entry, and a guard
 README covering: both gates and the on-touch split Decision 6 introduces, what leaves the machine
-and the redaction, the fail-open table and the breaker, the CA-bundle failure mode under
+and the redaction, the fail-open table, the breaker and the two-block yield, the CA-bundle failure mode under
 `python3 -I`, the Windows gap, and the off switch. `plugin.json`'s version and its description
 ("pattern set") change with it.
