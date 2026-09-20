@@ -546,6 +546,48 @@ class Judge(unittest.TestCase):
         self.assertFalse(any("Authorization" in h for h in sink_requests),
                          "the key reached the redirect target")
 
+    def test_an_oversized_response_is_an_error_not_an_answer(self):
+        # Both bodies are valid JSON carrying a flagging probability, so a
+        # transport that parsed either would flag. One is exactly at the cap
+        # and must still be read; the other is past it and must fail the
+        # request before any parse, as ResponseTooLarge rather than as a
+        # decode error over a truncated body.
+        import http.server
+        import threading as th
+
+        def padded(target):
+            skeleton = json.dumps(dict(pad="", **self.answer(0.99)))
+            return skeleton.replace('"pad": ""', '"pad": "%s"' % ("x" * (target - len(skeleton))))
+
+        bodies = {"/fit": padded(jev_scan.MAX_RESPONSE_BYTES).encode("utf-8"),
+                  "/big": padded(jev_scan.MAX_RESPONSE_BYTES + 1).encode("utf-8")}
+
+        class Sized(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = bodies[self.path]
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Sized)
+        th.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        fit = self.cfg(ANTI_TANGENT_JEV_URL="http://127.0.0.1:%d/fit" % server.server_port)
+        r = jev_scan.judge([jev_scan.Block("c", 1)], fit)
+        self.assertIsNotNone(r.flagged, "a body at the cap must still be parsed")
+
+        big = self.cfg(ANTI_TANGENT_JEV_URL="http://127.0.0.1:%d/big" % server.server_port)
+        r = jev_scan.judge([jev_scan.Block("c", 1)], big)
+        self.assertIsNone(r.flagged)
+        self.assertEqual(r.event, "jev-error")
+        self.assertEqual(r.detail, "ResponseTooLarge")
+
     def test_a_flag_survives_another_block_failing(self):
         calls = []
 
@@ -684,6 +726,26 @@ class Run(unittest.TestCase):
         self.assertEqual(code, 0, "an internal error must allow the write")
         self.assertEqual(event, "jev-error|RuntimeError")
         self.assertNotIn("Traceback", message or "")
+
+    def test_a_refusal_over_a_capped_block_set_says_so(self):
+        # The cap is decided before judge() runs and has to reach every
+        # verdict, not only a pass: a refusal or a yield reached over less
+        # than the edit contained is a different fact from one reached over
+        # all of it, and the trace is the only place that can be read.
+        original = jev_scan.judge
+        jev_scan.judge = (lambda blocks, cfg, transport=None, deadline=None:
+                          jev_scan.Verdict(blocks[0], 0.9, "jev-block"))
+        lines = []
+        for i in range(jev_scan.MAX_BLOCKS + 1):
+            lines += ["// block %d" % i, "var v%d = %d" % (i, i)]
+        context = "\n".join(lines) + "\n"
+        try:
+            events = [jev_scan.run(self.file, lines, context, self.env(), "s1", self.dir)[1]
+                      for _ in range(3)]
+        finally:
+            jev_scan.judge = original
+        self.assertEqual(events[:2], ["jev-block|p=0.90,capped"] * 2)
+        self.assertEqual(events[2], "jev-yield|%s,capped" % self.file)
 
     def test_an_untrusted_url_leaves_a_trace_of_the_silent_fallback(self):
         # judge() is stubbed rather than left to hit the real DEFAULT_URL a

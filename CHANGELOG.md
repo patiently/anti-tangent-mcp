@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `evals/jev-comments.jsonl` byte for byte on any later checkout and the parity test reports a
   change to the hook's block builder rather than every commit that touches a harvested file.
   Refreshing the corpus means moving the pin and answering the judgement calls it surfaces.
+- The semantic tier's `,capped` trace suffix is carried on every verdict (`jev-block`, `jev-yield`
+  and `jev-error` as well as `jev-pass`), so a refusal decided over a truncated block set is
+  readable as such. A response body past 64 KiB is refused unparsed as `jev-error |
+  ResponseTooLarge` (the write is allowed). A relative `ANTI_TANGENT_GUARD_TRACE_LOG` is resolved
+  to an absolute path before the tier's state files are addressed beside it.
 - `docs/protocol/controller.md` (mirrored to `plugin/anti-tangent-protocol/protocol/controller.md`)
   gains a "Which tier a review earns" subsection under the dispatch addendum: a spec or
   code-quality reviewer defaults to superpowers' `standard` model-routing tier, escalates to

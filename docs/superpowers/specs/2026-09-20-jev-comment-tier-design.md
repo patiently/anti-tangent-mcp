@@ -135,8 +135,9 @@ is not one:
 
 Bounds: a block is windowed to 2,000 characters **around the touched lines**, never from the top,
 so a long licence or package header cannot push the touched text out of what is judged. At most 20
-blocks per write, subject to the deadline below; a write that exceeds either judges what fits and
-records `jev-capped`.
+blocks per write, subject to the deadline below; a write that exceeds the block cap judges what
+fits and appends `,capped` to whichever event it then records (`jev-pass`, `jev-block`, `jev-yield`
+or `jev-error`), so a verdict reached over less than the edit contained reads as such in the trace.
 
 Before egress, every block passes a redaction step: high-entropy tokens and `key`/`secret`/`token`/
 `password` assignments are replaced with a placeholder. Commented-out credentials are common, and
@@ -159,9 +160,12 @@ Flagged when `answers.kind.probabilities.change_history >= threshold`.
 Timing is specified rather than left to the pool: a flag prints its message and exits immediately
 via `os._exit`, because Python joins pool threads at interpreter exit and a plain `sys.exit` would
 wait for every in-flight request and could lose a verdict already found to the hook timeout. The
-block cap and pool size are derived so that `blocks ÷ workers × per-request timeout` stays inside
-the deadline. Host resolution happens inside a worker under the same deadline, since a socket
-timeout does not bound `getaddrinfo` and a dropped VPN would otherwise stall every edit.
+deadline is enforced on the wall clock directly, not derived from the block cap and pool size: no
+request is submitted once the budget is spent, and each request's timeout is the smaller of its
+own limit and what remains, so a write that touches more blocks than the pool can answer in time
+fails open with `jev-error | deadline` rather than overrunning. Host resolution happens inside a
+worker under the same deadline, since a socket timeout does not bound `getaddrinfo` and a dropped
+VPN would otherwise stall every edit.
 
 ### The question file
 
@@ -228,8 +232,9 @@ under `python3 -I`, a proxy that refuses CONNECT — is visible without reading 
 
 ### Trace
 
-New events: `jev-block` (with the probability), `jev-pass`, `jev-skip` (with the reason it was
-off), `jev-error` (with the failure class and the host), `jev-yield` and `jev-capped`. The wrapper today runs
+New events: `jev-block` (with the probability), `jev-pass` (with the block count), `jev-skip` (with
+the reason it was off), `jev-error` (with the failure class) and `jev-yield` (with the path); any of
+them but `jev-skip` carries a `,capped` suffix when the block cap truncated what was judged. The wrapper today runs
 the body as a bare pipeline and reads `PIPESTATUS`, so it captures no stdout: it gains a redirect
 of the body's stdout to a temp file, reads one `event|detail` line back, and a new status arm that
 maps a Jev flag to exit 2 with its own trace event. Command substitution is not usable here — it

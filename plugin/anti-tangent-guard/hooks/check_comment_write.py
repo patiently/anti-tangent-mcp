@@ -85,8 +85,12 @@ if bad:
 
 import jev_scan  # noqa: E402
 
-trace_dir = os.path.dirname(os.environ.get("ANTI_TANGENT_GUARD_TRACE_LOG")
-                            or "/tmp/claude-hooks/anti-tangent-guard.log")
+# The tier's state files (breaker, strike and warning stamps) live beside the
+# trace log. Resolved to an absolute directory first: a log path with no
+# directory component would otherwise address them by bare relative names,
+# which land wherever the process happens to be rather than beside the log.
+trace_dir = os.path.dirname(os.path.abspath(
+    os.environ.get("ANTI_TANGENT_GUARD_TRACE_LOG") or "/tmp/claude-hooks/anti-tangent-guard.log"))
 code, event, message = jev_scan.run(path, lines, context, os.environ,
                                     data.get("session_id") or "-", trace_dir)
 if message:

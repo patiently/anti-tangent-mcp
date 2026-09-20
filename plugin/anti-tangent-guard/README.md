@@ -681,8 +681,12 @@ symlink, so a link planted there cannot redirect the trace into a file of
 someone else's choosing. Both checks are best-effort: a trace that cannot be
 written is dropped and never changes a hook's exit status.
 
-Override the location with `ANTI_TANGENT_GUARD_TRACE_LOG`. Tail it while
-debugging:
+Override the location with `ANTI_TANGENT_GUARD_TRACE_LOG`, as an absolute
+path. A relative one is resolved against the hook's working directory — the
+project root under Claude Code — and the semantic tier's state files (its
+breaker, strike and warning stamps) live in the log's directory, so a bare
+filename puts the log and those stamps at the root of the repository being
+edited, as untracked files. Tail it while debugging:
 
 ```bash
 tail -f /tmp/claude-hooks/anti-tangent-guard.log
@@ -706,9 +710,8 @@ and `error | python-exit=N`.
 
 The semantic tier adds five events of its own to `check-comment-write`'s trace line, reached only
 after a clean pattern-tier pass: `jev-block | p=<probability>` when a touched block scores at or
-above the threshold (the write is refused); `jev-pass | blocks=<n>[,capped]` when every scored
-block cleared it, `capped` appended when the edit touched more comment blocks than the tier judges
-in one write; `jev-skip | <reason>` when the tier did not run at all — `setting` (not exactly `1`),
+above the threshold (the write is refused); `jev-pass | blocks=<n>` when every scored block cleared
+it; `jev-skip | <reason>` when the tier did not run at all — `setting` (not exactly `1`),
 `no-key`, `excluded`, `breaker` (a recent failure's 60-second pause), or `no-blocks` (the edit
 touched no comment); `jev-yield | <path>` on the third refusal for the same file within the
 session's 30-minute window, when the tier allows the write instead of blocking again — or
@@ -716,9 +719,13 @@ session's 30-minute window, when the tier allows the write instead of blocking a
 (the directory beside the trace log is not writable): a refusal the tier cannot count is one it
 could never bound, so it allows every such write, the first included, and says so on stderr each
 time, since the stamp that would make that warning once-per-session lives in the same directory;
-and `jev-error | <failure class>` on a failure — an exception type name, or `deadline` /
+and `jev-error | <failure class>` on a failure — an exception type name (`ResponseTooLarge` when
+the endpoint answered with more than 64 KiB, which is not parsed), or `deadline` /
 `deadline-before-request` / `no-question-file` for a budget or configuration problem — which
-always allows the write. Every one of these but `jev-block` lets the write through.
+always allows the write. Every one of these but `jev-block` lets the write through. Any of them
+but `jev-skip` carries a `,capped` suffix when the edit touched more comment blocks than the tier
+judges in one write, so a verdict reached over a truncated set — a refusal as much as a pass —
+reads as such in the trace.
 
 `ANTI_TANGENT_COMMENT_GUARD=0` never produces any of these five: `check-comment-write` short-circuits
 on it in bash, before Python ever starts, tracing the wrapper's own `skip | guard=0` line instead

@@ -368,13 +368,25 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
 
 _OPENER = urllib.request.build_opener(_NoRedirects)
 
+# An answer is a few hundred bytes of JSON. An endpoint sending far more is
+# not answering the question, and a hook that is holding up the user's edit
+# must not buffer whatever it sends.
+MAX_RESPONSE_BYTES = 65536
+
+
+class ResponseTooLarge(ValueError):
+    """The response body exceeded MAX_RESPONSE_BYTES and was not parsed."""
+
 
 def _http(url, body, headers, timeout):
     """One POST, one attempt. A retry in a blocking hook only doubles the wait."""
     req = urllib.request.Request(
         url, data=json.dumps(body).encode("utf-8"), method="POST", headers=headers)
     with _OPENER.open(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        raw = resp.read(MAX_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise ResponseTooLarge("more than %d bytes" % MAX_RESPONSE_BYTES)
+    return json.loads(raw.decode("utf-8"))
 
 
 def _probability(payload):
@@ -636,8 +648,8 @@ def _failed(trace_dir, session, detail, note=""):
 
     note is appended only to the trace event's detail, never to what
     _warn_once keys its once-per-session stamp and message choice on -- so an
-    overridden URL shows up in the log without changing which stderr message
-    a failure prints.
+    overridden URL or a capped block set shows up in the log without changing
+    which stderr message a failure prints.
     """
     breaker_trip(trace_dir)
     return 0, "jev-error|%s%s" % (detail, note), _warn_once(trace_dir, session, detail)
@@ -671,14 +683,18 @@ def run(path, touched, context, env, session, trace_dir):
         blocks, capped = build_blocks(path, touched, context, report=True)
         if not blocks:
             return 0, "jev-skip|no-blocks%s" % url_note, ""
+        # Every verdict from here on carries the cap, not only a pass: a
+        # refusal or a yield decided over less than the edit contained is a
+        # different fact from one decided over all of it, and the trace is
+        # the only place that difference can be read.
+        note = (",capped" if capped else "") + url_note
         if time.monotonic() >= until:
-            return _failed(trace_dir, session, "deadline-before-request", url_note)
+            return _failed(trace_dir, session, "deadline-before-request", note)
         verdict = judge(blocks, cfg, deadline=until)
         if verdict.event == "jev-error":
-            return _failed(trace_dir, session, verdict.detail, url_note)
+            return _failed(trace_dir, session, verdict.detail, note)
         if verdict.flagged is None:
-            return 0, "jev-pass|blocks=%d%s%s" % (
-                len(blocks), ",capped" if capped else "", url_note), ""
+            return 0, "jev-pass|blocks=%d%s" % (len(blocks), note), ""
         count = strike(trace_dir, session, path)
         quoted = verdict.flagged.text[:400]
         # A count that could not be recorded is not a first strike. Every
@@ -687,10 +703,10 @@ def run(path, touched, context, env, session, trace_dir):
         # So the tier yields on every such attempt, the first included, and
         # the trace says why -- a bare jev-yield would read as a third strike.
         if count is None:
-            return 0, "jev-yield|%s,untracked%s" % (path, url_note), YIELD_MESSAGE_UNTRACKED % quoted
+            return 0, "jev-yield|%s,untracked%s" % (path, note), YIELD_MESSAGE_UNTRACKED % quoted
         if count > STRIKE_LIMIT:
-            return 0, "jev-yield|%s%s" % (path, url_note), YIELD_MESSAGE % quoted
-        return 4, "jev-block|p=%.2f%s" % (verdict.probability, url_note), \
+            return 0, "jev-yield|%s%s" % (path, note), YIELD_MESSAGE % quoted
+        return 4, "jev-block|p=%.2f%s" % (verdict.probability, note), \
             BLOCK_MESSAGE % (quoted, verdict.probability)
     except Exception as exc:
         # Through the same door as every other failure: an unexpected error is
