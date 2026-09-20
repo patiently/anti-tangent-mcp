@@ -204,7 +204,11 @@ server already uses when an answered finding is raised again: stop, and put it t
 
 The counter is a stamp file in the trace directory keyed by session and path, with a short expiry
 so stale state cannot grant a free pass to a later edit. A yield records `jev-yield` and prints one
-warning on stderr, so it is never silent. An agent could rewrite carelessly twice to get through;
+warning on stderr, so it is never silent. A count that cannot be written is not a first strike: if
+it were, a directory the hook cannot write to would make every refusal the first, the limit
+unreachable, and the block endless — so the tier yields on every such attempt, the first included,
+records `jev-yield` with an `untracked` suffix, and prints its warning each time, since the stamp
+that would make the warning once-per-session lives in the same directory. An agent could rewrite carelessly twice to get through;
 it could equally unset the variable. This guard has never been an adversarial control, and its
 README says as much about the close-time pass signal.
 

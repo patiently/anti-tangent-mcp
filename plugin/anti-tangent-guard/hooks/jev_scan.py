@@ -521,7 +521,14 @@ def strike(directory, session, path):
     """How many times this file has been refused in this session, counting now.
 
     A stamp older than the TTL is a different sitting of work: it starts the
-    count again rather than spending a refusal the writer never saw.
+    count again rather than spending a refusal the writer never saw. A stamp
+    that cannot be read or parsed restarts the count the same way.
+
+    Returns None when the new count could not be written. That is not a
+    first strike: a count nobody can record never reaches the limit, so
+    reporting 1 here would let the refusal repeat without end -- the loop
+    the limit exists to break. The caller must not spend a refusal it
+    cannot count.
     """
     stamp = _strike_path(directory, session, path)
     count = 0
@@ -529,17 +536,24 @@ def strike(directory, session, path):
         if os.path.exists(stamp) and time.time() - os.path.getmtime(stamp) <= STRIKE_TTL_S:
             with open(stamp) as fh:
                 count = int((fh.read() or "0").strip() or 0)
-        count += 1
-        # Two Edit hooks can run at once. The write is atomic so a reader
-        # never sees a half-written count; a lost update costs one extra
-        # refusal, which is the safe direction for a gate.
-        tmp = "%s.%d" % (stamp, os.getpid())
+    except Exception:
+        count = 0
+    count += 1
+    # Two Edit hooks can run at once. The write is atomic so a reader
+    # never sees a half-written count; a lost update costs one extra
+    # refusal, which is the safe direction for a gate.
+    tmp = "%s.%d" % (stamp, os.getpid())
+    try:
         with open(tmp, "w") as fh:
             fh.write(str(count))
         os.replace(tmp, stamp)
-        return count
     except Exception:
-        return count or 1
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        return None
+    return count
 
 
 def breaker_trip(directory):
@@ -571,6 +585,15 @@ YIELD_MESSAGE = (
     "  %s\n\n"
     "It will be judged again at task close by validate_completion. If you believe the\n"
     "verdict is wrong, say so to the operator rather than rewriting it a third time.\n")
+
+# Printed on every attempt, not once per session: the once-per-session stamp
+# lives in the same directory the strike count could not be written to.
+YIELD_MESSAGE_UNTRACKED = (
+    "NOTE: this comment reads as change history, but the write is being allowed.\n\n"
+    "  %s\n\n"
+    "The check cannot record refusals for this session (the directory beside its trace\n"
+    "log is not writable), so it refuses nothing rather than refuse without limit. The\n"
+    "comment will be judged again at task close by validate_completion.\n")
 
 
 WARN_MESSAGE = (
@@ -658,6 +681,13 @@ def run(path, touched, context, env, session, trace_dir):
                 len(blocks), ",capped" if capped else "", url_note), ""
         count = strike(trace_dir, session, path)
         quoted = verdict.flagged.text[:400]
+        # A count that could not be recorded is not a first strike. Every
+        # attempt would be the first, the limit would never be reached, and
+        # a comment the writer cannot satisfy would be refused without end.
+        # So the tier yields on every such attempt, the first included, and
+        # the trace says why -- a bare jev-yield would read as a third strike.
+        if count is None:
+            return 0, "jev-yield|%s,untracked%s" % (path, url_note), YIELD_MESSAGE_UNTRACKED % quoted
         if count > STRIKE_LIMIT:
             return 0, "jev-yield|%s%s" % (path, url_note), YIELD_MESSAGE % quoted
         return 4, "jev-block|p=%.2f%s" % (verdict.probability, url_note), \

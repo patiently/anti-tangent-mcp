@@ -710,8 +710,12 @@ block cleared it, `capped` appended when the edit touched more comment blocks th
 in one write; `jev-skip | <reason>` when the tier did not run at all — `setting` (not exactly `1`),
 `no-key`, `excluded`, `breaker` (a recent failure's 60-second pause), or `no-blocks` (the edit
 touched no comment); `jev-yield | <path>` on the third refusal for the same file within the
-session's 30-minute window, when the tier allows the write instead of blocking again; and
-`jev-error | <failure class>` on a failure — an exception type name, or `deadline` /
+session's 30-minute window, when the tier allows the write instead of blocking again — or
+`jev-yield | <path>,untracked` when a block was flagged but the refusal count could not be written
+(the directory beside the trace log is not writable): a refusal the tier cannot count is one it
+could never bound, so it allows every such write, the first included, and says so on stderr each
+time, since the stamp that would make that warning once-per-session lives in the same directory;
+and `jev-error | <failure class>` on a failure — an exception type name, or `deadline` /
 `deadline-before-request` / `no-question-file` for a budget or configuration problem — which
 always allows the write. Every one of these but `jev-block` lets the write through.
 

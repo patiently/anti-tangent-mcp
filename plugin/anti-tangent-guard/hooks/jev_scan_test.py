@@ -595,8 +595,27 @@ class Strikes(unittest.TestCase):
         os.utime(stamp, (old, old))
         self.assertEqual(jev_scan.strike(self.dir, "s1", "/a.go"), 1)
 
-    def test_unwritable_dir_is_survivable(self):
-        self.assertEqual(jev_scan.strike("/proc/nonexistent", "s1", "/a.go"), 1)
+    def test_a_count_that_cannot_be_written_is_none_not_one(self):
+        # A path under a regular file: open() fails there for root too, so
+        # the store is unusable whoever runs the suite. Reporting 1 would be
+        # the bug: 1 never exceeds the limit, so a caller that trusted it
+        # would refuse the same file on every attempt.
+        blocker = os.path.join(self.dir, "not-a-dir")
+        with open(blocker, "w") as fh:
+            fh.write("")
+        unusable = os.path.join(blocker, "state")
+        for _ in range(3):
+            self.assertIsNone(jev_scan.strike(unusable, "s1", "/a.go"))
+
+    def test_a_corrupt_stamp_restarts_the_count(self):
+        # A stamp that cannot be parsed is replaced, not left in place: left
+        # alone it would fail to parse on every attempt, and the count would
+        # never move past 1.
+        stamp = jev_scan._strike_path(self.dir, "s1", "/a.go")
+        with open(stamp, "w") as fh:
+            fh.write("not a number")
+        self.assertEqual(jev_scan.strike(self.dir, "s1", "/a.go"), 1)
+        self.assertEqual(jev_scan.strike(self.dir, "s1", "/a.go"), 2)
 
     def test_concurrent_writers_leave_a_readable_stamp(self):
         # Eight processes racing one stamp. A lost update is allowed and costs
@@ -817,6 +836,25 @@ class HookBody(_HookFixture):
             self.run_body(body, session="s1")
         r = self.run_body(body, session="s2")
         self.assertEqual(r.returncode, 4, "a fresh session must not inherit strikes")
+
+    def test_an_unusable_strike_store_cannot_refuse_even_once(self):
+        # The store lives beside the trace log. When the hook cannot write
+        # there -- a path under a regular file, which fails for root too --
+        # no attempt can be told from the one before it, so there is no
+        # third attempt to yield on. Every attempt must yield, the first
+        # included: the alternative is the same refusal on the 2nd, 3rd and
+        # 10th attempt alike, with nothing the writer can do about it.
+        blocker = os.path.join(self.dir, "not-a-dir")
+        with open(blocker, "w") as fh:
+            fh.write("")
+        log = os.path.join(blocker, "hooks", "trace.log")
+        body = "// The count cap used to return a plain error.\npackage x\n"
+        for attempt in range(1, 11):
+            r = self.run_body(body, ANTI_TANGENT_GUARD_TRACE_LOG=log)
+            self.assertEqual(r.returncode, 0, "attempt %d refused the write" % attempt)
+            self.assertEqual(r.stdout.strip(), "jev-yield|%s,untracked" % self.file,
+                             "attempt %d must say the count is untracked" % attempt)
+            self.assertIn("cannot record refusals", r.stderr)
 
     def test_failure_allows_warns_once_and_opens_the_breaker(self):
         # A port nothing listens on: the request fails without a stub in the way.
