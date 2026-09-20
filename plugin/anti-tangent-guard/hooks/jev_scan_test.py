@@ -1,5 +1,7 @@
+import json
 import os
 import sys
+import tempfile
 import unittest
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
@@ -218,6 +220,42 @@ class Config(unittest.TestCase):
         c = self.cfg(ANTI_TANGENT_JEV_URL="https://proxy.internal/v1/systemone",
                      ANTI_TANGENT_JEV_URL_TRUSTED="1")
         self.assertEqual(c.url, "https://proxy.internal/v1/systemone")
+
+
+class QuestionFile(unittest.TestCase):
+    def test_options_are_the_measured_three(self):
+        q = jev_scan.question()
+        self.assertEqual(q["type"], "choice")
+        self.assertEqual(sorted(q["criteria"]),
+                         ["change_history", "compatibility_contract", "present_behaviour"])
+        self.assertIn("not_for", q["criteria"]["change_history"])
+        for name in ("change_history", "compatibility_contract", "present_behaviour"):
+            self.assertTrue(q["criteria"][name]["examples"], name)
+
+    def test_missing_file_returns_none(self):
+        self.assertIsNone(jev_scan.question(path="/nonexistent/jev-question.json"))
+
+    def test_the_loader_caches_for_the_process(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            json.dump(jev_scan.question(), fh)
+        self.addCleanup(lambda: os.path.exists(fh.name) and os.unlink(fh.name))
+        first = jev_scan.question(path=fh.name)
+        os.unlink(fh.name)
+        self.assertEqual(jev_scan.question(path=fh.name), first)
+
+    def test_malformed_files_return_none(self):
+        bad = ['{"type": "choice"',
+               '{"type": "noul", "criteria": {}}',
+               '{"type": "choice", "criteria": {"change_history": {"what": "x"}}}',
+               '{"type": "choice", "criteria": {"change_history": {},'
+               ' "compatibility_contract": {"what": "x"},'
+               ' "present_behaviour": {"what": "x"}}}',
+               '[]']
+        for text in bad:
+            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+                fh.write(text)
+            self.addCleanup(os.unlink, fh.name)
+            self.assertIsNone(jev_scan.question(path=fh.name), text)
 
 
 if __name__ == "__main__":

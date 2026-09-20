@@ -1,0 +1,22 @@
+{
+  "type": "choice",
+  "instructions": {
+    "question": "What kind of statement does `comment` make?",
+    "focus": "If any statement in the comment narrates change history, choose change_history even when the rest explains present behaviour."
+  },
+  "criteria": {
+    "change_history": {
+      "what": "Narrates how the code or its tests got here: what an earlier version did or lacked, what was replaced or removed, a bug an earlier version had, or the issue, pull request, task, review round or release that changed it.",
+      "not_for": "'Used to' in the sense of 'is used for', or run-time state that no longer exists.",
+      "examples": ["Previously the parser rejected tabs here.", "The retry helper this replaced swallowed timeouts.", "Added for the PR 88 backfill job."]
+    },
+    "compatibility_contract": {
+      "what": "Names a version, format or external identifier only to state what the code reads, accepts or talks to now.",
+      "examples": ["Reads the v3 wire format the gateway still sends.", "Accepts 2.x config files from older clients."]
+    },
+    "present_behaviour": {
+      "what": "Explains the code as it is now: what it does, why, an invariant, a hazard, or run-time state.",
+      "examples": ["The lock used to guard the map is held by the caller.", "Returns nil when the file no longer exists on disk.", "The #2 slot is reserved for the fallback provider."]
+    }
+  }
+}

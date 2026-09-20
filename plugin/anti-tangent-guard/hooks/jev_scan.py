@@ -5,6 +5,7 @@ The regex tier answers "does this line carry a reference?". This one answers
 set can decide, and it answers it for the whole block an edit touches.
 """
 import fnmatch
+import json
 import os
 import re
 import sys
@@ -220,3 +221,32 @@ def _runs(spans, touched_idx, report=False):
         blocks.append(Block(_window(texts, local), start + 1))
     capped = len(blocks) > MAX_BLOCKS
     return (blocks[:MAX_BLOCKS], capped) if report else blocks[:MAX_BLOCKS]
+
+
+_QUESTION_CACHE = {}
+
+
+def question(path=None):
+    """The shipped Choice question, or None when it cannot be read."""
+    path = path or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "jev-question.json")
+    if path not in _QUESTION_CACHE:
+        try:
+            with open(path, "rb") as fh:
+                q = json.loads(fh.read().decode("utf-8"))
+            _QUESTION_CACHE[path] = q if _valid_question(q) else None
+        except Exception:
+            _QUESTION_CACHE[path] = None
+    return _QUESTION_CACHE[path]
+
+
+def _valid_question(q):
+    """A question of the wrong shape is worse than none: it would be sent."""
+    if not isinstance(q, dict) or q.get("type") != "choice":
+        return False
+    criteria = q.get("criteria")
+    if not isinstance(criteria, dict):
+        return False
+    if set(criteria) != {"change_history", "compatibility_contract", "present_behaviour"}:
+        return False
+    return all(isinstance(v, dict) and v.get("what") for v in criteria.values())
