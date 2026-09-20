@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import os
 import sys
@@ -352,13 +353,39 @@ class Judge(unittest.TestCase):
         self.assertLessEqual(len(started), jev_scan.MAX_WORKERS)
 
     def test_a_batch_is_resolved_by_block_index(self):
-        # Two flags land in the same wait; the lower index must win, so the
-        # message a writer sees does not depend on thread scheduling.
-        gate = threading.Event()
-        self.addCleanup(gate.set)
+        # The lower-index block is also the first submitted (queue.pop(0)
+        # processes blocks in list order), so a race that merely lets both
+        # complete around the same time cannot tell "the tie-break sorts by
+        # index" apart from "the first-submitted block happened to finish
+        # first anyway" -- both give the same observed winner. Proving the
+        # sort really runs needs the HIGHER-index block to finish first in
+        # real time while the LOWER-index block still wins.
+        #
+        # Racing that gap against judge()'s own wait() call is not reliably
+        # reproducible: probing this on the target system showed the main
+        # thread reacting to a single completed future and returning from
+        # wait() before a second, closely-timed completion could join it, at
+        # gaps from 100us to 20ms and with or without a threading.Barrier
+        # synchronizing worker start. So wait() is patched for this test to
+        # block for ALL_COMPLETED rather than FIRST_COMPLETED, which
+        # deterministically constructs the "both landed in one batch" case
+        # the acceptance criterion describes, while still driving the real
+        # _resolve_batch sort against a real concurrent.futures.wait()
+        # result. The completion order itself (second finishes at 0.01s,
+        # first at 0.05s) is then just an ordinary, non-racy sleep.
+        real_wait = concurrent.futures.wait
+
+        def wait_for_all(fs, timeout=None, return_when=None):
+            return real_wait(fs, timeout=timeout, return_when=concurrent.futures.ALL_COMPLETED)
+
+        jev_scan.concurrent.futures.wait = wait_for_all
+        self.addCleanup(setattr, jev_scan.concurrent.futures, "wait", real_wait)
 
         def paired(url, body, headers, timeout):
-            gate.wait(0.2)
+            if body["state"]["comment"] == "second block":
+                time.sleep(0.01)
+            else:
+                time.sleep(0.05)
             return self.answer(0.9)
 
         blocks = [jev_scan.Block("first block", 1), jev_scan.Block("second block", 2)]
@@ -367,14 +394,37 @@ class Judge(unittest.TestCase):
 
     def test_the_transport_refuses_a_redirect(self):
         # A 3xx must reach judge() as an error, never as a second request
-        # carrying the key somewhere the host rule never approved.
+        # carrying the key somewhere the host rule never approved. Pointing
+        # the redirect at an unroutable port would not prove that: a BROKEN
+        # _NoRedirects that followed the redirect would also fail to connect
+        # there, so judge() would still report jev-error either way, and the
+        # test could not tell "refused" from "could not connect". Pointing
+        # it at a second, real loopback server that records what it
+        # receives can tell the difference -- a correct handler never
+        # connects to it at all.
         import http.server
         import threading as th
+
+        sink_requests = []
+
+        class Sink(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                sink_requests.append(dict(self.headers))
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        sink = http.server.HTTPServer(("127.0.0.1", 0), Sink)
+        th.Thread(target=sink.serve_forever, daemon=True).start()
+        self.addCleanup(sink.shutdown)
 
         class Redirector(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 self.send_response(302)
-                self.send_header("Location", "http://127.0.0.1:1/v1/systemone")
+                self.send_header("Location", "http://127.0.0.1:%d/v1/systemone"
+                                 % sink.server_port)
                 self.end_headers()
 
             def log_message(self, *a):
@@ -388,6 +438,10 @@ class Judge(unittest.TestCase):
         r = jev_scan.judge([jev_scan.Block("c", 1)], cfg)
         self.assertIsNone(r.flagged)
         self.assertEqual(r.event, "jev-error")
+        self.assertEqual(sink_requests, [],
+                         "the redirect target received a request")
+        self.assertFalse(any("Authorization" in h for h in sink_requests),
+                         "the key reached the redirect target")
 
     def test_a_flag_survives_another_block_failing(self):
         calls = []
