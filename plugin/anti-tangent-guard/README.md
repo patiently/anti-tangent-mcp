@@ -283,6 +283,7 @@ the log distinguishes a write the scanner cleared from one it never looked at:
 | `python3` absent from `PATH` | `skip \| no-python3` |
 | the scanner body unreadable under `$CLAUDE_PLUGIN_ROOT/hooks/` | `skip \| no-body` |
 | the `Write` target cannot be read: a symlink, a FIFO, a directory, or a file past the 2,000,000-byte read cap | `skip \| unreadable-target` |
+| the body exited with a blocking status but wrote no matching event — `python3` itself exits 2 when the script vanished between the readability check and the interpreter start | `error \| python-exit=2` (or `=4`) |
 | any other unexpected internal error | `error \| python-exit=N` |
 
 The unreadable-target row is the one worth understanding. A `Write` over an

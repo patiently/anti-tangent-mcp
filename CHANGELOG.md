@@ -24,7 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all. A refusal the tier cannot count — the directory beside the trace log is not writable, so no
   strike stamp lands — is never spent: every such write is allowed, the first included, traced as
   `jev-yield | <path>,untracked` and explained on stderr each time, because a count that cannot be
-  recorded would otherwise make every attempt the first and the yield unreachable.
+  recorded would otherwise make every attempt the first and the yield unreachable. The wrapper
+  honours a blocking exit status only together with the event the body writes to stdout for it
+  (`block|comment-hygiene`, `jev-block|…`): `python3` itself exits 2 when it cannot open the
+  script it was handed, and that status with no event is now traced as `error | python-exit=2`
+  and allows the write instead of refusing it as a hygiene block.
 - `docs/protocol/controller.md` (mirrored to `plugin/anti-tangent-protocol/protocol/controller.md`)
   gains a "Which tier a review earns" subsection under the dispatch addendum: a spec or
   code-quality reviewer defaults to superpowers' `standard` model-routing tier, escalates to

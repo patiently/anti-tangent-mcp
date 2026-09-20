@@ -77,6 +77,10 @@ if bad:
         "in the commit message, not the code. Rewrite the comment and retry.",
         file=sys.stderr,
     )
+    # The wrapper honours the status only together with this line. python3
+    # itself exits 2 when it cannot open the script it was handed, and a
+    # status alone cannot tell that from a refusal; the event can.
+    sys.stdout.write("block|comment-hygiene")
     sys.exit(2)
 
 import jev_scan  # noqa: E402

@@ -11,6 +11,13 @@
 # 0 allows, and any other status is an internal error. Everything but 2 and 4
 # allows, so a body that reports a status this wrapper does not know still
 # fails open.
+#
+# A blocking status is honoured only together with the event the body writes
+# to stdout for it (`block|…` for 2, `jev-block|…` for 4). Status 2 is not the
+# body's alone: python3 itself exits 2 when it cannot open the script it was
+# handed, which can happen after the readability check below and before the
+# interpreter starts — a plugin update or removal landing in that window. A
+# status with no event is therefore an internal error, and allows.
 set -uo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -146,8 +153,10 @@ ATG_DETAIL="${ATG_EVENT#*|}"
 # was scanned and found clean from one that was never scanned at all.
 case "$status" in
     0) trace "${ATG_EV:-pass}" "${ATG_DETAIL:-ext=${ATG_EXT:-?}}"; exit 0 ;;
-    2) trace "block" "comment-hygiene"; exit 2 ;;
+    2) [[ "$ATG_EV" == "block" ]] || { trace "error" "python-exit=2"; exit 0; }
+       trace "block" "${ATG_DETAIL:-comment-hygiene}"; exit 2 ;;
     3) trace "skip" "unreadable-target"; exit 0 ;;
-    4) trace "jev-block" "${ATG_DETAIL:-?}"; exit 2 ;;
+    4) [[ "$ATG_EV" == "jev-block" ]] || { trace "error" "python-exit=4"; exit 0; }
+       trace "jev-block" "${ATG_DETAIL:-?}"; exit 2 ;;
     *) trace "error" "python-exit=$status"; exit 0 ;;
 esac

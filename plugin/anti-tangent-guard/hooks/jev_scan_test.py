@@ -2,6 +2,7 @@ import concurrent.futures
 import gc
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -792,7 +793,10 @@ class HookBody(_HookFixture):
     def test_regex_violation_never_reaches_the_tier(self):
         r = self.run_body("// fixes #58\npackage x\n")
         self.assertEqual(r.returncode, 2)
-        self.assertEqual(r.stdout.strip(), "")
+        # The regex tier's own event, and no Jev event after it: the wrapper
+        # needs the former to honour the status, and the latter would mean
+        # the tier ran.
+        self.assertEqual(r.stdout.strip(), "block|comment-hygiene")
         self.assertEqual(self.requests_made(), 0)
         strikes = [f for f in os.listdir(self.dir) if f.startswith("jev-strike-")]
         self.assertEqual(strikes, [], "the tier never ran, so it must not have written a strike")
@@ -923,29 +927,62 @@ class Wrapper(_HookFixture):
                 if n.startswith("atg-comment-write.")}
         self.assertEqual(left, set())
 
-    def test_a_failed_mktemp_allows_the_write(self):
-        # Every dependency present EXCEPT a working mktemp. An empty PATH
-        # would not test this: the wrapper checks for python3 first and would
-        # exit on that instead, never reaching the branch under test.
+    def shim_path(self, **scripts):
+        """A PATH directory with every tool the wrapper needs, some replaced.
+
+        Each keyword names a tool and gives the script that stands in for it;
+        every other tool is a symlink to the real one. An empty PATH would
+        not do: the wrapper checks for python3 first and would exit on that,
+        never reaching the branch a test means to exercise. bash itself must
+        be reachable too: the wrapper's shebang is `#!/usr/bin/env bash`, and
+        /usr/bin/env resolves "bash" through the subprocess's own PATH (the
+        kernel invokes env by its absolute path, but env's own lookup is not
+        exempt from the replaced PATH).
+        """
         shim = os.path.join(self.dir, "bin")
         os.makedirs(shim, exist_ok=True)
-        # bash itself must be reachable too: the wrapper's shebang is
-        # `#!/usr/bin/env bash`, and /usr/bin/env resolves "bash" through the
-        # subprocess's own PATH (the kernel invokes env by its absolute path,
-        # but env's own lookup is not exempt from the replaced PATH).
         for tool in ("bash", "python3", "jq", "cat", "tr", "mkdir", "date", "dirname",
-                     "wc", "mv", "rm", "head", "printf", "seq", "sleep"):
+                     "wc", "mv", "rm", "head", "printf", "seq", "sleep", "mktemp"):
+            if tool in scripts:
+                continue
             found = shutil.which(tool)
             if found:
                 os.symlink(found, os.path.join(shim, tool))
-        with open(os.path.join(shim, "mktemp"), "w") as fh:
-            fh.write("#!/bin/sh\nexit 1\n")
-        os.chmod(os.path.join(shim, "mktemp"), 0o755)
+        for tool, script in scripts.items():
+            with open(os.path.join(shim, tool), "w") as fh:
+                fh.write(script)
+            os.chmod(os.path.join(shim, tool), 0o755)
+        return shim
 
+    def test_a_failed_mktemp_allows_the_write(self):
+        shim = self.shim_path(mktemp="#!/bin/sh\nexit 1\n")
         r = self.run_wrapper("// The count cap used to return a plain error.\npackage x\n",
                              extra_path=shim)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("no-tmp", self.trace())
+
+    def test_an_interpreter_that_cannot_open_the_body_allows_the_write(self):
+        # python3 exits 2 on its own when it cannot open the script it was
+        # handed -- the status the regex tier blocks with. The wrapper checks
+        # the body is readable before starting the interpreter, so the body
+        # is taken away in between: a python3 shim removes it and then execs
+        # the real interpreter, which fails to open it. The content is a
+        # genuine regex-tier violation, so an allow here can only mean the
+        # wrapper read the bare status as the internal error it is, not as a
+        # clean scan.
+        root = os.path.join(self.dir, "plugin")
+        os.makedirs(os.path.join(root, "hooks"))
+        body = os.path.join(root, "hooks", "check_comment_write.py")
+        shutil.copy(os.path.join(HOOKS, "check_comment_write.py"), body)
+        shim = self.shim_path(python3="#!/bin/sh\nrm -f %s\nexec %s \"$@\"\n"
+                              % (shlex.quote(body), shlex.quote(sys.executable)))
+        r = self.run_wrapper("// fixes #58\npackage x\n", extra_path=shim,
+                             CLAUDE_PLUGIN_ROOT=root)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "")
+        self.assertFalse(os.path.exists(body), "the shim must have removed the body")
+        self.assertIn("| error | python-exit=2", self.trace())
+        self.assertNotIn("| block |", self.trace())
 
     def test_hooks_json_declares_the_timeout(self):
         # Selected by command, not by position: the plugin registers more
