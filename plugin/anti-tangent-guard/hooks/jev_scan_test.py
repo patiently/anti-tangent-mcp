@@ -1,4 +1,5 @@
 import concurrent.futures
+import gc
 import json
 import os
 import shutil
@@ -8,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+import warnings
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HOOKS)
@@ -123,6 +125,63 @@ class BlockBuilder(unittest.TestCase):
                    "# Same comment.\n")
         blocks = jev_scan.build_blocks("x.py", ["# Same comment."], context)
         self.assertEqual([b.text for b in blocks], ["Same comment."])
+
+    def test_a_blank_marker_paragraph_break_keeps_both_paragraphs(self):
+        context = ("// First para, the history.\n"
+                   "//\n"
+                   "// Second para.\n"
+                   "func a() {}\n")
+        blocks = jev_scan.build_blocks("x.go", ["// Second para."], context)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].text, "First para, the history.\n\nSecond para.")
+        self.assertEqual(blocks[0].line, 1)
+
+    def test_a_blank_marker_paragraph_break_keeps_both_paragraphs_in_python(self):
+        context = ("# First para, the history.\n"
+                   "#\n"
+                   "# Second para.\n"
+                   "def a(): pass\n")
+        blocks = jev_scan.build_blocks("x.py", ["# Second para."], context)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].text, "First para, the history.\n\nSecond para.")
+        self.assertEqual(blocks[0].line, 1)
+
+    def test_a_blank_marker_paragraph_break_keeps_both_paragraphs_in_a_star_block(self):
+        context = ("/*\n"
+                   " * First para, the history.\n"
+                   " *\n"
+                   " * Second para.\n"
+                   " */\n"
+                   "func a() {}\n")
+        blocks = jev_scan.build_blocks("x.go", [" * Second para."], context)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].text, "First para, the history.\n\nSecond para.")
+        # The opener line "/*" is itself a blank comment line and sits ahead
+        # of the first real paragraph, so it is trimmed off the front; the
+        # block still reports the line the first paragraph actually sits on.
+        self.assertEqual(blocks[0].line, 2)
+
+    def test_a_code_line_still_splits_two_blocks(self):
+        context = "// A.\nfunc a() {}\n// B.\n"
+        blocks = jev_scan.build_blocks("x.go", ["// A.", "// B."], context)
+        self.assertEqual([(b.text, b.line) for b in blocks], [("A.", 1), ("B.", 3)])
+
+    def test_a_genuinely_blank_line_still_splits_two_blocks(self):
+        # No marker at all, unlike the paragraph-break cases above -- a blank
+        # line is not a comment line and must keep ending a run.
+        context = "// A.\n\n// B.\n"
+        blocks = jev_scan.build_blocks("x.go", ["// A.", "// B."], context)
+        self.assertEqual([(b.text, b.line) for b in blocks], [("A.", 1), ("B.", 3)])
+
+    def test_a_run_of_only_empty_markers_produces_no_block(self):
+        context = "//\n//\n//\nfunc a() {}\n"
+        blocks = jev_scan.build_blocks("x.go", ["//"], context)
+        self.assertEqual(blocks, [])
+
+    def test_a_trailing_empty_marker_is_trimmed_without_changing_the_text(self):
+        context = "// Real text.\n//\nfunc a() {}\n"
+        blocks = jev_scan.build_blocks("x.go", ["// Real text."], context)
+        self.assertEqual([b.text for b in blocks], ["Real text."])
 
     def test_touching_every_line_of_a_large_file_stays_roughly_linear(self):
         # A fresh Write touches every line of the file, so matching touched
@@ -445,6 +504,10 @@ class Judge(unittest.TestCase):
 
         sink = http.server.HTTPServer(("127.0.0.1", 0), Sink)
         th.Thread(target=sink.serve_forever, daemon=True).start()
+        # server_close() is registered before shutdown() so LIFO cleanup
+        # order runs shutdown() first: it must stop serve_forever's accept
+        # loop before the socket underneath it is closed.
+        self.addCleanup(sink.server_close)
         self.addCleanup(sink.shutdown)
 
         class Redirector(http.server.BaseHTTPRequestHandler):
@@ -459,10 +522,22 @@ class Judge(unittest.TestCase):
 
         server = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
         th.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         cfg = self.cfg(ANTI_TANGENT_JEV_URL="http://127.0.0.1:%d/v1/systemone"
                        % server.server_port)
         r = jev_scan.judge([jev_scan.Block("c", 1)], cfg)
+        # The HTTPError _NoRedirects raises keeps the refused response's
+        # socket alive through a traceback -> frame -> exception cycle that
+        # reference counting cannot break; left alone it is reaped by the
+        # interpreter's own shutdown GC, which reports the socket's
+        # ResourceWarning through the unhandled "Exception ignored in"
+        # path instead of the ordinary warnings machinery. Collecting here,
+        # with that one warning silenced for the collection itself, closes
+        # it where a normal filter can see it.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ResourceWarning)
+            gc.collect()
         self.assertIsNone(r.flagged)
         self.assertEqual(r.event, "jev-error")
         self.assertEqual(sink_requests, [],
@@ -560,8 +635,15 @@ class Strikes(unittest.TestCase):
         self.assertNotIn("could not reach", message)
 
 
-class HookBody(unittest.TestCase):
-    """The real hook body, against a loopback stub — the only seam there is."""
+class _HookFixture(unittest.TestCase):
+    """Shared plumbing for driving the comment-write hook against a loopback stub.
+
+    Carries no test methods of its own: HookBody and Wrapper each drive a
+    different entry point (the hook body directly, and the bash wrapper
+    around it) and must inherit only this shared setup, not one another, or
+    whichever one is the subclass ends up running the other's tests a second
+    time under its own name without exercising anything new.
+    """
 
     def setUp(self):
         self.dir = tempfile.mkdtemp()
@@ -592,28 +674,43 @@ class HookBody(unittest.TestCase):
         self.stub.stdout.close()
         self.stub = None
 
-    def run_body(self, content, session="s1", **env_over):
-        with open(self.file, "w") as fh:
-            fh.write("package x\n")
-        payload = json.dumps({"tool_name": "Write", "session_id": session,
-                              "tool_input": {"file_path": self.file, "content": content}})
-        env = dict(os.environ)
-        env.update({"ATG_ROOT": os.path.dirname(HOOKS), "ANTI_TANGENT_JEV": "1",
-                    "TYPESAFE_API_KEY": "k",
-                    "ANTI_TANGENT_JEV_URL": "http://127.0.0.1:%d/v1/systemone" % self.port,
-                    "ANTI_TANGENT_GUARD_TRACE_LOG": os.path.join(self.dir, "trace.log")})
-        env.pop("ANTI_TANGENT_TICKET_PATTERN", None)
-        env.update(env_over)
-        return subprocess.run([sys.executable, "-I", "-B",
-                               os.path.join(HOOKS, "check_comment_write.py")],
-                              input=payload, capture_output=True, text=True,
-                              env=env, timeout=30)
-
     def requests_made(self):
         if not os.path.exists(self.requests):
             return 0
         with open(self.requests) as fh:
             return len([l for l in fh if l.strip()])
+
+    def _base_env(self):
+        """The environment both entry points need, minus their own root variable.
+
+        ANTI_TANGENT_TICKET_PATTERN is popped here rather than at each call
+        site: it is read from the operator's own environment, and a value
+        the test runner's shell happens to carry would otherwise change
+        which lines the regex tier flags out from under these tests.
+        """
+        env = dict(os.environ)
+        env.update({"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "k",
+                    "ANTI_TANGENT_JEV_URL": "http://127.0.0.1:%d/v1/systemone" % self.port,
+                    "ANTI_TANGENT_GUARD_TRACE_LOG": os.path.join(self.dir, "trace.log")})
+        env.pop("ANTI_TANGENT_TICKET_PATTERN", None)
+        return env
+
+
+class HookBody(_HookFixture):
+    """The real hook body, against a loopback stub — the only seam there is."""
+
+    def run_body(self, content, session="s1", **env_over):
+        with open(self.file, "w") as fh:
+            fh.write("package x\n")
+        payload = json.dumps({"tool_name": "Write", "session_id": session,
+                              "tool_input": {"file_path": self.file, "content": content}})
+        env = self._base_env()
+        env["ATG_ROOT"] = os.path.dirname(HOOKS)
+        env.update(env_over)
+        return subprocess.run([sys.executable, "-I", "-B",
+                               os.path.join(HOOKS, "check_comment_write.py")],
+                              input=payload, capture_output=True, text=True,
+                              env=env, timeout=30)
 
     def test_regex_violation_never_reaches_the_tier(self):
         r = self.run_body("// fixes #58\npackage x\n")
@@ -680,7 +777,7 @@ class HookBody(unittest.TestCase):
         self.assertEqual(second.stderr.strip(), "", "only the first failure warns")
 
 
-class Wrapper(HookBody):
+class Wrapper(_HookFixture):
     """The bash wrapper's own contract, driven through the real binary."""
 
     WRAPPER = os.path.join(HOOKS, "check-comment-write")
@@ -690,12 +787,8 @@ class Wrapper(HookBody):
             fh.write("package x\n")
         payload = json.dumps({"tool_name": "Write", "session_id": "w1",
                               "tool_input": {"file_path": self.file, "content": content}})
-        env = dict(os.environ)
-        env.update({"CLAUDE_PLUGIN_ROOT": os.path.dirname(HOOKS),
-                    "ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "k",
-                    "ANTI_TANGENT_JEV_URL": "http://127.0.0.1:%d/v1/systemone" % self.port,
-                    "ANTI_TANGENT_GUARD_TRACE_LOG": os.path.join(self.dir, "trace.log")})
-        env.pop("ANTI_TANGENT_TICKET_PATTERN", None)
+        env = self._base_env()
+        env["CLAUDE_PLUGIN_ROOT"] = os.path.dirname(HOOKS)
         if extra_path:
             env["PATH"] = extra_path
         env.update(env_over)

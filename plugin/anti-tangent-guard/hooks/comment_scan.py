@@ -112,7 +112,7 @@ _HASH_DELIM = re.compile(r"(?<=\s)#")
 _SLASH_DELIM = re.compile(r"//|/\*")
 
 
-def _line_comment_spans(opens, raw):
+def _line_comment_spans(opens, raw, keep_empty=False):
     """Every comment span on a code line, as a list; empty when there are none.
 
     Walks delimiters LEFT TO RIGHT and takes the first whose preceding quote
@@ -130,6 +130,10 @@ def _line_comment_spans(opens, raw):
     genuine comment but will not promote code to comment. In hash-family files
     the delimiter must be whitespace-preceded, so shell parameter expansion
     (`${url#https://…}`) is not a comment.
+
+    keep_empty controls only whether a found span with no text is kept or
+    dropped; it never manufactures a span where the walk found no delimiter at
+    all. A line with no comment marker returns `[]` either way.
     """
     delim = _HASH_DELIM if "#" in opens else _SLASH_DELIM
     out, pos, seg = [], 0, 0
@@ -157,7 +161,7 @@ def _line_comment_spans(opens, raw):
             continue
         out.append(raw[m.end():])
         break
-    return [t for t in out if t.strip()]
+    return out if keep_empty else [t for t in out if t.strip()]
 
 
 # Quote forms that genuinely cross a newline. A single or double quote does
@@ -332,7 +336,7 @@ def starred_candidate(path, raw):
             and not line.startswith("*/"))
 
 
-def comment_spans(path, raw, allow_star=True):
+def comment_spans(path, raw, allow_star=True, keep_empty=False):
     """Every comment span on one line, as a list; empty when there are none.
 
     A LIST, not one joined string. Tells are matched per span, because joining
@@ -348,6 +352,12 @@ def comment_spans(path, raw, allow_star=True):
     through the ordinary left-to-right walk instead. The caller uses it when
     it can see the whole file and the file says this line is not inside an
     open block.
+
+    keep_empty distinguishes "a comment line with nothing after the marker"
+    from "not a comment line at all" -- both would otherwise collapse to the
+    same `[]`. A caller that needs to tell those apart (the shape of an open
+    doc-comment's blank separator line) sets it; violations() uses the
+    default, so a blank comment yields no span for a tell to match.
     """
     opens = openers(path)
     line = raw.strip()
@@ -366,11 +376,11 @@ def comment_spans(path, raw, allow_star=True):
         end = rest.find("*/")
         if end >= 0:
             rest = rest[:end]
-        return [rest] if rest.strip() else []
+        return [rest] if (keep_empty or rest.strip()) else []
     if "#" in opens and line.startswith("#"):
         rest = line[1:]
-        return [rest] if rest.strip() else []
-    return _line_comment_spans(opens, raw)
+        return [rest] if (keep_empty or rest.strip()) else []
+    return _line_comment_spans(opens, raw, keep_empty)
 
 TELLS = (
     # Anchored on both sides: bare `\bboundary` still let a digit run straight

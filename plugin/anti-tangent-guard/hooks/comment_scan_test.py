@@ -48,6 +48,18 @@ class CommentSpanExtraction(unittest.TestCase):
                            text=True, timeout=30)
         self.assertEqual(json.loads(r.stdout), [], r.stderr)
 
+    def test_a_bare_marker_still_yields_no_span_by_default(self):
+        # keep_empty defaults to False, so a bare marker carrying no text
+        # yields no span under it. violations() and every eval case call
+        # comment_spans without the flag, so this default is the contract
+        # both depend on.
+        code = ("import sys, json; sys.path.insert(0, %r);"
+                "from comment_scan import comment_spans;"
+                "print(json.dumps(comment_spans('x.go', '//')))" % HOOKS)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(json.loads(r.stdout), [], r.stderr)
+
 
 class TicketPatternLength(unittest.TestCase):
     # Exactly at the cap is accepted, one character more is refused. Both

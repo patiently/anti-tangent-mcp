@@ -141,16 +141,25 @@ def _keep_touched(texts, touched_local):
 
 
 def _spans_per_line(path, lines, context):
-    """Comment spans for every line, with the file's own answer on `*` and `#`."""
+    """Comment spans for every line, as a tri-state list the run-builder walks.
+
+    Each entry is `None` for a line that carries no comment at all, or a list
+    (possibly empty) of stripped span texts for a line that does. The `[]`
+    case matters on its own: a comment line with nothing after its marker
+    (a bare `//`, a lone ` *`) is still part of a comment block and must not
+    read the same as a line with no marker at all -- which is why this asks
+    comment_spans for the blank span instead of letting it filter one out.
+    """
     state = block_state(path, context)
     docstring = hash_string_lines(path, context)
     out = []
     for i, raw in enumerate(lines):
         if i in docstring:
-            out.append([])
+            out.append(None)
             continue
         star_ok = allow_star(state, raw) if starred_candidate(path, raw) else True
-        out.append([s.strip() for s in comment_spans(path, raw, star_ok) if s.strip()])
+        raw_spans = comment_spans(path, raw, star_ok, keep_empty=True)
+        out.append(None if not raw_spans else [s.strip() for s in raw_spans if s.strip()])
     return out
 
 
@@ -242,20 +251,61 @@ def build_blocks(path, touched, context, report=False):
     return _runs(spans, set(range(len(lines))), report)
 
 
+def _trim_blank_edges(texts, local):
+    """Leading/trailing blank lines trimmed off a run's texts, or None.
+
+    A blank comment line (no text after its marker) stays inside texts as ""
+    so it still reads as the paragraph break it is, but only between real
+    content: leading/trailing blanks carry nothing for the model to judge, so
+    they are cut off both ends. local is re-indexed to the trimmed texts,
+    dropping any index the trim removed. None means nothing touched survived
+    the trim -- either the whole run was blank, or every touched line was.
+    """
+    lo, hi = 0, len(texts)
+    while lo < hi and not texts[lo]:
+        lo += 1
+    while hi > lo and not texts[hi - 1]:
+        hi -= 1
+    if lo >= hi:
+        return None
+    local = [j - lo for j in local if lo <= j < hi]
+    if not local:
+        return None
+    return lo, texts[lo:hi], local
+
+
+def _block_for_run(spans, start, end, touched_idx):
+    """The Block for spans[start:end], or None when nothing touched survives.
+
+    Nothing survives either because the run has no touched line at all, or
+    because trimming its blank leading/trailing lines removes every touched
+    line along with them.
+    """
+    local = [j - start for j in range(start, end) if j in touched_idx]
+    if not local:
+        return None
+    texts = ["\n".join(redact(s) for s in line_spans) for line_spans in spans[start:end]]
+    trimmed = _trim_blank_edges(texts, local)
+    if trimmed is None:
+        return None
+    # The block's own line shifts by however much came off the FRONT, so it
+    # still points at the line its first real text sits on.
+    lo, texts, local = trimmed
+    return Block(_window(texts, local), start + 1 + lo)
+
+
 def _runs(spans, touched_idx, report=False):
     blocks, i = [], 0
     while i < len(spans):
-        if not spans[i]:
+        if spans[i] is None:
             i += 1
             continue
         start = i
-        while i < len(spans) and spans[i]:
+        while i < len(spans) and spans[i] is not None:
             i += 1
-        local = [j - start for j in range(start, i) if j in touched_idx]
-        if not local:
-            continue
-        texts = ["\n".join(redact(s) for s in line_spans) for line_spans in spans[start:i]]
-        blocks.append(Block(_window(texts, local), start + 1))
+        block = _block_for_run(spans, start, i, touched_idx)
+        if block is not None:
+            blocks.append(block)
     capped = len(blocks) > MAX_BLOCKS
     return (blocks[:MAX_BLOCKS], capped) if report else blocks[:MAX_BLOCKS]
 
