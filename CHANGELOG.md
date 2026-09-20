@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   readable as such. A response body past 64 KiB is refused unparsed as `jev-error |
   ResponseTooLarge` (the write is allowed). A relative `ANTI_TANGENT_GUARD_TRACE_LOG` is resolved
   to an absolute path before the tier's state files are addressed beside it.
+- CI runs the guard plugin's Python suites (`comment_scan_test.py`, `jev_scan_test.py`,
+  `check_task_start_test.py`, `build-jev-comments-test.py`, `jev-eval-test.py`) in a
+  `python-suites` job the Go build depends on, and asserts in the same job that
+  `evals/jev-eval.py` refuses to run there even when handed the setting and a key.
 - `docs/protocol/controller.md` (mirrored to `plugin/anti-tangent-protocol/protocol/controller.md`)
   gains a "Which tier a review earns" subsection under the dispatch addendum: a spec or
   code-quality reviewer defaults to superpowers' `standard` model-routing tier, escalates to
