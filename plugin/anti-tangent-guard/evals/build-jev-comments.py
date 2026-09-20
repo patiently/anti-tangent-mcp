@@ -29,6 +29,19 @@ OUT_PATH = os.path.join(REPO, "plugin/anti-tangent-guard/evals/jev-comments.json
 FP_CLASS_PATH = os.path.join(REPO, "plugin/anti-tangent-guard/evals/fp-class.tsv")
 GUARD_EVALS_PATH = os.path.join(REPO, "plugin/anti-tangent-guard/evals/guard-evals.json")
 
+
+def _open_repo_file(path):
+    """A repository-relative path, opened for text reading.
+
+    Returns the file object itself (not its contents), so every caller still
+    opens its own `with` block -- one reads the whole file, another iterates
+    it line by line -- while sharing the one place that decides how a
+    repository file is decoded. errors="replace" keeps a file that is not
+    valid UTF-8 from raising and taking the whole builder down with it.
+    """
+    return open(os.path.join(REPO, path), errors="replace")
+
+
 # Guard eval cases carry a label written here rather than derived from
 # expected_exit: exit 0 means "the hook allowed it", which is equally true of
 # genuine history when the tier is off, has no key, or timed out.
@@ -305,7 +318,8 @@ def add_from_file(state, source, label, path, line_no):
     matches nothing in SCAN_EXTS and would silently zero out regex_hit for
     every row this function ever adds.
     """
-    text = open(os.path.join(REPO, path), errors="replace").read()
+    with _open_repo_file(path) as fh:
+        text = fh.read()
     line = text.splitlines()[line_no - 1]
     regex_hit = bool(comment_scan.violations(path, [line], text))
     tag = "%s-%d" % (path.replace("/", "_"), line_no)
@@ -340,22 +354,31 @@ def tracked_files():
 def add_head_history_wording(state, tracked):
     """Comments at HEAD whose wording can narrate history or describe run time."""
     for path in tracked:
-        for i, line in enumerate(open(os.path.join(REPO, path), errors="replace"), 1):
-            if re.match(r"^\s*(//|#|\*)", line) and CUES.search(line):
-                add_from_file(state, "head-history-wording", "history", path, i)
+        # File iteration ('\n'-only line breaks), not text.splitlines() --
+        # which also breaks on '\v', '\f', '\x1c', '\x85' and more.
+        # add_from_file re-reads this same file via
+        # text.splitlines()[line_no - 1], so the two bases disagree whenever
+        # a line contains one of those bytes; switching this loop to match
+        # would silently renumber every row born from it.
+        with _open_repo_file(path) as fh:
+            for i, line in enumerate(fh, 1):
+                if re.match(r"^\s*(//|#|\*)", line) and CUES.search(line):
+                    add_from_file(state, "head-history-wording", "history", path, i)
 
 
 def add_fp_class(state):
     """The repository's own classified scanner hits: path, count, verdict, text."""
-    for raw in open(FP_CLASS_PATH):
-        if raw.startswith("#") or not raw.strip():
-            continue
-        path, _count, verdict, text = raw.rstrip("\n").split("\t", 3)
-        label = "history" if verdict == "true_positive" else "not_history"
-        src = open(os.path.join(REPO, path), errors="replace").read().splitlines()
-        idx = next((i for i, l in enumerate(src, 1) if l.strip() == text.strip()), None)
-        if idx:
-            add_from_file(state, "fp-class", label, path, idx)
+    with open(FP_CLASS_PATH) as fh:
+        for raw in fh:
+            if raw.startswith("#") or not raw.strip():
+                continue
+            path, _count, verdict, text = raw.rstrip("\n").split("\t", 3)
+            label = "history" if verdict == "true_positive" else "not_history"
+            with _open_repo_file(path) as src_fh:
+                src = src_fh.read().splitlines()
+            idx = next((i for i, l in enumerate(src, 1) if l.strip() == text.strip()), None)
+            if idx:
+                add_from_file(state, "fp-class", label, path, idx)
 
 
 def _dirty_lines(path, lines, text):
@@ -412,7 +435,8 @@ def add_head_random(state, tracked):
     random.seed(SEED)
     pool = []
     for path in tracked:
-        text = open(os.path.join(REPO, path), errors="replace").read()
+        with _open_repo_file(path) as fh:
+            text = fh.read()
         lines = text.splitlines()
         dirty = _dirty_lines(path, lines, text)
         for i, line in enumerate(lines, 1):
@@ -425,7 +449,8 @@ def add_head_random(state, tracked):
     for path, i in random.sample(pool, len(pool)):
         if added >= RANDOM_SAMPLE:
             break
-        text = open(os.path.join(REPO, path), errors="replace").read()
+        with _open_repo_file(path) as fh:
+            text = fh.read()
         line = text.splitlines()[i - 1]
         if len(jev_scan.build_blocks(path, [line], text)) != 1:
             continue
@@ -448,7 +473,8 @@ def add_guard_evals(state):
     into the first since both are labelled the same way -- one distinct
     comment reached from two fixtures, not two different answers for it.
     """
-    cases = json.load(open(GUARD_EVALS_PATH))
+    with open(GUARD_EVALS_PATH) as fh:
+        cases = json.load(fh)
     cases = cases if isinstance(cases, list) else next(v for v in cases.values() if isinstance(v, list))
     for case in cases:
         label = GUARD_LABELS.get(case.get("name"))
