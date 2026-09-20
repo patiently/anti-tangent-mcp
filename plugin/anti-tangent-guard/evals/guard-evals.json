@@ -1,6 +1,6 @@
 {
   "skill_name": "anti-tangent-guard",
-  "description": "Evals for the check-task-complete PostToolUse hook and the check-comment-write PreToolUse hook (145 cases)",
+  "description": "Evals for the check-task-complete PostToolUse hook, the check-comment-write PreToolUse hook, and the check-task-start PreToolUse hook (179 cases)",
   "evals": [
     {
       "id": 1,
@@ -2850,7 +2850,7 @@
       "id": 174,
       "name": "jev-off-by-default",
       "hook": "check-comment-write",
-      "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j1\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// The count cap used to return a plain error.\\npackage x\\n\"}}",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j1\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// OFF-BY-DEFAULT-MARKER: the count cap used to return a plain error.\\npackage x\\n\"}}",
       "expected_exit": 0,
       "reason": "the tier is opt-in: without ANTI_TANGENT_JEV=1 a prose-history comment is not sent anywhere"
     },
@@ -2861,7 +2861,7 @@
       "env": {
         "ANTI_TANGENT_JEV": "1"
       },
-      "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j2\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// The count cap used to return a plain error.\\npackage x\\n\"}}",
+      "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j2\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// NEEDS-A-KEY-MARKER: the count cap used to return a plain error.\\npackage x\\n\"}}",
       "expected_exit": 0,
       "reason": "the setting alone does not enable the tier; without a key there is nothing to call with"
     },

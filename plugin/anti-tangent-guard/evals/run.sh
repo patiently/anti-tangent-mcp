@@ -820,6 +820,18 @@ if grep -q "fixes #58" "$JEV_LOG" 2>/dev/null; then
     echo "FAIL: a regex-refused write reached the endpoint"
     FAILED=$((FAILED + 1))
 fi
+# Cases 174 and 175 assert only expected_exit=0, which a tier that ran, sent
+# the comment, and failed open would also produce -- an exit code alone
+# cannot tell "the tier stayed off" from "the tier ran and allowed it". Each
+# case's own marker is what proves it never reached the stub.
+if grep -q "OFF-BY-DEFAULT-MARKER" "$JEV_LOG" 2>/dev/null; then
+    echo "FAIL: the tier ran with no setting"
+    FAILED=$((FAILED + 1))
+fi
+if grep -q "NEEDS-A-KEY-MARKER" "$JEV_LOG" 2>/dev/null; then
+    echo "FAIL: the tier ran with no key"
+    FAILED=$((FAILED + 1))
+fi
 # The exit codes for 176 and 178 are 2 and 0, which several other outcomes
 # also produce. The trace line is what says WHICH path ran.
 if ! grep -q "comment-write | jev-block | p=0.95" "$ANTI_TANGENT_GUARD_TRACE_LOG"; then
