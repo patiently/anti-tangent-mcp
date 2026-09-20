@@ -129,6 +129,14 @@ class Redaction(unittest.TestCase):
         self.assertEqual(jev_scan.redact(short), short)
         self.assertIn("<redacted>", jev_scan.redact(exact))
 
+    def test_token_starting_with_plus(self):
+        token = "+A1" + "b" * 21         # starts with +, 24 characters total
+        self.assertIn("<redacted>", jev_scan.redact(token))
+
+    def test_token_starting_with_slash(self):
+        token = "/A1" + "b" * 21         # starts with /, 24 characters total
+        self.assertIn("<redacted>", jev_scan.redact(token))
+
     def test_prose_is_untouched(self):
         for line in ("The count cap used to return a plain error to the caller.",
                      "A well-known copy-on-write trade-off, documented upstream.",

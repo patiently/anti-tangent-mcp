@@ -4,13 +4,13 @@
     {
       "id": 0,
       "subject": "Task 0: Rebase onto main and open 0.24.0",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** This branch builds on current main and carries the version the release workflow expects.\n\n**Files:**\n- Modify: `CHANGELOG.md` (new `## [0.24.0]` section at the top of the entries)\n- Modify: `VERSION`\n\n**Acceptance Criteria:**\n- [ ] The branch is named `version/0.24.0` and contains main's current head as an ancestor.\n- [ ] `CHANGELOG.md` has a `## [0.24.0] - 2026-09-20` section with an `### Added` subsection.\n- [ ] `VERSION` reads `0.24.0`.\n- [ ] `go build ./...` and `go test -race ./...` pass on the rebased tree.\n\n**Verify:** ```bash\ngo build ./... \\\n  && go test -race ./... \\\n  && git merge-base --is-ancestor origin/main HEAD \\\n  && grep -q '^## \\[0.24.0\\] - 2026-09-20$' CHANGELOG.md \\\n  && awk '/^## \\[0.24.0\\]/{f=1} f&&/^### Added/{ok=1} END{exit !ok}' CHANGELOG.md \\\n  && [ \"$(cat VERSION)\" = \"0.24.0\" ] \\\n  && [ \"$(git branch --show-current)\" = \"version/0.24.0\" ]\n```\n\n\u2192 exit 0\n\n```json:metadata\n{\"files\": [\"CHANGELOG.md\", \"VERSION\"], \"verifyCommand\": \"go build ./... && go test -race ./... && git merge-base --is-ancestor origin/main HEAD && grep -q '^## \\\\[0.24.0\\\\] - 2026-09-20$' CHANGELOG.md && [ \\\"$(cat VERSION)\\\" = \\\"0.24.0\\\" ]\", \"acceptanceCriteria\": [\"branch is version/0.24.0 with main as ancestor\", \"CHANGELOG has the dated 0.24.0 section with ### Added\", \"VERSION reads 0.24.0\", \"go build ./... and go test -race ./... pass\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
       "id": 1,
       "subject": "Task 1: Extract the block-continuation decision from `violations()`",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The judgement \"may this `*`-led line be read as a block-comment continuation?\" becomes a pure pair of functions both tiers can call, with `violations()` behaving exactly as before.\n\n**Files:**\n- Modify: `plugin/anti-tangent-guard/hooks/comment_scan.py` (add `block_state` / `allow_star`; rewrite the body of `violations()`'s loop to use them)\n- Modify: `plugin/anti-tangent-guard/hooks/comment_scan_test.py` (append a test class)\n\n**Acceptance Criteria:**\n- [ ] `block_state(path, context)` returns `None` for no context, `True` when the context cannot be tokenized, else a `(block_lines, context_lines)` pair.\n- [ ] `allow_star(state, raw)` returns True for `None`/`True` state, and otherwise `raw in block_lines or raw not in context_lines`.\n- [ ] `violations()` computes the state lazily \u2014 a call with no starred candidate never tokenizes the context.\n- [ ] `_ScanTimeout` still propagates out of the state computation rather than being absorbed.\n- [ ] `evals/fp-report.sh` reports zero false positives and `evals/run.sh` passes unchanged.\n\n**Verify:** `python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v && bash plugin/anti-tangent-guard/evals/fp-report.sh && bash plugin/anti-tangent-guard/evals/run.sh` \u2192 OK, zero false positives, all eval cases pass\n\n```json:metadata\n{\"files\": [\"plugin/anti-tangent-guard/hooks/comment_scan.py\", \"plugin/anti-tangent-guard/hooks/comment_scan_test.py\"], \"verifyCommand\": \"python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v && bash plugin/anti-tangent-guard/evals/fp-report.sh && bash plugin/anti-tangent-guard/evals/run.sh\", \"acceptanceCriteria\": [\"block_state returns None/True/pair\", \"allow_star applies it\", \"state computed lazily\", \"_ScanTimeout propagates\", \"fp-report and run.sh unchanged\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         0
@@ -19,7 +19,7 @@
     {
       "id": 2,
       "subject": "Task 2: Build the comment blocks an edit touches",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `jev_scan.build_blocks()` turns a hook payload's touched lines plus post-edit text into the exact comment text that will be judged.\n\n**Files:**\n- Create: `plugin/anti-tangent-guard/hooks/jev_scan.py`\n- Create: `plugin/anti-tangent-guard/hooks/jev_scan_test.py`\n- Modify: `plugin/anti-tangent-guard/hooks/comment_scan.py` (add `hash_string_lines`)\n\n**Acceptance Criteria:**\n- [ ] A run of consecutive lines carrying comment spans is one block when the edit touched any line in it; untouched runs are not returned.\n- [ ] Only comment spans are returned, never the raw code around a trailing comment.\n- [ ] A touched line that is a fragment of a file line matches that line by containment.\n- [ ] When no touched line matches any context line, the fallback returns blocks built from the touched lines alone.\n- [ ] A starred line inside a Go raw string is not a comment line; a column-zero `#` inside a Python triple-quoted string is not either.\n- [ ] A block longer than 2,000 characters is windowed around the touched lines, never truncated from the top.\n- [ ] At most 20 blocks are returned, and `build_blocks()` itself reports that it capped \u2014 the caller never has to know the uncapped count.\n- [ ] When the touched lines alone exceed 2,000 characters, the neighbours are dropped first and the touched text is then cut to the cap from its end, keeping its first 2,000 characters. Neighbouring text is never kept in preference to touched text.\n\n**Verify:** `python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py BlockBuilder -v` \u2192 OK\n\n```json:metadata\n{\"files\": [\"plugin/anti-tangent-guard/hooks/jev_scan.py\", \"plugin/anti-tangent-guard/hooks/jev_scan_test.py\", \"plugin/anti-tangent-guard/hooks/comment_scan.py\"], \"verifyCommand\": \"python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py BlockBuilder -v\", \"acceptanceCriteria\": [\"touched run is one block including untouched neighbours\", \"untouched runs excluded\", \"spans only, never raw code\", \"fragment matches by containment\", \"fallback when nothing matches\", \"raw-string star and docstring hash excluded\", \"windowed around touched lines\", \"capped at 20 blocks\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         1
@@ -28,7 +28,7 @@
     {
       "id": 3,
       "subject": "Task 3: The enablement gate and configuration",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `jev_scan.config()` answers whether the tier runs at all, and with what settings, refusing to hand the key to a host a repository chose.\n\n**Files:**\n- Modify: `plugin/anti-tangent-guard/hooks/jev_scan.py`\n- Modify: `plugin/anti-tangent-guard/hooks/jev_scan_test.py`\n\n**Acceptance Criteria:**\n- [ ] The tier is off unless `ANTI_TANGENT_JEV` is exactly `1` and `TYPESAFE_API_KEY` is non-empty; each off case reports a distinct reason.\n- [ ] `ANTI_TANGENT_COMMENT_GUARD=0` turns it off too.\n- [ ] The threshold parses from `ANTI_TANGENT_JEV_THRESHOLD`, and anything outside `(0, 1]` \u2014 including `0`, `1.5`, `nan`, `inf`, `abc`, empty \u2014 falls back to 0.7.\n- [ ] A non-default URL is used only for loopback, or with `ANTI_TANGENT_JEV_URL_TRUSTED=1`; otherwise the default host is used and the reason is reported.\n- [ ] A path matching any glob in `ANTI_TANGENT_JEV_EXCLUDE` (colon-separated) turns the tier off for that call.\n\n**Verify:** `python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Config -v` \u2192 OK\n\n```json:metadata\n{\"files\": [\"plugin/anti-tangent-guard/hooks/jev_scan.py\", \"plugin/anti-tangent-guard/hooks/jev_scan_test.py\"], \"verifyCommand\": \"python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Config -v\", \"acceptanceCriteria\": [\"off unless setting is 1 and key present, with distinct reasons\", \"COMMENT_GUARD=0 turns it off\", \"threshold clamped to (0,1] with 0.7 fallback\", \"non-default host refused unless loopback or trusted\", \"exclude globs honoured\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         2
@@ -116,5 +116,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-09-20T09:46:24.195147+00:00"
+  "lastUpdated": "2026-09-20T10:34:22.748408+00:00"
 }
