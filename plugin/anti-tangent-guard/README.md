@@ -471,6 +471,11 @@ for a `Write` — while an `Edit` still scans its added lines, since those come 
 own operands rather than a file read, but with no post-edit file context, so this tier's
 block-comment continuation falls back to the touched fragments alone.
 
+Tracked as [#87](https://github.com/patiently/anti-tangent-mcp/issues/87), which also covers the
+close-time hook and carries a reproduction that needs no Windows machine. Every failure here is
+silent by design — each caller fails open so an unreadable file can never block a write — so on
+Windows a clean hook run is not evidence that anything was scanned.
+
 ## Comment-hygiene scan at close
 
 Beyond the first two block conditions above, every close gets one more check,
