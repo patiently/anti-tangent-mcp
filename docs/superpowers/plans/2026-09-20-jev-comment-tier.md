@@ -1535,7 +1535,7 @@ git commit -m "feat(guard): bound the refusals and the outage"
 ```
 
 ```json:metadata
-{"files": ["plugin/anti-tangent-guard/hooks/jev_scan.py", "plugin/anti-tangent-guard/hooks/jev_scan_test.py"], "verifyCommand": "python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Strikes -v", "acceptanceCriteria": ["strike counts per session and path", "expired stamp restarts the count", "third strike returns 3 for Task 8 to interpret", "atomic stamp write proven by concurrent writers", "breaker opens for 60s", "filesystem failures swallowed"], "modelTier": "standard"}
+{"files": ["plugin/anti-tangent-guard/hooks/jev_scan.py", "plugin/anti-tangent-guard/hooks/jev_scan_test.py"], "verifyCommand": "python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Strikes -v", "acceptanceCriteria": ["strike counts per session and path", "expired stamp restarts the count", "third strike returns 3 for Task 8 to interpret", "atomic stamp write by os.replace, with concurrent writers proving no crash and a parseable count", "breaker opens for 60s", "filesystem failures swallowed"], "modelTier": "standard"}
 ```
 
 ---
