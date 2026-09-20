@@ -23,7 +23,11 @@ and merge risk, not about whether it ships.
 - **Fail open, always.** Any error, timeout, unparsable response or unexpected exception allows the write **in the absence of a flag**. A failure never blocks and never turns another block's flag into a pass: a confident flag on one block still refuses the write even when a second request failed, because the flag is evidence and the failure is only missing evidence. A hook that raises must never reach the user as a traceback.
 - **No network in unit tests.** Every test stubs the transport, with one stated exception: a loopback server the test starts and stops itself, which is how the redirect refusal is proved. Loopback is not the network, and no other test may open a socket. The repository rule is absolute (`CLAUDE.md`, Testing Conventions).
 - **`comment_scan.py` stays network-free and behaviour-identical.** `violations()` must return exactly what it returns today; `evals/fp-report.sh` must stay at zero false positives and `evals/run.sh` must stay green after the helper extraction.
-- **The key goes only to the default host or loopback** unless `ANTI_TANGENT_JEV_URL_TRUSTED=1`.
+- **The key goes only to the default host, to loopback, or to an `https` host listed in the
+  operator-owned `~/.claude/anti-tangent-guard/jev-hosts` file** — never an environment variable,
+  since a repository's own checked-in settings can populate the hook's environment. (Task 3 below
+  walks through an earlier, environment-flag form of this rule; the spec's Configuration section
+  and the README describe what shipped.)
 - **The tier is off unless** `ANTI_TANGENT_JEV=1` **and** `TYPESAFE_API_KEY` is non-empty. `ANTI_TANGENT_COMMENT_GUARD=0` disables both tiers.
 - **Comment policy applies to this plan's own code.** No comment may reference a task number, this plan, an issue or a version as history. `ANTI_TANGENT_TICKET_PATTERN=YN-\d+` is set in this environment.
 - **Budget for the whole tier: 4 seconds wall clock**, measured from the moment `run()` is entered — configuration, block building and requests all inside it — 3 seconds per request, at most 20 blocks, 2,000 characters per block. The bound is enforced by abandoning a slow worker, not by cancelling it: a request already in flight cannot be stopped, and the executor's threads are joined by an interpreter-exit handler, so the hook body leaves through `os._exit` once it has a decision.
@@ -632,6 +636,13 @@ git commit -m "feat(guard): build the comment blocks an edit touches"
 
 **Goal:** `jev_scan.config()` answers whether the tier runs at all, and with what settings, refusing to hand the key to a host a repository chose.
 
+The URL-trust criterion and steps below are this task's original design, gated on an
+`ANTI_TANGENT_JEV_URL_TRUSTED` environment flag. The rule that shipped instead reads the
+approval from the operator-owned `~/.claude/anti-tangent-guard/jev-hosts` file over `https`,
+because an environment variable is exactly as repository-controllable as the URL it would be
+approving. See the spec's Configuration section and the README's "Why the URL is restricted" for
+what ships.
+
 **Files:**
 - Modify: `plugin/anti-tangent-guard/hooks/jev_scan.py`
 - Modify: `plugin/anti-tangent-guard/hooks/jev_scan_test.py`
@@ -640,7 +651,7 @@ git commit -m "feat(guard): build the comment blocks an edit touches"
 - [ ] The tier is off unless `ANTI_TANGENT_JEV` is exactly `1` and `TYPESAFE_API_KEY` is non-empty; each off case reports a distinct reason.
 - [ ] `ANTI_TANGENT_COMMENT_GUARD=0` turns it off too.
 - [ ] The threshold parses from `ANTI_TANGENT_JEV_THRESHOLD`, and anything outside `(0, 1]` — including `0`, `1.5`, `nan`, `inf`, `abc`, empty — falls back to 0.7.
-- [ ] A non-default URL is used only for loopback, or with `ANTI_TANGENT_JEV_URL_TRUSTED=1`; otherwise the default host is used and the reason is reported.
+- [ ] A non-default URL is used only for loopback, or for an `https` host listed in the operator-owned `~/.claude/anti-tangent-guard/jev-hosts` file; otherwise the default host is used and the reason is reported.
 - [ ] A path matching any glob in `ANTI_TANGENT_JEV_EXCLUDE` (colon-separated) turns the tier off for that call.
 
 **Verify:** `python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Config -v` → OK
@@ -2747,7 +2758,7 @@ git commit -m "test(guard): commit the calibration set and its runner"
 - Modify: `CLAUDE.md` (the "What This Repo Is Not" paragraph on what the plugins block)
 
 **Acceptance Criteria:**
-- [ ] The README's write-time guard section covers: the two tiers and the order they run in; the host rule AND its honest limit — a repository whose settings you trust can define hook commands, so the rule covers the accidental and partially-trusted cases, not a repo you have already trusted; that the semantic tier judges the whole touched block while the tells judge added lines, and why; all seven variables (`ANTI_TANGENT_JEV`, `TYPESAFE_API_KEY`, threshold, model, URL, `ANTI_TANGENT_JEV_URL_TRUSTED`, exclude) and the host rule; what leaves the machine and that zero retention is enterprise-only; fail-open, the breaker and the two-block yield; the CA-bundle failure mode under `python3 -I`; and the Windows gap.
+- [ ] The README's write-time guard section covers: the two tiers and the order they run in; the host rule AND its honest limit — a repository whose settings you trust can define hook commands, so the rule covers the accidental and partially-trusted cases, not a repo you have already trusted; that the semantic tier judges the whole touched block while the tells judge added lines, and why; all six variables (`ANTI_TANGENT_JEV`, `TYPESAFE_API_KEY`, threshold, model, URL, exclude), the operator-owned `~/.claude/anti-tangent-guard/jev-hosts` approval file, and the host rule; what leaves the machine and that zero retention is enterprise-only; fail-open, the breaker and the two-block yield; the CA-bundle failure mode under `python3 -I`; and the Windows gap.
 - [ ] `plugin.json`'s version goes from `0.5.0` to `0.6.0` and its description no longer implies pattern matching is all the write-time hook does.
 - [ ] The `CHANGELOG.md` 0.24.0 entry names the tier, its gate and its failure behaviour.
 - [ ] `CLAUDE.md`'s "What This Repo Is Not" paragraph counts the guard's ways of blocking correctly once the tier lands — it currently says "three ways" and "three kill switches" — and names `ANTI_TANGENT_JEV` as the tier's own switch alongside the existing three.
@@ -2801,14 +2812,16 @@ subsection beside `ANTI_TANGENT_TICKET_PATTERN`; the table here is the summary.
 | `TYPESAFE_API_KEY` | unset | Required. |
 | `ANTI_TANGENT_JEV_THRESHOLD` | `0.7` | Flag at or above. Anything outside (0, 1] falls back. |
 | `ANTI_TANGENT_JEV_MODEL` | `jev-1.13.0` | Pinned: an alias moves under a tuned threshold. |
-| `ANTI_TANGENT_JEV_URL` | the TypeSafe endpoint | Honoured for loopback, or with `ANTI_TANGENT_JEV_URL_TRUSTED=1`. |
+| `ANTI_TANGENT_JEV_URL` | the TypeSafe endpoint | Honoured for loopback, or for an `https` host listed in `~/.claude/anti-tangent-guard/jev-hosts`. |
 | `ANTI_TANGENT_JEV_EXCLUDE` | unset | Colon-separated globs never sent. |
 
 **Why the URL is restricted.** Environment reaches these hooks from several places — your shell,
 a CI job, and a repository's own checked-in settings — and an arbitrary endpoint would be handed
 your key along with the comment text. The default host and loopback are the only ones that get it
-without `ANTI_TANGENT_JEV_URL_TRUSTED=1`, which you set in your own global settings when you route
-through a proxy.
+on the strength of the environment alone. Any other host has to be named in
+`~/.claude/anti-tangent-guard/jev-hosts`, a file in your own home directory, one hostname per line;
+a variable would arrive through the same environment a repository controls, so a file the operator
+alone owns is the approval instead, and it is honoured only for `https` hosts.
 
 **What this rule does not defend against.** A repository whose settings you have trusted can
 define hook *commands*, not only environment — at which point it can read your key directly, and

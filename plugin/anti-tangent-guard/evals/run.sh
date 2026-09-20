@@ -642,15 +642,20 @@ run_case() {
     # which no hook uses, so an expiry is distinguishable from every real
     # exit status. The binary is resolved to an absolute path because a
     # path_stub_exclude case runs under a PATH holding only the hook's own
-    # utilities. A case that declares a timeout on a machine with neither
-    # timeout nor gtimeout (coreutils on macOS) is FAILED, not run unbounded:
-    # the hang it exists to catch would otherwise become a stalled suite.
+    # utilities. A declared bound can evaporate two ways, and both are
+    # FAILED rather than run unbounded: a machine with neither timeout nor
+    # gtimeout (coreutils on macOS) cannot enforce any bound, and a value of
+    # 0 asks GNU/BSD timeout to disable the bound outright — timeout(1)
+    # documents "A duration of 0 disables the associated timeout" — so 0 is
+    # rejected at validation rather than accepted as a number. Either way,
+    # the hang this timeout exists to catch would otherwise become a
+    # stalled suite.
     local case_timeout timeout_bin=""
     case_timeout=$(jq -r ".evals[$idx].case_timeout_seconds // empty" "$EVALS_FILE")
     if [[ -n "$case_timeout" ]]; then
-        if [[ ! "$case_timeout" =~ ^[0-9]+$ ]]; then
+        if [[ ! "$case_timeout" =~ ^[1-9][0-9]*$ ]]; then
             TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
-            printf '  \033[31mFAIL\033[0m  [%s] %-45s case_timeout_seconds is not a whole number: %s\n' "$id" "$name" "$case_timeout"
+            printf '  \033[31mFAIL\033[0m  [%s] %-45s case_timeout_seconds is not a positive whole number: %s\n' "$id" "$name" "$case_timeout"
             return
         fi
         timeout_bin=$(command -v timeout || command -v gtimeout || true)
@@ -846,6 +851,37 @@ if [[ "$hook_exts" != "$py_exts" ]]; then
     diff <(printf '%s\n' "$py_exts") <(printf '%s\n' "$hook_exts") | sed 's/^/  /'
     echo "an extension in only one of them is silently unguarded — update both."
     exit 1
+fi
+
+# case_timeout_seconds: 0 must FAIL validation, not run: GNU/BSD `timeout 0`
+# disables the timeout rather than expiring immediately (verified against
+# coreutils: `timeout 0 sleep 3` runs the full three seconds and exits 0;
+# timeout(1) itself documents "A duration of 0 disables the associated
+# timeout"), so a case declaring one would run unbounded — exactly the
+# stalled suite this timeout was added to prevent. Exercised through the
+# real run_case function against a synthetic one-case table, inside a
+# command substitution subshell so its TOTAL/FAILED/PASSED bookkeeping and
+# its EVALS_FILE override never touch the real suite's counters or table.
+zero_timeout_evals="$WORKDIR/zero-timeout-eval.json"
+cat > "$zero_timeout_evals" <<'EOF'
+{
+  "evals": [
+    {
+      "id": 9001,
+      "name": "case-timeout-seconds-zero-self-test",
+      "hook": "check-task-complete",
+      "reason": "case_timeout_seconds: 0 must be rejected at validation, not run with timeout(1) disabled",
+      "expected_exit": 0,
+      "stdin_raw": "{}",
+      "case_timeout_seconds": 0
+    }
+  ]
+}
+EOF
+zero_timeout_output=$(EVALS_FILE="$zero_timeout_evals" run_case 0 2>&1)
+if [[ "$zero_timeout_output" != *"case_timeout_seconds is not a positive whole number"* ]]; then
+    echo "FAIL: a case declaring case_timeout_seconds: 0 was accepted by validation instead of rejected — GNU timeout 0 disables the bound entirely, so the case would run unbounded"
+    FAILED=$((FAILED + 1))
 fi
 
 json_count=$(jq -r '.evals | length' "$EVALS_FILE")
