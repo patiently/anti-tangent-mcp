@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2026-09-20
+
+### Added
+
+- `anti-tangent-guard`'s write-time comment hook gains a second tier: with `ANTI_TANGENT_JEV=1`
+  and `TYPESAFE_API_KEY` set, a comment block the edit touches is sent to TypeSafe's Jev, and a
+  block that reads as change history is refused. The regex tells run first and unchanged; the tier
+  never runs when they already refuse the write, and every failure allows it.
+
 ## [0.23.0] - 2026-09-18
 
 ### Added
