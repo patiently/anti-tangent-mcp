@@ -324,9 +324,13 @@ JEV_PORT_FILE="$WORKDIR/jev-port"
 : > "$JEV_LOG"
 # An ordinary background job, so $! is the PID of the process this run owns.
 # pgrep would match a concurrent run's stub, and killing that one breaks a
-# suite nobody is looking at.
+# suite nobody is looking at. Its stdout is redirected: the stub prints its
+# own port line there too (the port file is what this script actually reads),
+# and left connected to this script's stdout it can land mid-line inside
+# whatever the suite prints next. stderr is left alone so a stub crash still
+# surfaces.
 python3 -B "$(dirname "${BASH_SOURCE[0]}")/jev-stub.py" \
-    --prob 0.95 --log "$JEV_LOG" --port-file "$JEV_PORT_FILE" &
+    --prob 0.95 --log "$JEV_LOG" --port-file "$JEV_PORT_FILE" >/dev/null &
 JEV_PID=$!
 for _ in $(seq 1 50); do
     [[ -s "$JEV_PORT_FILE" ]] && break
@@ -799,7 +803,7 @@ if [[ "$json_count" -ne "$EXPECTED_CASE_COUNT" ]]; then
     exit 1
 fi
 
-echo "anti-tangent-guard hook evals (check-task-complete + check-comment-write)"
+echo "anti-tangent-guard hook evals (check-task-complete + check-comment-write, pattern and semantic tiers + check-task-start)"
 echo "────────────────────────────────────────────────────────────────"
 
 for ((i = 0; i < json_count; i++)); do

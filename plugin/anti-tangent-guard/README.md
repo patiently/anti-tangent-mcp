@@ -374,6 +374,84 @@ Set `ANTI_TANGENT_COMMENT_GUARD=0` to disable the comment-hygiene scan at both
 write time (PreToolUse on `Edit`/`Write`) and close time (part of the
 PostToolUse scan), while leaving the completion-gate check active.
 
+## The semantic tier (optional, off by default)
+
+The pattern set catches change history that carries a token: a task id, an issue or pull-request
+reference, a version a change verb governs, your configured tracker key. History written as
+ordinary prose — "the count cap used to return a plain error" — carries none, and no pattern
+decides it, because the ambiguity is in what the sentence means.
+
+Set `ANTI_TANGENT_JEV=1` and provide `TYPESAFE_API_KEY`, and the write-time hook asks TypeSafe's
+Jev about the comment when the patterns find nothing. **While it is on, comment text from every
+repository you edit is sent to TypeSafe**, redacted for anything shaped like a credential.
+TypeSafe offers zero data retention on enterprise plans only.
+
+**Order.** The two tiers run inside the same `PreToolUse` hook, one after the other, never both:
+the pattern tier's regex tells go first, and a match there refuses the write immediately with no
+Jev call at all. Only when the patterns find nothing does the hook consider Jev — and only then if
+the semantic tier is configured on and reachable.
+
+### What it judges
+
+The whole comment block your edit touches, not only the line you added — including lines that were
+already there. That is deliberate and it differs from the pattern tier, which judges added lines
+alone: this project's comment policy says history in a comment you touch gets rewritten as part of
+the change.
+
+The file you are editing is scanned locally to find where comment blocks begin and end, so every
+line passes through the hook on your own machine. Only the blocks your edit touched are sent, and
+only after credential redaction; a comment elsewhere in the file leaves no trace and never reaches
+TypeSafe.
+
+### Settings
+
+These also belong in the README's own `## Configuration` section, each as its own `###`
+subsection beside `ANTI_TANGENT_TICKET_PATTERN`; the table here is the summary.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ANTI_TANGENT_JEV` | unset | Must be exactly `1`. |
+| `TYPESAFE_API_KEY` | unset | Required. |
+| `ANTI_TANGENT_JEV_THRESHOLD` | `0.7` | Flag at or above. Anything outside (0, 1] falls back. |
+| `ANTI_TANGENT_JEV_MODEL` | `jev-1.13.0` | Pinned: an alias moves under a tuned threshold. |
+| `ANTI_TANGENT_JEV_URL` | the TypeSafe endpoint | Honoured for loopback, or with `ANTI_TANGENT_JEV_URL_TRUSTED=1`. |
+| `ANTI_TANGENT_JEV_EXCLUDE` | unset | Colon-separated globs never sent. |
+
+**Why the URL is restricted.** Environment reaches these hooks from several places — your shell,
+a CI job, and a repository's own checked-in settings — and an arbitrary endpoint would be handed
+your key along with the comment text. The default host and loopback are the only ones that get it
+without `ANTI_TANGENT_JEV_URL_TRUSTED=1`, which you set in your own global settings when you route
+through a proxy.
+
+**What this rule does not defend against.** A repository whose settings you have trusted can
+define hook *commands*, not only environment — at which point it can read your key directly, and
+no rule here changes that. This restriction is for the accidental and the partially-trusted case:
+an endpoint inherited from a shell profile or a CI job, or a repository that sets one for its own
+tooling. Trusting a repository's settings is still the decision that matters.
+
+### When it cannot answer
+
+Every failure allows the write: no key, no network, DNS failure, TLS failure, a timeout, a
+malformed response, an unexpected error. After one failure the tier steps aside for 60 seconds, so
+a dead service costs one slow edit rather than every edit, and prints one warning per session.
+
+A refusal you disagree with is bounded too: the tier blocks a given file at most twice within a
+session — a 30-minute window, so a stamp from an abandoned sitting of work does not spend a later
+edit's refusals — then allows the write and says so. That comment still reaches
+`validate_completion` at task close, which is the enforcement that exists without this tier at
+all.
+
+### Two failure modes worth knowing
+
+Under `python3 -I` the user site directory is dropped, so a Python whose certificates live there
+(a python.org install on macOS) cannot verify TLS and every call fails — silently, since failures
+allow the write. The per-session warning is how you notice; the trace log names the class. Set
+`SSL_CERT_FILE` for a corporate CA.
+
+On Windows there is no `O_NOFOLLOW` — `comment_scan.py`'s capped read asks for it unconditionally
+— so a `Write` over an existing file is not scanned at all and this tier never runs for it. An
+`Edit` is judged without the post-edit text.
+
 ## Comment-hygiene scan at close
 
 Beyond the first two block conditions above, every close gets one more check,
@@ -457,6 +535,49 @@ Both hooks honour it: the tell is appended to the scanner's set when `comment_sc
 
 **There is no default, and without it a comment like `// ABC-1234: the keyword` is not detected.** A generic pattern cannot be made safe: measured over real comment lines, `[A-Z]+-\d+` matches hardware identifiers (`HDMI-0`, `DP-0`) and prose labels (`ROUND-1`) far more often than tracker keys, and the write-time hook blocks writes. An uncompilable or over-long pattern is ignored, and each file's scan runs under a two-second deadline that fails open. The close-time walk over every file a completion named is bounded in turn — a twenty-second budget over the git questions and another over the scans — so neither a stalled git nor a slow pattern can hold the session for minutes. What a budget cuts short is recorded on the trace line rather than reported as a clean scan.
 
+### `ANTI_TANGENT_JEV`
+
+Turns the semantic tier on. Must be exactly `1` — any other value, including unset, leaves the
+write-time hook running the pattern tier alone. Also requires `TYPESAFE_API_KEY`; the two are
+independent switches, and either one missing keeps the tier off.
+
+### `ANTI_TANGENT_JEV_THRESHOLD`
+
+The `change_history` probability at or above which a judged block flags. Default `0.7`. A value
+outside `(0, 1]` — including something unparsable, or `nan` — falls back to the default rather
+than silently disabling the check: `0` would flag every block and `nan` compares `False` against
+every probability, and neither is a stricter or looser policy, just a broken one.
+
+### `TYPESAFE_API_KEY`
+
+The TypeSafe API key the semantic tier authenticates with. Required for the tier to run; unset or
+empty leaves it off (`jev-skip | no-key`) even with `ANTI_TANGENT_JEV=1`.
+
+### `ANTI_TANGENT_JEV_MODEL`
+
+The Jev model id sent with every request. Default `jev-1.13.0`, pinned deliberately: the model's
+behaviour on this question was calibrated against that exact id, and an alias could move under a
+threshold nobody re-tuned for it.
+
+### `ANTI_TANGENT_JEV_URL`
+
+The TypeSafe endpoint. Default `https://api.typesafe.ai/v1/systemone`. Any other value is honoured
+only for a loopback host (`127.0.0.1`, `localhost`, `::1`) or when `ANTI_TANGENT_JEV_URL_TRUSTED=1`
+is also set — see "Why the URL is restricted" under the semantic tier above.
+
+### `ANTI_TANGENT_JEV_URL_TRUSTED`
+
+Set to `1` in your own global settings — never a repository's — to let `ANTI_TANGENT_JEV_URL`
+point somewhere other than the default host or loopback, such as a corporate proxy. See "What
+this rule does not defend against" under the semantic tier above for what this does and does not
+protect.
+
+### `ANTI_TANGENT_JEV_EXCLUDE`
+
+Colon-separated glob patterns (`fnmatch` syntax), matched against the edited file's path as the
+tool call names it. A match disables the semantic tier for that write (`jev-skip | excluded`)
+while leaving the pattern tier running. Unset by default — nothing is excluded.
+
 ## Kill switches
 
 - `ANTI_TANGENT_COMPLETION_GUARD=0` disables the completion-gate check in the
@@ -470,6 +591,10 @@ Both hooks honour it: the tell is appended to the scanner's set when `comment_sc
 - Setting all three to `0` is what short-circuits the `PostToolUse` hook to
   `exit 0` before it reads stdin. With any one still on, the hook reads stdin
   and runs the rules that are still enabled.
+- `ANTI_TANGENT_JEV` unset or not exactly `1` disables the semantic tier alone,
+  leaving the pattern tier, the completion gate and the start gate untouched.
+  It has no bearing on the `PostToolUse` hook or the three switches above:
+  the semantic tier runs only inside the write-time `PreToolUse` hook.
 
 ## Fail-open policy
 
@@ -499,6 +624,13 @@ deliberately not folded into "fail open": the transcript walker skips a
 single unparsable JSONL line and lets the remaining lines decide the verdict
 as usual, so one corrupt line elsewhere in a long transcript doesn't erase
 the block that should fire.
+
+**The semantic tier's own row.** Every failure — no key, no network, DNS, TLS, a timeout, a
+malformed response, an unexpected exception — allows the write; only a flag above threshold
+blocks. A failure also trips a 60-second breaker so a dead service costs one slow edit rather than
+every edit, and prints one warning on stderr per session so a silent, permanent fail-open (an
+expired CA bundle, a proxy that refuses `CONNECT`) does not go unnoticed. See "When it cannot
+answer" under the semantic tier above.
 
 ## Trace log
 
@@ -545,6 +677,18 @@ since it has no task id to report, and its own event set: `pass | spec-called`
 could not be read), `skip | guard=0`, `skip | no-python3`, `skip | no-body`,
 and `error | python-exit=N`.
 
+The semantic tier adds five events of its own to `check-comment-write`'s trace line, reached only
+after a clean pattern-tier pass: `jev-block | p=<probability>` when a touched block scores at or
+above the threshold (the write is refused); `jev-pass | blocks=<n>[,capped]` when every scored
+block cleared it, `capped` appended when the edit touched more comment blocks than the tier judges
+in one write; `jev-skip | <reason>` when the tier did not run at all — `setting` (not exactly `1`),
+`no-key`, `guard=0`, `excluded`, `breaker` (a recent failure's 60-second pause), or `no-blocks`
+(the edit touched no comment); `jev-yield | <path>` on the third refusal for the same file within
+the session's 30-minute window, when the tier allows the write instead of blocking again; and
+`jev-error | <failure class>` on a failure — an exception type name, or `deadline` /
+`deadline-before-request` / `no-question-file` for a budget or configuration problem — which
+always allows the write. Every one of these but `jev-block` lets the write through.
+
 A close whose comment scan ran also emits a `scan` line — for example
 `scan | src=final_files submitted=3 scanned=0 lines=0` — naming which
 evidence the scan read and how much of it there was to read. `submitted`
@@ -579,11 +723,13 @@ bash evals/run.sh
 ```
 
 Runs the hooks' own unit tests (`hooks/*_test.py`) first, then the full eval
-suite (172 cases) against all three hooks, and exits non-zero on either — the
+suite (179 cases) against all three hooks, and exits non-zero on either — the
 cases cover check-task-complete's four block conditions (the third being its
 own close-time comment-hygiene scan, the fourth being the no-session rule),
-check-comment-write's write-time comment-hygiene guard, and check-task-start's
-start gate. See `evals/run.sh`'s header comment for the
+check-comment-write's write-time comment-hygiene guard — both the pattern
+tier and, behind a loopback stub server the suite starts and tears down
+itself, the semantic tier — and check-task-start's start gate. See
+`evals/run.sh`'s header comment for the
 full breakdown by case. Cases 18/19 are deliberately un-escaped fixtures — they
 test positional extraction against an older server. Cases 20/21 are the
 current server's own rendering, pinned byte-for-byte to the formatters by
@@ -593,6 +739,24 @@ mirror of its regexes. Case 22 pairs a validate_completion tool_use with its
 tool_result exactly as the server's `envelopeResult` marshals it, so the
 direct-call verdict read (see "The four block conditions" above) is
 exercised end-to-end too.
+
+### The semantic tier's calibration suite
+
+```bash
+ANTI_TANGENT_JEV=1 TYPESAFE_API_KEY=... python3 evals/jev-eval.py
+```
+
+Separate again, and never run by CI or by `evals/run.sh`: it spends a real request per row against
+the live TypeSafe endpoint, so it needs the key and the setting and refuses to run without both.
+It scores `evals/jev-comments.jsonl` — 124 labelled comment blocks built by the hook's own block
+builder — and prints recall and precision per source group. Read its output with the same care the
+design measurement needed: the pattern tier's regex tells catch 20 of the 57 `history`-labelled
+rows in that set, but 19 of those 20 come from a source (`fp-class`) generated by running the
+regex scanner over this repository, so that group's hit rate is circular by construction and
+proves nothing about the tier's real reach. Excluding it, the pattern tier catches 1 of the
+remaining 38, and on prose-narrated history specifically (the `head-history-wording` group, 30
+rows, every label operator-confirmed) it catches 0 of 30 — which is the gap the semantic tier
+exists to close.
 
 ### The false-positive gate
 

@@ -9,10 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `anti-tangent-guard`'s write-time comment hook gains a second tier: with `ANTI_TANGENT_JEV=1`
-  and `TYPESAFE_API_KEY` set, a comment block the edit touches is sent to TypeSafe's Jev, and a
-  block that reads as change history is refused. The regex tells run first and unchanged; the tier
-  never runs when they already refuse the write, and every failure allows it.
+- `anti-tangent-guard` 0.6.0's write-time comment hook gains a second, optional tier: with
+  `ANTI_TANGENT_JEV=1` and `TYPESAFE_API_KEY` set, the whole comment block an edit touches —
+  pre-existing lines included, not only the ones added — is sent to TypeSafe's Jev, and a block
+  that reads as change history is refused. The regex tells run first and unchanged; the tier never
+  runs when they already refuse the write, so a repository can turn this on without changing what
+  the pattern tier already catches. Every failure (no key, no network, DNS, TLS, a timeout, a
+  malformed response, an unexpected error) allows the write, trips a 60-second breaker so a dead
+  service costs one slow edit rather than every edit, and warns once per session. A refusal the
+  tier cannot resolve is bounded too: it blocks a given file at most twice within a session, then
+  yields and allows the write, leaving the comment for `validate_completion` to catch at task
+  close — the enforcement that exists without this tier at all.
 
 ## [0.23.0] - 2026-09-18
 
