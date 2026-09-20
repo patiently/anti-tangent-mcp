@@ -406,8 +406,8 @@ TypeSafe.
 
 ### Settings
 
-These also belong in the README's own `## Configuration` section, each as its own `###`
-subsection beside `ANTI_TANGENT_TICKET_PATTERN`; the table here is the summary.
+A summary; each variable also has its own `###` subsection under "Configuration" below, beside
+`ANTI_TANGENT_TICKET_PATTERN`.
 
 | Variable | Default | Meaning |
 |---|---|---|
