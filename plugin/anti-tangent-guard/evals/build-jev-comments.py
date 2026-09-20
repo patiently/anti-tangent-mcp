@@ -162,10 +162,20 @@ DECISIONS = {
 # All three faithfully mirror what the real hook would do with the same
 # touched lines -- none of them is scanned by it either -- so
 # build_blocks() correctly returns nothing for them.
-PAIRS = [("4bb1729", "plugin/anti-tangent-guard/hooks/comment_scan_test.py"),
-         ("53709c6", "docs/superpowers/plans/2026-09-11-anti-tangent-v0.21.0.md"),
-         ("a174d25", "plugin/anti-tangent-guard/hooks/git_added_lines.py"),
-         ("1e9da90", "plugin/anti-tangent-guard/hooks/check-task-complete")]
+#
+# Full hashes, like HARVEST_REV: an abbreviation can become ambiguous as the
+# repository grows, and git then resolves nothing for it. The rows themselves
+# carry the first seven characters, in the tag their id is built from and in
+# the "<rev>:<path>" provenance string: the fixture names a pair, git is
+# asked about it by the full hash.
+PAIRS = [("4bb17291afb7f1e6f2bea3e92f7894fb80a93c07",
+          "plugin/anti-tangent-guard/hooks/comment_scan_test.py"),
+         ("53709c6946a9d8fd0c8050b5c8aa70ea3e172301",
+          "docs/superpowers/plans/2026-09-11-anti-tangent-v0.21.0.md"),
+         ("a174d2544a71801b0e4c2f22b38997c177c7a6fb",
+          "plugin/anti-tangent-guard/hooks/git_added_lines.py"),
+         ("1e9da9029feba4f4d39dd2ff9a9980f706fc1329",
+          "plugin/anti-tangent-guard/hooks/check-task-complete")]
 
 
 class State(object):
@@ -406,6 +416,8 @@ def add_head_history_wording(state, tracked):
 
 def add_fp_class(state):
     """The repository's own classified scanner hits: path, count, verdict, text."""
+    if not _blob(FP_CLASS_PATH):
+        raise SystemExit("%s is absent or empty at %s" % (FP_CLASS_PATH, HARVEST_REV))
     with _open_repo_file(FP_CLASS_PATH) as fh:
         for raw in fh:
             if raw.startswith("#") or not raw.strip():
@@ -529,27 +541,65 @@ def add_guard_evals(state):
             route(state, "guard-evals", label, path, block.text, regex_hit, tag)
 
 
-def _add_cleanup_side(state, commit, path, changed, rev, label, sign):
-    """One side (before or after) of one cleanup commit."""
-    text = subprocess.run(["git", "show", "%s:%s" % (rev, path)],
-                           capture_output=True, text=True, cwd=REPO).stdout
-    if not text:
-        return
+def _git_show(args, what):
+    """stdout of `git show`, or SystemExit naming what could not be read.
+
+    A revision git cannot resolve -- an abbreviation grown ambiguous, an
+    object lost to a squash -- produces no output and a non-zero status.
+    Only the status tells that apart from a legitimately empty file, and a
+    side of a pair that silently read as empty would drop its rows without
+    a word, leaving a fixture that is short rather than wrong.
+    """
+    shown = subprocess.run(["git", "show"] + args, capture_output=True, text=True, cwd=REPO)
+    if shown.returncode != 0:
+        raise SystemExit("cannot read %s: %s" % (
+            what, shown.stderr.strip() or "git show exited %d" % shown.returncode))
+    return shown.stdout
+
+
+def _require_commit(rev):
+    """SystemExit unless rev names a commit this repository holds.
+
+    Every harvested byte is read at HARVEST_REV, and `git show` on a
+    revision git cannot resolve reads as an absent file. With the pin gone,
+    the walk would list no tracked files, harvest nothing, and write an
+    empty fixture that refuse_if_undecided has no reason to stop.
+    """
+    probe = subprocess.run(["git", "rev-parse", "--verify", "--quiet", rev + "^{commit}"],
+                           capture_output=True, text=True, cwd=REPO)
+    if probe.returncode != 0:
+        raise SystemExit("%s does not name a commit in this repository" % rev)
+
+
+def _add_cleanup_side(state, commit, path, changed, side, label, sign):
+    """One side (before or after) of one cleanup commit.
+
+    side is "" for the commit itself or "^" for its parent; the row's
+    provenance string is built from the seven-character form so the fixture
+    reads the same however the pair is spelled in PAIRS.
+    """
+    rev = commit + side
+    text = _git_show(["%s:%s" % (rev, path)], "cleanup pair side %s:%s" % (rev, path))
     touched = [l[1:] for l in changed.splitlines()
                if l.startswith(sign) and not l.startswith(sign * 3)]
     regex_hit = bool(comment_scan.violations(path, touched, text))
+    shown = "%s%s:%s" % (commit[:7], side, path)
     for n, block in enumerate(jev_scan.build_blocks(path, touched, text)):
         tag = "%s-%s-%d" % (commit[:7], label, n)
-        route(state, "cleanup-commit-pair", label, "%s:%s" % (rev, path), block.text, regex_hit, tag)
+        route(state, "cleanup-commit-pair", label, shown, block.text, regex_hit, tag)
 
 
 def add_cleanup_pairs(state):
     """Both sides of a cleanup commit, read from git since only one exists on disk."""
     for commit, path in PAIRS:
-        changed = subprocess.run(["git", "show", "--unified=0", "--format=", commit, "--", path],
-                                  capture_output=True, text=True, cwd=REPO).stdout
-        for rev, label, sign in ((commit + "^", "history", "-"), (commit, "not_history", "+")):
-            _add_cleanup_side(state, commit, path, changed, rev, label, sign)
+        changed = _git_show(["--unified=0", "--format=", commit, "--", path],
+                            "cleanup pair %s -- %s" % (commit, path))
+        # git reports an untouched path as an empty diff with a clean exit,
+        # so the status alone cannot catch a pair naming the wrong file.
+        if not changed:
+            raise SystemExit("cleanup pair %s does not touch %s" % (commit, path))
+        for side, label, sign in (("^", "history", "-"), ("", "not_history", "+")):
+            _add_cleanup_side(state, commit, path, changed, side, label, sign)
 
 
 def build_rows():
@@ -560,6 +610,7 @@ def build_rows():
     rows in the same order, which is what lets a rebuild be diffed
     byte-for-byte against the committed fixture on any later checkout.
     """
+    _require_commit(HARVEST_REV)
     state = State()
     tracked = tracked_files()
     # The four already-decided sources run first: when a text is shared with

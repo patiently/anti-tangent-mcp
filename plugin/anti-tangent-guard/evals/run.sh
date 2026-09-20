@@ -317,8 +317,9 @@ cleanup() {
 trap cleanup EXIT
 
 # A loopback stub stands in for the endpoint. Loopback is the one non-default
-# host the hook will talk to without the operator's trust flag, which is what
-# makes this possible without weakening that rule for everyone else.
+# host the hook will talk to without an entry in the operator's approved-host
+# file, which is what makes this possible without touching that file or
+# weakening the rule for everyone else.
 JEV_LOG="$WORKDIR/jev-requests.log"
 JEV_PORT_FILE="$WORKDIR/jev-port"
 : > "$JEV_LOG"
@@ -356,7 +357,6 @@ unset ANTI_TANGENT_JEV_URL
 unset ANTI_TANGENT_JEV_MODEL
 unset ANTI_TANGENT_JEV_THRESHOLD
 unset ANTI_TANGENT_JEV_EXCLUDE
-unset ANTI_TANGENT_JEV_URL_TRUSTED
 unset TYPESAFE_API_KEY
 export ANTI_TANGENT_JEV_URL="http://127.0.0.1:$JEV_PORT/v1/systemone"
 
@@ -390,9 +390,9 @@ build_stub_dir() {
 # {{TRANSCRIPT}} substituted into input.transcript_path, then invokes the
 # case's hook (default check-task-complete; "hook" field selects another,
 # e.g. check-comment-write) and checks its exit code and (for blocks) its
-# stderr message. An optional "repeat" field invokes the hook that many times
-# before grading, keeping only the last invocation's outcome; only the
-# third-attempt yield case uses it today.
+# stderr message. An optional "expected_exits" array replaces "expected_exit"
+# for a case that must be invoked several times: one entry per invocation,
+# each graded before the next invocation starts.
 #
 # Every case gets its own {{TMPDIR}} — a fresh, case-scoped directory
 # substituted for the literal "{{TMPDIR}}" token wherever it appears in
@@ -635,31 +635,68 @@ run_case() {
     path_exclude=$(jq -r ".evals[$idx].path_stub_exclude // empty" "$EVALS_FILE")
     bash_path=$(command -v bash)
 
-    # Optional "case_timeout_seconds": wrap the hook in `timeout` so a case
-    # whose failure mode is a hang fails as a case instead of stalling the
-    # suite. `timeout` returns 124 on expiry, which no hook uses, so a
-    # timeout is distinguishable from every real exit status below.
-    local case_timeout
+    # Optional "case_timeout_seconds": wrap every invocation in timeout(1) so
+    # a case whose failure mode is a hang fails as a case instead of stalling
+    # the suite. The hook is invoked directly here, so the timeout hooks.json
+    # declares for the host never applies. timeout returns 124 on expiry,
+    # which no hook uses, so an expiry is distinguishable from every real
+    # exit status. The binary is resolved to an absolute path because a
+    # path_stub_exclude case runs under a PATH holding only the hook's own
+    # utilities. A case that declares a timeout on a machine with neither
+    # timeout nor gtimeout (coreutils on macOS) is FAILED, not run unbounded:
+    # the hang it exists to catch would otherwise become a stalled suite.
+    local case_timeout timeout_bin=""
     case_timeout=$(jq -r ".evals[$idx].case_timeout_seconds // empty" "$EVALS_FILE")
-    if [[ -n "$case_timeout" && "$case_timeout" =~ ^[0-9]+$ ]] && command -v timeout >/dev/null 2>&1; then
-        timeout_prefix=(timeout "$case_timeout")
+    if [[ -n "$case_timeout" ]]; then
+        if [[ ! "$case_timeout" =~ ^[0-9]+$ ]]; then
+            TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+            printf '  \033[31mFAIL\033[0m  [%s] %-45s case_timeout_seconds is not a whole number: %s\n' "$id" "$name" "$case_timeout"
+            return
+        fi
+        timeout_bin=$(command -v timeout || command -v gtimeout || true)
+        if [[ -z "$timeout_bin" ]]; then
+            TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+            printf '  \033[31mFAIL\033[0m  [%s] %-45s declares case_timeout_seconds but neither timeout nor gtimeout is installed, so the case cannot be bounded\n' "$id" "$name"
+            return
+        fi
+        timeout_prefix=("$timeout_bin" "$case_timeout")
     fi
 
-    # Optional "repeat": invoke the hook this many times before grading it,
-    # keeping only the LAST invocation's exit code and stderr. Only the
-    # third-attempt yield case uses this — the strike count that decides
-    # jev-block vs. jev-yield lives in a file keyed by session and path, so
-    # reaching the yield needs two prior refusals against the same case_tmp
-    # and session_id, which a single invocation cannot produce on its own.
-    local repeat_count
-    repeat_count=$(jq -r ".evals[$idx].repeat // 1" "$EVALS_FILE")
+    # Optional "expected_exits": one exit code per invocation, in place of
+    # "expected_exit". The hook is invoked once per entry against the same
+    # stdin and case directory, and each invocation is graded on its own exit
+    # code — and, when it is expected to block, on expected_stderr_contains —
+    # before the next one starts. Only the third-attempt yield case uses
+    # this: the strike count that decides jev-block vs. jev-yield lives in a
+    # file keyed by session and path, so the yield is reachable only after
+    # two refusals against the same case_tmp and session_id. Grading the
+    # last exit code alone would pass a ladder whose first two rungs wrongly
+    # allowed the write and whose third yielded for the wrong reason.
+    local -a expected_exits=()
+    local has_exits
+    has_exits=$(jq -r ".evals[$idx] | has(\"expected_exits\")" "$EVALS_FILE")
+    if [[ "$has_exits" == "true" ]]; then
+        if [[ "$expected_exit" != "null" ]]; then
+            echo "case $id declares both expected_exit and expected_exits — it must declare one or the other."
+            exit 1
+        fi
+        local code
+        while IFS= read -r code; do
+            expected_exits+=("$code")
+        done < <(jq -r ".evals[$idx].expected_exits[]" "$EVALS_FILE")
+        if [[ ${#expected_exits[@]} -eq 0 ]]; then
+            echo "case $id declares an empty expected_exits — nothing would be graded."
+            exit 1
+        fi
+    else
+        expected_exits=("$expected_exit")
+    fi
 
-    local exit_code=0 rep
-    for ((rep = 1; rep <= repeat_count; rep++)); do
+    local exit_code=0 attempt want total_attempts=${#expected_exits[@]}
+    for ((attempt = 0; attempt < total_attempts; attempt++)); do
         # Reset every iteration: the `||` below only fires on a NON-ZERO exit,
-        # so a passing final invocation after a failing earlier one would
-        # otherwise be graded on the stale exit code the earlier one left
-        # behind instead of its own.
+        # so a passing invocation after a failing earlier one would otherwise
+        # be graded on the stale exit code the earlier one left behind.
         exit_code=0
         if [[ -n "$path_exclude" ]]; then
             local stub
@@ -670,40 +707,54 @@ run_case() {
         else
             ( cd "$case_cwd" && "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
         fi
-    done
 
-    if [[ "$exit_code" == "124" ]]; then
-        echo "  TIMED OUT after ${case_timeout}s — the case hung rather than returning" >&2
-        return 1
-    fi
-
-    TOTAL=$((TOTAL + 1))
-
-    if [[ "$exit_code" != "$expected_exit" ]]; then
-        printf '  \033[31mFAIL\033[0m  [%s] %-45s expected exit=%s got=%s\n' "$id" "$name" "$expected_exit" "$exit_code"
-        echo "         reason: $reason"
-        echo "         stderr:"
-        sed 's/^/           /' "$stderr_file"
-        FAILED=$((FAILED + 1))
-        return
-    fi
-
-    if [[ "$expected_exit" == "2" ]]; then
-        local expect_count ei missing=0
-        expect_count=$(jq -r ".evals[$idx].expected_stderr_contains | length" "$EVALS_FILE")
-        for ((ei = 0; ei < expect_count; ei++)); do
-            local needle
-            needle=$(jq -r ".evals[$idx].expected_stderr_contains[$ei]" "$EVALS_FILE")
-            if ! grep -qF -- "$needle" "$stderr_file"; then
-                printf '  \033[31mFAIL\033[0m  [%s] %-45s exit code matched, but stderr missing: %s\n' "$id" "$name" "$needle"
-                missing=1
-            fi
-        done
-        if [[ "$missing" == "1" ]]; then
-            FAILED=$((FAILED + 1))
+        if [[ ${#timeout_prefix[@]} -gt 0 && "$exit_code" == "124" ]]; then
+            TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+            printf '  \033[31mFAIL\033[0m  [%s] %-45s timed out after %ss on invocation %d of %d — the hook hung rather than returning\n' \
+                "$id" "$name" "$case_timeout" "$((attempt + 1))" "$total_attempts"
+            echo "         reason: $reason"
             return
         fi
-    fi
+
+        want="${expected_exits[$attempt]}"
+        if [[ "$exit_code" != "$want" ]]; then
+            TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+            if [[ "$total_attempts" -gt 1 ]]; then
+                printf '  \033[31mFAIL\033[0m  [%s] %-45s invocation %d of %d: expected exit=%s got=%s\n' \
+                    "$id" "$name" "$((attempt + 1))" "$total_attempts" "$want" "$exit_code"
+            else
+                printf '  \033[31mFAIL\033[0m  [%s] %-45s expected exit=%s got=%s\n' "$id" "$name" "$want" "$exit_code"
+            fi
+            echo "         reason: $reason"
+            echo "         stderr:"
+            sed 's/^/           /' "$stderr_file"
+            return
+        fi
+
+        if [[ "$want" == "2" ]]; then
+            local expect_count ei missing=0
+            expect_count=$(jq -r ".evals[$idx].expected_stderr_contains | length" "$EVALS_FILE")
+            for ((ei = 0; ei < expect_count; ei++)); do
+                local needle
+                needle=$(jq -r ".evals[$idx].expected_stderr_contains[$ei]" "$EVALS_FILE")
+                if ! grep -qF -- "$needle" "$stderr_file"; then
+                    if [[ "$total_attempts" -gt 1 ]]; then
+                        printf '  \033[31mFAIL\033[0m  [%s] %-45s invocation %d of %d: exit code matched, but stderr missing: %s\n' \
+                            "$id" "$name" "$((attempt + 1))" "$total_attempts" "$needle"
+                    else
+                        printf '  \033[31mFAIL\033[0m  [%s] %-45s exit code matched, but stderr missing: %s\n' "$id" "$name" "$needle"
+                    fi
+                    missing=1
+                fi
+            done
+            if [[ "$missing" == "1" ]]; then
+                TOTAL=$((TOTAL + 1)); FAILED=$((FAILED + 1))
+                return
+            fi
+        fi
+    done
+
+    TOTAL=$((TOTAL + 1))
 
     # Optional "expected_file_contains": {path: [substrings]} — checked after
     # the case has already passed on exit code (and stderr, if a block).

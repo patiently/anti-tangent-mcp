@@ -1,6 +1,7 @@
 # anti-tangent-guard — a semantic second tier for comment hygiene
 
-Status: approved design, not yet implemented. Target release 0.24.0.
+Status: implemented — shipped in 0.24.0 as `anti-tangent-guard` 0.6.0. The URL rule below is
+the one that shipped; the plan's task text still describes an earlier, environment-based form.
 
 ## Problem
 
@@ -252,11 +253,16 @@ pins that the hook's own stdout stays empty, so nothing reaches Claude Code's tr
 | `ANTI_TANGENT_JEV_URL` | `https://api.typesafe.ai/v1/systemone` | Stub endpoint for evals; proxy for operators. |
 | `ANTI_TANGENT_JEV_EXCLUDE` | unset | Path globs never sent. |
 
-**The key is sent only to the default host or to loopback.** Environment reaches this hook from a
+**The key is sent only to the default host, to loopback, or to an `https` host the operator has
+listed in `~/.claude/anti-tangent-guard/jev-hosts`.** Environment reaches this hook from a
 repository's own checked-in `.claude/settings.json`, so a cloned repository could otherwise point
 the hook at a server of its choosing and be handed `Authorization: Bearer $TYPESAFE_API_KEY` along
-with the comment text. Any other host requires `ANTI_TANGENT_JEV_URL_TRUSTED=1`, which an operator
-sets in their own global settings, and every `jev-*` trace line records the host.
+with the comment text. Nothing in the environment can approve another host: a repository that can
+set the URL can set an approval variable beside it, so the approval is a file under the operator's
+own home instead — `~` resolved from the password database rather than `$HOME`, a regular file
+owned by the operator and writable by nobody else, absent meaning nothing is approved. A rejected
+override falls back to the default host, and every `jev-*` trace line for that call says why
+(`url=untrusted-host`, `url=insecure-scheme`, `url=unparsable-url`).
 
 `ANTI_TANGENT_COMMENT_GUARD=0` continues to disable comment scanning entirely, both tiers.
 

@@ -327,6 +327,62 @@ class GuardEvalsAndCleanupPairsDedup(unittest.TestCase):
         self.assertTrue(state.rows)  # one pair's corrected path yields real rows
 
 
+class GitReadsAreChecked(unittest.TestCase):
+    """A revision git cannot read stops the build instead of shrinking it.
+
+    Offline: every case here names an object this repository cannot hold,
+    or a path a real commit does not touch, and asks local git about it.
+    """
+
+    def _with_pairs(self, pairs):
+        original = bjc.PAIRS
+        bjc.PAIRS = pairs
+        self.addCleanup(setattr, bjc, "PAIRS", original)
+
+    def test_every_committed_pair_names_a_full_hash(self):
+        for commit, _ in bjc.PAIRS:
+            self.assertRegex(commit, r"^[0-9a-f]{40}$")
+
+    def test_a_revision_git_cannot_resolve_raises(self):
+        missing = "0" * 40
+        self._with_pairs([(missing, "plugin/anti-tangent-guard/hooks/comment_scan_test.py")])
+        with self.assertRaises(SystemExit) as ctx:
+            bjc.add_cleanup_pairs(bjc.State())
+        self.assertIn(missing, str(ctx.exception))
+
+    def test_a_path_the_commit_does_not_touch_raises(self):
+        commit, _ = bjc.PAIRS[0]
+        self._with_pairs([(commit, "no/such/file.go")])
+        with self.assertRaises(SystemExit) as ctx:
+            bjc.add_cleanup_pairs(bjc.State())
+        self.assertIn("no/such/file.go", str(ctx.exception))
+
+    def test_a_side_absent_at_its_revision_raises(self):
+        # A path the commit touches but that does not exist at the parent
+        # (a file the commit created) cannot be a before/after pair.
+        commit, _ = bjc.PAIRS[0]
+        original_show = bjc._git_show  # noqa: SLF001
+
+        def parent_side_missing(args, what):
+            if args[0].endswith("^:plugin/anti-tangent-guard/hooks/comment_scan_test.py"):
+                args = [args[0].replace("comment_scan_test.py", "never-existed.py")]
+            return original_show(args, what)
+
+        bjc._git_show = parent_side_missing  # noqa: SLF001
+        self.addCleanup(setattr, bjc, "_git_show", original_show)
+        self._with_pairs([(commit, "plugin/anti-tangent-guard/hooks/comment_scan_test.py")])
+        with self.assertRaises(SystemExit):
+            bjc.add_cleanup_pairs(bjc.State())
+
+    def test_a_vanished_harvest_rev_stops_the_build(self):
+        original = bjc.HARVEST_REV
+        bjc.HARVEST_REV = "0" * 40
+        self.addCleanup(setattr, bjc, "HARVEST_REV", original)
+        with self.assertRaises(SystemExit) as ctx:
+            bjc.build_rows()
+        self.assertIn("0" * 40, str(ctx.exception))
+
+
 class HarvestReadsThePinnedCommit(unittest.TestCase):
     """Every harvested byte comes from git at HARVEST_REV. What the working
     tree holds at the same path is never consulted, so a later commit that

@@ -416,21 +416,29 @@ A summary; each variable also has its own `###` subsection under "Configuration"
 | `TYPESAFE_API_KEY` | unset | Required. |
 | `ANTI_TANGENT_JEV_THRESHOLD` | `0.7` | Flag at or above. Anything outside (0, 1] falls back. |
 | `ANTI_TANGENT_JEV_MODEL` | `jev-1.13.0` | Pinned: an alias moves under a tuned threshold. |
-| `ANTI_TANGENT_JEV_URL` | the TypeSafe endpoint | Honoured for loopback, or with `ANTI_TANGENT_JEV_URL_TRUSTED=1`. |
+| `ANTI_TANGENT_JEV_URL` | the TypeSafe endpoint | Honoured for loopback, or for an `https` host listed in `~/.claude/anti-tangent-guard/jev-hosts`. |
 | `ANTI_TANGENT_JEV_EXCLUDE` | unset | Colon-separated globs never sent. |
 
 **Why the URL is restricted.** Environment reaches these hooks from several places — your shell,
 a CI job, and a repository's own checked-in settings — and an arbitrary endpoint would be handed
 your key along with the comment text. The default host and loopback are the only ones that get it
-without `ANTI_TANGENT_JEV_URL_TRUSTED=1`, which you set in your own global settings when you route
-through a proxy.
+on the strength of the environment alone. Any other host has to be named in
+`~/.claude/anti-tangent-guard/jev-hosts`, a file in your own home directory: one hostname per line,
+`#` comments allowed, and a line written as a URL contributes its host. A file, not a variable, is
+the approval on purpose: a variable would arrive through the same environment a repository
+controls, and a repository that can set the URL can set anything beside it. The hook resolves `~`
+from the account's password-database entry rather than from `$HOME`, so a `HOME` set in that
+environment cannot point it at a file a repository wrote. The file must be a regular file (not a
+symlink) owned by you and writable by nobody else; anything less approves nothing. An approved host
+is reached over `https` only — the approval names a host, not a plaintext wire your key may cross.
+With no file at all, the key goes to the default host and to loopback, and nowhere else.
 
 A rejected URL is silently swapped for the default rather than refused outright, so it never costs
 you an edit — but that silence is worth being able to see. Every trace event this call produces
-carries a `,url=untrusted-host` or `,url=unparsable-url` suffix when the override was rejected —
-for example `jev-pass|blocks=1,url=untrusted-host` — so you can tell your proxy was never actually
-used from the trace log alone, without reading `ANTI_TANGENT_JEV_URL` back out of your settings. No
-suffix at all means the configured URL, if any, was used as given.
+carries a `,url=untrusted-host`, `,url=insecure-scheme` or `,url=unparsable-url` suffix when the
+override was rejected — for example `jev-pass|blocks=1,url=untrusted-host` — so you can tell your
+proxy was never actually used from the trace log alone, without reading `ANTI_TANGENT_JEV_URL` back
+out of your settings. No suffix at all means the configured URL, if any, was used as given.
 
 **What this rule does not defend against.** A repository whose settings you have trusted can
 define hook *commands*, not only environment — at which point it can read your key directly, and
@@ -587,15 +595,21 @@ threshold nobody re-tuned for it.
 ### `ANTI_TANGENT_JEV_URL`
 
 The TypeSafe endpoint. Default `https://api.typesafe.ai/v1/systemone`. Any other value is honoured
-only for a loopback host (`127.0.0.1`, `localhost`, `::1`) or when `ANTI_TANGENT_JEV_URL_TRUSTED=1`
-is also set — see "Why the URL is restricted" under the semantic tier above.
+only for a loopback host (`127.0.0.1`, `localhost`, `::1`) or for an `https` URL whose host is
+listed in `~/.claude/anti-tangent-guard/jev-hosts` — see "Why the URL is restricted" under the
+semantic tier above.
 
-### `ANTI_TANGENT_JEV_URL_TRUSTED`
+### `~/.claude/anti-tangent-guard/jev-hosts`
 
-Set to `1` in your own global settings — never a repository's — to let `ANTI_TANGENT_JEV_URL`
-point somewhere other than the default host or loopback, such as a corporate proxy. See "What
-this rule does not defend against" under the semantic tier above for what this does and does not
-protect.
+Not a variable: a file in your home directory listing the hosts, one per line, that
+`ANTI_TANGENT_JEV_URL` may name besides the default host and loopback — a corporate proxy, say.
+It lives under `~/.claude/` beside your own global settings and is read from there whatever
+`CLAUDE_CONFIG_DIR` or `HOME` say: the path is fixed and the home directory comes from the
+password database, because the environment is what this file exists to distrust. Create it with
+`chmod 600`; a symlink, a file owned by another account, or one writable by group or other is
+ignored, and an approved host is only ever reached over `https`. See "Why the URL is restricted"
+and "What this rule does not defend against" under the semantic tier above for what this does and
+does not protect.
 
 ### `ANTI_TANGENT_JEV_EXCLUDE`
 
@@ -738,7 +752,7 @@ Nothing shipped depends on that branch today — the calibration suite below cal
 for the model, threshold, key and URL, and gates itself separately.
 
 Any of these five, when the tier reached its decision using an overridden URL, carries an extra
-`,url=untrusted-host` or `,url=unparsable-url` suffix — for example
+`,url=untrusted-host`, `,url=insecure-scheme` or `,url=unparsable-url` suffix — for example
 `jev-error|URLError,url=untrusted-host` — naming why `ANTI_TANGENT_JEV_URL` was rejected and
 swapped for the default; see "Why the URL is restricted" above. No such suffix means the
 configured URL, if any, was used as given.

@@ -33,7 +33,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commit (`HARVEST_REV`) rather than from the working tree, so a rebuild reproduces the committed
   `evals/jev-comments.jsonl` byte for byte on any later checkout and the parity test reports a
   change to the hook's block builder rather than every commit that touches a harvested file.
-  Refreshing the corpus means moving the pin and answering the judgement calls it surfaces.
+  Refreshing the corpus means moving the pin and answering the judgement calls it surfaces. The
+  cleanup-pair commits are pinned by full hash too, and a revision git cannot read, a pair whose
+  commit does not touch its path, or a `HARVEST_REV` the repository no longer holds stops the
+  build outright instead of silently writing a shorter fixture.
+- The guard's eval runner grades a multi-invocation case on every invocation (`expected_exits`,
+  one exit code per attempt, each checked before the next attempt starts), so the third-attempt
+  yield case fails if either of the first two attempts wrongly allows the write. A case that
+  declares `case_timeout_seconds` fails loudly on expiry, and fails rather than running unbounded
+  when no `timeout` binary exists to enforce it; the never-answered-request case now declares one,
+  above the tier's own deadline.
+
+### Security
+
+- The semantic tier's endpoint override is approved by a file the operator owns, never by the
+  environment. `ANTI_TANGENT_JEV_URL` may name a host other than the default or loopback only when
+  that host is listed in `~/.claude/anti-tangent-guard/jev-hosts` — a regular file under the
+  operator's home (resolved from the password database, not `$HOME`), owned by the operator and
+  writable by nobody else — and only over `https`. The earlier `ANTI_TANGENT_JEV_URL_TRUSTED=1`
+  variable is gone: a repository's checked-in `.claude/settings.json` populates the hook's
+  environment, so it could set that flag alongside the URL it wanted approved and receive the
+  operator's `TYPESAFE_API_KEY` together with the comment text. A rejected override still falls
+  back to the default host and is recorded on the trace line (`url=untrusted-host`,
+  `url=insecure-scheme`, `url=unparsable-url`).
 - The semantic tier's `,capped` trace suffix is carried on every verdict (`jev-block`, `jev-yield`
   and `jev-error` as well as `jev-pass`), so a refusal decided over a truncated block set is
   readable as such. A response body past 64 KiB is refused unparsed as `jev-error |

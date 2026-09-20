@@ -10,11 +10,17 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
+
+try:
+    import pwd
+except ImportError:  # Windows has no password database; see _operator_home.
+    pwd = None
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.environ.get("ATG_ROOT", ""), "hooks"))
@@ -29,6 +35,12 @@ DEFAULT_URL = "https://api.typesafe.ai/v1/systemone"
 DEFAULT_MODEL = "jev-1.13.0"
 DEFAULT_THRESHOLD = 0.7
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
+# The operator's approved-host list, relative to their home directory. A
+# fixed path under ~/.claude rather than one derived from CLAUDE_CONFIG_DIR:
+# that variable arrives through the environment, which is the one source
+# this file exists to distrust.
+APPROVAL_FILE = os.path.join(".claude", "anti-tangent-guard", "jev-hosts")
+APPROVAL_MAX_BYTES = 65536
 
 
 class Config(object):
@@ -50,24 +62,98 @@ def _threshold(raw):
     return value
 
 
+def _operator_home():
+    """The invoking account's home directory, from the password database.
+
+    Not $HOME and not os.path.expanduser: both read the environment, and the
+    environment is what a repository's checked-in settings populate. The
+    password database is the system's own record of the account, so a path
+    resolved from it cannot be pointed into a repository. None when the
+    account has no entry there, or on a platform without one.
+    """
+    if pwd is None or not hasattr(os, "getuid"):
+        return None
+    try:
+        return pwd.getpwuid(os.getuid()).pw_dir or None
+    except (KeyError, OSError):
+        return None
+
+
+def approved_hosts():
+    """Hostnames the operator has approved to receive the key, lowercased.
+
+    Read from APPROVAL_FILE under the operator's own home: one host per
+    line, blank lines and `#` comments skipped, and a line written as a URL
+    contributes its hostname. Every failure is an empty set -- no home, no
+    file, a symlink where the file should be, a file owned by another
+    account or writable by group or other, an unreadable one. An empty set
+    approves nothing beyond the default host and loopback, so a missing or
+    damaged file can only make the tier stricter, never looser.
+    """
+    home = _operator_home()
+    if not home:
+        return frozenset()
+    path = os.path.join(home, APPROVAL_FILE)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return frozenset()
+    try:
+        fh = os.fdopen(fd, "rb")
+    except OSError:
+        os.close(fd)
+        return frozenset()
+    try:
+        with fh:
+            st = os.fstat(fh.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() \
+                    or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                return frozenset()
+            raw = fh.read(APPROVAL_MAX_BYTES)
+    except OSError:
+        return frozenset()
+    hosts = set()
+    for line in raw.decode("utf-8", "replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "://" in line:
+            try:
+                line = urlparse(line).hostname or ""
+            except ValueError:
+                continue
+        if line:
+            hosts.add(line.lower())
+    return frozenset(hosts)
+
+
 def _url(env):
     """The endpoint, and why it is not the one the environment asked for.
 
     Environment reaches this hook from a repository's own checked-in
     settings, so an arbitrary URL would be handed the operator's key along
-    with the comment text. Loopback is the eval stub; anything else needs the
-    operator to say so in their own settings.
+    with the comment text. Loopback is the eval stub; any other host needs
+    the operator to have written it into APPROVAL_FILE under their own home,
+    a file the environment can neither name nor fill. Nothing in the
+    environment can approve a host, because whatever a repository can set
+    there, it can set beside the URL it wants approved. An approved host is
+    reached over TLS only: the approval names a host, not a wire the key may
+    cross in the clear.
     """
     asked = (env.get("ANTI_TANGENT_JEV_URL") or "").strip()
     if not asked or asked == DEFAULT_URL:
         return DEFAULT_URL, ""
-    if env.get("ANTI_TANGENT_JEV_URL_TRUSTED") == "1":
-        return asked, ""
     try:
-        host = urlparse(asked).hostname or ""
+        parsed = urlparse(asked)
+        host = parsed.hostname or ""
     except ValueError:
         return DEFAULT_URL, "unparsable-url"
     if host in LOOPBACK:
+        return asked, ""
+    if host and host in approved_hosts():
+        if parsed.scheme != "https":
+            return DEFAULT_URL, "insecure-scheme"
         return asked, ""
     return DEFAULT_URL, "untrusted-host"
 

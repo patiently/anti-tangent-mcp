@@ -2,6 +2,7 @@ import concurrent.futures
 import gc
 import json
 import os
+import pwd
 import shlex
 import shutil
 import subprocess
@@ -261,11 +262,31 @@ class Redaction(unittest.TestCase):
 
 class Config(unittest.TestCase):
     BASE = {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "k"}
+    PROXY = "https://proxy.internal/v1/systemone"
+
+    def setUp(self):
+        # The operator's home is a directory of this test's own, so nothing
+        # here reads the developer's real approval file or depends on it.
+        self.home = tempfile.mkdtemp()
+        self._real_home = jev_scan._operator_home
+        jev_scan._operator_home = lambda: self.home
+
+    def tearDown(self):
+        jev_scan._operator_home = self._real_home
+        shutil.rmtree(self.home, ignore_errors=True)
 
     def cfg(self, path="x.go", **over):
         env = dict(self.BASE)
         env.update(over)
         return jev_scan.config(env, path)
+
+    def approve(self, text, home=None, mode=0o600):
+        path = os.path.join(home or self.home, jev_scan.APPROVAL_FILE)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(text)
+        os.chmod(path, mode)
+        return path
 
     def test_enabled_with_setting_and_key(self):
         self.assertTrue(self.cfg().enabled)
@@ -303,13 +324,101 @@ class Config(unittest.TestCase):
         self.assertEqual(c.url_reason, "untrusted-host")
 
     def test_loopback_url_is_allowed(self):
+        # No approval file exists in this test's home: loopback needs none.
         c = self.cfg(ANTI_TANGENT_JEV_URL="http://127.0.0.1:8931/v1/systemone")
         self.assertEqual(c.url, "http://127.0.0.1:8931/v1/systemone")
 
-    def test_trusted_flag_allows_any_host(self):
-        c = self.cfg(ANTI_TANGENT_JEV_URL="https://proxy.internal/v1/systemone",
+    def test_a_repository_style_environment_cannot_approve_its_own_host(self):
+        # A repository's checked-in settings populate the hook's environment,
+        # so a variable beside the URL carries no authority the URL lacks:
+        # whoever set one set both. With nothing in the operator's home, the
+        # key stays with the default host whatever the environment says.
+        c = self.cfg(ANTI_TANGENT_JEV_URL="https://repo-chosen.example/v1/systemone",
                      ANTI_TANGENT_JEV_URL_TRUSTED="1")
-        self.assertEqual(c.url, "https://proxy.internal/v1/systemone")
+        self.assertEqual(c.url, jev_scan.DEFAULT_URL)
+        self.assertEqual(c.url_reason, "untrusted-host")
+
+    def test_an_operator_listed_host_is_honoured(self):
+        self.approve("# the corporate proxy\n\nproxy.internal\n")
+        c = self.cfg(ANTI_TANGENT_JEV_URL=self.PROXY)
+        self.assertEqual(c.url, self.PROXY)
+        self.assertEqual(c.url_reason, "")
+
+    def test_a_line_written_as_a_url_contributes_its_host(self):
+        self.approve("https://Proxy.Internal:8443/whatever\n")
+        c = self.cfg(ANTI_TANGENT_JEV_URL=self.PROXY)
+        self.assertEqual(c.url, self.PROXY)
+
+    def test_a_host_the_operator_did_not_list_is_refused(self):
+        self.approve("proxy.internal\n")
+        c = self.cfg(ANTI_TANGENT_JEV_URL="https://other.internal/v1/systemone")
+        self.assertEqual(c.url, jev_scan.DEFAULT_URL)
+        self.assertEqual(c.url_reason, "untrusted-host")
+
+    def test_an_approved_host_is_reached_over_tls_only(self):
+        # The file approves a host, not a plaintext wire: a repository that
+        # could downgrade the scheme would have the key sent in the clear to
+        # a host the operator approved for https.
+        self.approve("proxy.internal\n")
+        c = self.cfg(ANTI_TANGENT_JEV_URL="http://proxy.internal/v1/systemone")
+        self.assertEqual(c.url, jev_scan.DEFAULT_URL)
+        self.assertEqual(c.url_reason, "insecure-scheme")
+
+    def test_a_file_another_party_could_write_approves_nothing(self):
+        for mode in (0o620, 0o602, 0o666):
+            self.approve("proxy.internal\n", mode=mode)
+            c = self.cfg(ANTI_TANGENT_JEV_URL=self.PROXY)
+            self.assertEqual(c.url, jev_scan.DEFAULT_URL, oct(mode))
+            self.assertEqual(c.url_reason, "untrusted-host", oct(mode))
+
+    def test_the_file_is_not_read_through_a_symlink(self):
+        target = os.path.join(self.home, "elsewhere")
+        with open(target, "w") as fh:
+            fh.write("proxy.internal\n")
+        os.chmod(target, 0o600)
+        path = os.path.join(self.home, jev_scan.APPROVAL_FILE)
+        os.makedirs(os.path.dirname(path))
+        os.symlink(target, path)
+        c = self.cfg(ANTI_TANGENT_JEV_URL=self.PROXY)
+        self.assertEqual(c.url, jev_scan.DEFAULT_URL)
+
+    def test_no_resolvable_home_approves_nothing(self):
+        jev_scan._operator_home = lambda: None
+        c = self.cfg(ANTI_TANGENT_JEV_URL=self.PROXY)
+        self.assertEqual(c.url, jev_scan.DEFAULT_URL)
+        self.assertEqual(c.url_reason, "untrusted-host")
+        # Loopback is unaffected: it never needed the file.
+        c = self.cfg(ANTI_TANGENT_JEV_URL="http://127.0.0.1:8931/v1/systemone")
+        self.assertEqual(c.url, "http://127.0.0.1:8931/v1/systemone")
+
+    def test_the_home_comes_from_the_password_database_not_the_environment(self):
+        # A repository can set HOME in the hook's environment as easily as it
+        # sets the URL. The file is resolved from the account's password
+        # database entry, so a HOME naming a directory that carries a
+        # well-formed approval file changes nothing.
+        try:
+            real_home = pwd.getpwuid(os.getuid()).pw_dir
+        except KeyError:
+            self.skipTest("this account has no password-database entry")
+        jev_scan._operator_home = self._real_home
+        planted = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, planted, ignore_errors=True)
+        self.approve("repo-chosen.example\n", home=planted)
+        saved = os.environ.get("HOME")
+        os.environ["HOME"] = planted
+        try:
+            self.assertEqual(jev_scan._operator_home(), real_home)
+            self.assertNotEqual(os.path.expanduser("~"), real_home,
+                                "expanduser must follow the planted HOME for this to prove anything")
+            c = self.cfg(ANTI_TANGENT_JEV_URL="https://repo-chosen.example/v1/systemone",
+                         HOME=planted)
+        finally:
+            if saved is None:
+                del os.environ["HOME"]
+            else:
+                os.environ["HOME"] = saved
+        self.assertEqual(c.url, jev_scan.DEFAULT_URL)
+        self.assertEqual(c.url_reason, "untrusted-host")
 
 
 class QuestionFile(unittest.TestCase):
@@ -564,6 +673,12 @@ class Judge(unittest.TestCase):
 
         class Sized(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
+                # Drain the request before answering. Closing a socket with
+                # unread bytes in its receive buffer sends a reset, and one
+                # that lands before the client has finished reading the
+                # body reaches judge() as ConnectionResetError instead of
+                # the ResponseTooLarge this test is about.
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 body = bodies[self.path]
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
@@ -774,6 +889,37 @@ class Run(unittest.TestCase):
                           "the silent fallback must show up in the trace even though "
                           "the write is allowed either way")
 
+    def test_a_repository_style_environment_never_reaches_its_own_host(self):
+        # The hook body hands run() its whole process environment, and a
+        # repository's checked-in settings populate that environment. A URL
+        # and an approval flag arriving together through it are therefore
+        # one party's word twice over; with nothing approving the host in
+        # the operator's home, the request must go to the default host and
+        # the trace must say the override was refused. judge() is captured
+        # rather than left to dial that default host.
+        original_judge, original_home = jev_scan.judge, jev_scan._operator_home
+        empty_home = tempfile.mkdtemp()
+        seen = []
+
+        def fake_judge(blocks, cfg, transport=None, deadline=None):
+            seen.append(cfg.url)
+            return jev_scan.Verdict(probability=0.1)
+
+        jev_scan.judge, jev_scan._operator_home = fake_judge, (lambda: empty_home)
+        try:
+            env = dict(self.env())
+            env["ANTI_TANGENT_JEV_URL"] = "https://repo-chosen.example/v1/systemone"
+            env["ANTI_TANGENT_JEV_URL_TRUSTED"] = "1"
+            code, event, _ = jev_scan.run(
+                self.file, ["// A comment."], "// A comment.\n", env, "s1", self.dir)
+        finally:
+            jev_scan.judge, jev_scan._operator_home = original_judge, original_home
+            shutil.rmtree(empty_home, ignore_errors=True)
+        self.assertEqual(seen, [jev_scan.DEFAULT_URL],
+                          "the repository's host must never reach the request")
+        self.assertEqual(code, 0)
+        self.assertEqual(event, "jev-pass|blocks=1,url=untrusted-host")
+
 
 class _HookFixture(unittest.TestCase):
     """Shared plumbing for driving the comment-write hook against a loopback stub.
@@ -888,13 +1034,35 @@ class HookBody(_HookFixture):
         self.assertTrue(r.stdout.startswith("jev-block|"), r.stdout)
 
     def test_third_strike_yields(self):
+        # Every rung of the ladder is graded, not only the last: a tier that
+        # wrongly allowed the first two attempts would still yield on the
+        # third, and the yield alone cannot tell those apart.
         body = "// The count cap used to return a plain error.\npackage x\n"
-        for _ in range(2):
-            self.run_body(body)
+        for attempt in (1, 2):
+            r = self.run_body(body)
+            self.assertEqual(r.returncode, 4, "attempt %d must be refused" % attempt)
+            self.assertTrue(r.stdout.startswith("jev-block|"), r.stdout)
+            self.assertIn("reads as change history", r.stderr)
         r = self.run_body(body)
         self.assertEqual(r.returncode, 0)
         self.assertTrue(r.stdout.startswith("jev-yield|"), r.stdout)
         self.assertIn("task close", r.stderr)
+        self.assertEqual(self.requests_made(), 3, "each attempt must have asked")
+
+    def test_a_repository_style_environment_is_refused_by_the_real_body(self):
+        # check_comment_write.py passes os.environ to run() as it is. Both
+        # the URL and the flag beside it travel that way, and the real body
+        # must still decide against the host. The breaker is tripped first
+        # so the decision is observable without the fallback dialling the
+        # default host: the skip event carries the refusal reason all the
+        # same, and the stub proves nothing was sent anywhere.
+        jev_scan.breaker_trip(self.dir)
+        r = self.run_body("// The count cap used to return a plain error.\npackage x\n",
+                          ANTI_TANGENT_JEV_URL="https://repo-chosen.example/v1/systemone",
+                          ANTI_TANGENT_JEV_URL_TRUSTED="1")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "jev-skip|breaker,url=untrusted-host")
+        self.assertEqual(self.requests_made(), 0)
 
     def test_a_different_session_starts_its_own_count(self):
         body = "// The count cap used to return a plain error.\npackage x\n"

@@ -2904,10 +2904,13 @@
         "ANTI_TANGENT_JEV": "1",
         "TYPESAFE_API_KEY": "eval-key"
       },
-      "repeat": 3,
       "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j6\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval-yield.go\",\"content\":\"// YIELD-CASE-MARKER: the count cap used to return a plain error.\\npackage x\\n\"}}",
-      "expected_exit": 0,
-      "reason": "two refusals then a yield: the third attempt on one path allows the write and hands the comment to the close-time reviewer"
+      "expected_exits": [2, 2, 0],
+      "expected_stderr_contains": [
+        "reads as change history",
+        "change_history"
+      ],
+      "reason": "two refusals then a yield, each invocation graded on its own: the first two attempts on one path are refused, and the third allows the write and hands the comment to the close-time reviewer"
     },
     {
       "id": 179,
@@ -2918,8 +2921,9 @@
         "TYPESAFE_API_KEY": "eval-key"
       },
       "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j5\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// HANG-THIS-REQUEST the count cap used to return a plain error.\\npackage x\\n\"}}",
+      "case_timeout_seconds": 10,
       "expected_exit": 0,
-      "reason": "the stub never answers this one: the deadline must expire and the write must proceed, because a service that cannot answer must not stop an edit"
+      "reason": "the stub never answers this one: the deadline must expire and the write must proceed, because a service that cannot answer must not stop an edit; the case timeout sits above the tier's four-second deadline so a deadline that stops firing fails this case instead of stalling the suite"
     }
   ]
 }
