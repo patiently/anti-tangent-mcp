@@ -2008,6 +2008,10 @@ class Wrapper(HookBody):
         self.assertIn("jev-block | p=0.95", self.trace())
 
     def test_pass_traces_the_reported_event(self):
+        # A second stub, scoring below the threshold: the inherited setUp
+        # starts one at 0.95, so a comment sent there flags and this test
+        # would pass on the wrong outcome.
+        self.port = self.start_stub("0.05")
         r = self.run_wrapper("// Returns nil when the file is absent.\npackage x\n")
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
