@@ -2666,10 +2666,17 @@ subsection beside `ANTI_TANGENT_TICKET_PATTERN`; the table here is the summary.
 | `ANTI_TANGENT_JEV_URL` | the TypeSafe endpoint | Honoured for loopback, or with `ANTI_TANGENT_JEV_URL_TRUSTED=1`. |
 | `ANTI_TANGENT_JEV_EXCLUDE` | unset | Colon-separated globs never sent. |
 
-**Why the URL is restricted.** A repository's own checked-in settings can set environment for your
-hooks. Without this rule, cloning a repository would be enough to have your key posted to a host
-of its choosing. Set `ANTI_TANGENT_JEV_URL_TRUSTED=1` in your own global settings if you route
+**Why the URL is restricted.** Environment reaches these hooks from several places — your shell,
+a CI job, and a repository's own checked-in settings — and an arbitrary endpoint would be handed
+your key along with the comment text. The default host and loopback are the only ones that get it
+without `ANTI_TANGENT_JEV_URL_TRUSTED=1`, which you set in your own global settings when you route
 through a proxy.
+
+**What this rule does not defend against.** A repository whose settings you have trusted can
+define hook *commands*, not only environment — at which point it can read your key directly, and
+no rule here changes that. This restriction is for the accidental and the partially-trusted case:
+an endpoint inherited from a shell profile or a CI job, or a repository that sets one for its own
+tooling. Trusting a repository's settings is still the decision that matters.
 
 ### When it cannot answer
 
