@@ -1,6 +1,8 @@
 import concurrent.futures
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -470,6 +472,56 @@ class Judge(unittest.TestCase):
                            transport=lambda *a, **k: self.answer(0.42))
         self.assertIsNone(r.flagged)
         self.assertAlmostEqual(r.probability, 0.42)
+
+
+class Strikes(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_counts_per_session_and_path(self):
+        self.assertEqual(jev_scan.strike(self.dir, "s1", "/a.go"), 1)
+        self.assertEqual(jev_scan.strike(self.dir, "s1", "/a.go"), 2)
+        self.assertEqual(jev_scan.strike(self.dir, "s1", "/a.go"), 3)
+        self.assertEqual(jev_scan.strike(self.dir, "s1", "/b.go"), 1)
+        self.assertEqual(jev_scan.strike(self.dir, "s2", "/a.go"), 1)
+
+    def test_expired_stamp_restarts(self):
+        jev_scan.strike(self.dir, "s1", "/a.go")
+        stamp = jev_scan._strike_path(self.dir, "s1", "/a.go")
+        old = time.time() - jev_scan.STRIKE_TTL_S - 1
+        os.utime(stamp, (old, old))
+        self.assertEqual(jev_scan.strike(self.dir, "s1", "/a.go"), 1)
+
+    def test_unwritable_dir_is_survivable(self):
+        self.assertEqual(jev_scan.strike("/proc/nonexistent", "s1", "/a.go"), 1)
+
+    def test_concurrent_writers_leave_a_readable_stamp(self):
+        # Eight processes racing one stamp. A lost update is allowed and costs
+        # an extra refusal; a corrupt stamp is not, because the next read
+        # would fail and the count would restart silently.
+        code = ("import sys; sys.path.insert(0, %r); import jev_scan;"
+                "jev_scan.strike(%r, 's1', '/a.go')" % (HOOKS, self.dir))
+        procs = [subprocess.Popen([sys.executable, "-c", code]) for _ in range(8)]
+        for proc in procs:
+            proc.wait(timeout=30)
+        stamp = jev_scan._strike_path(self.dir, "s1", "/a.go")
+        with open(stamp) as fh:
+            value = int(fh.read().strip())
+        self.assertGreaterEqual(value, 1)
+        self.assertLessEqual(value, 8)
+        self.assertEqual(jev_scan.strike(self.dir, "s1", "/a.go"), value + 1)
+
+    def test_breaker_opens_and_closes(self):
+        self.assertFalse(jev_scan.breaker_open(self.dir))
+        jev_scan.breaker_trip(self.dir)
+        self.assertTrue(jev_scan.breaker_open(self.dir))
+        stamp = os.path.join(self.dir, jev_scan.BREAKER_FILE)
+        old = time.time() - jev_scan.BREAKER_S - 1
+        os.utime(stamp, (old, old))
+        self.assertFalse(jev_scan.breaker_open(self.dir))
 
 
 if __name__ == "__main__":

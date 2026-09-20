@@ -6,6 +6,7 @@ set can decide, and it answers it for the whole block an edit touches.
 """
 import concurrent.futures
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -421,3 +422,55 @@ def judge(blocks, cfg, transport=None, deadline=None):
     if errors:
         return Verdict(probability=best, event="jev-error", detail=errors[0])
     return Verdict(probability=best)
+
+
+STRIKE_TTL_S = 1800
+STRIKE_LIMIT = 2
+BREAKER_S = 60
+BREAKER_FILE = "jev-breaker"
+
+
+def _strike_path(directory, session, path):
+    key = hashlib.sha256(("%s\0%s" % (session, path)).encode("utf-8")).hexdigest()[:16]
+    return os.path.join(directory, "jev-strike-%s" % key)
+
+
+def strike(directory, session, path):
+    """How many times this file has been refused in this session, counting now.
+
+    A stamp older than the TTL is a different sitting of work: it starts the
+    count again rather than spending a refusal the writer never saw.
+    """
+    stamp = _strike_path(directory, session, path)
+    count = 0
+    try:
+        if os.path.exists(stamp) and time.time() - os.path.getmtime(stamp) <= STRIKE_TTL_S:
+            with open(stamp) as fh:
+                count = int((fh.read() or "0").strip() or 0)
+        count += 1
+        # Two Edit hooks can run at once. The write is atomic so a reader
+        # never sees a half-written count; a lost update costs one extra
+        # refusal, which is the safe direction for a gate.
+        tmp = "%s.%d" % (stamp, os.getpid())
+        with open(tmp, "w") as fh:
+            fh.write(str(count))
+        os.replace(tmp, stamp)
+        return count
+    except Exception:
+        return count or 1
+
+
+def breaker_trip(directory):
+    try:
+        with open(os.path.join(directory, BREAKER_FILE), "w") as fh:
+            fh.write(str(int(time.time())))
+    except Exception:
+        pass
+
+
+def breaker_open(directory):
+    try:
+        stamp = os.path.join(directory, BREAKER_FILE)
+        return os.path.exists(stamp) and time.time() - os.path.getmtime(stamp) <= BREAKER_S
+    except Exception:
+        return False
