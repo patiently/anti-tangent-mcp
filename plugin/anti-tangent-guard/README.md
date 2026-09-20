@@ -386,10 +386,11 @@ Jev about the comment when the patterns find nothing. **While it is on, comment 
 repository you edit is sent to TypeSafe**, redacted for anything shaped like a credential.
 TypeSafe offers zero data retention on enterprise plans only.
 
-**Order.** The two tiers run inside the same `PreToolUse` hook, one after the other, never both:
-the pattern tier's regex tells go first, and a match there refuses the write immediately with no
-Jev call at all. Only when the patterns find nothing does the hook consider Jev — and only then if
-the semantic tier is configured on and reachable.
+**Order.** The two tiers run inside the same `PreToolUse` hook, in a fixed order: the pattern
+tier's regex tells always run first, and a match there refuses the write immediately with no Jev
+call at all. Only when the pattern tier finds nothing to block on does the hook go on to ask Jev —
+so a clean write is judged by both tiers in turn, while a write the pattern tier already refuses
+never reaches the second.
 
 ### What it judges
 
@@ -431,9 +432,14 @@ tooling. Trusting a repository's settings is still the decision that matters.
 
 ### When it cannot answer
 
-Every failure allows the write: no key, no network, DNS failure, TLS failure, a timeout, a
-malformed response, an unexpected error. After one failure the tier steps aside for 60 seconds, so
-a dead service costs one slow edit rather than every edit, and prints one warning per session.
+Every failure allows the write: no network, a DNS failure, a TLS failure, a timeout, a malformed
+response, an unexpected error. After one failure the tier steps aside for 60 seconds, so a dead
+service costs one slow edit rather than every edit, and prints one warning per session.
+
+Missing configuration is not a failure and does not touch either of those: `ANTI_TANGENT_JEV` not
+exactly `1`, no `TYPESAFE_API_KEY`, or a path matching `ANTI_TANGENT_JEV_EXCLUDE` all mean the
+tier never places a call at all, traced as `jev-skip` with its reason, so a repository that simply
+hasn't turned this on never trips the breaker or the once-per-session warning either.
 
 A refusal you disagree with is bounded too: the tier blocks a given file at most twice within a
 session — a 30-minute window, so a stamp from an abandoned sitting of work does not spend a later
@@ -625,12 +631,14 @@ single unparsable JSONL line and lets the remaining lines decide the verdict
 as usual, so one corrupt line elsewhere in a long transcript doesn't erase
 the block that should fire.
 
-**The semantic tier's own row.** Every failure — no key, no network, DNS, TLS, a timeout, a
-malformed response, an unexpected exception — allows the write; only a flag above threshold
-blocks. A failure also trips a 60-second breaker so a dead service costs one slow edit rather than
-every edit, and prints one warning on stderr per session so a silent, permanent fail-open (an
-expired CA bundle, a proxy that refuses `CONNECT`) does not go unnoticed. See "When it cannot
-answer" under the semantic tier above.
+**The semantic tier's own row.** Every failure — no network, DNS, TLS, a timeout, a malformed
+response, an unexpected exception — allows the write; only a flag above threshold blocks. A
+failure also trips a 60-second breaker so a dead service costs one slow edit rather than every
+edit, and prints one warning on stderr per session so a silent, permanent fail-open (an expired CA
+bundle, a proxy that refuses `CONNECT`) does not go unnoticed. Missing configuration — the setting
+off, no key, an excluded path — is a separate, silent skip: the tier never places a call, so it
+trips neither the breaker nor the warning. See "When it cannot answer" under the semantic tier
+above.
 
 ## Trace log
 
