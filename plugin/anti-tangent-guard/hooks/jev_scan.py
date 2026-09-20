@@ -474,3 +474,93 @@ def breaker_open(directory):
         return os.path.exists(stamp) and time.time() - os.path.getmtime(stamp) <= BREAKER_S
     except Exception:
         return False
+
+
+BLOCK_MESSAGE = (
+    "BLOCKED: a comment this edit touches reads as change history.\n\n"
+    "  %s\n\n"
+    "  -> change_history %.2f\n\n"
+    "Comments explain behaviour, an invariant or a hazard; how the code got here belongs in\n"
+    "git. This covers the whole comment you touched, not only the line you added: history\n"
+    "already in it is cleaned up as part of the change. Rewrite those lines and retry.\n")
+
+YIELD_MESSAGE = (
+    "NOTE: this comment was refused twice and is being allowed through.\n\n"
+    "  %s\n\n"
+    "It will be judged again at task close by validate_completion. If you believe the\n"
+    "verdict is wrong, say so to the operator rather than rewriting it a third time.\n")
+
+
+WARN_MESSAGE = (
+    "NOTE: the comment check could not reach TypeSafe (%s). This write was allowed "
+    "and the check is paused for 60 seconds.\nThe trace log carries the failure "
+    "class; this warning is printed once per session.\n")
+
+
+def _warn_once(trace_dir, session, detail):
+    """One line per session, or a silent permanent fail-open goes unnoticed.
+
+    Failures allow the write, so an expired CA bundle or a refused proxy looks
+    exactly like a clean run from the outside. The stamp keeps that from
+    becoming a warning on every edit.
+    """
+    try:
+        stamp = os.path.join(trace_dir, "jev-warned-%s" % hashlib.sha256(
+            session.encode("utf-8")).hexdigest()[:12])
+        if os.path.exists(stamp) and time.time() - os.path.getmtime(stamp) <= STRIKE_TTL_S:
+            return ""
+        with open(stamp, "w") as fh:
+            fh.write(detail)
+        return WARN_MESSAGE % detail
+    except Exception:
+        return ""
+
+
+def _failed(trace_dir, session, detail):
+    """One exit for every failure: allow the write, open the breaker, warn once."""
+    breaker_trip(trace_dir)
+    return 0, "jev-error|%s" % detail, _warn_once(trace_dir, session, detail)
+
+
+def run(path, touched, context, env, session, trace_dir):
+    """Judge the touched blocks. Returns (exit_code, stdout_event, stderr_text).
+
+    The transport is never injectable from the environment. A seam for it
+    would be a bypass: a repository's own settings reach these hooks, so
+    anything that can answer instead of the service can also disable the gate.
+    Tests point the URL at loopback, which the host rule already allows.
+    """
+    # The budget covers the whole tier, so the clock starts here rather than
+    # inside judge(): building blocks for a large write is not free, and a
+    # deadline that only bounds the waiting is not the one the hook promises.
+    until = time.monotonic() + DEADLINE_S
+    try:
+        cfg = config(env, path)
+        if not cfg.enabled:
+            return 0, "jev-skip|%s" % cfg.reason, ""
+        if breaker_open(trace_dir):
+            return 0, "jev-skip|breaker", ""
+        blocks, capped = build_blocks(path, touched, context, report=True)
+        if not blocks:
+            return 0, "jev-skip|no-blocks", ""
+        if time.monotonic() >= until:
+            return _failed(trace_dir, session, "deadline-before-request")
+        verdict = judge(blocks, cfg, deadline=until)
+        if verdict.event == "jev-error":
+            return _failed(trace_dir, session, verdict.detail)
+        if verdict.flagged is None:
+            return 0, "jev-pass|blocks=%d%s" % (len(blocks), ",capped" if capped else ""), ""
+        count = strike(trace_dir, session, path)
+        quoted = verdict.flagged.text[:400]
+        if count > STRIKE_LIMIT:
+            return 0, "jev-yield|%s" % path, YIELD_MESSAGE % quoted
+        return 4, "jev-block|p=%.2f" % verdict.probability, \
+            BLOCK_MESSAGE % (quoted, verdict.probability)
+    except Exception as exc:
+        # Through the same door as every other failure: an unexpected error is
+        # the one most likely to repeat on the next edit, so it must open the
+        # breaker rather than be paid for again immediately.
+        try:
+            return _failed(trace_dir, session, type(exc).__name__)
+        except Exception:
+            return 0, "jev-error|%s" % type(exc).__name__, ""

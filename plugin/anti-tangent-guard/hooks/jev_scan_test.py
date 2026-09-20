@@ -524,5 +524,100 @@ class Strikes(unittest.TestCase):
         self.assertFalse(jev_scan.breaker_open(self.dir))
 
 
+class HookBody(unittest.TestCase):
+    """The real hook body, against a loopback stub — the only seam there is."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.file = os.path.join(self.dir, "x.go")
+        self.requests = os.path.join(self.dir, "requests.log")
+        self.port = self.start_stub("0.95")
+
+    def tearDown(self):
+        self.stub.terminate()
+        self.stub.wait(timeout=10)
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def start_stub(self, prob):
+        stub = os.path.join(os.path.dirname(HOOKS), "evals", "jev-stub.py")
+        self.stub = subprocess.Popen(
+            [sys.executable, "-B", stub, "--prob", prob, "--log", self.requests],
+            stdout=subprocess.PIPE, text=True)
+        return int(self.stub.stdout.readline().strip())
+
+    def run_body(self, content, session="s1", **env_over):
+        with open(self.file, "w") as fh:
+            fh.write("package x\n")
+        payload = json.dumps({"tool_name": "Write", "session_id": session,
+                              "tool_input": {"file_path": self.file, "content": content}})
+        env = dict(os.environ)
+        env.update({"ATG_ROOT": os.path.dirname(HOOKS), "ANTI_TANGENT_JEV": "1",
+                    "TYPESAFE_API_KEY": "k",
+                    "ANTI_TANGENT_JEV_URL": "http://127.0.0.1:%d/v1/systemone" % self.port,
+                    "ANTI_TANGENT_GUARD_TRACE_LOG": os.path.join(self.dir, "trace.log")})
+        env.pop("ANTI_TANGENT_TICKET_PATTERN", None)
+        env.update(env_over)
+        return subprocess.run([sys.executable, "-I", "-B",
+                               os.path.join(HOOKS, "check_comment_write.py")],
+                              input=payload, capture_output=True, text=True,
+                              env=env, timeout=30)
+
+    def requests_made(self):
+        if not os.path.exists(self.requests):
+            return 0
+        with open(self.requests) as fh:
+            return len([l for l in fh if l.strip()])
+
+    def test_regex_violation_never_reaches_the_tier(self):
+        r = self.run_body("// fixes #58\npackage x\n")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stdout.strip(), "")
+        self.assertEqual(self.requests_made(), 0)
+
+    def test_disabled_tier_reports_why(self):
+        r = self.run_body("// A plain comment.\n", ANTI_TANGENT_JEV="0")
+        self.assertEqual(r.returncode, 0)
+        self.assertTrue(r.stdout.startswith("jev-skip|setting"), r.stdout)
+        self.assertEqual(self.requests_made(), 0)
+
+    def test_flag_blocks_and_quotes_the_comment(self):
+        r = self.run_body("// The count cap used to return a plain error.\npackage x\n")
+        self.assertEqual(r.returncode, 4)
+        self.assertIn("used to return a plain error", r.stderr)
+        self.assertIn("0.95", r.stderr)
+        self.assertTrue(r.stdout.startswith("jev-block|"), r.stdout)
+
+    def test_third_strike_yields(self):
+        body = "// The count cap used to return a plain error.\npackage x\n"
+        for _ in range(2):
+            self.run_body(body)
+        r = self.run_body(body)
+        self.assertEqual(r.returncode, 0)
+        self.assertTrue(r.stdout.startswith("jev-yield|"), r.stdout)
+        self.assertIn("task close", r.stderr)
+
+    def test_a_different_session_starts_its_own_count(self):
+        body = "// The count cap used to return a plain error.\npackage x\n"
+        for _ in range(3):
+            self.run_body(body, session="s1")
+        r = self.run_body(body, session="s2")
+        self.assertEqual(r.returncode, 4, "a fresh session must not inherit strikes")
+
+    def test_failure_allows_warns_once_and_opens_the_breaker(self):
+        # A port nothing listens on: the request fails without a stub in the way.
+        dead = {"ANTI_TANGENT_JEV_URL": "http://127.0.0.1:9/v1/systemone"}
+        first = self.run_body("// A plain comment.\n", **dead)
+        self.assertEqual(first.returncode, 0)
+        self.assertTrue(first.stdout.startswith("jev-error|"), first.stdout)
+        self.assertTrue(first.stderr.strip(), "the first failure must say so once")
+
+        before = self.requests_made()
+        second = self.run_body("// The count cap used to return a plain error.\npackage x\n")
+        self.assertEqual(second.returncode, 0)
+        self.assertTrue(second.stdout.startswith("jev-skip|breaker"), second.stdout)
+        self.assertEqual(self.requests_made(), before, "the breaker must stop the request")
+        self.assertEqual(second.stderr.strip(), "", "only the first failure warns")
+
+
 if __name__ == "__main__":
     unittest.main()

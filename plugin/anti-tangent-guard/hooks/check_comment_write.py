@@ -2,10 +2,11 @@
 
 Reads the hook payload as JSON on stdin. The wrapper consumes the hook's own
 stdin and re-feeds it here, so nothing else in this process may read stdin.
-Exit 0 = allow, 2 = block, 3 = allow without having scanned (the target could
-not be read), anything else = internal error the wrapper converts to allow.
-Only 2 stops the tool call; 3 exists so the trace log can distinguish a scan
-that ran and found nothing from one that never ran.
+Exit 0 = allow, 2 = block (regex tier), 3 = allow without having scanned (the
+target could not be read), 4 = block (the semantic tier flagged a comment as
+change history), anything else = internal error the wrapper converts to
+allow. Only 2 and 4 stop the tool call; 3 exists so the trace log can
+distinguish a scan that ran and found nothing from one that never ran.
 """
 import json
 import os
@@ -62,19 +63,32 @@ else:
     context = content
 
 bad = violations(path, lines, context)
-if not bad:
-    sys.exit(0)
+if bad:
+    print("BLOCKED: this edit adds comment(s) carrying change history.\n", file=sys.stderr)
+    for line, why in bad[:10]:
+        print("  %s\n    -> contains %s" % (line[:200], why), file=sys.stderr)
+    print(
+        "\nComments must explain non-trivial behaviour or a non-obvious invariant, and must read\n"
+        "correctly to someone who never saw this change. Issue, task and version references belong\n"
+        "in the commit message, not the code. Rewrite the comment and retry.",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
-print("BLOCKED: this edit adds comment(s) carrying change history.\n", file=sys.stderr)
-for line, why in bad[:10]:
-    # The line comes from the payload and is unbounded there. bad[:10] bounds
-    # how many are echoed, not how long each one is, and a single very long
-    # line would otherwise reach the model as megabytes of hook stderr.
-    print("  %s\n    -> contains %s" % (line[:200], why), file=sys.stderr)
-print(
-    "\nComments must explain non-trivial behaviour or a non-obvious invariant, and must read\n"
-    "correctly to someone who never saw this change. Issue, task and version references belong\n"
-    "in the commit message, not the code. Rewrite the comment and retry.",
-    file=sys.stderr,
-)
-sys.exit(2)
+import jev_scan  # noqa: E402
+
+trace_dir = os.path.dirname(os.environ.get("ANTI_TANGENT_GUARD_TRACE_LOG")
+                            or "/tmp/claude-hooks/anti-tangent-guard.log")
+code, event, message = jev_scan.run(path, lines, context, os.environ,
+                                    data.get("session_id") or "-", trace_dir)
+if message:
+    sys.stderr.write(message)
+if event:
+    sys.stdout.write(event)
+# os._exit, not sys.exit: a worker abandoned at the deadline is still alive,
+# and the interpreter-exit handler for thread pools would join it, holding
+# the hook open long past the budget. The streams are flushed by hand first,
+# because os._exit does not do it.
+sys.stderr.flush()
+sys.stdout.flush()
+os._exit(code)
