@@ -88,7 +88,7 @@ def config(env, path):
 
 
 _SECRET_ASSIGN = re.compile(
-    r"(?i)\b([\w.-]*(?:key|secret|token|password|passwd)[\w.-]*)\s*[:=]\s*\S+")
+    r"(?i)\b([\w.-]*(?:key|secret|token|password|passwd)[\w.-]*)\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|\S+)")
 # A credential-shaped run contains at least one ASCII letter and one digit, or
 # is a long hexadecimal run. A hyphen is deliberately NOT in the alphabet --
 # "backward-compatibility-preserving" is 33 characters of ordinary English and

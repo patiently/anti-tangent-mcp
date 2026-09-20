@@ -152,6 +152,20 @@ class Redaction(unittest.TestCase):
         self.assertTrue(blocks)
         self.assertNotIn(secret[:12], blocks[0].text)
 
+    def test_double_quoted_value_is_fully_redacted(self):
+        line = '# password: "correct horse battery staple"'
+        self.assertEqual(jev_scan.redact(line), '# password=<redacted>')
+
+    def test_single_quoted_value_is_fully_redacted(self):
+        line = "password = 'hunter2 hunter2hunter2'"
+        self.assertEqual(jev_scan.redact(line), "password=<redacted>")
+
+    def test_hex_boundary_31_vs_32(self):
+        hex31 = "0" * 31                 # 31 hex chars: survives
+        hex32 = "0" * 32                 # 32 hex chars: redacted
+        self.assertEqual(jev_scan.redact(hex31), hex31)
+        self.assertEqual(jev_scan.redact(hex32), "<redacted>")
+
 
 class Config(unittest.TestCase):
     BASE = {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "k"}
