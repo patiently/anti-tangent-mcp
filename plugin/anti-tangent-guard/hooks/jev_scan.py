@@ -4,8 +4,10 @@ The regex tier answers "does this line carry a reference?". This one answers
 "does this comment tell the story of how the code changed?", which no pattern
 set can decide, and it answers it for the whole block an edit touches.
 """
+import fnmatch
 import os
 import sys
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.environ.get("ATG_ROOT", ""), "hooks"))
@@ -16,6 +18,72 @@ from comment_scan import (  # noqa: E402
 
 BLOCK_CHARS = 2000
 MAX_BLOCKS = 20
+DEFAULT_URL = "https://api.typesafe.ai/v1/systemone"
+DEFAULT_MODEL = "jev-1.13.0"
+DEFAULT_THRESHOLD = 0.7
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+class Config(object):
+    __slots__ = ("enabled", "reason", "key", "url", "url_reason", "model", "threshold")
+
+
+def _threshold(raw):
+    """A threshold outside (0, 1] is not a stricter setting, it is a broken one.
+
+    0 flags everything and nan compares False against every probability, so
+    both silently replace the policy with something nobody asked for.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_THRESHOLD
+    if not (0 < value <= 1):
+        return DEFAULT_THRESHOLD
+    return value
+
+
+def _url(env):
+    """The endpoint, and why it is not the one the environment asked for.
+
+    Environment reaches this hook from a repository's own checked-in
+    settings, so an arbitrary URL would be handed the operator's key along
+    with the comment text. Loopback is the eval stub; anything else needs the
+    operator to say so in their own settings.
+    """
+    asked = (env.get("ANTI_TANGENT_JEV_URL") or "").strip()
+    if not asked or asked == DEFAULT_URL:
+        return DEFAULT_URL, ""
+    if env.get("ANTI_TANGENT_JEV_URL_TRUSTED") == "1":
+        return asked, ""
+    try:
+        host = urlparse(asked).hostname or ""
+    except ValueError:
+        return DEFAULT_URL, "unparsable-url"
+    if host in LOOPBACK:
+        return asked, ""
+    return DEFAULT_URL, "untrusted-host"
+
+
+def config(env, path):
+    c = Config()
+    c.key = (env.get("TYPESAFE_API_KEY") or "").strip()
+    c.model = (env.get("ANTI_TANGENT_JEV_MODEL") or "").strip() or DEFAULT_MODEL
+    c.threshold = _threshold(env.get("ANTI_TANGENT_JEV_THRESHOLD"))
+    c.url, c.url_reason = _url(env)
+    globs = [g for g in (env.get("ANTI_TANGENT_JEV_EXCLUDE") or "").split(":") if g]
+    c.enabled, c.reason = False, ""
+    if env.get("ANTI_TANGENT_COMMENT_GUARD") == "0":
+        c.reason = "guard=0"
+    elif env.get("ANTI_TANGENT_JEV") != "1":
+        c.reason = "setting"
+    elif not c.key:
+        c.reason = "no-key"
+    elif any(fnmatch.fnmatch(path, g) for g in globs):
+        c.reason = "excluded"
+    else:
+        c.enabled = True
+    return c
 
 
 class Block(object):

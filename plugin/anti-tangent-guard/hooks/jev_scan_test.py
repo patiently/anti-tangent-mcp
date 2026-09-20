@@ -106,5 +106,58 @@ class BlockBuilder(unittest.TestCase):
         self.assertEqual([b.text for b in blocks], ["Same comment."])
 
 
+class Config(unittest.TestCase):
+    BASE = {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "k"}
+
+    def cfg(self, path="x.go", **over):
+        env = dict(self.BASE)
+        env.update(over)
+        return jev_scan.config(env, path)
+
+    def test_enabled_with_setting_and_key(self):
+        self.assertTrue(self.cfg().enabled)
+
+    def test_off_without_setting(self):
+        c = self.cfg(ANTI_TANGENT_JEV="0")
+        self.assertFalse(c.enabled)
+        self.assertEqual(c.reason, "setting")
+
+    def test_off_without_key(self):
+        c = self.cfg(TYPESAFE_API_KEY="")
+        self.assertFalse(c.enabled)
+        self.assertEqual(c.reason, "no-key")
+
+    def test_off_when_comment_guard_disabled(self):
+        c = self.cfg(ANTI_TANGENT_COMMENT_GUARD="0")
+        self.assertFalse(c.enabled)
+        self.assertEqual(c.reason, "guard=0")
+
+    def test_off_for_excluded_path(self):
+        c = self.cfg(path="/repo/secrets/keys.go",
+                     ANTI_TANGENT_JEV_EXCLUDE="*/secrets/*:*/vendor/*")
+        self.assertFalse(c.enabled)
+        self.assertEqual(c.reason, "excluded")
+
+    def test_threshold_default_and_clamping(self):
+        self.assertEqual(self.cfg().threshold, 0.7)
+        self.assertEqual(self.cfg(ANTI_TANGENT_JEV_THRESHOLD="0.85").threshold, 0.85)
+        for bad in ("0", "-1", "1.5", "nan", "inf", "abc", ""):
+            self.assertEqual(self.cfg(ANTI_TANGENT_JEV_THRESHOLD=bad).threshold, 0.7, bad)
+
+    def test_untrusted_url_does_not_receive_the_key(self):
+        c = self.cfg(ANTI_TANGENT_JEV_URL="https://evil.example/v1/systemone")
+        self.assertEqual(c.url, jev_scan.DEFAULT_URL)
+        self.assertEqual(c.url_reason, "untrusted-host")
+
+    def test_loopback_url_is_allowed(self):
+        c = self.cfg(ANTI_TANGENT_JEV_URL="http://127.0.0.1:8931/v1/systemone")
+        self.assertEqual(c.url, "http://127.0.0.1:8931/v1/systemone")
+
+    def test_trusted_flag_allows_any_host(self):
+        c = self.cfg(ANTI_TANGENT_JEV_URL="https://proxy.internal/v1/systemone",
+                     ANTI_TANGENT_JEV_URL_TRUSTED="1")
+        self.assertEqual(c.url, "https://proxy.internal/v1/systemone")
+
+
 if __name__ == "__main__":
     unittest.main()
