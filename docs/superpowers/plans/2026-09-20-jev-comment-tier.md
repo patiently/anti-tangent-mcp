@@ -1397,7 +1397,7 @@ git commit -m "feat(guard): ask the service under one deadline, failing open"
 **Acceptance Criteria:**
 - [ ] `strike(dir, session, path)` returns 1, then 2, then 3 for the same session and path; a different path or session counts separately.
 - [ ] A stamp older than `STRIKE_TTL_S` is ignored, so a later edit starts from 1.
-- [ ] Concurrent hook processes counting the same session and path cannot corrupt the stamp: it is written to a temp file beside it and moved into place, so a lost race costs one extra refusal, never a missing one. (The yield itself is Task 8's, which owns the caller.)
+- [ ] Concurrent hook processes counting the same session and path cannot corrupt the stamp: it is written to a temp file beside it and moved into place, so atomicity comes from the rename syscall rather than from timing. The concurrency test proves what a test can prove here — several writers race, none crashes, the stamp stays a parseable count and counting continues afterwards — and NOT torn reads, which a wait-then-read test cannot observe and which a stamp this small would survive even without `os.replace`. A lost race costs one extra refusal, never a missing one: every write is read+1, so a returned count can never exceed the number of real calls.
 - [ ] `breaker_open(dir)` is true for `BREAKER_S` after `breaker_trip(dir)`, false before and after.
 - [ ] Every filesystem failure is swallowed: an unwritable directory must not break the hook.
 
