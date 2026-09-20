@@ -1,12 +1,20 @@
 """Build jev-comments.jsonl with the hook's own block builder.
 
-The fixture is regenerated from git and from the eval corpus on every run
-(see State/add() below), never hand-edited: rerunning this script is how the
-calibration set tracks the repository and the guard's own eval cases as both
-evolve. The only thing that survives a rerun untouched is DECISIONS, which is
-this file's own source, not the generated output.
+The fixture is regenerated on every run (see State/add() below), never
+hand-edited, from the repository as it stood at HARVEST_REV: every harvested
+file -- the tracked sources, the guard's own eval cases, the classified
+scanner hits -- is read from git at that one commit, never from the working
+tree, so a rebuild reproduces the committed fixture byte for byte on any
+later checkout. What CAN change a rebuild is the hook's own block builder,
+which this script imports from the working tree: a change to how blocks are
+windowed or which lines count as comments changes the rows, and the parity
+test in build-jev-comments-test.py is what reports that. Refreshing the
+corpus itself means moving HARVEST_REV and re-answering whatever judgement
+calls the new tree surfaces. The only thing that survives a rerun untouched
+is DECISIONS, which is this file's own source, not the generated output.
 """
 import hashlib
+import io
 import json
 import os
 import random
@@ -25,21 +33,42 @@ CUES = re.compile(r"(?i)\b(previously|no longer|used to|until (task|v)|originall
 RANDOM_SAMPLE = 45
 SEED = 20260919
 
+# The commit every harvested file is read at. A full hash rather than an
+# abbreviation, so it cannot become ambiguous as the repository grows. It must
+# stay reachable from main: this repository merges with merge commits, which
+# keeps it so; a squash would orphan it and every read below would come back
+# empty.
+HARVEST_REV = "7b36d2443fc00afe39eba76ab25e6fce4af89da5"
+
 OUT_PATH = os.path.join(REPO, "plugin/anti-tangent-guard/evals/jev-comments.jsonl")
-FP_CLASS_PATH = os.path.join(REPO, "plugin/anti-tangent-guard/evals/fp-class.tsv")
-GUARD_EVALS_PATH = os.path.join(REPO, "plugin/anti-tangent-guard/evals/guard-evals.json")
+FP_CLASS_PATH = "plugin/anti-tangent-guard/evals/fp-class.tsv"
+GUARD_EVALS_PATH = "plugin/anti-tangent-guard/evals/guard-evals.json"
+
+# path -> bytes at HARVEST_REV. One git call per file per process: the random
+# walk and add_from_file re-read files the cue-word pass already opened.
+_BLOBS = {}
+
+
+def _blob(path):
+    """The bytes of one repository file at HARVEST_REV; empty when absent there."""
+    if path not in _BLOBS:
+        _BLOBS[path] = subprocess.run(["git", "show", "%s:%s" % (HARVEST_REV, path)],
+                                      capture_output=True, cwd=REPO).stdout
+    return _BLOBS[path]
 
 
 def _open_repo_file(path):
-    """A repository-relative path, opened for text reading.
+    """A repository-relative path at HARVEST_REV, opened for text reading.
 
-    Returns the file object itself (not its contents), so every caller still
-    opens its own `with` block -- one reads the whole file, another iterates
-    it line by line -- while sharing the one place that decides how a
-    repository file is decoded. errors="replace" keeps a file that is not
-    valid UTF-8 from raising and taking the whole builder down with it.
+    Returns a file object (not its contents), so every caller still opens its
+    own `with` block -- one reads the whole file, another iterates it line by
+    line -- while sharing the one place that decides how a repository file is
+    decoded. errors="replace" keeps a file that is not valid UTF-8 from
+    raising and taking the whole builder down with it, and the wrapper's
+    default universal-newline translation is what an on-disk open() would
+    apply, so line numbers match a checkout of that commit.
     """
-    return open(os.path.join(REPO, path), errors="replace")
+    return io.TextIOWrapper(io.BytesIO(_blob(path)), encoding="utf-8", errors="replace")
 
 
 # Guard eval cases carry a label written here rather than derived from
@@ -346,9 +375,18 @@ def _corpus_eligible(path):
 
 
 def tracked_files():
-    return [f for f in subprocess.run(["git", "ls-files", "*.go", "*.py", "*.sh"],
-                                       capture_output=True, text=True, cwd=REPO).stdout.split()
-            if _corpus_eligible(f)]
+    """Every .go/.py/.sh path in HARVEST_REV's tree, in git's own order.
+
+    The order is part of the fixture: the random walk draws from a pool
+    built in this order, so a reordering reshuffles rows in files nothing
+    touched. ls-tree lists a commit's tree in the same order ls-files lists
+    the index, which is what keeps this harvest identical to one taken from
+    a checkout of that commit.
+    """
+    listing = subprocess.run(["git", "ls-tree", "-r", "--name-only", HARVEST_REV],
+                             capture_output=True, text=True, cwd=REPO).stdout
+    return [f for f in listing.splitlines()
+            if f.endswith((".go", ".py", ".sh")) and _corpus_eligible(f)]
 
 
 def add_head_history_wording(state, tracked):
@@ -368,7 +406,7 @@ def add_head_history_wording(state, tracked):
 
 def add_fp_class(state):
     """The repository's own classified scanner hits: path, count, verdict, text."""
-    with open(FP_CLASS_PATH) as fh:
+    with _open_repo_file(FP_CLASS_PATH) as fh:
         for raw in fh:
             if raw.startswith("#") or not raw.strip():
                 continue
@@ -473,7 +511,7 @@ def add_guard_evals(state):
     into the first since both are labelled the same way -- one distinct
     comment reached from two fixtures, not two different answers for it.
     """
-    with open(GUARD_EVALS_PATH) as fh:
+    with _open_repo_file(GUARD_EVALS_PATH) as fh:
         cases = json.load(fh)
     cases = cases if isinstance(cases, list) else next(v for v in cases.values() if isinstance(v, list))
     for case in cases:
@@ -517,10 +555,10 @@ def add_cleanup_pairs(state):
 def build_rows():
     """Run every source over the repository and return a populated State.
 
-    Deterministic given the repository's current commit and working tree:
-    the same tracked files and the same eval corpus reproduce the same rows
-    in the same order, which is what lets a rebuild be diffed byte-for-byte
-    against the committed fixture.
+    Deterministic given HARVEST_REV and the hook modules this script
+    imports: the same tree and the same block builder reproduce the same
+    rows in the same order, which is what lets a rebuild be diffed
+    byte-for-byte against the committed fixture on any later checkout.
     """
     state = State()
     tracked = tracked_files()

@@ -3,7 +3,7 @@
 Exercises add()/route()/check_duplicate()/State/refuse_if_undecided()
 directly with synthetic inputs (no git, no corpus walk), plus one
 end-to-end rebuild-parity check against the committed fixture. Reads only
-files already on disk in this checkout; never touches the network.
+this checkout's files and its local git history; never touches the network.
 """
 import contextlib
 import filecmp
@@ -276,19 +276,14 @@ class AddFromFileRegexHit(unittest.TestCase):
     would silently record False for every row this function adds."""
 
     def setUp(self):
-        self.testdata_dir = os.path.join(bjc.REPO, "plugin/anti-tangent-guard/evals/testdata")
-        # tracked_files() excludes any path containing "/testdata/", so a
-        # fixture placed here can never be picked up by a real corpus walk.
-        os.makedirs(self.testdata_dir, exist_ok=True)
-        self.fixture_path = os.path.join(self.testdata_dir, "regex-hit-fixture.go")
+        # Seeded straight into the blob cache: the builder reads every
+        # harvested file from git at HARVEST_REV, so a file written to disk
+        # would never be seen. The path only needs to look like a Go file.
         self.rel_path = "plugin/anti-tangent-guard/evals/testdata/regex-hit-fixture.go"
-        with open(self.fixture_path, "w") as fh:
-            fh.write("package x\n\n// fixes #58\nfunc f() {}\n")
+        bjc._BLOBS[self.rel_path] = b"package x\n\n// fixes #58\nfunc f() {}\n"  # noqa: SLF001
 
     def tearDown(self):
-        os.remove(self.fixture_path)
-        if not os.listdir(self.testdata_dir):
-            os.rmdir(self.testdata_dir)
+        bjc._BLOBS.pop(self.rel_path, None)  # noqa: SLF001
 
     def test_regex_hit_true_for_a_genuine_tell(self):
         state = bjc.State()
@@ -332,6 +327,50 @@ class GuardEvalsAndCleanupPairsDedup(unittest.TestCase):
         self.assertTrue(state.rows)  # one pair's corrected path yields real rows
 
 
+class HarvestReadsThePinnedCommit(unittest.TestCase):
+    """Every harvested byte comes from git at HARVEST_REV. What the working
+    tree holds at the same path is never consulted, so a later commit that
+    edits a harvested file cannot move a single row."""
+
+    def test_a_path_absent_at_the_harvest_rev_reads_as_empty(self):
+        self.assertEqual(bjc._blob("no/such/file-anywhere.go"), b"")  # noqa: SLF001
+
+    def test_a_file_that_changed_since_the_harvest_rev_is_read_as_it_was_then(self):
+        # The builder's own module is excluded from the corpus, but it is a
+        # tracked file that HAS changed since HARVEST_REV -- this very
+        # pinning is such a change -- which makes it the one path guaranteed
+        # to tell a git read from a working-tree read.
+        path = "plugin/anti-tangent-guard/evals/build-jev-comments.py"
+        pinned = bjc._blob(path)  # noqa: SLF001
+        with open(os.path.join(bjc.REPO, path), "rb") as fh:
+            on_disk = fh.read()
+        self.assertTrue(pinned, "the pinned read must find the file")
+        self.assertNotEqual(pinned, on_disk)
+        self.assertNotIn(b"HARVEST_REV", pinned)
+
+    def test_every_tracked_file_exists_at_the_harvest_rev(self):
+        tracked = bjc.tracked_files()
+        self.assertTrue(tracked)
+        for path in tracked:
+            self.assertTrue(bjc._blob(path), "%s is listed but empty" % path)  # noqa: SLF001
+
+    def test_open_repo_file_translates_newlines_like_a_disk_open_would(self):
+        # Line iteration and text.splitlines() must agree on numbering, and
+        # both must see a CRLF file the way open() shows it: one '\n' per
+        # line, no '\r' left behind to sit inside a block's text.
+        path = "synthetic/crlf.go"
+        bjc._BLOBS[path] = b"package x\r\n// one\r\n// two\r\n"  # noqa: SLF001
+        try:
+            with bjc._open_repo_file(path) as fh:  # noqa: SLF001
+                iterated = list(fh)
+            with bjc._open_repo_file(path) as fh:  # noqa: SLF001
+                split = fh.read().splitlines()
+        finally:
+            del bjc._BLOBS[path]  # noqa: SLF001
+        self.assertEqual(iterated, ["package x\n", "// one\n", "// two\n"])
+        self.assertEqual(split, ["package x", "// one", "// two"])
+
+
 class CorpusEligible(unittest.TestCase):
     def test_this_tools_own_files_are_excluded(self):
         for path in bjc._SELF_FILES:  # noqa: SLF001
@@ -348,8 +387,7 @@ class CorpusEligible(unittest.TestCase):
 class RebuildParity(unittest.TestCase):
     def test_rebuild_matches_the_committed_fixture_byte_for_byte(self):
         if not os.path.exists(bjc.OUT_PATH):
-            self.skipTest("jev-comments.jsonl has not been built yet "
-                           "(Step 2's operator gate is still pending)")
+            self.skipTest("jev-comments.jsonl has not been built yet")
         state = bjc.build_rows()
         bjc.refuse_if_undecided(state)
         fd, rebuilt_path = tempfile.mkstemp(suffix=".jsonl")
@@ -366,8 +404,7 @@ class RebuildParity(unittest.TestCase):
         actually rejects an incomplete table, not merely that today's
         complete one happens to satisfy it."""
         if not os.path.exists(bjc.OUT_PATH):
-            self.skipTest("jev-comments.jsonl has not been built yet "
-                           "(Step 2's operator gate is still pending)")
+            self.skipTest("jev-comments.jsonl has not been built yet")
         removed_id = sorted(bjc.DECISIONS)[0]
         removed_label = bjc.DECISIONS.pop(removed_id)
         try:
