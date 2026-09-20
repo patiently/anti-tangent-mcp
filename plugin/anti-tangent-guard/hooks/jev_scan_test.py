@@ -2,6 +2,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 HOOKS = os.path.dirname(os.path.abspath(__file__))
@@ -256,6 +258,164 @@ class QuestionFile(unittest.TestCase):
                 fh.write(text)
             self.addCleanup(os.unlink, fh.name)
             self.assertIsNone(jev_scan.question(path=fh.name), text)
+
+
+class Judge(unittest.TestCase):
+    def cfg(self, **over):
+        env = {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "k"}
+        env.update(over)
+        return jev_scan.config(env, "x.go")
+
+    @staticmethod
+    def answer(p):
+        return {"model": "jev-1.13.0",
+                "answers": {"kind": {"type": "choice", "choice": "change_history",
+                                     "probabilities": {"change_history": p,
+                                                       "compatibility_contract": 0.0,
+                                                       "present_behaviour": 1 - p},
+                                     "confidence": 0.9}}}
+
+    def test_flags_at_or_above_threshold(self):
+        blocks = [jev_scan.Block("The count cap used to return a plain error.", 1)]
+        r = jev_scan.judge(blocks, self.cfg(), transport=lambda *a, **k: self.answer(0.82))
+        self.assertEqual(r.flagged.text, blocks[0].text)
+        self.assertAlmostEqual(r.probability, 0.82)
+
+    def test_below_threshold_passes(self):
+        blocks = [jev_scan.Block("Returns nil when the file is absent.", 1)]
+        r = jev_scan.judge(blocks, self.cfg(), transport=lambda *a, **k: self.answer(0.31))
+        self.assertIsNone(r.flagged)
+        self.assertEqual(r.event, "jev-pass")
+
+    def test_request_shape(self):
+        seen = {}
+
+        def transport(url, body, headers, timeout):
+            seen.update(url=url, body=body, headers=headers, timeout=timeout)
+            return self.answer(0.1)
+
+        jev_scan.judge([jev_scan.Block("A comment.", 1)], self.cfg(), transport=transport)
+        self.assertEqual(seen["url"], jev_scan.DEFAULT_URL)
+        self.assertEqual(seen["headers"]["Authorization"], "Bearer k")
+        self.assertEqual(seen["body"]["model"], "jev-1.13.0")
+        self.assertEqual(seen["body"]["state"], {"comment": "A comment."})
+        self.assertIn("kind", seen["body"]["questions"])
+
+    def test_every_failure_passes(self):
+        for boom in (OSError("no route"), ValueError("bad json"), RuntimeError("?")):
+            def transport(*a, **k):
+                raise boom
+            r = jev_scan.judge([jev_scan.Block("c", 1)], self.cfg(), transport=transport)
+            self.assertIsNone(r.flagged, boom)
+            self.assertEqual(r.event, "jev-error")
+
+    def test_missing_field_passes(self):
+        r = jev_scan.judge([jev_scan.Block("c", 1)], self.cfg(),
+                           transport=lambda *a, **k: {"answers": {}})
+        self.assertIsNone(r.flagged)
+        self.assertEqual(r.event, "jev-error")
+
+    def test_returns_within_the_deadline_against_a_transport_that_never_returns(self):
+        forever = threading.Event()
+        self.addCleanup(forever.set)
+
+        def never(*a, **k):
+            forever.wait()
+            return self.answer(0.9)
+
+        start = time.monotonic()
+        r = jev_scan.judge([jev_scan.Block("c%d" % i, i) for i in range(20)],
+                           self.cfg(), transport=never,
+                           deadline=time.monotonic() + 0.5)
+        elapsed = time.monotonic() - start
+        self.assertLess(elapsed, 2.0, "judge waited for a worker it should have abandoned")
+        self.assertIsNone(r.flagged)
+        self.assertEqual(r.event, "jev-error")
+
+    def test_no_request_starts_after_the_deadline(self):
+        started = []
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def slow(*a, **k):
+            started.append(time.monotonic())
+            release.wait()
+            return self.answer(0.0)
+
+        begin = time.monotonic()
+        jev_scan.judge([jev_scan.Block("c%d" % i, i) for i in range(20)],
+                       self.cfg(), transport=slow, deadline=begin + 0.3)
+        self.assertTrue(started)
+        for at in started:
+            self.assertLessEqual(at, begin + 0.3 + 0.05,
+                                 "a request started after the deadline")
+        self.assertLessEqual(len(started), jev_scan.MAX_WORKERS)
+
+    def test_a_batch_is_resolved_by_block_index(self):
+        # Two flags land in the same wait; the lower index must win, so the
+        # message a writer sees does not depend on thread scheduling.
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+
+        def paired(url, body, headers, timeout):
+            gate.wait(0.2)
+            return self.answer(0.9)
+
+        blocks = [jev_scan.Block("first block", 1), jev_scan.Block("second block", 2)]
+        r = jev_scan.judge(blocks, self.cfg(), transport=paired)
+        self.assertEqual(r.flagged.text, "first block")
+
+    def test_the_transport_refuses_a_redirect(self):
+        # A 3xx must reach judge() as an error, never as a second request
+        # carrying the key somewhere the host rule never approved.
+        import http.server
+        import threading as th
+
+        class Redirector(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(302)
+                self.send_header("Location", "http://127.0.0.1:1/v1/systemone")
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
+        th.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        cfg = self.cfg(ANTI_TANGENT_JEV_URL="http://127.0.0.1:%d/v1/systemone"
+                       % server.server_port)
+        r = jev_scan.judge([jev_scan.Block("c", 1)], cfg)
+        self.assertIsNone(r.flagged)
+        self.assertEqual(r.event, "jev-error")
+
+    def test_a_flag_survives_another_block_failing(self):
+        calls = []
+
+        def mixed(url, body, headers, timeout):
+            calls.append(body["state"]["comment"])
+            if body["state"]["comment"] == "bad block":
+                raise OSError("no route")
+            return self.answer(0.9)
+
+        blocks = [jev_scan.Block("bad block", 1), jev_scan.Block("flagging block", 2)]
+        r = jev_scan.judge(blocks, self.cfg(), transport=mixed)
+        self.assertIsNotNone(r.flagged, "a failure must not suppress another block's flag")
+        self.assertEqual(r.flagged.text, "flagging block")
+
+    def test_failures_without_a_flag_report_the_error(self):
+        def failing(url, body, headers, timeout):
+            raise OSError("no route")
+
+        r = jev_scan.judge([jev_scan.Block("c", 1)], self.cfg(), transport=failing)
+        self.assertIsNone(r.flagged)
+        self.assertEqual(r.event, "jev-error")
+
+    def test_clean_verdict_carries_the_highest_probability(self):
+        r = jev_scan.judge([jev_scan.Block("c", 1)], self.cfg(),
+                           transport=lambda *a, **k: self.answer(0.42))
+        self.assertIsNone(r.flagged)
+        self.assertAlmostEqual(r.probability, 0.42)
 
 
 if __name__ == "__main__":

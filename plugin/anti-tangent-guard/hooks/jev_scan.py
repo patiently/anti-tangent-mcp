@@ -4,11 +4,15 @@ The regex tier answers "does this line carry a reference?". This one answers
 "does this comment tell the story of how the code changed?", which no pattern
 set can decide, and it answers it for the whole block an edit touches.
 """
+import concurrent.futures
 import fnmatch
 import json
 import os
 import re
 import sys
+import time
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -250,3 +254,170 @@ def _valid_question(q):
     if set(criteria) != {"change_history", "compatibility_contract", "present_behaviour"}:
         return False
     return all(isinstance(v, dict) and v.get("what") for v in criteria.values())
+
+
+PER_REQUEST_S = 3.0
+DEADLINE_S = 4.0
+MAX_WORKERS = 4
+
+
+class Verdict(object):
+    __slots__ = ("flagged", "probability", "event", "detail")
+
+    def __init__(self, flagged=None, probability=0.0, event="jev-pass", detail=""):
+        self.flagged = flagged
+        self.probability = probability
+        self.event = event
+        self.detail = detail
+
+
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect rather than following it with the key attached.
+
+    urlopen follows 3xx by default and carries the Authorization header to
+    wherever it is sent. The host rule decides which host may see the key;
+    a redirect would let the approved host hand that decision to another.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirects)
+
+
+def _http(url, body, headers, timeout):
+    """One POST, one attempt. A retry in a blocking hook only doubles the wait."""
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"), method="POST", headers=headers)
+    with _OPENER.open(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _probability(payload):
+    return float(payload["answers"]["kind"]["probabilities"]["change_history"])
+
+
+def _shutdown(pool):
+    """Stop scheduling and stop waiting. A running request cannot be cancelled.
+
+    The executor's threads are not daemons and an interpreter-exit handler
+    joins them, so a worker stuck in getaddrinfo would hold the process open
+    long after this function returned. Callers that must not wait exit through
+    os._exit, which skips that handler; see jev_scan.run's contract.
+    """
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except TypeError:
+        pool.shutdown(wait=False)
+
+
+def _deadline(deadline):
+    """The caller's absolute deadline, or a fresh DEADLINE_S budget from now.
+
+    A caller that wants block-building time charged to the same budget as
+    the requests computes and passes that absolute deadline itself; the
+    fresh budget this returns when deadline is None starts only from here.
+    """
+    return time.monotonic() + DEADLINE_S if deadline is None else deadline
+
+
+def _submit_ready(pool, queue, pending, cfg, headers, q, transport, end):
+    """Top up pending from queue while a worker slot and budget remain.
+
+    Mutates queue and pending in place. Stops the moment the remaining
+    budget is non-positive, leaving whatever is left in queue for the
+    caller to notice as a deadline miss.
+    """
+    while queue and len(pending) < MAX_WORKERS:
+        remaining = end - time.monotonic()
+        if remaining <= 0:
+            return
+        block = queue.pop(0)
+        body = {"model": cfg.model, "state": {"comment": block.text},
+                "questions": {"kind": q}}
+        pending[pool.submit(transport, cfg.url, body, headers,
+                            min(PER_REQUEST_S, remaining))] = block
+
+
+def _resolve_batch(done, pending, blocks, cfg, errors, best):
+    """Resolve one wait() batch in ascending block-index order.
+
+    Within a batch, lowest block index wins, so which of several futures
+    that landed in the same wait() call decides is not left to thread
+    scheduling; which futures land in the same batch is still
+    completion-dependent. Returns as soon as a probability reaches
+    cfg.threshold, without resolving the rest of the batch -- that flag is
+    the answer, and finishing the batch would only spend budget confirming a
+    verdict already reached.
+    """
+    for fut in sorted(done, key=lambda f: blocks.index(pending[f])):
+        block = pending.pop(fut)
+        try:
+            p = _probability(fut.result())
+        except Exception as exc:
+            errors.append(type(exc).__name__)
+            continue
+        best = max(best, p)
+        if p >= cfg.threshold:
+            return Verdict(block, p, "jev-block"), best
+    return None, best
+
+
+def judge(blocks, cfg, transport=None, deadline=None):
+    """The first flag to complete, or a clean verdict, inside the deadline.
+
+    Completion decides, not file position: the hook refuses the write either
+    way, and waiting for an earlier block to come back would spend the budget
+    on ordering nobody reads. Several requests can land in one wait, and a
+    set has no order, so a batch is resolved by block index -- that is what
+    keeps two futures completing together from leaving the result to thread
+    scheduling. Which requests land in the same batch is still
+    completion-dependent, which is why the deadline tests assert a bound on
+    elapsed time rather than an exact outcome.
+
+    Resolution, connection and read all happen inside the worker, because a
+    socket timeout does not bound getaddrinfo. That makes a worker
+    unstoppable, so the deadline is enforced by walking away from it rather
+    than by cancelling it.
+    """
+    # Computed before question() so a slow load of the question file spends
+    # the same budget the requests do, not a bonus on top of it.
+    end = _deadline(deadline)
+    q = question()
+    if q is None:
+        return Verdict(event="jev-error", detail="no-question-file")
+    transport = transport or _http
+    headers = {"Authorization": "Bearer " + cfg.key, "Content-Type": "application/json"}
+    errors, best, pending, queue = [], 0.0, {}, list(blocks)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
+    try:
+        while True:
+            _submit_ready(pool, queue, pending, cfg, headers, q, transport, end)
+            if not pending:
+                # Queue empty too: every block resolved. Queue non-empty:
+                # the deadline ran out before this pass could submit it.
+                if queue:
+                    errors.append("deadline")
+                break
+            left = end - time.monotonic()
+            if left <= 0:
+                errors.append("deadline")
+                break
+            done, _ = concurrent.futures.wait(
+                pending, timeout=left,
+                return_when=concurrent.futures.FIRST_COMPLETED)
+            if not done:
+                errors.append("deadline")
+                break
+            # A flag stands even when another request failed: the flag is
+            # evidence, the failure is only missing evidence, and waiting
+            # for the rest would spend budget to reach the same refusal.
+            verdict, best = _resolve_batch(done, pending, blocks, cfg, errors, best)
+            if verdict is not None:
+                return verdict
+    finally:
+        _shutdown(pool)
+    if errors:
+        return Verdict(probability=best, event="jev-error", detail=errors[0])
+    return Verdict(probability=best)
