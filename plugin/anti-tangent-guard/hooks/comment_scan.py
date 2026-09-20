@@ -526,6 +526,38 @@ def scannable(path):
     return os.path.splitext(path)[1].lower() in SCAN_EXTS
 
 
+def block_state(path, context):
+    """What `context` says about `*`-led lines, or None when it says nothing.
+
+    Returns None when there is no context to ask, True when the context
+    cannot be tokenized (callers then fall back to the shape-only answer),
+    and otherwise the pair allow_star() needs. Only _ScanTimeout escapes: it
+    bounds the whole call and must not be absorbed here.
+    """
+    if context is None:
+        return None
+    try:
+        return (block_comment_lines(context, _interpolates(path), _backticks(path)),
+                set(context.splitlines()))
+    except _ScanTimeout:
+        raise
+    except Exception:
+        return True
+
+
+def allow_star(state, raw):
+    """Whether comment_spans may read raw as a block continuation.
+
+    A line the context does not contain is one the context cannot speak for:
+    an edit's operands can hand over a fragment of a file line, and reading
+    that absence as "outside a block" would decline a genuine continuation.
+    """
+    if state is None or state is True:
+        return True
+    block_lines, context_lines = state
+    return raw in block_lines or raw not in context_lines
+
+
 def violations(path, added_lines, context=None, strict=False):
     """Return [(line, why)] for added comment lines carrying change history.
 
@@ -559,42 +591,18 @@ def violations(path, added_lines, context=None, strict=False):
     if not scannable(path):
         return []
     out = []
-    block_lines = None
-    context_lines = None
+    state = None
+    computed = False
     try:
         with scan_deadline():
             for raw in added_lines:
-                allow_star = True
+                star_ok = True
                 if context is not None and starred_candidate(path, raw):
-                    if block_lines is None:
-                        try:
-                            block_lines = block_comment_lines(
-                                context, _interpolates(path),
-                                _backticks(path))
-                            context_lines = set(context.splitlines())
-                        except _ScanTimeout:
-                            # ITIMER_REAL is one-shot: absorbing the deadline
-                            # here would leave every remaining line scanned
-                            # with no bound at all, which is the only thing
-                            # standing between a backtracking operator pattern
-                            # and a hung session.
-                            raise
-                        except Exception:
-                            block_lines = True
-                    if block_lines is not True:
-                        # An added line the context does not contain is one
-                        # the context cannot speak for. An Edit's added lines
-                        # come from old_string/new_string, which may start
-                        # part-way through a file line, so the fragment
-                        # appears in no line of the reconstructed text.
-                        # Reading that absence as "outside a block" would
-                        # decline a genuine block continuation; leaving the
-                        # shape-only answer standing is the fallback the rest
-                        # of this module takes whenever the premise cannot be
-                        # checked.
-                        allow_star = (raw in block_lines
-                                      or raw not in context_lines)
-                for span in comment_spans(path, raw, allow_star):
+                    if not computed:
+                        state = block_state(path, context)
+                        computed = True
+                    star_ok = allow_star(state, raw)
+                for span in comment_spans(path, raw, star_ok):
                     hit = next((why for pat, why in TELLS if pat.search(span)), None)
                     if hit is not None:
                         out.append((raw.strip(), hit))
