@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers-extended-cc:subagent-driven-development (recommended) or superpowers-extended-cc:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a second, semantic tier to `anti-tangent-guard`'s write-time comment hook that asks TypeSafe's Jev whether a touched comment block narrates change history, and blocks when it does.
+**Goal:** Add a second, semantic tier to `anti-tangent-guard`'s write-time comment hook that asks TypeSafe's Jev whether a touched comment block narrates change history, and blocks when it does — and ship the review-tier policy that decides which model reviews work like this, in the sandbox that installs both plugins.
 
 **Architecture:** The regex tier in `comment_scan.py` runs first and unchanged. When it finds nothing and the tier is enabled, a new `jev_scan.py` builds the comment blocks this edit touched, sends one request per block to `https://api.typesafe.ai/v1/systemone`, and blocks on a `change_history` probability at or above the threshold. Every failure allows the write. `comment_scan.py` stays network-free; only a pure helper is extracted from it.
 
@@ -10,10 +10,18 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-20-jev-comment-tier-design.md`
 
+**A second deliverable, decided mid-run.** Task 13 ships the three-level model-routing policy
+through `claude-sandbox`'s entrypoint and documents the review tiers in anti-tangent's controller
+protocol. It is here rather than in its own plan because the operator asked for it as this plan's
+last task. It is REQUIRED for plan completion — its acceptance criteria are mandatory and its
+tests are part of whole-plan verification. It shares no code with Tasks 0-12, so it touches no
+file they touch and may be executed at any point after them; that independence is about ordering
+and merge risk, not about whether it ships.
+
 ## Global Constraints
 
 - **Fail open, always.** Any error, timeout, unparsable response or unexpected exception allows the write **in the absence of a flag**. A failure never blocks and never turns another block's flag into a pass: a confident flag on one block still refuses the write even when a second request failed, because the flag is evidence and the failure is only missing evidence. A hook that raises must never reach the user as a traceback.
-- **No network in unit tests.** Every test stubs the transport. The repository rule is absolute (`CLAUDE.md`, Testing Conventions).
+- **No network in unit tests.** Every test stubs the transport, with one stated exception: a loopback server the test starts and stops itself, which is how the redirect refusal is proved. Loopback is not the network, and no other test may open a socket. The repository rule is absolute (`CLAUDE.md`, Testing Conventions).
 - **`comment_scan.py` stays network-free and behaviour-identical.** `violations()` must return exactly what it returns today; `evals/fp-report.sh` must stay at zero false positives and `evals/run.sh` must stay green after the helper extraction.
 - **The key goes only to the default host or loopback** unless `ANTI_TANGENT_JEV_URL_TRUSTED=1`.
 - **The tier is off unless** `ANTI_TANGENT_JEV=1` **and** `TYPESAFE_API_KEY` is non-empty. `ANTI_TANGENT_COMMENT_GUARD=0` disables both tiers.
@@ -1059,10 +1067,10 @@ git commit -m "feat(guard): ship the comment-history question as data"
 - Modify: `plugin/anti-tangent-guard/hooks/jev_scan_test.py`
 
 **Acceptance Criteria:**
-- [ ] One request per block, at most `MAX_WORKERS` at a time, each carrying `Authorization: Bearer <key>`, the pinned model and `state = {"comment": <block text>}`.
+- [ ] At most one request per SUBMITTED block. Judging stops as soon as a completed request flags, because the verdict cannot change and the remaining budget would buy the same refusal; blocks not yet submitted are never requested, at most `MAX_WORKERS` at a time, each carrying `Authorization: Bearer <key>`, the pinned model and `state = {"comment": <block text>}`.
 - [ ] A probability at or above the threshold returns a flag carrying the block and the probability; a clean verdict still carries the highest probability seen, so the calibration runner can read it back.
 - [ ] A connection error, HTTP error, timeout, malformed JSON, missing field or unexpected exception returns no flag and an error class.
-- [ ] Requests are submitted one at a time with the remaining budget checked before each, so none starts after the deadline.
+- [ ] Requests are submitted one at a time with the remaining budget checked before each, so none is SUBMITTED after the deadline. A worker that was already queued may begin marginally later; the caller is protected by `judge()` returning at the deadline and abandoning it, not by the worker itself.
 - [ ] `judge()` takes one parameter for the bound, `deadline`, and it is an absolute monotonic time from the caller, not a duration — block building spends the same budget the requests do. A caller with a duration passes `time.monotonic() + duration`.
 - [ ] **The transport refuses redirects.** A 3xx is an error like any other, so the bearer token cannot be replayed to a host the trust rule never approved.
 - [ ] A failure on one block never suppresses a flag on another: a confident flag is returned even when an earlier or simultaneous request failed, and a run with failures and no flag returns `jev-error`.
@@ -2093,6 +2101,7 @@ git commit -m "feat(guard): trace the semantic tier's outcome"
 - [ ] Every inherited Jev variable is unset before the case loop — `ANTI_TANGENT_JEV`, `ANTI_TANGENT_JEV_URL`, `ANTI_TANGENT_JEV_MODEL`, `ANTI_TANGENT_JEV_THRESHOLD`, `ANTI_TANGENT_JEV_EXCLUDE`, `ANTI_TANGENT_JEV_URL_TRUSTED`, `TYPESAFE_API_KEY` — and only then is the runner's own loopback `ANTI_TANGENT_JEV_URL` exported, so no case can reach the real service.
 - [ ] Six new cases: tier off by setting; tier off with no key; a flag blocking with `jev-block` and the probability asserted in the trace; a regex hit short-circuiting, proven by the absence of its own comment text from the shared request log; a request the stub never answers, allowing the write; and a third attempt on one path yielding with `jev-yield` in the trace and three requests carrying that case's marker.
 - [ ] `EXPECTED_CASE_COUNT` is raised from its current value of 173 to 179, the header's group partition gains a named Jev group, and both count checks pass.
+- [ ] A unit test in `jev_scan_test.py` forces an UNEXPECTED exception through `run()`'s outer handler and proves the tier fails open: exit 0, the event `jev-error|<ExceptionClass>`, and no traceback on stderr. Carried over from Task 8, whose criterion claimed this and whose tests only ever exercised a refused connection — which `judge()` converts into an ordinary error verdict and never reaches the outer handler at all.
 
 **Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all cases pass, count assertion holds
 
@@ -2233,10 +2242,11 @@ Append to `guard-evals.json` (ids 174-179 continue from the current maximum of 1
 on the LAST invocation only. Add it beside the existing per-case fields, defaulting to 1, and note
 in the runner's header comment that only this case uses it.
 
-**The order of these two is load-bearing, and the JSON above is written in that order (178 before 179).** A hanging request is a `jev-error`, which trips the
+**The order of these two is load-bearing, and the JSON above is written in that order.** Case 178
+is the yielding case and 179 is the hanging one. A hanging request is a `jev-error`, which trips the
 60-second breaker, and every later case in the same trace directory would then take
-`jev-skip|breaker` instead of reaching the stub. The yielding case therefore runs first, as 150,
-and the hanging one last, as 151. A post-loop assertion pins that the yield case really reached
+`jev-skip|breaker` instead of reaching the stub. The yielding case therefore runs first, as 178,
+and the hanging one last, as 179. A post-loop assertion pins that the yield case really reached
 the service three times rather than being skipped:
 
 ```bash
@@ -2283,6 +2293,32 @@ Set `EXPECTED_CASE_COUNT=179` — the current value is 173 and this task adds si
 # third attempt on one path yielding.
 ```
 
+- [ ] **Step 6b: Prove the tier fails open on an unexpected exception**
+
+A refused connection is handled inside `judge()` and never reaches `run()`'s outer handler, so
+the existing tests leave that handler unexecuted. Raise from a dependency `run()` calls, rather
+than adding a seam to production code — a test-only branch inside `run()` would be the very
+bypass this tier's design already rejected once.
+
+```python
+    def test_an_unexpected_exception_fails_open(self):
+        import jev_scan
+        original = jev_scan.build_blocks
+        jev_scan.build_blocks = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            code, event, message = jev_scan.run(
+                self.file, ["// A comment."], "// A comment.\n", self.env(), "s1", self.dir)
+        finally:
+            jev_scan.build_blocks = original
+        self.assertEqual(code, 0, "an internal error must allow the write")
+        self.assertEqual(event, "jev-error|RuntimeError")
+        self.assertNotIn("Traceback", message or "")
+```
+
+Check the real `run()` signature and the fixture's env helper before pasting this — the shape
+above is the assertion set, not necessarily the exact call. If `run()` catches only a narrower
+exception type than `Exception`, that is the defect: report it rather than widening the test.
+
 - [ ] **Step 7: Run the suite**
 
 Run: `bash plugin/anti-tangent-guard/evals/run.sh`
@@ -2314,14 +2350,36 @@ git commit -m "test(guard): pin the semantic tier against a loopback stub"
 
 **Acceptance Criteria:**
 - [ ] Every fixture's `block` text is produced by `jev_scan.build_blocks()`, so the measured text is byte-for-byte what the hook would send.
-- [ ] Each row carries `id`, `source`, `path`, `block`, `label` (`history` / `not_history` / `ambiguous`) and `regex_hit`. The id includes the source, a per-row tag and a hash of the block text, and the builder fails on a duplicate rather than writing one.
+- [ ] Each row carries `id`, `source`, `path`, `block`, `label` (`history` / `not_history` / `ambiguous`) and `regex_hit`. The id includes the source, a per-row tag and a hash of the block text, and the builder deduplicates on block text: a repeat carrying the SAME label is absorbed into one row and reported in a coalescing summary, while a repeat carrying a DIFFERENT label exits non-zero naming both sources and both labels. The second is the case that matters — `fp-class` labels from its verdict column and `head-random` from cue-word absence, so two independent rules can land on one text and disagree, and a contradiction inside the fixture that decides the right answer is the one duplicate that must never be written.
+- [ ] A judgement-call row's decision is resolved BEFORE any duplicate comparison. Comparing an unconfirmed proposal against an already-settled verdict from another source, and keeping the settled one when they agree, coalesces the row away before the operator can ever see it — a gate that silently shrinks itself, and invisibly, because nothing disagreed. Only two still-undecided proposals from the SAME source may be coalesced ahead of a decision.
+- [ ] Operator decisions survive a rebuild. Every label the operator sets lives in a checked-in decisions table the builder reads, keyed by row id; the builder exits non-zero when a row it generates has no decision on record. Regenerating the fixture must never silently revert a label a human set.
 - [ ] The operator has confirmed **every** judgement-call label before the file is committed: all `ambiguous` rows and all `head-history-wording` rows. The other four sources carry labels from a recorded decision rather than a fresh reading — the reviewed `GUARD_LABELS` table in the builder (a case's `expected_exit` describes what the hook did, never whether the comment is history), `fp-class.tsv`'s own `true_positive` / `false_positive` column, the cue-word absence in the sample, and which side of a rewrite a row came from — and are listed for the operator but need no per-row verdict.
 - [ ] `jev-eval.py` refuses to run unless `TYPESAFE_API_KEY` and `ANTI_TANGENT_JEV=1` are both set **and** no CI marker is present (`CI`, `GITHUB_ACTIONS`, `BUILD_NUMBER`), so a CI job that happens to carry a key still cannot spend money.
 - [ ] It caches answers keyed by the row id and a hash of **both** `jev-question.json` and the configured model, so neither an edited question nor a model change can be scored against stale answers.
 - [ ] It prints recall and precision per source group — `tp/pos` and `tp/(tp+fp)`, with `n/a` where the denominator is zero — alongside the raw counts.
-- [ ] Every row's probability is recorded as returned, including clean ones, so a re-score needs no second run.
+- [ ] Every scored row's probability is recorded as returned, including clean ones, so a re-score needs no second run. Ambiguous rows are not scored and not requested — they are excluded before the runner asks anything.
 
-**Verify:** `ANTI_TANGENT_JEV=1 TYPESAFE_API_KEY=$KEY python3 plugin/anti-tangent-guard/evals/jev-eval.py --limit 5` → prints a per-group table for 5 rows; `python3 plugin/anti-tangent-guard/evals/jev-eval.py` without the variables → exits non-zero with a message naming them
+**Verify:** three commands, because this is a non-skippable gate and one paid
+five-row run proves almost none of its criteria. Capture the output of all three.
+
+```bash
+# 1. Builder invariants, offline: a duplicate block fails, a judgement-call row
+#    with no DECISIONS entry fails and names the id, ambiguous rows never reach
+#    the output, and a rebuild is byte-identical to the committed fixture.
+python3 plugin/anti-tangent-guard/evals/build-jev-comments-test.py -v
+
+# 2. Runner behaviour, offline: refuses without the key and without the setting,
+#    the cache is keyed by row id AND question hash AND model, a changed
+#    question or model misses the cache, and the per-group table is well formed.
+python3 plugin/anti-tangent-guard/evals/jev-eval-test.py -v
+
+# 3. The paid run, last, against the real service.
+ANTI_TANGENT_JEV=1 TYPESAFE_API_KEY=$KEY python3 plugin/anti-tangent-guard/evals/jev-eval.py --limit 5
+```
+
+Expected: 1 and 2 pass with no network; 3 prints a per-group table for 5 rows.
+`python3 plugin/anti-tangent-guard/evals/jev-eval.py` with neither variable set
+exits non-zero naming them.
 
 **Steps:**
 
@@ -2368,12 +2426,45 @@ GUARD_LABELS = {
     "jev-unanswered-request-allows": "history",
 }
 
-rows, seen_blocks, seen_ids = [], set(), set()
+# Operator decisions, keyed by row id. A judgement-call row's label is not
+# something this builder can derive: a human read the comment and said what it
+# is. Keeping those verdicts here, in the repository, is what makes a rebuild
+# reproduce the same fixture instead of silently reverting to a guess -- the
+# rows themselves are regenerated from git and from the eval corpus every run,
+# so a label written into the output file would not survive.
+DECISIONS = {
+    # "head-history-wording:internal_x_go-41:1a2b3c4d": "history",
+}
+
+rows, seen_blocks, seen_ids, undecided = [], set(), set(), []
+
+
+def _judgement_call(source, label):
+    """Whether this row's label needs a human rather than a rule.
+
+    Two shapes qualify. A `head-history-wording` row was selected BECAUSE it
+    carries a cue word, and a cue word is evidence of history, not proof of it.
+    An `ambiguous` proposal is the builder saying outright that it could not
+    tell. Every other source carries a label that follows from a recorded fact
+    -- a `fp-class` verdict column, a reviewed table, which side of a rewrite
+    the row came from -- and needs no reading.
+    """
+    return source == "head-history-wording" or label == "ambiguous"
 
 
 def add(source, label, path, block_text, raw_lines, context, tag):
     """One fixture row, keyed so no two rows can share an id."""
-    if not block_text or block_text in seen_blocks:
+    if not block_text:
+        return
+    prior = seen_blocks.get(block_text)
+    if prior is not None:
+        prior_id, prior_label, prior_source = prior
+        if prior_label != label:
+            raise SystemExit(
+                "same block, two labels: %s says %r (%s), %s says %r (%s) -- "
+                "a contradiction inside the fixture that settles the right answer"
+                % (prior_source, prior_label, prior_id, source, label, path))
+        coalesced.append((prior_id, prior_source, source))
         return
     seen_blocks.add(block_text)
     digest = hashlib.sha256(block_text.encode("utf-8")).hexdigest()[:8]
@@ -2381,9 +2472,29 @@ def add(source, label, path, block_text, raw_lines, context, tag):
     if row_id in seen_ids:
         raise SystemExit("duplicate row id: %s" % row_id)
     seen_ids.add(row_id)
+    judged_by = "derived"
+    if _judgement_call(source, label):
+        if row_id not in DECISIONS:
+            undecided.append((row_id, block_text))
+            return
+        label, judged_by = DECISIONS[row_id], "operator"
     rows.append({"id": row_id, "source": source, "path": path, "block": block_text,
-                 "label": label,
+                 "label": label, "judged_by": judged_by,
                  "regex_hit": bool(comment_scan.violations(path, raw_lines, context))})
+
+
+def refuse_if_undecided():
+    """Nothing is written until every judgement call has a recorded verdict.
+
+    Printing the block text with each id is the point: the operator answers by
+    reading these, and an id alone would send them back to the source file.
+    """
+    if not undecided:
+        return
+    for row_id, block_text in undecided:
+        sys.stderr.write("\n%s\n    %s\n" % (row_id, block_text.replace("\n", "\n    ")))
+    raise SystemExit("\n%d row(s) have no operator decision; add them to DECISIONS and re-run"
+                     % len(undecided))
 
 
 def add_from_file(source, label, path, line_no):
@@ -2461,6 +2572,11 @@ for commit, path in PAIRS:
             add("cleanup-commit-pair", label, "%s:%s" % (rev, path), block.text,
                 touched, text, "%s-%s-%d" % (commit[:7], label, n))
 
+# Before the file is opened, not after: a partial write would leave a fixture
+# that looks committed but is missing exactly the rows a human still owes a
+# verdict on.
+refuse_if_undecided()
+
 out = os.path.join(REPO, "plugin/anti-tangent-guard/evals/jev-comments.jsonl")
 with open(out, "w") as fh:
     for row in rows:
@@ -2482,7 +2598,25 @@ before going on. Every label is a proposal until Step 2.
 
 - [ ] **Step 2: Ask the operator to confirm the labels**
 
-Present the rows whose label is a judgement call — every `ambiguous` row, and every row whose source is `head-history-wording` — and ask the operator to confirm or flip each. Use `AskUserQuestion` with the row text in the option descriptions. Record their verdict in the row's `label` and set `"judged_by": "operator"`.
+Run the builder. It writes nothing and exits non-zero, printing every judgement-call row id with
+its block text — every `ambiguous` row, and every row whose source is `head-history-wording`.
+
+**An implementing subagent cannot do this step.** `AskUserQuestion` reaches the human running the
+session, and a dispatched subagent has no path to them. So the implementer STOPS here: it reports
+the refusal, with every printed row id and its block text, to the controller and waits. The
+controller puts the rows to the operator, and returns the verdicts to the implementer to record.
+An implementer that invents labels to get past the refusal has defeated the entire point of the
+table, and of this task's gate.
+
+The controller presents those rows with `AskUserQuestion`, the block text in the option
+descriptions, and asks the operator to confirm or flip each. Record each verdict as a `DECISIONS` entry in
+the builder, keyed by the row id exactly as printed. Then re-run the builder: with every decision
+on record it writes the fixture, stamping `"judged_by": "operator"` on those rows and `"derived"`
+on the rest.
+
+The verdict goes in `DECISIONS`, never in the output file. The output is regenerated from git and
+from the eval corpus on every run, so a label written there is lost the next time anyone rebuilds —
+which is exactly the failure this table exists to prevent.
 
 This question is open despite the header decisions because Decision 5 settles the *policy* (an earlier version's bug is history) while these rows ask whether a given sentence states one — a reading of the text, not of the policy.
 
@@ -2597,7 +2731,7 @@ git commit -m "test(guard): commit the calibration set and its runner"
 ```
 
 ```json:metadata
-{"files": ["plugin/anti-tangent-guard/evals/build-jev-comments.py", "plugin/anti-tangent-guard/evals/jev-comments.jsonl", "plugin/anti-tangent-guard/evals/jev-eval.py"], "verifyCommand": "ANTI_TANGENT_JEV=1 python3 plugin/anti-tangent-guard/evals/jev-eval.py --limit 5", "acceptanceCriteria": ["fixtures built by jev_scan.build_blocks", "rows carry id, source, block, label, regex_hit", "operator confirmed the judgement-call labels", "runner refuses without the key and the setting", "cache keyed by row id and question hash", "prints recall and precision per group"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"], "gateScope": "calibration labels confirmed by the operator before the fixture is committed", "failurePolicy": "stop and report"}
+{"files": ["plugin/anti-tangent-guard/evals/build-jev-comments.py", "plugin/anti-tangent-guard/evals/jev-comments.jsonl", "plugin/anti-tangent-guard/evals/jev-eval.py"], "verifyCommand": "ANTI_TANGENT_JEV=1 python3 plugin/anti-tangent-guard/evals/jev-eval.py --limit 5", "acceptanceCriteria": ["fixtures built by jev_scan.build_blocks", "rows carry id, source, block, label, regex_hit", "builder fails on a duplicate block rather than skipping it", "operator decisions live in a checked-in table the rebuild cannot revert", "operator confirmed the judgement-call labels", "runner refuses without the key and the setting", "cache keyed by row id and question hash", "prints recall and precision per group"], "modelTier": "standard", "userGate": true, "tags": ["user-gate"], "gateScope": "calibration labels confirmed by the operator before the fixture is committed", "failurePolicy": "stop and report"}
 ```
 
 ---
@@ -2814,9 +2948,48 @@ install_superpowers_routing() {
 }
 ```
 
-`SP_ROUTING_JSON` is the full document including the `_policy` block — take it verbatim from
-`~/.claude/superpowers/model-routing.json` as it stands after this conversation, since that file
-is the policy's current text.
+`SP_ROUTING_JSON` is this document, verbatim — it is the policy's canonical text and lives here so
+the task is reproducible without reading anyone's home directory:
+
+```json
+{
+  "mechanical": "haiku",
+  "standard": "sonnet",
+  "frontier": "opus",
+  "_policy": {
+    "levels": "Three levels. NORMAL is mechanical (haiku: 1-2 files with the code already in the steps) and standard (sonnet: multi-file integration, pattern matching, debugging). COMPLEX is the frontier tier, which resolves to opus: design or architecture judgement in the implementation, or a review that needs more than sonnet. HIGH RISK is not a tier, because superpowers validates modelTier against exactly mechanical|standard|frontier — it is a concrete \"model\": \"fable\" pin in the task's json:metadata.",
+    "justification": "COMPLEX and HIGH RISK both require a written \"tierReason\" in the task's metadata BEFORE any dispatch serving that task. The bar for either: a named failure mode that reaches a real user — a hook that can hang their editor, a path that carries a credential, a gate that can block their work — combined with reasoning the cheaper model is measurably weaker at, which in practice means concurrency, wall-clock timing, or a security boundary.",
+    "not_a_reason": "Volume of code is not a reason. Unfamiliarity is not a reason. 'It looks important' is not a reason. A long diff is slower to review, not harder to reason about: escalate for the kind of thinking required, never for the number of lines.",
+    "high_risk_cost": "A model pin makes pre-agent-model-routing allow ANY model for that task's dispatches — the guard stops constraining exactly where the risk is highest. That is the accepted price of not forking superpowers' hooks, and it is why the pin needs the same written reason the tier does. Dispatch the implementer at the model its own work needs and the reviewer on fable; the guard will not stop you doing otherwise, so the reason is the only control.",
+    "scope": "pre-agent-model-routing reads $HOME/.claude/superpowers/model-routing.json — hardcoded to .claude, not CLAUDE_CONFIG_DIR — so this one file governs every account in this sandbox. A per-project file at <cwd>/docs/superpowers/model-routing.json wins entirely over it, with no merging."
+  }
+}
+```
+
+Assign it with a QUOTED heredoc. The document contains `$HOME`, `\"model\"` and `<cwd>`, all of
+which an unquoted heredoc or a double-quoted string would mangle — `<<'JSON'` expands nothing:
+
+```bash
+SP_ROUTING_JSON=$(cat <<'JSON'
+{
+  "mechanical": "haiku",
+  ... the document above, verbatim ...
+}
+JSON
+)
+```
+
+Paste the whole document between the markers. Prove it survived rather than trusting the quoting:
+`printf '%s' "$SP_ROUTING_JSON" | jq -e '._policy.scope | test("\\$HOME")'` must exit 0, which is
+only true if the literal `$HOME` reached the file instead of the boot user's home path.
+
+**Repo facts, already checked — do not go looking for them:** the workspace's source is
+`/home/pgilmore/Development/YC/claude-sandbox` at `5ba27cd`. The entrypoint is a single
+`sandbox-entrypoint.sh` at the repo root (~344 KB, so read the region you are editing, never the
+whole file). Tests follow one convention, `tests/<name>/run-tests.sh`, and both
+`tests/sandbox-entrypoint/run-tests.sh` and `tests/anti-tangent-protocol-wiring/run-tests.sh`
+already exist — extend the former, and read the latter first for the house style of an
+anti-tangent-related entrypoint test.
 
 - [ ] **Step 3: Test the five cases**
 
@@ -2858,6 +3031,14 @@ python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v
 python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py -v
 bash plugin/anti-tangent-guard/evals/run.sh
 bash plugin/anti-tangent-guard/evals/fp-report.sh
+bash scripts/check-protocol-docs.sh
+diff docs/protocol/controller.md plugin/anti-tangent-protocol/protocol/controller.md
+```
+
+And, in the claude-sandbox workspace Task 13 creates:
+
+```bash
+bash tests/sandbox-entrypoint/run-tests.sh
 ```
 
 All five must pass. The calibration runner (Task 11) is deliberately not in this list: it costs money and needs a key.
