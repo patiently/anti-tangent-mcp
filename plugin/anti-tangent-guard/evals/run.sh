@@ -275,6 +275,11 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # case here cannot express, because the walk builds that environment itself
 # rather than inheriting it; comment_scan_test.py takes them apart.
 #
+# A group covers the semantic tier: off by default, off without a key,
+# a flag refusing the write through the real binary, a tell refusing it first
+# without the tier ever being asked, a request the stub never answers, and a
+# third attempt on one path yielding.
+#
 # The per-group counts above PARTITION this table: every case belongs to
 # exactly one group, and they sum to EXPECTED_CASE_COUNT. Adding a case means
 # growing the group that describes it, or writing a new group; a breakdown
@@ -284,7 +289,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=173
+EXPECTED_CASE_COUNT=179
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
@@ -294,14 +299,6 @@ WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # file instead; a case that sets ANTI_TANGENT_GUARD_TRACE_LOG in its own "env"
 # block still wins, since `env` applies after this export.
 export ANTI_TANGENT_GUARD_TRACE_LOG="$WORKDIR/trace.log"
-# The suite must not inherit ambient values of the variables its own cases
-# exercise: a case that sets no "env" block would otherwise test the
-# invoking developer's shell rather than the behaviour it names. A case that
-# sets one of these in its own "env" block still wins, since `env` applies
-# after this unset.
-unset ANTI_TANGENT_TICKET_PATTERN
-unset ANTI_TANGENT_COMPLETION_GUARD
-unset ANTI_TANGENT_COMMENT_GUARD
 # Every hook invocation below runs with this as its cwd, run-scoped (inside
 # WORKDIR, so isolated from a concurrent run.sh invocation) rather than
 # per-case, so a "cwd_fixture" case can place a real file at a RELATIVE path
@@ -311,9 +308,53 @@ unset ANTI_TANGENT_COMMENT_GUARD
 HOOK_CWD="$WORKDIR/hook-cwd"
 mkdir -p "$HOOK_CWD"
 cleanup() {
+    if [[ -n "${JEV_PID:-}" ]]; then
+        kill "$JEV_PID" 2>/dev/null
+        wait "$JEV_PID" 2>/dev/null
+    fi
     rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
+
+# A loopback stub stands in for the endpoint. Loopback is the one non-default
+# host the hook will talk to without the operator's trust flag, which is what
+# makes this possible without weakening that rule for everyone else.
+JEV_LOG="$WORKDIR/jev-requests.log"
+JEV_PORT_FILE="$WORKDIR/jev-port"
+: > "$JEV_LOG"
+# An ordinary background job, so $! is the PID of the process this run owns.
+# pgrep would match a concurrent run's stub, and killing that one breaks a
+# suite nobody is looking at.
+python3 -B "$(dirname "${BASH_SOURCE[0]}")/jev-stub.py" \
+    --prob 0.95 --log "$JEV_LOG" --port-file "$JEV_PORT_FILE" &
+JEV_PID=$!
+for _ in $(seq 1 50); do
+    [[ -s "$JEV_PORT_FILE" ]] && break
+    sleep 0.1
+done
+JEV_PORT=$(cat "$JEV_PORT_FILE" 2>/dev/null)
+[[ -n "$JEV_PORT" ]] || { echo "FAIL: the Jev stub never reported a port"; exit 1; }
+
+# The suite must not inherit ambient values of the variables its own cases
+# exercise: a case that sets no "env" block would otherwise test the
+# invoking developer's shell rather than the behaviour it names. A case that
+# sets one of these in its own "env" block still wins, since `env` applies
+# after this unset.
+#
+# Order matters for the Jev variables: clear everything inherited, INCLUDING
+# the URL, and only then export the one this run owns. A developer with a
+# real endpoint in their environment must not have the suite spend their key.
+unset ANTI_TANGENT_TICKET_PATTERN
+unset ANTI_TANGENT_COMPLETION_GUARD
+unset ANTI_TANGENT_COMMENT_GUARD
+unset ANTI_TANGENT_JEV
+unset ANTI_TANGENT_JEV_URL
+unset ANTI_TANGENT_JEV_MODEL
+unset ANTI_TANGENT_JEV_THRESHOLD
+unset ANTI_TANGENT_JEV_EXCLUDE
+unset ANTI_TANGENT_JEV_URL_TRUSTED
+unset TYPESAFE_API_KEY
+export ANTI_TANGENT_JEV_URL="http://127.0.0.1:$JEV_PORT/v1/systemone"
 
 PASSED=0
 FAILED=0
@@ -345,7 +386,9 @@ build_stub_dir() {
 # {{TRANSCRIPT}} substituted into input.transcript_path, then invokes the
 # case's hook (default check-task-complete; "hook" field selects another,
 # e.g. check-comment-write) and checks its exit code and (for blocks) its
-# stderr message.
+# stderr message. An optional "repeat" field invokes the hook that many times
+# before grading, keeping only the last invocation's outcome; only the
+# third-attempt yield case uses it today.
 #
 # Every case gets its own {{TMPDIR}} — a fresh, case-scoped directory
 # substituted for the literal "{{TMPDIR}}" token wherever it appears in
@@ -598,16 +641,32 @@ run_case() {
         timeout_prefix=(timeout "$case_timeout")
     fi
 
-    local exit_code=0
-    if [[ -n "$path_exclude" ]]; then
-        local stub
-        stub=$(build_stub_dir "$path_exclude")
-        ( cd "$case_cwd" && PATH="$stub" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
-    elif [[ ${#env_assignments[@]} -gt 0 ]]; then
-        ( cd "$case_cwd" && env "${env_assignments[@]}" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
-    else
-        ( cd "$case_cwd" && "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
-    fi
+    # Optional "repeat": invoke the hook this many times before grading it,
+    # keeping only the LAST invocation's exit code and stderr. Only the
+    # third-attempt yield case uses this — the strike count that decides
+    # jev-block vs. jev-yield lives in a file keyed by session and path, so
+    # reaching the yield needs two prior refusals against the same case_tmp
+    # and session_id, which a single invocation cannot produce on its own.
+    local repeat_count
+    repeat_count=$(jq -r ".evals[$idx].repeat // 1" "$EVALS_FILE")
+
+    local exit_code=0 rep
+    for ((rep = 1; rep <= repeat_count; rep++)); do
+        # Reset every iteration: the `||` below only fires on a NON-ZERO exit,
+        # so a passing final invocation after a failing earlier one would
+        # otherwise be graded on the stale exit code the earlier one left
+        # behind instead of its own.
+        exit_code=0
+        if [[ -n "$path_exclude" ]]; then
+            local stub
+            stub=$(build_stub_dir "$path_exclude")
+            ( cd "$case_cwd" && PATH="$stub" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        elif [[ ${#env_assignments[@]} -gt 0 ]]; then
+            ( cd "$case_cwd" && env "${env_assignments[@]}" "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        else
+            ( cd "$case_cwd" && "${timeout_prefix[@]}" "$bash_path" "$case_hook" < "$stdin_file" > /dev/null 2> "$stderr_file" ) || exit_code=$?
+        fi
+    done
 
     if [[ "$exit_code" == "124" ]]; then
         echo "  TIMED OUT after ${case_timeout}s — the case hung rather than returning" >&2
@@ -746,6 +805,31 @@ echo "────────────────────────�
 for ((i = 0; i < json_count; i++)); do
     run_case "$i"
 done
+
+# The stub logs request BODIES, which carry the comment text but not the file
+# path, so the marker has to live in the comment itself.
+if [[ "$(grep -c 'YIELD-CASE-MARKER' "$JEV_LOG")" != "3" ]]; then
+    echo "FAIL: the yield case did not make three requests"
+    FAILED=$((FAILED + 1))
+fi
+
+# Case 177 is only meaningful if nothing was sent. The stub logs every request
+# body it receives, so an empty log for that case's comment text is the proof
+# an exit code cannot give.
+if grep -q "fixes #58" "$JEV_LOG" 2>/dev/null; then
+    echo "FAIL: a regex-refused write reached the endpoint"
+    FAILED=$((FAILED + 1))
+fi
+# The exit codes for 176 and 178 are 2 and 0, which several other outcomes
+# also produce. The trace line is what says WHICH path ran.
+if ! grep -q "comment-write | jev-block | p=0.95" "$ANTI_TANGENT_GUARD_TRACE_LOG"; then
+    echo "FAIL: no jev-block trace line with its probability"
+    FAILED=$((FAILED + 1))
+fi
+if ! grep -q "comment-write | jev-yield" "$ANTI_TANGENT_GUARD_TRACE_LOG"; then
+    echo "FAIL: no jev-yield trace line"
+    FAILED=$((FAILED + 1))
+fi
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"

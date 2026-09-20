@@ -635,6 +635,37 @@ class Strikes(unittest.TestCase):
         self.assertNotIn("could not reach", message)
 
 
+class Run(unittest.TestCase):
+    """run()'s own outer handler, exercised in-process rather than through judge().
+
+    A refused connection is handled inside judge() and converted to an ordinary
+    jev-error verdict, so it never reaches run()'s own try/except. Only a raise
+    from somewhere else run() calls proves that handler actually runs.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.file = os.path.join(self.dir, "x.go")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def env(self):
+        return {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "k"}
+
+    def test_an_unexpected_exception_fails_open(self):
+        original = jev_scan.build_blocks
+        jev_scan.build_blocks = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            code, event, message = jev_scan.run(
+                self.file, ["// A comment."], "// A comment.\n", self.env(), "s1", self.dir)
+        finally:
+            jev_scan.build_blocks = original
+        self.assertEqual(code, 0, "an internal error must allow the write")
+        self.assertEqual(event, "jev-error|RuntimeError")
+        self.assertNotIn("Traceback", message or "")
+
+
 class _HookFixture(unittest.TestCase):
     """Shared plumbing for driving the comment-write hook against a loopback stub.
 
