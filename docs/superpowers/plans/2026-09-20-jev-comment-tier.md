@@ -12,13 +12,13 @@
 
 ## Global Constraints
 
-- **Fail open, always.** Any error, timeout, unparsable response or unexpected exception allows the write. Only a confident flag blocks. A hook that raises must never reach the user as a traceback.
+- **Fail open, always.** Any error, timeout, unparsable response or unexpected exception allows the write **in the absence of a flag**. A failure never blocks and never turns another block's flag into a pass: a confident flag on one block still refuses the write even when a second request failed, because the flag is evidence and the failure is only missing evidence. A hook that raises must never reach the user as a traceback.
 - **No network in unit tests.** Every test stubs the transport. The repository rule is absolute (`CLAUDE.md`, Testing Conventions).
 - **`comment_scan.py` stays network-free and behaviour-identical.** `violations()` must return exactly what it returns today; `evals/fp-report.sh` must stay at zero false positives and `evals/run.sh` must stay green after the helper extraction.
 - **The key goes only to the default host or loopback** unless `ANTI_TANGENT_JEV_URL_TRUSTED=1`.
 - **The tier is off unless** `ANTI_TANGENT_JEV=1` **and** `TYPESAFE_API_KEY` is non-empty. `ANTI_TANGENT_COMMENT_GUARD=0` disables both tiers.
 - **Comment policy applies to this plan's own code.** No comment may reference a task number, this plan, an issue or a version as history. `ANTI_TANGENT_TICKET_PATTERN=YN-\d+` is set in this environment.
-- **Budget for the whole tier: 4 seconds wall clock**, 3 seconds per request, at most 20 blocks, 2,000 characters per block. The bound is enforced by abandoning a slow worker, not by cancelling it: a request already in flight cannot be stopped, and the executor's threads are joined by an interpreter-exit handler, so the hook body leaves through `os._exit` once it has a decision.
+- **Budget for the whole tier: 4 seconds wall clock**, measured from the moment `run()` is entered — configuration, block building and requests all inside it — 3 seconds per request, at most 20 blocks, 2,000 characters per block. The bound is enforced by abandoning a slow worker, not by cancelling it: a request already in flight cannot be stopped, and the executor's threads are joined by an interpreter-exit handler, so the hook body leaves through `os._exit` once it has a decision.
 
 **User decisions (already made):**
 - Write time only — the `PreToolUse` Edit/Write hook. Not the close-time hook, not the MCP server.
@@ -365,6 +365,13 @@ class BlockBuilder(unittest.TestCase):
             "x.go", ["// this used to panic on nil"], "unrelated file text\n")
         self.assertEqual([b.text for b in blocks], ["this used to panic on nil"])
 
+    def test_the_fallback_works_for_hash_family_paths(self):
+        # The fallback passes no context, which the triple-quote helper must
+        # survive: it is the only caller that can hand it None.
+        blocks = jev_scan.build_blocks(
+            "x.py", ["# this used to panic on nil"], "unrelated file text\n")
+        self.assertEqual([b.text for b in blocks], ["this used to panic on nil"])
+
     def test_star_inside_go_raw_string_is_not_a_comment(self):
         context = "const s = `\n * Previously the parser rejected tabs.\n`\n"
         blocks = jev_scan.build_blocks(
@@ -438,7 +445,9 @@ def hash_string_lines(path, text):
     in code and wrong inside a docstring. Only hash-family files have the
     shape, and only a caller with the whole file can tell the two apart.
     """
-    if "#" not in openers(path):
+    # `text` is None on the no-context fallback path, where there is no file
+    # to ask about strings at all.
+    if not text or "#" not in openers(path):
         return set()
     inside, delim, out = False, None, set()
     for line in text.splitlines():
@@ -791,8 +800,8 @@ git commit -m "feat(guard): gate the Jev tier on the setting, the key and the ho
 
 **Acceptance Criteria:**
 - [ ] An assignment whose name contains `key`, `secret`, `token`, `password` or `passwd` has its value replaced with `<redacted>`, for `=`, `:` and `: ` forms.
-- [ ] A bare high-entropy run of 24 or more characters from the base64/hex alphabet is replaced.
-- [ ] Ordinary prose, including long hyphenated English and a 40-character sentence, is left untouched.
+- [ ] A bare credential-shaped run is replaced, defined exactly: 24 or more characters from `[A-Za-z0-9+/_]` containing **at least one digit and at least one letter**, with optional `=` padding; or 32 or more hexadecimal characters. A hyphen is not in the alphabet, so hyphenated English is out of scope by construction.
+- [ ] Ordinary prose is left untouched, including a hyphenated compound over 24 characters and a single digitless word over 24 characters — neither meets the rule above.
 - [ ] Redaction runs on the block text, so it covers pre-existing lines pulled in by the block.
 
 **Verify:** `python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Redaction -v` → OK
@@ -1036,7 +1045,9 @@ git commit -m "feat(guard): ship the comment-history question as data"
 - [ ] A probability at or above the threshold returns a flag carrying the block and the probability; a clean verdict still carries the highest probability seen, so the calibration runner can read it back.
 - [ ] A connection error, HTTP error, timeout, malformed JSON, missing field or unexpected exception returns no flag and an error class.
 - [ ] Requests are submitted one at a time with the remaining budget checked before each, so none starts after the deadline.
-- [ ] `judge()` returns a verdict within `DEADLINE_S`, whatever the transport does — including a transport that never returns and a resolver that never answers. A worker still running at that point is abandoned, not awaited.
+- [ ] `judge()` takes an absolute `deadline` from its caller rather than starting its own clock, so block building spends the same budget the requests do.
+- [ ] A failure on one block never suppresses a flag on another: a confident flag is returned even when an earlier or simultaneous request failed, and a run with failures and no flag returns `jev-error`.
+- [ ] `judge()` returns a verdict by the deadline, whatever the transport does — including a transport that never returns and a resolver that never answers. A worker still running at that point is abandoned, not awaited.
 - [ ] The order contract is stated and tested: the first completed **batch** of requests decides, and within a batch the lowest block index wins. A block that completes in a later batch never beats one from an earlier batch, whatever its position in the file.
 - [ ] Transport is injectable, so no test touches the network.
 
@@ -1151,6 +1162,28 @@ class Judge(unittest.TestCase):
         r = jev_scan.judge(blocks, self.cfg(), transport=paired)
         self.assertEqual(r.flagged.text, "first block")
 
+    def test_a_flag_survives_another_block_failing(self):
+        calls = []
+
+        def mixed(url, body, headers, timeout):
+            calls.append(body["state"]["comment"])
+            if body["state"]["comment"] == "bad block":
+                raise OSError("no route")
+            return self.answer(0.9)
+
+        blocks = [jev_scan.Block("bad block", 1), jev_scan.Block("flagging block", 2)]
+        r = jev_scan.judge(blocks, self.cfg(), transport=mixed)
+        self.assertIsNotNone(r.flagged, "a failure must not suppress another block's flag")
+        self.assertEqual(r.flagged.text, "flagging block")
+
+    def test_failures_without_a_flag_report_the_error(self):
+        def failing(url, body, headers, timeout):
+            raise OSError("no route")
+
+        r = jev_scan.judge([jev_scan.Block("c", 1)], self.cfg(), transport=failing)
+        self.assertIsNone(r.flagged)
+        self.assertEqual(r.event, "jev-error")
+
     def test_clean_verdict_carries_the_highest_probability(self):
         r = jev_scan.judge([jev_scan.Block("c", 1)], self.cfg(),
                            transport=lambda *a, **k: self.answer(0.42))
@@ -1209,7 +1242,7 @@ def _shutdown(pool):
         pool.shutdown(wait=False)
 
 
-def judge(blocks, cfg, transport=None, deadline=DEADLINE_S):
+def judge(blocks, cfg, transport=None, deadline=None, until=None):
     """The first flag to complete, or a clean verdict, inside the deadline.
 
     Completion decides, not file position: the hook refuses the write either
@@ -1228,7 +1261,11 @@ def judge(blocks, cfg, transport=None, deadline=DEADLINE_S):
         return Verdict(event="jev-error", detail="no-question-file")
     transport = transport or _http
     headers = {"Authorization": "Bearer " + cfg.key, "Content-Type": "application/json"}
-    end = time.monotonic() + deadline
+    # `until` is an absolute deadline the caller already started; `deadline` is
+    # the convenience form for tests. The caller's clock is the real one,
+    # because block building spends the same budget these requests do.
+    end = until if until is not None else time.monotonic() + (
+        DEADLINE_S if deadline is None else deadline)
     errors, best, pending, queue = [], 0.0, {}, list(blocks)
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
     try:
@@ -1259,6 +1296,9 @@ def judge(blocks, cfg, transport=None, deadline=DEADLINE_S):
                     errors.append(type(exc).__name__)
                     continue
                 best = max(best, p)
+                # A flag stands even when another request failed: the flag is
+                # evidence, the failure is only missing evidence, and waiting
+                # for the rest would spend budget to reach the same refusal.
                 if p >= cfg.threshold:
                     return Verdict(block, p, "jev-block")
     finally:
@@ -1273,7 +1313,7 @@ Add `import concurrent.futures`, `import json`, `import re`, `import time`, `imp
 - [ ] **Step 4: Run the tests**
 
 Run: `python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Judge -v`
-Expected: PASS, 6 tests. The deadline test must finish in a few seconds, not 10.
+Expected: PASS — every test in the class. The deadline test must finish in about a second, not ten.
 
 - [ ] **Step 5: Commit**
 
@@ -1459,7 +1499,7 @@ git commit -m "feat(guard): bound the refusals and the outage"
 - [ ] A flag on strike 3 exits 0, prints `jev-yield|...` and writes the yield message to stderr.
 - [ ] Any exception inside the tier exits 0 with `jev-error|<class>` — nothing escapes as a traceback.
 - [ ] After a failure, the next call within the breaker window prints `jev-skip|breaker` and sends no request to the stub.
-- [ ] The first failure in a session also writes one line to stderr; a second failure in the same session writes none.
+- [ ] The first failure in a session also writes one warning message to stderr; a second failure in the same session writes none.
 - [ ] **There is no environment variable that can make the tier answer without the service.** Tests point `ANTI_TANGENT_JEV_URL` at a loopback stub, which the host rule already permits; nothing repository-controlled can substitute a verdict.
 - [ ] The body leaves through `os._exit` once it has a decision, so a worker abandoned at the deadline cannot hold the hook open.
 
@@ -1694,6 +1734,10 @@ def run(path, touched, context, env, session, trace_dir):
     anything that can answer instead of the service can also disable the gate.
     Tests point the URL at loopback, which the host rule already allows.
     """
+    # The budget covers the whole tier, so the clock starts here rather than
+    # inside judge(): building blocks for a large write is not free, and a
+    # deadline that only bounds the waiting is not the one the hook promises.
+    until = time.monotonic() + DEADLINE_S
     try:
         cfg = config(env, path)
         if not cfg.enabled:
@@ -1703,7 +1747,9 @@ def run(path, touched, context, env, session, trace_dir):
         blocks, capped = build_blocks(path, touched, context, report=True)
         if not blocks:
             return 0, "jev-skip|no-blocks", ""
-        verdict = judge(blocks, cfg)
+        if time.monotonic() >= until:
+            return 0, "jev-error|deadline-before-request", ""
+        verdict = judge(blocks, cfg, until=until)
         if verdict.event == "jev-error":
             breaker_trip(trace_dir)
             return 0, "jev-error|%s" % verdict.detail, _warn_once(trace_dir, session,
@@ -1793,7 +1839,7 @@ git commit -m "feat(guard): run the semantic tier when the tells find nothing"
 - [ ] Exit 0 traces the event the body reported (`jev-pass`, `jev-skip`, `jev-yield`, `jev-error`), falling back to `pass` when the body reported none.
 - [ ] `hooks.json` sets `"timeout": 10` for the `Edit|Write` hook.
 
-**Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all cases pass (the new Jev cases arrive in Task 10)
+**Verify:** `python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Wrapper -v && bash plugin/anti-tangent-guard/evals/run.sh` → OK, and all existing cases still pass (the new Jev cases arrive in Task 10)
 
 **Steps:**
 
@@ -1855,20 +1901,90 @@ Simpler in practice: start the stub with `--port-file /tmp/atg-port`, then read 
 that file.
 Expected: `exit=2`, and a trace line reading `… | comment-write | jev-block | p=0.95`. Nothing on stdout.
 
-- [ ] **Step 4: Run the existing suite**
+- [ ] **Step 4: Write the wrapper tests**
 
-Run: `bash plugin/anti-tangent-guard/evals/run.sh`
-Expected: every case passes — the capture must not change any existing outcome.
+Append to `jev_scan_test.py`. These drive the wrapper binary, not the body, so they cover the
+plumbing the eval suite cannot see:
 
-- [ ] **Step 5: Commit**
+```python
+class Wrapper(HookBody):
+    """The bash wrapper's own contract, driven through the real binary."""
+
+    WRAPPER = os.path.join(HOOKS, "check-comment-write")
+
+    def run_wrapper(self, content, extra_path="", **env_over):
+        with open(self.file, "w") as fh:
+            fh.write("package x\n")
+        payload = json.dumps({"tool_name": "Write", "session_id": "w1",
+                              "tool_input": {"file_path": self.file, "content": content}})
+        env = dict(os.environ)
+        env.update({"CLAUDE_PLUGIN_ROOT": os.path.dirname(HOOKS),
+                    "ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "k",
+                    "ANTI_TANGENT_JEV_URL": "http://127.0.0.1:%d/v1/systemone" % self.port,
+                    "ANTI_TANGENT_GUARD_TRACE_LOG": os.path.join(self.dir, "trace.log")})
+        env.pop("ANTI_TANGENT_TICKET_PATTERN", None)
+        if extra_path:
+            env["PATH"] = extra_path
+        env.update(env_over)
+        return subprocess.run([self.WRAPPER], input=payload, capture_output=True,
+                              text=True, env=env, timeout=30)
+
+    def trace(self):
+        with open(os.path.join(self.dir, "trace.log")) as fh:
+            return fh.read()
+
+    def test_flag_maps_to_exit_two_with_its_probability(self):
+        r = self.run_wrapper("// The count cap used to return a plain error.\npackage x\n")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stdout, "", "the body's event must not reach the transcript")
+        self.assertIn("jev-block | p=0.95", self.trace())
+
+    def test_pass_traces_the_reported_event(self):
+        r = self.run_wrapper("// Returns nil when the file is absent.\npackage x\n")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("jev-pass", self.trace())
+
+    def test_disabled_tier_traces_its_reason(self):
+        r = self.run_wrapper("// A plain comment.\n", ANTI_TANGENT_JEV="0")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("jev-skip | setting", self.trace())
+
+    def test_no_temp_files_are_left_behind(self):
+        before = set(os.listdir(tempfile.gettempdir()))
+        self.run_wrapper("// A plain comment.\npackage x\n")
+        left = {n for n in set(os.listdir(tempfile.gettempdir())) - before
+                if n.startswith("atg-comment-write.")}
+        self.assertEqual(left, set())
+
+    def test_a_failed_mktemp_allows_the_write(self):
+        # An empty PATH takes mktemp away; the wrapper must allow rather than
+        # redirect the body's output into an empty filename.
+        r = self.run_wrapper("// The count cap used to return a plain error.\npackage x\n",
+                             extra_path="/nonexistent")
+        self.assertEqual(r.returncode, 0)
+
+    def test_hooks_json_declares_the_timeout(self):
+        with open(os.path.join(HOOKS, "hooks.json")) as fh:
+            hooks = json.load(fh)
+        entry = hooks["hooks"]["PreToolUse"][0]["hooks"][0]
+        self.assertEqual(entry["timeout"], 10)
+```
+
+- [ ] **Step 5: Run the tests and the existing suite**
+
+Run: `python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Wrapper -v && bash plugin/anti-tangent-guard/evals/run.sh`
+Expected: OK, and every existing case passes — the capture must not change any existing outcome.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add plugin/anti-tangent-guard/hooks/check-comment-write plugin/anti-tangent-guard/hooks/hooks.json
+git add plugin/anti-tangent-guard/hooks/check-comment-write plugin/anti-tangent-guard/hooks/hooks.json plugin/anti-tangent-guard/hooks/jev_scan_test.py
 git commit -m "feat(guard): trace the semantic tier's outcome"
 ```
 
 ```json:metadata
-{"files": ["plugin/anti-tangent-guard/hooks/check-comment-write", "plugin/anti-tangent-guard/hooks/hooks.json"], "verifyCommand": "bash plugin/anti-tangent-guard/evals/run.sh", "acceptanceCriteria": ["body stdout captured to a temp file and removed", "PIPESTATUS still used", "exit 4 becomes exit 2 with jev-block", "exit 0 traces the reported event", "hooks.json timeout is 10"], "modelTier": "standard"}
+{"files": ["plugin/anti-tangent-guard/hooks/check-comment-write", "plugin/anti-tangent-guard/hooks/hooks.json", "plugin/anti-tangent-guard/hooks/jev_scan_test.py"], "verifyCommand": "python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Wrapper -v && bash plugin/anti-tangent-guard/evals/run.sh", "acceptanceCriteria": ["body stdout captured to a temp file and removed", "PIPESTATUS still used", "exit 4 becomes exit 2 with jev-block", "exit 0 traces the reported event", "hooks.json timeout is 10"], "modelTier": "standard"}
 ```
 
 ---
@@ -2004,15 +2120,6 @@ Append to `guard-evals.json` (ids continue from the current maximum; `{{TMPDIR}}
 
 ```json
 {
-  "id": 151,
-  "name": "jev-unanswered-request-allows",
-  "hook": "check-comment-write",
-  "env": {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "eval-key"},
-  "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j5\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// HANG-THIS-REQUEST the count cap used to return a plain error.\\npackage x\\n\"}}",
-  "expected_exit": 0,
-  "reason": "the stub never answers this one: the deadline must expire and the write must proceed, because a service that cannot answer must not stop an edit"
-},
-{
   "id": 150,
   "name": "jev-third-attempt-yields",
   "hook": "check-comment-write",
@@ -2021,6 +2128,15 @@ Append to `guard-evals.json` (ids continue from the current maximum; `{{TMPDIR}}
   "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j6\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval-yield.go\",\"content\":\"// The count cap used to return a plain error.\\npackage x\\n\"}}",
   "expected_exit": 0,
   "reason": "two refusals then a yield: the third attempt on one path allows the write and hands the comment to the close-time reviewer"
+},
+{
+  "id": 151,
+  "name": "jev-unanswered-request-allows",
+  "hook": "check-comment-write",
+  "env": {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "eval-key"},
+  "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j5\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// HANG-THIS-REQUEST the count cap used to return a plain error.\\npackage x\\n\"}}",
+  "expected_exit": 0,
+  "reason": "the stub never answers this one: the deadline must expire and the write must proceed, because a service that cannot answer must not stop an edit"
 }
 ```
 
@@ -2028,7 +2144,7 @@ Append to `guard-evals.json` (ids continue from the current maximum; `{{TMPDIR}}
 on the LAST invocation only. Add it beside the existing per-case fields, defaulting to 1, and note
 in the runner's header comment that only this case uses it.
 
-**The order of these two is load-bearing.** A hanging request is a `jev-error`, which trips the
+**The order of these two is load-bearing, and the JSON above is written in that order.** A hanging request is a `jev-error`, which trips the
 60-second breaker, and every later case in the same trace directory would then take
 `jev-skip|breaker` instead of reaching the stub. The yielding case therefore runs first, as 150,
 and the hanging one last, as 151. A post-loop assertion pins that the yield case really reached
@@ -2106,10 +2222,10 @@ git commit -m "test(guard): pin the semantic tier against a loopback stub"
 
 **Acceptance Criteria:**
 - [ ] Every fixture's `block` text is produced by `jev_scan.build_blocks()`, so the measured text is byte-for-byte what the hook would send.
-- [ ] Each row carries `id`, `source`, `block`, `label` (`history` / `not_history` / `ambiguous`) and `regex_hit`.
+- [ ] Each row carries `id`, `source`, `path`, `block`, `label` (`history` / `not_history` / `ambiguous`) and `regex_hit`. The id includes the source, a per-row tag and a hash of the block text, and the builder fails on a duplicate rather than writing one.
 - [ ] The operator has confirmed **every** judgement-call label before the file is committed: all `ambiguous` rows and all `head-history-wording` rows. Labels from the other four sources follow mechanically from their source — a guard eval case's `expected_exit`, `fp-class.tsv`'s own classification, the cue-word absence in the random sample, and a cleanup commit's before/after sides — and are listed for the operator but need no per-row verdict.
 - [ ] `jev-eval.py` refuses to run unless `TYPESAFE_API_KEY` and `ANTI_TANGENT_JEV=1` are both set **and** no CI marker is present (`CI`, `GITHUB_ACTIONS`, `BUILD_NUMBER`), so a CI job that happens to carry a key still cannot spend money.
-- [ ] It caches answers keyed by the row id **and a hash of `jev-question.json`**, so an edited question cannot be scored against stale answers.
+- [ ] It caches answers keyed by the row id and a hash of **both** `jev-question.json` and the configured model, so neither an edited question nor a model change can be scored against stale answers.
 - [ ] It prints recall and precision per source group — `tp/pos` and `tp/(tp+fp)`, with `n/a` where the denominator is zero — alongside the raw counts.
 - [ ] Every row's probability is recorded as returned, including clean ones, so a re-score needs no second run.
 
@@ -2119,12 +2235,18 @@ git commit -m "test(guard): pin the semantic tier against a loopback stub"
 
 - [ ] **Step 1: Rebuild the fixtures with the hook's own builder**
 
-The measured set was built by a throwaway script whose block shape differs from `jev_scan.build_blocks()`. Rebuild it from the same five sources — the guard's own eval cases, `fp-class.tsv`, comments at HEAD matching the cue words, a random sample of HEAD comments, and the before/after pairs from the four commits that removed history framing (`4bb1729`, `53709c6`, `a174d25`, `1e9da90`) — running every candidate through the hook's builder:
+The measured set was built by a throwaway script whose block shape differs from
+`jev_scan.build_blocks()`. This builder produces the committed fixture from all five sources,
+running every candidate through the hook's own builder so fixture and hook agree byte for byte.
+Save it as `plugin/anti-tangent-guard/evals/build-jev-comments.py` and commit it with the fixture,
+so the set can be rebuilt rather than re-judged from scratch.
 
 ```python
 """Build jev-comments.jsonl with the hook's own block builder."""
+import hashlib
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -2137,79 +2259,134 @@ import jev_scan  # noqa: E402
 
 CUES = re.compile(r"(?i)\b(previously|no longer|used to|until (task|v)|originally|"
                   r"formerly|was changed|this replaced|now (uses|returns|reads))\b")
-rows, seen = [], set()
+RANDOM_SAMPLE = 45
+SEED = 20260919
+
+# Guard eval cases carry a label written here, never derived from expected_exit:
+# exit 0 means "the hook allowed it", which is also true of genuine history when
+# the tier is off, has no key, or timed out.
+GUARD_LABELS = {
+    "comment-write-issue-ref-blocks": "history",
+    "comment-write-invariant-why-passes": "not_history",
+    "jev-off-by-default": "history",
+    "jev-needs-a-key": "history",
+    "jev-flag-blocks": "history",
+    "jev-regex-hit-short-circuits": "history",
+    "jev-third-attempt-yields": "history",
+    "jev-unanswered-request-allows": "history",
+}
+
+rows, seen_blocks, seen_ids = [], set(), set()
 
 
-def add(source, path, line_no, label):
-    """One fixture row, with the block text the hook itself would send."""
+def add(source, label, path, block_text, raw_lines, context, tag):
+    """One fixture row, keyed so no two rows can share an id."""
+    if not block_text or block_text in seen_blocks:
+        return
+    seen_blocks.add(block_text)
+    digest = hashlib.sha256(block_text.encode("utf-8")).hexdigest()[:8]
+    row_id = "%s:%s:%s" % (source, tag, digest)
+    if row_id in seen_ids:
+        raise SystemExit("duplicate row id: %s" % row_id)
+    seen_ids.add(row_id)
+    rows.append({"id": row_id, "source": source, "path": path, "block": block_text,
+                 "label": label,
+                 "regex_hit": bool(comment_scan.violations(path, raw_lines, context))})
+
+
+def add_from_file(source, label, path, line_no):
     text = open(os.path.join(REPO, path), errors="replace").read()
     line = text.splitlines()[line_no - 1]
-    blocks = jev_scan.build_blocks(path, [line], text)
-    if not blocks:
-        return
-    block = blocks[0].text
-    if block in seen:
-        return
-    seen.add(block)
-    rows.append({"id": "%s-%d" % (os.path.basename(path), line_no),
-                 "source": source, "path": "%s:%d" % (path, line_no),
-                 "block": block, "label": label,
-                 "regex_hit": bool(comment_scan.violations(path, [line], text))})
+    for block in jev_scan.build_blocks(path, [line], text):
+        add(source, label, "%s:%d" % (path, line_no), block.text, [line], text,
+            "%s-%d" % (path.replace("/", "_"), line_no))
 
 
-tracked = subprocess.run(["git", "ls-files", "*.go", "*.py", "*.sh"],
-                         capture_output=True, text=True, cwd=REPO).stdout.split()
+tracked = [f for f in subprocess.run(["git", "ls-files", "*.go", "*.py", "*.sh"],
+                                     capture_output=True, text=True, cwd=REPO).stdout.split()
+           if "/testdata/" not in f]
+
+# 1. Comments at HEAD whose wording can narrate history or describe run time.
 for path in tracked:
-    if "/testdata/" in path:
-        continue
     for i, line in enumerate(open(os.path.join(REPO, path), errors="replace"), 1):
         if re.match(r"^\s*(//|#|\*)", line) and CUES.search(line):
-            add("head-history-wording", path, i, "history")
+            add_from_file("head-history-wording", "history", path, i)
 
-with open(os.path.join(REPO, "plugin/anti-tangent-guard/evals/jev-comments.jsonl"), "w") as fh:
-    for row in rows:
-        fh.write(json.dumps(row) + "\n")
-print(len(rows), "rows")
-```
+# 2. The repository's own classified scanner hits: path, count, verdict, text.
+for raw in open(os.path.join(REPO, "plugin/anti-tangent-guard/evals/fp-class.tsv")):
+    if raw.startswith("#") or not raw.strip():
+        continue
+    path, _count, verdict, text = raw.rstrip("\n").split("\t", 3)
+    label = "history" if verdict == "true_positive" else "not_history"
+    src = open(os.path.join(REPO, path), errors="replace").read().splitlines()
+    idx = next((i for i, l in enumerate(src, 1) if l.strip() == text.strip()), None)
+    if idx:
+        add_from_file("fp-class", label, path, idx)
 
-`regex_hit` is computed from the **source line**, not from the block: a block holds stripped spans
-(`A comment.`), which `violations()` would not see as comments at all, so scoring it there would
-record `False` for every row.
+# 3. Ordinary comments, sampled reproducibly.
+random.seed(SEED)
+pool = []
+for path in tracked:
+    for i, line in enumerate(open(os.path.join(REPO, path), errors="replace"), 1):
+        if re.match(r"^\s*(//|#[^!]|\*)", line) and not CUES.search(line) \
+                and not comment_scan.violations(path, [line]):
+            pool.append((path, i))
+for path, i in random.sample(pool, min(RANDOM_SAMPLE, len(pool))):
+    add_from_file("head-random", "not_history", path, i)
 
-Extend it the same way for the other four sources:
+# 4. The guard's own eval cases, labelled from the table above.
+cases = json.load(open(os.path.join(REPO, "plugin/anti-tangent-guard/evals/guard-evals.json")))
+cases = cases if isinstance(cases, list) else next(v for v in cases.values() if isinstance(v, list))
+for case in cases:
+    label = GUARD_LABELS.get(case.get("name"))
+    if not label or not case.get("stdin_raw"):
+        continue
+    payload = json.loads(case["stdin_raw"])
+    inp = payload.get("tool_input") or {}
+    content = inp.get("content") or inp.get("new_string") or ""
+    path = (inp.get("file_path") or "x.go").replace("{{TMPDIR}}", "/tmp")
+    for block in jev_scan.build_blocks(path, content.splitlines(), content):
+        add("guard-evals", label, path, block.text, content.splitlines(), content,
+            str(case["id"]))
 
-- **Guard eval cases** supply their comment text directly. Their label is written per case in a
-  table in this builder, never derived from `expected_exit` — exit 0 means "the hook allowed it",
-  which for `jev-off-by-default` and `jev-unanswered-request-allows` is true of genuine history.
-- **`fp-class.tsv`** supplies path plus text, all `history`, matched to the current file the same
-  way as above.
-- **The random sample** takes comment lines matching neither the cue words nor a tell, labelled
-  `not_history`, with `random.seed(20260919)` recorded here so the sample is reproducible.
-- **The commit pairs** read both sides out of git rather than the working tree, since the "before"
-  text no longer exists on disk:
-
-```python
-def add_pair(commit, path):
-    """Both sides of a comment a commit rewrote, through the hook's own builder."""
-    for rev, label in ((commit + "^", "history"), (commit, "not_history")):
+# 5. Both sides of the four commits that removed change-history framing. The
+# "before" text is gone from disk, so each side is read out of git.
+PAIRS = [("4bb1729", "plugin/anti-tangent-guard/hooks/git_added_lines_test.py"),
+         ("53709c6", "plugin/anti-tangent-guard/hooks/git_added_lines.py"),
+         ("a174d25", "plugin/anti-tangent-guard/hooks/git_added_lines.py"),
+         ("1e9da90", "plugin/anti-tangent-guard/hooks/check-task-complete")]
+for commit, path in PAIRS:
+    changed = subprocess.run(["git", "show", "--unified=0", "--format=", commit, "--", path],
+                             capture_output=True, text=True, cwd=REPO).stdout
+    for rev, label, sign in ((commit + "^", "history", "-"), (commit, "not_history", "+")):
         text = subprocess.run(["git", "show", "%s:%s" % (rev, path)],
                               capture_output=True, text=True, cwd=REPO).stdout
         if not text:
             continue
-        changed = subprocess.run(
-            ["git", "show", "--unified=0", "--format=", commit, "--", path],
-            capture_output=True, text=True, cwd=REPO).stdout
-        sign = "-" if label == "history" else "+"
         touched = [l[1:] for l in changed.splitlines()
                    if l.startswith(sign) and not l.startswith(sign * 3)]
-        for block in jev_scan.build_blocks(path, touched, text):
-            rows.append({"id": "%s-%s-%s" % (commit[:7], os.path.basename(path), label),
-                         "source": "cleanup-commit-pair", "path": "%s:%s" % (rev, path),
-                         "block": block.text, "label": label,
-                         "regex_hit": bool(comment_scan.violations(path, touched))})
+        for n, block in enumerate(jev_scan.build_blocks(path, touched, text)):
+            add("cleanup-commit-pair", label, "%s:%s" % (rev, path), block.text,
+                touched, text, "%s-%s-%d" % (commit[:7], label, n))
+
+out = os.path.join(REPO, "plugin/anti-tangent-guard/evals/jev-comments.jsonl")
+with open(out, "w") as fh:
+    for row in rows:
+        fh.write(json.dumps(row, sort_keys=True) + "\n")
+print("%d rows" % len(rows))
+for source in sorted({r["source"] for r in rows}):
+    group = [r for r in rows if r["source"] == source]
+    print("  %-22s %3d rows, %d history" % (source, len(group),
+                                            sum(r["label"] == "history" for r in group)))
 ```
 
-Every label is a proposal until Step 2.
+`regex_hit` is computed from the **source lines with their delimiters**, never from the block: a
+block holds stripped spans (`A comment.`), which `violations()` would not read as comments at all,
+so scoring it there would record `False` for every row.
+
+Run it, and check the printed per-source counts look like the measured set (roughly 50 rows of
+`head-history-wording`, 19 of `fp-class`, 45 sampled, a handful of eval cases and 8 pair rows)
+before going on. Every label is a proposal until Step 2.
 
 - [ ] **Step 2: Ask the operator to confirm the labels**
 
@@ -2240,8 +2417,13 @@ for marker in ("CI", "GITHUB_ACTIONS", "BUILD_NUMBER"):
     if os.environ.get(marker):
         sys.exit("the calibration suite is manual: %s is set" % marker)
 
+# The cache namespace covers BOTH inputs that can change an answer: the
+# question's wording and the model that answers it. A model change with an
+# unchanged question would otherwise be scored against last month's numbers.
+cfg = jev_scan.config(dict(os.environ), "calibration.go")
 question_hash = hashlib.sha256(
     open(os.path.join(os.path.dirname(HERE), "hooks", "jev-question.json"), "rb").read()
+    + cfg.model.encode("utf-8")
 ).hexdigest()[:12]
 ```
 
@@ -2254,7 +2436,6 @@ if "--limit" in sys.argv:
 
 cache_path = os.path.join(HERE, ".jev-eval-cache-%s.json" % question_hash)
 cache = json.load(open(cache_path)) if os.path.exists(cache_path) else {}
-cfg = jev_scan.config(dict(os.environ), "calibration.go")
 
 for row in rows:
     if row["id"] in cache:
@@ -2372,8 +2553,12 @@ TypeSafe offers zero data retention on enterprise plans only.
 The whole comment block your edit touches, not only the line you added — including lines that were
 already there. That is deliberate and it differs from the pattern tier, which judges added lines
 alone: this project's comment policy says history in a comment you touch gets rewritten as part of
-the change. The scope stays bounded to that block; other comments in the file are never read and
-never sent.
+the change.
+
+The file you are editing is scanned locally to find where comment blocks begin and end, so every
+line passes through the hook on your own machine. Only the blocks your edit touched are sent, and
+only after credential redaction; a comment elsewhere in the file leaves no trace and never reaches
+TypeSafe.
 
 ### Settings
 
