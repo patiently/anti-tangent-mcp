@@ -722,10 +722,13 @@ always allows the write. Every one of these but `jev-block` lets the write throu
 
 `ANTI_TANGENT_COMMENT_GUARD=0` never produces any of these five: `check-comment-write` short-circuits
 on it in bash, before Python ever starts, tracing the wrapper's own `skip | guard=0` line instead
-(see "Kill switches" above). The check for the same setting inside the tier's own `config()` is
-real defence in depth, not dead code — the calibration suite below calls `config()` directly and
-depends on it — but the write-time hook never reaches that branch, since the wrapper's own check
-always runs first.
+(see "Kill switches" above). The tier's own `config()` checks the same setting again, and from the
+write-time hook that branch is unreachable, since the wrapper's check always runs first. It is kept
+as defence in depth for a caller that reaches `config()` without the wrapper: `config()` is the one
+place that decides whether the tier may send anything at all, and `run()` consults nothing else, so
+a host that invoked the Python body directly would get the kill switch from there or not at all.
+Nothing shipped depends on that branch today — the calibration suite below calls `config()` only
+for the model, threshold, key and URL, and gates itself separately.
 
 Any of these five, when the tier reached its decision using an overridden URL, carries an extra
 `,url=untrusted-host` or `,url=unparsable-url` suffix — for example
