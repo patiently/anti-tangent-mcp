@@ -6,6 +6,7 @@ set can decide, and it answers it for the whole block an edit touches.
 """
 import fnmatch
 import os
+import re
 import sys
 from urllib.parse import urlparse
 
@@ -84,6 +85,31 @@ def config(env, path):
     else:
         c.enabled = True
     return c
+
+
+_SECRET_ASSIGN = re.compile(
+    r"(?i)\b([\w.-]*(?:key|secret|token|password|passwd)[\w.-]*)\s*[:=]\s*\S+")
+# A credential's shape is a long run with no word structure: mixed case AND
+# digits, or a long hex run. A hyphen is deliberately NOT in the alphabet --
+# "backward-compatibility-preserving" is 33 characters of ordinary English and
+# must survive, and a hyphenated credential still trips the assignment rule
+# above whenever it is assigned to anything named like a secret.
+# A digit AND a letter, 24 characters or more, no hyphen. The digit is what
+# ordinary English of that length does not have -- an AWS-style key is all
+# caps with digits, a base64 secret is mixed, and
+# "Supercalifragilisticexpialidocious" has no digit anywhere in it.
+# The trailing lookahead, not \b, ends the run: a word boundary does not sit
+# between "=" and the end of a line, so `\b` after optional padding can only
+# match by leaving the padding behind.
+_MIXED_TOKEN = re.compile(r"\b(?=[A-Za-z0-9+/_]*\d)(?=[A-Za-z0-9+/_]*[A-Za-z])"
+                          r"[A-Za-z0-9+/_]{24,}={0,2}(?![A-Za-z0-9+/_=])")
+_HEX_TOKEN = re.compile(r"\b[0-9a-fA-F]{32,}\b")
+
+
+def redact(text):
+    text = _SECRET_ASSIGN.sub(lambda m: "%s=<redacted>" % m.group(1), text)
+    text = _MIXED_TOKEN.sub("<redacted>", text)
+    return _HEX_TOKEN.sub("<redacted>", text)
 
 
 class Block(object):
@@ -193,7 +219,7 @@ def _runs(spans, touched_idx, report=False):
         local = [j - start for j in range(start, i) if j in touched_idx]
         if not local:
             continue
-        texts = ["\n".join(line_spans) for line_spans in spans[start:i]]
+        texts = ["\n".join(redact(s) for s in line_spans) for line_spans in spans[start:i]]
         blocks.append(Block(_window(texts, local), start + 1))
     capped = len(blocks) > MAX_BLOCKS
     return (blocks[:MAX_BLOCKS], capped) if report else blocks[:MAX_BLOCKS]

@@ -106,6 +106,45 @@ class BlockBuilder(unittest.TestCase):
         self.assertEqual([b.text for b in blocks], ["Same comment."])
 
 
+class Redaction(unittest.TestCase):
+    def test_named_assignment_is_redacted(self):
+        for line in ("export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI0K7MDENGbPxRfiCY",
+                     'api_key: "sk-live-9d8f7a6b5c4d3e2f1a0b"',
+                     "password = hunter2hunter2hunter2"):
+            self.assertIn("<redacted>", jev_scan.redact(line), line)
+
+    def test_bare_high_entropy_token_is_redacted(self):
+        for line in ("the old value was AKIAIOSFODNN7EXAMPLEQWERTYUIOP",
+                     "was dGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZzEyMw==",
+                     "hash 5f4dcc3b5aa765d61d8327deb882cf995f4dcc3b"):
+            self.assertIn("<redacted>", jev_scan.redact(line), line)
+
+    def test_padding_is_consumed(self):
+        padded = "was dGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZzEyMw=="
+        self.assertEqual(jev_scan.redact(padded), "was <redacted>")
+
+    def test_boundaries(self):
+        short = "A1" + "b" * 21          # 23 characters: under the run length
+        exact = "A1" + "b" * 22          # 24 characters: at it
+        self.assertEqual(jev_scan.redact(short), short)
+        self.assertIn("<redacted>", jev_scan.redact(exact))
+
+    def test_prose_is_untouched(self):
+        for line in ("The count cap used to return a plain error to the caller.",
+                     "A well-known copy-on-write trade-off, documented upstream.",
+                     "a backward-compatibility-preserving migration path",
+                     "SupercalifragilisticexpialidociousBehaviour"):
+            self.assertEqual(jev_scan.redact(line), line)
+
+    def test_a_credential_cannot_survive_the_block_cap(self):
+        secret = "AKIAIOSFODNN7EXAMPLEQWERTYUIOP1234"
+        filler = ["// filler %d" % i for i in range(300)]
+        context = "\n".join(filler + ["// old value was " + secret]) + "\n"
+        blocks = jev_scan.build_blocks("x.go", ["// old value was " + secret], context)
+        self.assertTrue(blocks)
+        self.assertNotIn(secret[:12], blocks[0].text)
+
+
 class Config(unittest.TestCase):
     BASE = {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "k"}
 
