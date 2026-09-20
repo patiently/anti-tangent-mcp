@@ -1905,7 +1905,7 @@ git commit -m "feat(guard): run the semantic tier when the tells find nothing"
 - [ ] `PIPESTATUS` still reads the body's status — command substitution is not used.
 - [ ] Exit 4 becomes exit 2 with a `jev-block` trace line carrying the probability.
 - [ ] Exit 0 traces the event the body reported (`jev-pass`, `jev-skip`, `jev-yield`, `jev-error`), falling back to `pass` when the body reported none.
-- [ ] `hooks.json` sets `"timeout": 10` for the `Edit|Write` hook.
+- [ ] `hooks.json` sets `"timeout": 10` on the `check-comment-write` entry, asserted by a test that selects it by command rather than by position — the plugin registers a second `PreToolUse` matcher for its start gate.
 
 **Verify:** `python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Wrapper -v && bash plugin/anti-tangent-guard/evals/run.sh` → OK, and all existing cases still pass (the new Jev cases arrive in Task 10)
 
@@ -1943,7 +1943,7 @@ esac
 
 - [ ] **Step 2: Set the hook timeout**
 
-In `hooks.json`, the `Edit|Write` entry becomes:
+In `hooks.json`, the `check-comment-write` entry — the first `PreToolUse` matcher, `Edit|Write`; the second one registers `check-task-start` and is not yours — becomes:
 
 ```json
 { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/check-comment-write\"", "timeout": 10 }
@@ -2046,10 +2046,14 @@ class Wrapper(HookBody):
         self.assertIn("no-tmp", self.trace())
 
     def test_hooks_json_declares_the_timeout(self):
+        # Selected by command, not by position: the plugin registers more
+        # than one PreToolUse matcher, and their order is not a contract.
         with open(os.path.join(HOOKS, "hooks.json")) as fh:
             hooks = json.load(fh)
-        entry = hooks["hooks"]["PreToolUse"][0]["hooks"][0]
-        self.assertEqual(entry["timeout"], 10)
+        entries = [h for matcher in hooks["hooks"]["PreToolUse"]
+                   for h in matcher["hooks"] if "check-comment-write" in h["command"]]
+        self.assertEqual(len(entries), 1, "expected exactly one comment-write hook entry")
+        self.assertEqual(entries[0]["timeout"], 10)
 ```
 
 - [ ] **Step 5: Run the tests and the existing suite**
@@ -2084,7 +2088,7 @@ git commit -m "feat(guard): trace the semantic tier's outcome"
 - [ ] The runner starts the stub as a background process, captures its PID from `$!` rather than discovering it with `pgrep`, reads the port from a file the stub writes, and kills and waits for that PID in the existing `cleanup` trap.
 - [ ] Every inherited Jev variable is unset before the case loop — `ANTI_TANGENT_JEV`, `ANTI_TANGENT_JEV_URL`, `ANTI_TANGENT_JEV_MODEL`, `ANTI_TANGENT_JEV_THRESHOLD`, `ANTI_TANGENT_JEV_EXCLUDE`, `ANTI_TANGENT_JEV_URL_TRUSTED`, `TYPESAFE_API_KEY` — and only then is the runner's own loopback `ANTI_TANGENT_JEV_URL` exported, so no case can reach the real service.
 - [ ] Six new cases: tier off by setting; tier off with no key; a flag blocking with `jev-block` and the probability asserted in the trace; a regex hit short-circuiting, proven by the absence of its own comment text from the shared request log; a request the stub never answers, allowing the write; and a third attempt on one path yielding with `jev-yield` in the trace and three requests carrying that case's marker.
-- [ ] `EXPECTED_CASE_COUNT` is raised from the verified baseline of 145 to 151, the header's group partition gains a named Jev group, and both count checks pass.
+- [ ] `EXPECTED_CASE_COUNT` is raised from its current value of 173 to 179, the header's group partition gains a named Jev group, and both count checks pass.
 
 **Verify:** `bash plugin/anti-tangent-guard/evals/run.sh` → all cases pass, count assertion holds
 
@@ -2155,11 +2159,11 @@ the whole environment contract reads in one place.
 
 - [ ] **Step 3: Add the cases**
 
-Append to `guard-evals.json` (ids continue from the current maximum; `{{TMPDIR}}` is substituted by the runner as the existing cases use it):
+Append to `guard-evals.json` (ids 174-179 continue from the current maximum of 173; `{{TMPDIR}}` is substituted by the runner as the existing cases use it):
 
 ```json
 {
-  "id": 146,
+  "id": 174,
   "name": "jev-off-by-default",
   "hook": "check-comment-write",
   "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j1\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval.go\",\"content\":\"// The count cap used to return a plain error.\\npackage x\\n\"}}",
@@ -2167,7 +2171,7 @@ Append to `guard-evals.json` (ids continue from the current maximum; `{{TMPDIR}}
   "reason": "the tier is opt-in: without ANTI_TANGENT_JEV=1 a prose-history comment is not sent anywhere"
 },
 {
-  "id": 147,
+  "id": 175,
   "name": "jev-needs-a-key",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_JEV": "1"},
@@ -2176,7 +2180,7 @@ Append to `guard-evals.json` (ids continue from the current maximum; `{{TMPDIR}}
   "reason": "the setting alone does not enable the tier; without a key there is nothing to call with"
 },
 {
-  "id": 148,
+  "id": 176,
   "name": "jev-flag-blocks",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "eval-key"},
@@ -2186,7 +2190,7 @@ Append to `guard-evals.json` (ids continue from the current maximum; `{{TMPDIR}}
   "reason": "a block the stub scores above the threshold is refused, through the real hook binary"
 },
 {
-  "id": 149,
+  "id": 177,
   "name": "jev-regex-hit-short-circuits",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "eval-key"},
@@ -2201,7 +2205,7 @@ Append to `guard-evals.json` (ids continue from the current maximum; `{{TMPDIR}}
 
 ```json
 {
-  "id": 150,
+  "id": 178,
   "name": "jev-third-attempt-yields",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "eval-key"},
@@ -2211,7 +2215,7 @@ Append to `guard-evals.json` (ids continue from the current maximum; `{{TMPDIR}}
   "reason": "two refusals then a yield: the third attempt on one path allows the write and hands the comment to the close-time reviewer"
 },
 {
-  "id": 151,
+  "id": 179,
   "name": "jev-unanswered-request-allows",
   "hook": "check-comment-write",
   "env": {"ANTI_TANGENT_JEV": "1", "TYPESAFE_API_KEY": "eval-key"},
@@ -2225,7 +2229,7 @@ Append to `guard-evals.json` (ids continue from the current maximum; `{{TMPDIR}}
 on the LAST invocation only. Add it beside the existing per-case fields, defaulting to 1, and note
 in the runner's header comment that only this case uses it.
 
-**The order of these two is load-bearing, and the JSON above is written in that order.** A hanging request is a `jev-error`, which trips the
+**The order of these two is load-bearing, and the JSON above is written in that order (178 before 179).** A hanging request is a `jev-error`, which trips the
 60-second breaker, and every later case in the same trace directory would then take
 `jev-skip|breaker` instead of reaching the stub. The yielding case therefore runs first, as 150,
 and the hanging one last, as 151. A post-loop assertion pins that the yield case really reached
@@ -2245,14 +2249,14 @@ fi
 After the case loop in `run.sh`, beside the other post-loop checks:
 
 ```bash
-# Case 149 is only meaningful if nothing was sent. The stub logs every request
+# Case 177 is only meaningful if nothing was sent. The stub logs every request
 # body it receives, so an empty log for that case's comment text is the proof
 # an exit code cannot give.
 if grep -q "fixes #58" "$JEV_LOG" 2>/dev/null; then
     echo "FAIL: a regex-refused write reached the endpoint"
     FAILED=$((FAILED + 1))
 fi
-# The exit codes for 148 and 151 are 2 and 0, which several other outcomes
+# The exit codes for 176 and 178 are 2 and 0, which several other outcomes
 # also produce. The trace line is what says WHICH path ran.
 if ! grep -q "comment-write | jev-block | p=0.95" "$ANTI_TANGENT_GUARD_TRACE_LOG"; then
     echo "FAIL: no jev-block trace line with its probability"
@@ -2266,10 +2270,10 @@ fi
 
 - [ ] **Step 6: Update the counts**
 
-Set `EXPECTED_CASE_COUNT=151` — the verified baseline is 145 and this task adds six — and add to the group comment above it:
+Set `EXPECTED_CASE_COUNT=179` — the current value is 173 and this task adds six — and add to the group comment above it:
 
 ```
-# A fourth group covers the semantic tier: off by default, off without a key,
+# A group covers the semantic tier: off by default, off without a key,
 # a flag refusing the write through the real binary, a tell refusing it first
 # without the tier ever being asked, a request the stub never answers, and a
 # third attempt on one path yielding.
@@ -2288,7 +2292,7 @@ git commit -m "test(guard): pin the semantic tier against a loopback stub"
 ```
 
 ```json:metadata
-{"files": ["plugin/anti-tangent-guard/evals/run.sh", "plugin/anti-tangent-guard/evals/jev-stub.py", "plugin/anti-tangent-guard/evals/guard-evals.json"], "verifyCommand": "bash plugin/anti-tangent-guard/evals/run.sh", "acceptanceCriteria": ["stub hangs per request via the sentinel", "runner captures the stub PID from $! and kills and waits for it", "every inherited Jev variable unset before the loopback URL is exported", "six new cases pass", "short-circuit proven by an empty request log", "jev-block and jev-yield asserted in the trace", "EXPECTED_CASE_COUNT raised from 145 to 151 with the group partition"], "modelTier": "standard"}
+{"files": ["plugin/anti-tangent-guard/evals/run.sh", "plugin/anti-tangent-guard/evals/jev-stub.py", "plugin/anti-tangent-guard/evals/guard-evals.json"], "verifyCommand": "bash plugin/anti-tangent-guard/evals/run.sh", "acceptanceCriteria": ["stub hangs per request via the sentinel", "runner captures the stub PID from $! and kills and waits for it", "every inherited Jev variable including the URL unset before the loopback URL is exported", "six new cases pass", "short-circuit proven by its comment text being absent from the request log", "yield proven by three marker-carrying requests", "jev-block and jev-yield asserted in the trace", "EXPECTED_CASE_COUNT raised from 173 to 179 with the group partition"], "modelTier": "standard"}
 ```
 
 ---
@@ -2605,19 +2609,23 @@ git commit -m "test(guard): commit the calibration set and its runner"
 - Modify: `CLAUDE.md` (the "What This Repo Is Not" paragraph on what the plugins block)
 
 **Acceptance Criteria:**
-- [ ] The README has a section covering: the two tiers and the order they run in; that the semantic tier judges the whole touched block while the tells judge added lines, and why; all seven variables (`ANTI_TANGENT_JEV`, `TYPESAFE_API_KEY`, threshold, model, URL, `ANTI_TANGENT_JEV_URL_TRUSTED`, exclude) and the host rule; what leaves the machine and that zero retention is enterprise-only; fail-open, the breaker and the two-block yield; the CA-bundle failure mode under `python3 -I`; and the Windows gap.
-- [ ] `plugin.json`'s version is bumped and its description no longer implies pattern matching is all the hook does.
+- [ ] The README's write-time guard section covers: the two tiers and the order they run in; that the semantic tier judges the whole touched block while the tells judge added lines, and why; all seven variables (`ANTI_TANGENT_JEV`, `TYPESAFE_API_KEY`, threshold, model, URL, `ANTI_TANGENT_JEV_URL_TRUSTED`, exclude) and the host rule; what leaves the machine and that zero retention is enterprise-only; fail-open, the breaker and the two-block yield; the CA-bundle failure mode under `python3 -I`; and the Windows gap.
+- [ ] `plugin.json`'s version goes from `0.5.0` to `0.6.0` and its description no longer implies pattern matching is all the write-time hook does.
 - [ ] The `CHANGELOG.md` 0.24.0 entry names the tier, its gate and its failure behaviour.
-- [ ] `CLAUDE.md`'s description of what the guard blocks mentions the semantic tier and its kill switch.
+- [ ] `CLAUDE.md`'s "What This Repo Is Not" paragraph counts the guard's ways of blocking correctly once the tier lands — it currently says "three ways" and "three kill switches" — and names `ANTI_TANGENT_JEV` as the tier's own switch alongside the existing three.
 - [ ] `bash scripts/check-protocol-docs.sh` (if present) and `go test -race ./...` pass.
 
 **Verify:** `go test -race ./... && bash plugin/anti-tangent-guard/evals/run.sh && python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py -v && python3 plugin/anti-tangent-guard/hooks/comment_scan_test.py -v` → all green
 
 **Steps:**
 
-- [ ] **Step 1: Write the README section**
+- [ ] **Step 1: Write the README sections**
 
-Add after the existing "The three block conditions" section:
+The README already carries `## Write-time comment guard (PreToolUse hook)`, `## Configuration`,
+`## Kill switches`, `## Fail-open policy`, `## Trace log` and `## Running the evals`. Extend those
+rather than duplicating them: the block below goes immediately after the write-time guard's own
+section (before `## Comment-hygiene scan at close`), and four short additions go into the existing
+sections, named under the block.
 
 ```markdown
 ## The semantic tier (optional, off by default)
@@ -2645,6 +2653,9 @@ only after credential redaction; a comment elsewhere in the file leaves no trace
 TypeSafe.
 
 ### Settings
+
+These also belong in the README's own `## Configuration` section, each as its own `###`
+subsection beside `ANTI_TANGENT_TICKET_PATTERN`; the table here is the summary.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -2677,13 +2688,25 @@ Under `python3 -I` the user site directory is dropped, so a Python whose certifi
 allow the write. The per-session warning is how you notice; the trace log names the class. Set
 `SSL_CERT_FILE` for a corporate CA.
 
-On Windows there is no `O_NOFOLLOW`, so a `Write` over an existing file is not scanned at all and
-this tier never runs for it. An `Edit` is judged without the post-edit text.
+On Windows there is no `O_NOFOLLOW` — `comment_scan.py`'s capped read asks for it unconditionally
+— so a `Write` over an existing file is not scanned at all and this tier never runs for it. An
+`Edit` is judged without the post-edit text.
 ```
+
+Then four additions to the sections that already exist:
+
+- `## Kill switches`: a fourth bullet — `ANTI_TANGENT_JEV` unset or not exactly `1` disables the
+  semantic tier alone, leaving the pattern tier, the completion gate and the start gate untouched.
+- `## Fail-open policy`: the tier's own row — every failure allows the write, one warning per
+  session, and the 60-second breaker after a failure.
+- `## Trace log`: the five new events (`jev-block`, `jev-pass`, `jev-skip`, `jev-yield`,
+  `jev-error`) and what each records.
+- `## Running the evals`: one line for the calibration suite, that it needs a key and the setting,
+  and that CI never runs it.
 
 - [ ] **Step 2: Update `plugin.json`**
 
-Bump `version` to `0.5.0` (or the next patch above whatever main carries after the rebase) and extend the description with one clause: a second, optional tier reads the touched comment block semantically when `ANTI_TANGENT_JEV=1` and a key is present.
+Bump `version` from `0.5.0` to `0.6.0` and extend the description with one clause: a second, optional tier reads the touched comment block semantically when `ANTI_TANGENT_JEV=1` and a key is present.
 
 - [ ] **Step 3: Fill in the changelog entry**
 
@@ -2691,7 +2714,7 @@ Expand the 0.24.0 `### Added` bullet written in Task 0 with the gate, the block 
 
 - [ ] **Step 4: Update `CLAUDE.md`**
 
-In "What This Repo Is Not", the sentence describing what `anti-tangent-guard` blocks gains the semantic tier and names `ANTI_TANGENT_JEV` as its own switch, distinct from `ANTI_TANGENT_COMMENT_GUARD`.
+In "What This Repo Is Not", the sentence describing what `anti-tangent-guard` blocks gains the semantic tier. Two counts in that paragraph move: "blocks three ways of its own" and "three kill switches". The tier is a second way the write-time hook refuses a comment, gated by `ANTI_TANGENT_JEV` — which is a fourth switch, distinct from `ANTI_TANGENT_COMMENT_GUARD` (that one turns off comment scanning entirely, both tiers).
 
 - [ ] **Step 5: Run everything**
 
