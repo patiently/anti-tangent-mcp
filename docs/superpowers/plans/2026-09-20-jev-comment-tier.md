@@ -2748,6 +2748,104 @@ git commit -m "docs(guard): document the semantic tier"
 
 ---
 
+### Task 13: Ship the review-tier policy with the sandbox
+
+**Goal:** Every Claude account in the sandbox boots with the three-level model-routing policy in place, and the protocol says which tier a review earns.
+
+**Files:**
+- Create: a Superset workspace for `claude-sandbox` (step 1; the rest of this task's sandbox work happens there, not in this worktree)
+- Modify (in that workspace): `sandbox-entrypoint.sh`, `tests/sandbox-entrypoint/run-tests.sh`, `README.md`
+- Modify (here): `docs/protocol/controller.md`, `plugin/anti-tangent-protocol/protocol/controller.md`, `CHANGELOG.md`
+
+**Acceptance Criteria:**
+- [ ] The entrypoint writes `/home/$SANDBOX_USER/.claude/superpowers/model-routing.json` when it is absent, carrying `mechanical: haiku`, `standard: sonnet`, `frontier: opus` and the `_policy` block that states the bar for escalation.
+- [ ] It writes **one** file, never one per account. The routing hook reads `$HOME/.claude/...` hardcoded rather than per `CLAUDE_CONFIG_DIR`, so a per-account copy is never read and misleads whoever finds it.
+- [ ] An existing file whose three tier values already match is left untouched, with no warning.
+- [ ] An existing file whose tier values differ is left untouched and draws one stderr warning naming both the found and the shipped mapping — the operator's own edit wins.
+- [ ] An unparseable file, or a symlink at that path, is left alone with a warning rather than overwritten.
+- [ ] `tests/sandbox-entrypoint/run-tests.sh` covers all five cases above and passes.
+- [ ] `README.md` gains a short section: the three levels, that high risk is a `model` pin rather than a tier because superpowers validates the tier name, and that a pin makes the routing guard yield for that task.
+- [ ] In this repo, `docs/protocol/controller.md` gains a subsection on which tier a review earns, stays under the 16,000-byte CI cap, and is mirrored byte-for-byte into `plugin/anti-tangent-protocol/protocol/controller.md` in the same commit.
+- [ ] The `CHANGELOG.md` 0.24.0 entry names the protocol addition.
+
+**Verify:** in the claude-sandbox workspace `bash tests/sandbox-entrypoint/run-tests.sh` → all pass; here `bash scripts/check-protocol-docs.sh && go test -race ./... && diff docs/protocol/controller.md plugin/anti-tangent-protocol/protocol/controller.md && wc -c docs/protocol/*.md` → identical, every part under 16000
+
+**Steps:**
+
+- [ ] **Step 1: Create the workspace**
+
+Use the `superset-ws` skill for `claude-sandbox`. This task's sandbox edits happen there; the protocol edits happen in this worktree. Do not edit `claude-sandbox` from here.
+
+- [ ] **Step 2: Add the writer to the entrypoint**
+
+Follow the file's existing managed-block conventions. Place it beside the other per-boot installers:
+
+```bash
+# Superpowers' routing guard reads ONE file — $HOME/.claude/superpowers/model-routing.json,
+# hardcoded rather than resolved per CLAUDE_CONFIG_DIR — so it governs every account in this
+# sandbox. A per-account copy under .claude-<acct> is never read by anything and only misleads
+# whoever finds it later, which is why this writes one path and not a loop over config dirs.
+SP_ROUTING="/home/$SANDBOX_USER/.claude/superpowers/model-routing.json"
+SP_ROUTING_TIERS='{"frontier":"opus","mechanical":"haiku","standard":"sonnet"}'
+
+install_superpowers_routing() {
+    local have shipped
+    if [ -L "$SP_ROUTING" ]; then
+        echo "sandbox-entrypoint: WARN $SP_ROUTING is a symlink; leaving it alone" >&2
+        return 0
+    fi
+    if [ ! -f "$SP_ROUTING" ]; then
+        install -d -o "$SANDBOX_USER" -g "$SANDBOX_USER" -m 755 "$(dirname "$SP_ROUTING")"
+        printf '%s\n' "$SP_ROUTING_JSON" > "$SP_ROUTING"
+        chown "$SANDBOX_USER:$SANDBOX_USER" "$SP_ROUTING"
+        return 0
+    fi
+    have=$(jq -cS '{mechanical, standard, frontier}' "$SP_ROUTING" 2>/dev/null) || {
+        echo "sandbox-entrypoint: WARN $SP_ROUTING is not parseable JSON; leaving it alone" >&2
+        return 0
+    }
+    shipped=$(printf '%s' "$SP_ROUTING_TIERS" | jq -cS '.')
+    [ "$have" = "$shipped" ] && return 0
+    echo "sandbox-entrypoint: WARN $SP_ROUTING tiers differ from the shipped policy (found $have, shipped $shipped); leaving your file alone" >&2
+}
+```
+
+`SP_ROUTING_JSON` is the full document including the `_policy` block — take it verbatim from
+`~/.claude/superpowers/model-routing.json` as it stands after this conversation, since that file
+is the policy's current text.
+
+- [ ] **Step 3: Test the five cases**
+
+In `tests/sandbox-entrypoint/run-tests.sh`, following its existing case style: absent → written and
+parseable; matching → byte-identical afterwards and no warning; drifted → unchanged and exactly one
+warning naming both mappings; unparseable → unchanged with a warning; symlink → target untouched.
+
+- [ ] **Step 4: Document it in the sandbox README**
+
+Three levels, what earns each, that high risk is a `model` pin rather than a tier, and the cost of
+the pin: the routing guard allows any model for that task, so the written reason is the only control.
+
+- [ ] **Step 5: Add the protocol subsection here**
+
+In `docs/protocol/controller.md`, under the dispatch guidance, add a short subsection naming which
+tier a review earns and the bar for escalating one. Keep it to a paragraph — the part is capped at
+16,000 bytes and CI enforces it. Then resync the bundle in the same commit:
+
+```bash
+rm -f plugin/anti-tangent-protocol/protocol/*.md
+cp docs/protocol/*.md plugin/anti-tangent-protocol/protocol/
+```
+
+- [ ] **Step 6: Changelog and verify**
+
+Add the protocol line to the 0.24.0 entry, then run the verify command above in both repositories.
+
+```json:metadata
+{"files": ["sandbox-entrypoint.sh", "tests/sandbox-entrypoint/run-tests.sh", "README.md", "docs/protocol/controller.md", "plugin/anti-tangent-protocol/protocol/controller.md", "CHANGELOG.md"], "verifyCommand": "bash scripts/check-protocol-docs.sh && go test -race ./... && diff docs/protocol/controller.md plugin/anti-tangent-protocol/protocol/controller.md", "acceptanceCriteria": ["entrypoint writes the routing file when absent", "one file, never per-account", "matching file untouched and silent", "drifted file untouched with one warning naming both mappings", "unparseable or symlink left alone with a warning", "five cases covered by run-tests.sh", "sandbox README documents the three levels and the pin's cost", "controller.md subsection mirrored and under the byte cap", "changelog names it"], "modelTier": "standard", "crossRepo": "claude-sandbox plus this repository; the sandbox work happens in its own Superset workspace"}
+```
+
+---
+
 ## Verification of the whole plan
 
 ```bash

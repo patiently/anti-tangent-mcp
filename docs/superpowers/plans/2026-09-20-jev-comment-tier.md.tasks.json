@@ -37,7 +37,7 @@
     {
       "id": 4,
       "subject": "Task 4: Redact credentials before anything leaves the machine",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** A commented-out secret is replaced before a block is sent.\n\n**Files:**\n- Modify: `plugin/anti-tangent-guard/hooks/jev_scan.py`\n- Modify: `plugin/anti-tangent-guard/hooks/jev_scan_test.py`\n\n**Acceptance Criteria:**\n- [ ] An assignment whose name contains `key`, `secret`, `token`, `password` or `passwd` has its value replaced with `<redacted>`, for `=`, `:` and `: ` forms.\n- [ ] A bare credential-shaped run is replaced, defined exactly: 24 or more characters from `[A-Za-z0-9+/_]` containing **at least one digit and at least one letter**, with optional `=` padding; or 32 or more hexadecimal characters. A hyphen is not in the alphabet, so hyphenated English is out of scope by construction.\n- [ ] Ordinary prose is left untouched, including a hyphenated compound over 24 characters and a single digitless word over 24 characters \u2014 neither meets the rule above.\n- [ ] Redaction runs on the block text, so it covers pre-existing lines pulled in by the block.\n\n**Verify:** `python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Redaction -v` \u2192 OK\n\n```json:metadata\n{\"files\": [\"plugin/anti-tangent-guard/hooks/jev_scan.py\", \"plugin/anti-tangent-guard/hooks/jev_scan_test.py\"], \"verifyCommand\": \"python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py Redaction -v\", \"acceptanceCriteria\": [\"named secret assignments redacted\", \"bare high-entropy tokens redacted\", \"prose untouched\", \"redaction applied to block text\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         3
@@ -46,7 +46,7 @@
     {
       "id": 5,
       "subject": "Task 5: The question file",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The shipped question is the measured question, held as reviewable data.\n\n**Files:**\n- Create: `plugin/anti-tangent-guard/hooks/jev-question.json`\n- Modify: `plugin/anti-tangent-guard/hooks/jev_scan.py` (loader)\n- Modify: `plugin/anti-tangent-guard/hooks/jev_scan_test.py`\n\n**Acceptance Criteria:**\n- [ ] The file holds one Choice question with exactly the options `change_history`, `compatibility_contract` and `present_behaviour`.\n- [ ] `change_history` carries `what`, `not_for` and `examples`; the other two carry `what` and `examples`.\n- [ ] The loader returns the question dict and caches it for the process.\n- [ ] The loader returns `None` for a missing file, for invalid JSON, and for valid JSON that is not a Choice question whose three options each carry a `what` \u2014 a wrong-shaped question would otherwise reach the service and be answered against criteria nobody wrote.\n\n**Verify:** `python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py QuestionFile -v` \u2192 OK\n\n```json:metadata\n{\"files\": [\"plugin/anti-tangent-guard/hooks/jev-question.json\", \"plugin/anti-tangent-guard/hooks/jev_scan.py\", \"plugin/anti-tangent-guard/hooks/jev_scan_test.py\"], \"verifyCommand\": \"python3 plugin/anti-tangent-guard/hooks/jev_scan_test.py QuestionFile -v\", \"acceptanceCriteria\": [\"three measured options\", \"change_history carries not_for\", \"loader caches\", \"missing file returns None\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         4
@@ -114,7 +114,16 @@
       "blockedBy": [
         11
       ]
+    },
+    {
+      "id": 13,
+      "subject": "Task 13: Ship the review-tier policy with the sandbox",
+      "status": "pending",
+      "description": "**Goal:** Every Claude account in the sandbox boots with the three-level model-routing policy in place, and the protocol says which tier a review earns.\n\n**Files:**\n- Create: a Superset workspace for `claude-sandbox` (step 1; the rest of this task's sandbox work happens there, not in this worktree)\n- Modify (in that workspace): `sandbox-entrypoint.sh`, `tests/sandbox-entrypoint/run-tests.sh`, `README.md`\n- Modify (here): `docs/protocol/controller.md`, `plugin/anti-tangent-protocol/protocol/controller.md`, `CHANGELOG.md`\n\n**Acceptance Criteria:**\n- [ ] The entrypoint writes `/home/$SANDBOX_USER/.claude/superpowers/model-routing.json` when it is absent, carrying `mechanical: haiku`, `standard: sonnet`, `frontier: opus` and the `_policy` block that states the bar for escalation.\n- [ ] It writes **one** file, never one per account. The routing hook reads `$HOME/.claude/...` hardcoded rather than per `CLAUDE_CONFIG_DIR`, so a per-account copy is never read and misleads whoever finds it.\n- [ ] An existing file whose three tier values already match is left untouched, with no warning.\n- [ ] An existing file whose tier values differ is left untouched and draws one stderr warning naming both the found and the shipped mapping \u2014 the operator's own edit wins.\n- [ ] An unparseable file, or a symlink at that path, is left alone with a warning rather than overwritten.\n- [ ] `tests/sandbox-entrypoint/run-tests.sh` covers all five cases above and passes.\n- [ ] `README.md` gains a short section: the three levels, that high risk is a `model` pin rather than a tier because superpowers validates the tier name, and that a pin makes the routing guard yield for that task.\n- [ ] In this repo, `docs/protocol/controller.md` gains a subsection on which tier a review earns, stays under the 16,000-byte CI cap, and is mirrored byte-for-byte into `plugin/anti-tangent-protocol/protocol/controller.md` in the same commit.\n- [ ] The `CHANGELOG.md` 0.24.0 entry names the protocol addition.\n\n**Verify:** in the claude-sandbox workspace `bash tests/sandbox-entrypoint/run-tests.sh` \u2192 all pass; here `bash scripts/check-protocol-docs.sh && go test -race ./... && diff docs/protocol/controller.md plugin/anti-tangent-protocol/protocol/controller.md && wc -c docs/protocol/*.md` \u2192 identical, every part under 16000\n\n```json:metadata\n{\"files\": [\"sandbox-entrypoint.sh\", \"tests/sandbox-entrypoint/run-tests.sh\", \"README.md\", \"docs/protocol/controller.md\", \"plugin/anti-tangent-protocol/protocol/controller.md\", \"CHANGELOG.md\"], \"verifyCommand\": \"bash scripts/check-protocol-docs.sh && go test -race ./... && diff docs/protocol/controller.md plugin/anti-tangent-protocol/protocol/controller.md\", \"acceptanceCriteria\": [\"entrypoint writes the routing file when absent\", \"one file, never per-account\", \"matching file untouched and silent\", \"drifted file untouched with one warning naming both mappings\", \"unparseable or symlink left alone with a warning\", \"five cases covered by run-tests.sh\", \"sandbox README documents the three levels and the pin's cost\", \"controller.md subsection mirrored and under the byte cap\", \"changelog names it\"], \"modelTier\": \"standard\", \"crossRepo\": \"claude-sandbox plus this repository; the sandbox work happens in its own Superset workspace\"}\n```",
+      "blockedBy": [
+        12
+      ]
     }
   ],
-  "lastUpdated": "2026-09-20T10:34:22.748408+00:00"
+  "lastUpdated": "2026-09-20T11:43:58.404547+00:00"
 }
