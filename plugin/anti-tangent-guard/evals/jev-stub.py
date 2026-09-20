@@ -1,9 +1,10 @@
 """A local stand-in for the System One endpoint, for the eval suite.
 
-Prints its port on stdout, then serves one fixed probability. With --hang it
-accepts the connection and never answers, which is what the hook's deadline
-is for. Every request is appended to the log file named by --log, so a case
-can assert that no request was made at all.
+Prints its port on stdout, then serves one fixed probability set by --prob.
+A request whose body contains HANG_SENTINEL is accepted but never answered,
+which is what the hook's deadline is for. Every request is appended to the
+log file named by --log, so a case can assert that no request was made at
+all.
 """
 import argparse
 import json

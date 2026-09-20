@@ -159,14 +159,31 @@ def _touched_indexes(lines, touched):
 
     An Edit's operands can add a fragment of a file line, which equals no
     line of the post-edit text; the fragment is still what was written.
+
+    A fresh Write touches every line of the file, and each touched entry is
+    then the whole line it names -- an exact match once both sides are
+    stripped the same way. Resolving those through a dict first keeps that
+    common case linear; only a fragment with no exact hit (an Edit's partial
+    line) pays for the O(lines) substring scan below, and only once per such
+    fragment rather than once per touched entry.
     """
+    by_stripped = {}
+    for i, line in enumerate(lines):
+        by_stripped.setdefault(line.strip(), []).append(i)
     hit = set()
+    remaining = []
     for frag in touched:
         frag = frag.strip()
         if not frag:
             continue
+        exact = by_stripped.get(frag)
+        if exact:
+            hit.update(exact)
+        else:
+            remaining.append(frag)
+    if remaining:
         for i, line in enumerate(lines):
-            if line == frag or frag in line:
+            if any(frag in line for frag in remaining):
                 hit.add(i)
     return hit
 
@@ -496,6 +513,15 @@ WARN_MESSAGE = (
     "and the check is paused for 60 seconds.\nThe trace log carries the failure "
     "class; this warning is printed once per session.\n")
 
+# A distinct wording for the one failure that never dials out: building the
+# blocks alone used up the whole budget, so "could not reach" would claim a
+# network attempt that never happened.
+WARN_MESSAGE_NO_REQUEST = (
+    "NOTE: the comment check ran out of its time budget (%s) before it could contact "
+    "TypeSafe; no request was sent. This write was allowed and the check is paused "
+    "for 60 seconds.\nThe trace log carries the failure class; this warning is "
+    "printed once per session.\n")
+
 
 def _warn_once(trace_dir, session, detail):
     """One line per session, or a silent permanent fail-open goes unnoticed.
@@ -511,7 +537,8 @@ def _warn_once(trace_dir, session, detail):
             return ""
         with open(stamp, "w") as fh:
             fh.write(detail)
-        return WARN_MESSAGE % detail
+        template = WARN_MESSAGE_NO_REQUEST if detail == "deadline-before-request" else WARN_MESSAGE
+        return template % detail
     except Exception:
         return ""
 

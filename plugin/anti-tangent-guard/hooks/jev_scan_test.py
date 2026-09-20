@@ -112,6 +112,19 @@ class BlockBuilder(unittest.TestCase):
         blocks = jev_scan.build_blocks("x.py", ["# Same comment."], context)
         self.assertEqual([b.text for b in blocks], ["Same comment."])
 
+    def test_touching_every_line_of_a_large_file_stays_roughly_linear(self):
+        # A fresh Write touches every line of the file, so matching touched
+        # lines against context lines one substring test at a time would be
+        # quadratic in the file size -- slow enough on a large generated file
+        # to blow the hook's own deadline. 5,000 distinct lines is well past
+        # the point where a quadratic matcher would already miss this bound.
+        n = 5000
+        context = "".join("// comment line number %d is here\n" % i for i in range(n))
+        touched = ["// comment line number %d is here" % i for i in range(n)]
+        start = time.monotonic()
+        jev_scan.build_blocks("x.go", touched, context)
+        self.assertLess(time.monotonic() - start, 1.0)
+
 
 class Redaction(unittest.TestCase):
     def test_named_assignment_is_redacted(self):
@@ -523,6 +536,17 @@ class Strikes(unittest.TestCase):
         os.utime(stamp, (old, old))
         self.assertFalse(jev_scan.breaker_open(self.dir))
 
+    def test_warn_once_then_silent(self):
+        first = jev_scan._warn_once(self.dir, "s1", "x")
+        second = jev_scan._warn_once(self.dir, "s1", "x")
+        self.assertEqual(first, jev_scan.WARN_MESSAGE % "x")
+        self.assertEqual(second, "")
+
+    def test_warn_once_names_the_no_request_case_honestly(self):
+        message = jev_scan._warn_once(self.dir, "s1", "deadline-before-request")
+        self.assertEqual(message, jev_scan.WARN_MESSAGE_NO_REQUEST % "deadline-before-request")
+        self.assertNotIn("could not reach", message)
+
 
 class HookBody(unittest.TestCase):
     """The real hook body, against a loopback stub — the only seam there is."""
@@ -573,6 +597,19 @@ class HookBody(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertEqual(r.stdout.strip(), "")
         self.assertEqual(self.requests_made(), 0)
+        strikes = [f for f in os.listdir(self.dir) if f.startswith("jev-strike-")]
+        self.assertEqual(strikes, [], "the tier never ran, so it must not have written a strike")
+
+    def test_pass_outcome_allows_the_write(self):
+        self.stub.terminate()
+        self.stub.wait(timeout=10)
+        port = self.start_stub("0.05")
+        r = self.run_body(
+            "// The count cap used to return a plain error.\npackage x\n",
+            ANTI_TANGENT_JEV_URL="http://127.0.0.1:%d/v1/systemone" % port)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "jev-pass|blocks=1")
+        self.assertEqual(r.stderr.strip(), "")
 
     def test_disabled_tier_reports_why(self):
         r = self.run_body("// A plain comment.\n", ANTI_TANGENT_JEV="0")
@@ -609,7 +646,8 @@ class HookBody(unittest.TestCase):
         first = self.run_body("// A plain comment.\n", **dead)
         self.assertEqual(first.returncode, 0)
         self.assertTrue(first.stdout.startswith("jev-error|"), first.stdout)
-        self.assertTrue(first.stderr.strip(), "the first failure must say so once")
+        detail = first.stdout.strip().split("|", 1)[1]
+        self.assertEqual(first.stderr, jev_scan.WARN_MESSAGE % detail)
 
         before = self.requests_made()
         second = self.run_body("// The count cap used to return a plain error.\npackage x\n")

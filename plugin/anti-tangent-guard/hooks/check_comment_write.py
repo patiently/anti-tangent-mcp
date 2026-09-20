@@ -66,6 +66,10 @@ bad = violations(path, lines, context)
 if bad:
     print("BLOCKED: this edit adds comment(s) carrying change history.\n", file=sys.stderr)
     for line, why in bad[:10]:
+        # `line` is payload text and has no length limit of its own. bad[:10]
+        # caps how many lines get echoed, not how long any one of them is, so
+        # the [:200] here is what stops one oversized line from turning this
+        # stderr block into megabytes the model then has to read.
         print("  %s\n    -> contains %s" % (line[:200], why), file=sys.stderr)
     print(
         "\nComments must explain non-trivial behaviour or a non-obvious invariant, and must read\n"
