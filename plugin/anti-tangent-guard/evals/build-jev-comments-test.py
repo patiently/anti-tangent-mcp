@@ -1,9 +1,9 @@
 """Offline invariants for build-jev-comments.py.
 
-Exercises add()/State/refuse_if_undecided() directly with synthetic inputs
-(no git, no corpus walk), plus one end-to-end rebuild-parity check against
-the committed fixture. Reads only files already on disk in this checkout;
-never touches the network.
+Exercises add()/route()/check_duplicate()/State/refuse_if_undecided()
+directly with synthetic inputs (no git, no corpus walk), plus one
+end-to-end rebuild-parity check against the committed fixture. Reads only
+files already on disk in this checkout; never touches the network.
 """
 import contextlib
 import filecmp
@@ -31,11 +31,12 @@ bjc = _load("build_jev_comments", "build-jev-comments.py")
 
 
 class AddInvariants(unittest.TestCase):
-    """add() itself no longer judges whether a block_text repeat is safe --
-    that is check_duplicate()'s job (see CheckDuplicateInvariants below).
-    add() commits whatever the caller already decided; its own remaining
-    guard is the id-collision safety net below, which a caller cannot avoid
-    just by skipping check_duplicate()."""
+    """add() takes the "is this text new" decision from its caller (see
+    check_duplicate()/route(), covered by CheckDuplicateInvariants and
+    RouteInvariants below) and does not re-derive it. Its own guard is
+    narrower and independent: a row-id collision, which a caller cannot
+    avoid merely by getting the duplicate check right, since id and block
+    text are different axes."""
 
     def test_a_row_id_repeat_raises_even_past_check_duplicate(self):
         # Two rows with distinct block text could in principle still collide
@@ -78,12 +79,13 @@ class AddInvariants(unittest.TestCase):
 
 
 class CheckDuplicateInvariants(unittest.TestCase):
-    """check_duplicate() is the shared compare the three source-construction
-    callers use before add(): a repeated block text is only dangerous when
-    it carries a DIFFERENT label than what is already on record -- that is
-    a contradiction in the fixture meant to settle the right answer. A
-    same-label repeat is one comment reached twice, not two different
-    answers, so it is coalesced rather than treated as new evidence."""
+    """check_duplicate() is the compare route() runs once a candidate's
+    label is settled (resolved from DECISIONS, for a judgement-call row): a
+    repeated block text is only dangerous when it carries a DIFFERENT label
+    than what is already on record -- that is a contradiction in the fixture
+    meant to settle the right answer. A same-label repeat is one comment
+    reached twice, not two different answers, so it is coalesced rather than
+    treated as new evidence."""
 
     def test_new_text_is_reported_new_and_nothing_is_recorded(self):
         state = bjc.State()

@@ -140,14 +140,16 @@ class State(object):
     def __init__(self):
         self.rows = []
         # block text -> (row_id, label, source) of whichever row is on
-        # record for it. Checked by check_duplicate() before a caller ever
-        # calls add() for a text that might repeat.
+        # record for it. route() consults this for every candidate that
+        # might repeat, either directly (an undecided judgement-call row
+        # checked against its own source) or through check_duplicate() (once
+        # a label is known).
         self.seen_blocks = {}
         self.seen_ids = set()
         self.undecided = []
         # (kept_id, kept_source, dropped_id, dropped_source) for every
-        # same-label repeat check_duplicate() absorbed -- the coalescing
-        # summary main() prints, so a dedupe is never silent.
+        # same-text repeat route() absorbed -- the coalescing summary main()
+        # prints, so a dedupe is never silent.
         self.coalesced = []
 
 
@@ -185,8 +187,10 @@ def check_duplicate(state, source, label, block_text, tag):
 
     Returns True when the caller should go on to add() a new row, False when
     it should skip. Raises SystemExit on a label disagreement, naming both
-    sides, and never mutates state -- add() is what commits a decision made
-    here, in the one place both branches (proceed or skip) end up.
+    sides. The only state this changes is state.coalesced, which records
+    that a same-label repeat was seen; it adds no row and decides no label
+    itself -- add() is what commits a row, in the one place both branches
+    (proceed or skip) end up.
     """
     if not block_text:
         return False
@@ -241,10 +245,12 @@ def route(state, source, label, path, block_text, regex_hit, tag):
 
 
 def add(state, source, label, path, block_text, regex_hit, tag):
-    """One fixture row. The caller has already decided this text is new (see
-    check_duplicate); add() does not re-derive that decision, only commits
-    the row and registers its identity so a LATER check_duplicate() call can
-    find it.
+    """One fixture row. route() is the only caller (directly, or through
+    check_duplicate()) and has already decided this call is warranted --
+    either the text is genuinely new, or it is a judgement call still
+    awaiting its own operator verdict. add() does not judge duplication
+    itself; it commits the row and registers its identity so a later
+    duplicate check can find it.
 
     regex_hit is a plain bool the caller already computed against the real
     source lines with their delimiters -- see the module docstring on
@@ -492,10 +498,13 @@ def build_rows():
     """
     state = State()
     tracked = tracked_files()
-    # The four already-decided sources run first, so a cue word that also
-    # happens to land on text one of them already classified does not force
-    # a duplicate row or an operator verdict on something already settled --
-    # see add()'s docstring for how a collision is resolved between them.
+    # The four already-decided sources run first: when a text is shared with
+    # head-history-wording, the row that survives is attributed to whichever
+    # source claimed it first, so running these first keeps that attribution
+    # on the source with a reviewed verdict rather than a cue-word guess. An
+    # undecided head-history-wording candidate still needs its own operator
+    # decision regardless of this ordering -- see route() and
+    # check_duplicate() for how a shared text is actually resolved.
     add_fp_class(state)
     add_head_random(state, tracked)
     add_guard_evals(state)
@@ -514,8 +523,8 @@ def format_coalesced_summary(coalesced):
     """The coalescing summary text, or "" when nothing was coalesced.
 
     A silent dedupe is how a set quietly stops covering what people think it
-    covers, so every same-text/same-label repeat check_duplicate() absorbed
-    is named here, not just counted.
+    covers, so every same-text repeat route() absorbed is named here, not
+    just counted.
     """
     if not coalesced:
         return ""
