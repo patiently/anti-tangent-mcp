@@ -35,10 +35,11 @@ func (h *handlers) taskIndexAdvisory(runID string, index int) (verdict.Finding, 
 	}, true
 }
 
-// taskSpecPlanRunAdvisory is the plan-run advisory for one validate_task_spec
-// call: it names the latest live run when the call passed no plan_run_id, or
-// flags a task_index outside the named run's plan. Split out from
-// ValidateTaskSpec to keep that function's branch count down.
+// taskSpecPlanRunAdvisory returns the plan-run advisory for one
+// validate_task_spec call: it names the latest live run when the call passed
+// no plan_run_id, or flags a task_index outside the named run's plan. Kept
+// out of ValidateTaskSpec, whose cyclomatic complexity already sits above
+// CodeScene's per-function threshold.
 func (h *handlers) taskSpecPlanRunAdvisory(planRunID string, taskIndex int) (verdict.Finding, bool) {
 	if planRunID == "" {
 		if run, ok := h.deps.PlanRuns.Latest(); ok {
@@ -49,10 +50,11 @@ func (h *handlers) taskSpecPlanRunAdvisory(planRunID string, taskIndex int) (ver
 	return h.taskIndexAdvisory(planRunID, taskIndex)
 }
 
-// lightweightPlanRunAdvisory is the plan-run advisory for one lightweight
-// validate_completion call: an untargeted-task notice when plan_run_id named
-// no task, or a task_index outside the run's plan. Split out from
-// ValidateCompletion to keep that function's branch count down.
+// lightweightPlanRunAdvisory returns the plan-run advisory for one
+// lightweight validate_completion call: an untargeted-task notice when
+// plan_run_id named no task, or a task_index outside the run's plan. Kept
+// out of ValidateCompletion, whose cyclomatic complexity already sits above
+// CodeScene's per-function threshold.
 func (h *handlers) lightweightPlanRunAdvisory(planRunID string, taskIndex int, taskTitle string) (verdict.Finding, bool) {
 	if planRunID == "" {
 		return verdict.Finding{}, false
