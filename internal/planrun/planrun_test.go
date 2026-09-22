@@ -13,12 +13,15 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 )
 
-// attach records one validate_task_spec session against the task named by title.
-func attach(t *testing.T, s *Store, runID, sessionID, title, pre string) TaskRow {
-	t.Helper()
-	row, ok := s.Attach(runID, sessionID, TaskRef{Title: title}, pre)
-	require.True(t, ok)
-	return row
+// attacher binds t, s and runID so each attach records one validate_task_spec
+// session against the task named by title.
+func attacher(t *testing.T, s *Store, runID string) func(sessionID, title, pre string) TaskRow {
+	return func(sessionID, title, pre string) TaskRow {
+		t.Helper()
+		row, ok := s.Attach(runID, sessionID, TaskRef{Title: title}, pre)
+		require.True(t, ok)
+		return row
+	}
 }
 
 func titledTasks(titles ...string) []PlanTask {
@@ -32,9 +35,10 @@ func titledTasks(titles ...string) []PlanTask {
 func TestAttach_ReValidationUpdatesTheSameRow(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha", "Task 2: Beta"))
-	attach(t, s, r.ID, "s1", "Alpha", "fail")
-	attach(t, s, r.ID, "s2", "Task 1:  alpha", "fail")
-	row := attach(t, s, r.ID, "s3", "Task 1: Alpha", "warn")
+	attach := attacher(t, s, r.ID)
+	attach("s1", "Alpha", "fail")
+	attach("s2", "Task 1:  alpha", "fail")
+	row := attach("s3", "Task 1: Alpha", "warn")
 
 	assert.Equal(t, 1, row.Index)
 	assert.Equal(t, 3, row.Attempts)
@@ -63,8 +67,9 @@ func TestAttach_OutOfRangeIndexFallsBackToTitle(t *testing.T) {
 func TestAttach_AmbiguousHeadingIsUnmatchedButStillOneRow(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Same", "Task 2: Same"))
-	first := attach(t, s, r.ID, "s1", "Same", "fail")
-	again := attach(t, s, r.ID, "s2", "Same", "pass")
+	attach := attacher(t, s, r.ID)
+	first := attach("s1", "Same", "fail")
+	again := attach("s2", "Same", "pass")
 
 	assert.True(t, first.Unmatched)
 	assert.Equal(t, 3, first.Index, "an unmatched row is numbered after the plan's tasks")
@@ -75,10 +80,11 @@ func TestAttach_AmbiguousHeadingIsUnmatchedButStillOneRow(t *testing.T) {
 func TestAttach_UntitledPlanTakesDispatchOrder(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 2)
-	assert.Equal(t, 1, attach(t, s, r.ID, "s1", "Task A", "pass").Index)
-	assert.Equal(t, 2, attach(t, s, r.ID, "s2", "Task B", "pass").Index)
-	assert.Equal(t, 1, attach(t, s, r.ID, "s3", "Task A", "warn").Index, "same title, same row")
-	extra := attach(t, s, r.ID, "s4", "Task C", "pass")
+	attach := attacher(t, s, r.ID)
+	assert.Equal(t, 1, attach("s1", "Task A", "pass").Index)
+	assert.Equal(t, 2, attach("s2", "Task B", "pass").Index)
+	assert.Equal(t, 1, attach("s3", "Task A", "warn").Index, "same title, same row")
+	extra := attach("s4", "Task C", "pass")
 	assert.True(t, extra.Unmatched, "a plan with every task dispatched has no slot left")
 	assert.Equal(t, 3, extra.Index)
 }
@@ -95,8 +101,9 @@ func TestAttach_EmptyRefRecordsNothing(t *testing.T) {
 func TestUpdateRow_EverySessionOfATaskUpdatesIt(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha"))
-	attach(t, s, r.ID, "s1", "Alpha", "fail")
-	attach(t, s, r.ID, "s2", "Alpha", "pass")
+	attach := attacher(t, s, r.ID)
+	attach("s1", "Alpha", "fail")
+	attach("s2", "Alpha", "pass")
 
 	row, ok := s.UpdateRow(r.ID, "s1", func(row *TaskRow) { row.PostVerdict = "pass" })
 	require.True(t, ok, "the first session still names the task")
@@ -120,7 +127,8 @@ func TestUpsertLite_AddsALiteRowTitledFromThePlan(t *testing.T) {
 func TestUpsertLite_UpdatesAnAttachedRowWithoutMarkingItLite(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha"))
-	attach(t, s, r.ID, "s1", "Alpha", "pass")
+	attach := attacher(t, s, r.ID)
+	attach("s1", "Alpha", "pass")
 	row, ok := s.UpsertLite(r.ID, TaskRef{Title: "Alpha"}, func(row *TaskRow) { row.PostVerdict = "warn" })
 	require.True(t, ok)
 	assert.False(t, row.Lite)
@@ -132,11 +140,23 @@ func TestUpsertLite_UpdatesAnAttachedRowWithoutMarkingItLite(t *testing.T) {
 func TestRowsStayInIndexOrder(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: A", "Task 2: B", "Task 3: C"))
-	attach(t, s, r.ID, "s3", "C", "pass")
-	attach(t, s, r.ID, "s1", "A", "pass")
+	attach := attacher(t, s, r.ID)
+	attach("s3", "C", "pass")
+	attach("s1", "A", "pass")
 	got, _ := s.Snapshot(r.ID)
 	require.Len(t, got.Rows, 2)
 	assert.Equal(t, []int{1, 3}, []int{got.Rows[0].Index, got.Rows[1].Index})
+}
+
+func TestAttach_ClearsLiteOnARowALightweightCallCreated(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha"))
+	_, ok := s.UpsertLite(r.ID, TaskRef{Index: 1}, func(row *TaskRow) { row.PostVerdict = "pass" })
+	require.True(t, ok)
+	row, ok := s.Attach(r.ID, "s1", TaskRef{Title: "Alpha"}, "warn")
+	require.True(t, ok)
+	assert.False(t, row.Lite, "a task with a validate_task_spec session is not lightweight")
+	assert.Equal(t, 1, row.Attempts)
 }
 
 func TestPlanTaskCount(t *testing.T) {
@@ -156,12 +176,13 @@ func TestCreate_IDShape(t *testing.T) {
 	assert.Equal(t, 5, r.TaskCount)
 }
 
-func TestAppendAndUpdateRow_PreservesOrder(t *testing.T) {
+func TestAttachAndUpdateRow_PreservesOrder(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "actionable", 2)
 
-	attach(t, s, r.ID, "s1", "first", "pass")
-	attach(t, s, r.ID, "s2", "second", "warn")
+	attach := attacher(t, s, r.ID)
+	attach("s1", "first", "pass")
+	attach("s2", "second", "warn")
 
 	_, ok := s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
 		row.PostVerdict = "pass"
@@ -198,7 +219,7 @@ func TestEvictExpired(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestConcurrentAppend(t *testing.T) {
+func TestConcurrentAttach(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 50)
 
@@ -229,7 +250,8 @@ func TestConcurrentAppend(t *testing.T) {
 func TestSnapshot_IndependentOfLaterUpdate(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 1)
-	attach(t, s, r.ID, "s1", "first", "pass")
+	attach := attacher(t, s, r.ID)
+	attach("s1", "first", "pass")
 
 	snap, ok := s.Snapshot(r.ID)
 	require.True(t, ok)
@@ -257,7 +279,8 @@ func TestSnapshot_IndependentOfLaterUpdate(t *testing.T) {
 func TestSnapshot_DeepCopiesSeverityAndCodescene(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 1)
-	attach(t, s, r.ID, "s1", "first", "pass")
+	attach := attacher(t, s, r.ID)
+	attach("s1", "first", "pass")
 	_, ok := s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
 		row.Severity = map[string]int{"major": 1}
 		row.Codescene = &codescene.Digest{Ran: true, NetPP: -1.5}
@@ -288,7 +311,8 @@ func TestSnapshot_DeepCopiesSeverityAndCodescene(t *testing.T) {
 func TestSnapshot_DeepCopiesCodesceneNestedFields(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 1)
-	attach(t, s, r.ID, "s1", "first", "pass")
+	attach := attacher(t, s, r.ID)
+	attach("s1", "first", "pass")
 	_, ok := s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
 		row.Codescene = &codescene.Digest{
 			Ran:            true,
@@ -328,10 +352,11 @@ func TestSnapshot_DeepCopiesCodesceneNestedFields(t *testing.T) {
 func TestConcurrentSnapshotWhileUpdating(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 50)
+	attach := attacher(t, s, r.ID)
 	sessionIDs := make([]string, 50)
 	for i := 0; i < 50; i++ {
 		sessionIDs[i] = fmt.Sprintf("s%d", i)
-		attach(t, s, r.ID, sessionIDs[i], fmt.Sprintf("task %d", i), "pass")
+		attach(sessionIDs[i], fmt.Sprintf("task %d", i), "pass")
 	}
 
 	stop := make(chan struct{})

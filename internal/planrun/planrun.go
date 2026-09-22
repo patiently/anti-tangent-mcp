@@ -277,6 +277,7 @@ func (s *Store) Attach(runID, sessionID string, ref TaskRef, preVerdict string) 
 	row.SessionID = sessionID
 	row.PreVerdict = preVerdict
 	row.Attempts++
+	row.Lite = false
 	if r.sessions == nil {
 		r.sessions = map[string]int{}
 	}
