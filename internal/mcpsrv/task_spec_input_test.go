@@ -1,9 +1,11 @@
 package mcpsrv
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/patiently/anti-tangent-mcp/internal/session"
@@ -125,8 +127,8 @@ func TestNormalizeTaskSpecInputs_Verification(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"go test ./..."}, in.Verification)
 
-	_, err = normalizeTaskSpecInputs(ValidateTaskSpecArgs{TaskTitle: "t", Goal: "g", Verification: []string{strings.Repeat("x", maxPinnedByChars+1)}}, 1<<20)
-	require.EqualError(t, err, "verification[0] must be at most 500 characters")
+	_, err = normalizeTaskSpecInputs(ValidateTaskSpecArgs{TaskTitle: "t", Goal: "g", Verification: []string{strings.Repeat("x", maxVerificationChars+1)}}, 1<<20)
+	require.EqualError(t, err, "verification[0] must be at most 2000 characters")
 
 	many := make([]string, maxPinnedByEntries+1)
 	for i := range many {
@@ -137,4 +139,39 @@ func TestNormalizeTaskSpecInputs_Verification(t *testing.T) {
 
 	_, err = normalizeTaskSpecInputs(ValidateTaskSpecArgs{TaskTitle: "t", Goal: "g", Verification: []string{strings.Repeat("x", 400)}}, 300)
 	require.ErrorContains(t, err, "task spec payload 402 bytes > cap 300")
+}
+
+func TestNormalizeTaskSpecInputs_VerificationHasItsOwnCap(t *testing.T) {
+	args := ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G", Verification: []string{strings.Repeat("a", maxVerificationChars)}}
+	in, err := normalizeTaskSpecInputs(args, 1<<20)
+	require.NoError(t, err, "a step of %d characters is within the verification cap", maxVerificationChars)
+	require.Len(t, in.Verification, 1)
+
+	args.Verification = []string{strings.Repeat("a", maxVerificationChars+1)}
+	_, err = normalizeTaskSpecInputs(args, 1<<20)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "verification[0] must be at most 2000 characters")
+}
+
+func TestNormalizeTaskSpecInputs_PinnedByKeepsTheShorterCap(t *testing.T) {
+	args := ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G", PinnedBy: []string{strings.Repeat("a", maxPinnedByChars+1)}}
+	_, err := normalizeTaskSpecInputs(args, 1<<20)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pinned_by[0] must be at most 500 characters")
+}
+
+func TestNormalizeTaskSpecInputs_VerifiedReferencesTakeTwoHundred(t *testing.T) {
+	refs := make([]string, maxVerifiedReferenceEntries)
+	for i := range refs {
+		refs[i] = fmt.Sprintf("internal/pkg/file%d.go", i)
+	}
+	args := ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G", ControllerVerifiedReferences: refs}
+	in, err := normalizeTaskSpecInputs(args, 1<<20)
+	require.NoError(t, err)
+	assert.Len(t, in.ControllerVerifiedReferences, maxVerifiedReferenceEntries)
+
+	args.ControllerVerifiedReferences = append(refs, "one too many")
+	_, err = normalizeTaskSpecInputs(args, 1<<20)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controller_verified_references must contain at most 200 entries")
 }

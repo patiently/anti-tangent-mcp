@@ -189,12 +189,14 @@ func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 	descs := allPropertyDescriptions(t)
 	n := strconv.Itoa
 	bounded := []string{n(maxPinnedByEntries), n(maxPinnedByChars)}
+	verification := []string{n(maxPinnedByEntries), n(maxVerificationChars)}
+	verifiedRefs := []string{n(maxVerifiedReferenceEntries), n(maxPinnedByChars)}
 	payload := []string{n(config.DefaultMaxPayloadBytes), "ANTI_TANGENT_MAX_PAYLOAD_BYTES"}
 	planPayload := []string{n(config.DefaultPlanMaxPayloadBytes), "ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES"}
 	cases := map[string][]string{
 		"validate_task_spec.pinned_by":                              bounded,
-		"validate_task_spec.verification":                           bounded,
-		"validate_task_spec.controller_verified_references":         bounded,
+		"validate_task_spec.verification":                           verification,
+		"validate_task_spec.controller_verified_references":         verifiedRefs,
 		"validate_task_spec.test_strategy_notes":                    bounded,
 		"validate_task_spec.codebase_conventions":                   bounded,
 		"validate_task_spec.testability_extractions":                bounded,
@@ -223,7 +225,7 @@ func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 		"validate_completion.controller_rulings[].ruling":           {n(maxControllerRulingChars)},
 		"validate_plan.controller_rulings":                          {n(maxControllerRulingEntries), n(maxControllerRulingChars)},
 		"validate_plan.controller_rulings[].ruling":                 {n(maxControllerRulingChars)},
-		"validate_plan.controller_verified_references":              bounded,
+		"validate_plan.controller_verified_references":              verifiedRefs,
 	}
 	for path, wants := range cases {
 		desc, ok := descs[path]

@@ -326,7 +326,7 @@ func TestValidateTaskSpec_ControllerVerifiedReferencesLimitsRejected(t *testing.
 	d := newDeps(t, rv)
 	h := &handlers{deps: d}
 
-	tooMany := make([]string, 51)
+	tooMany := make([]string, 201)
 	for i := range tooMany {
 		tooMany[i] = "internal/foo.go"
 	}
@@ -336,7 +336,7 @@ func TestValidateTaskSpec_ControllerVerifiedReferencesLimitsRejected(t *testing.
 		ControllerVerifiedReferences: tooMany,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "controller_verified_references must contain at most 50 entries")
+	assert.Contains(t, err.Error(), "controller_verified_references must contain at most 200 entries")
 
 	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
 		TaskTitle:                    "T",
