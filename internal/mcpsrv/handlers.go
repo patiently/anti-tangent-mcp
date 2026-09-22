@@ -101,8 +101,9 @@ type ValidateTaskSpecArgs struct {
 	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
 	// PlanRunID ties this task to a plan run minted by validate_plan. Best
 	// effort: an unknown or expired id must not fail the review.
-	PlanRunID string `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call."`
-	TaskIndex int    `json:"task_index,omitempty" jsonschema:"The task's 1-based position in the plan, from the controller's dispatch. With plan_run_id it names the plan task this call belongs to; without it the task is found by matching task_title against the plan's headings. Validating the same task again updates its plan_run_report row instead of adding one."`
+	PlanRunID    string   `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call."`
+	ContextPaths []string `json:"context_paths,omitempty" jsonschema:"Absolute paths to files the implementer was told to work from, such as its dispatch brief: the server reads them and shows the reviewer their whole contents, so a term or step they define is not reported as missing from the spec. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the task-spec payload cap."`
+	TaskIndex    int      `json:"task_index,omitempty" jsonschema:"The task's 1-based position in the plan, from the controller's dispatch. With plan_run_id it names the plan task this call belongs to; without it the task is found by matching task_title against the plan's headings. Validating the same task again updates its plan_run_report row instead of adding one."`
 }
 
 type handlers struct {
@@ -139,6 +140,11 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, err
 	}
 
+	contextFiles, _, cerr := resolveContextPaths(args.ContextPaths, h.deps.Cfg)
+	if cerr != nil {
+		return h.rejectTaskSpecContextPaths(cerr)
+	}
+
 	spec := session.TaskSpec{
 		Title:                        args.TaskTitle,
 		Goal:                         args.Goal,
@@ -162,7 +168,11 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		args.ModelOverride,
 		h.deps.Cfg.PreModel,
 		func() (prompts.Output, error) {
-			return prompts.RenderPre(prompts.PreInput{Spec: spec, ProjectKnowledge: inputs.ProjectKnowledge})
+			return prompts.RenderPre(prompts.PreInput{
+				Spec:             spec,
+				ProjectKnowledge: inputs.ProjectKnowledge,
+				ContextFiles:     toPromptContextFiles(contextFiles),
+			})
 		},
 		"render pre prompt",
 	)
@@ -1026,6 +1036,46 @@ func tooLargeEnvelope(tool, id string, model config.ModelRef, size, limit int, s
 		NextAction: "Reduce the payload and retry.",
 		ModelUsed:  model.String(),
 	}
+}
+
+// contextTooLargeTaskSpecEnvelope refuses a validate_task_spec call whose
+// context_paths do not fit, before any reviewer call. The error carries the
+// shape that failed and the cap in force; its message is the evidence.
+func contextTooLargeTaskSpecEnvelope(err *contextTooLargeError, model config.ModelRef) Envelope {
+	return Envelope{
+		Tool:      "validate_task_spec",
+		Verdict:   string(verdict.VerdictFail),
+		ModelUsed: model.String(),
+		Findings: []verdict.Finding{{
+			Severity:   verdict.SeverityCritical,
+			Category:   verdict.CategoryTooLarge,
+			Criterion:  "context_paths",
+			Evidence:   err.Error(),
+			Suggestion: "Attach fewer or smaller files, or raise ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES (staying at or below ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES).",
+		}},
+		NextAction: "Reduce the attached set and retry.",
+	}
+}
+
+// rejectTaskSpecContextPaths turns a resolveContextPaths failure for
+// validate_task_spec into its response: a cap breach (contextTooLargeError)
+// becomes a rejection envelope with no reviewer call, and any other
+// resolution failure (bad path, outside ANTI_TANGENT_PLAN_ROOTS) stays a
+// transport error. Split out of ValidateTaskSpec so that branch does not
+// count against its own cyclomatic complexity.
+func (h *handlers) rejectTaskSpecContextPaths(cerr error) (*mcp.CallToolResult, Envelope, error) {
+	var tle *contextTooLargeError
+	if !errors.As(cerr, &tle) {
+		return nil, Envelope{}, cerr
+	}
+	env := contextTooLargeTaskSpecEnvelope(tle, h.deps.Cfg.PreModel)
+	h.recordStat(statParams{
+		tool:      "validate_task_spec",
+		verdict:   env.Verdict,
+		findings:  env.Findings,
+		modelUsed: env.ModelUsed,
+	})
+	return rejectionEnvelopeResult(env)
 }
 
 func validateCompletionTool() *mcp.Tool {

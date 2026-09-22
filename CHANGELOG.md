@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a task's step text, and compressing steps to fit made the reviewer report them as undefined.
 - `controller_verified_references` accepts 200 entries on `validate_task_spec` and `validate_plan`. It is the
   only way to clear the rolled-up codebase-reference checklist, and a plan can cite more than 50 code facts.
+- `validate_task_spec` accepts `context_paths`: the server reads those files and shows the spec reviewer
+  their whole contents, so a term, path or step the dispatch brief defines is no longer reported as
+  missing from the spec. Same limits as `validate_plan`'s attachments.
 
 ### Fixed
 

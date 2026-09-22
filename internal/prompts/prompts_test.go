@@ -120,6 +120,32 @@ func TestRenderPre_WithoutControllerVerifiedReferencesOmitsSection(t *testing.T)
 	assert.NotContains(t, out.User, "Controller-verified references:")
 }
 
+func TestRenderPre_AttachedFilesAreShownWithTheirPaths(t *testing.T) {
+	out, err := RenderPre(PreInput{
+		Spec: session.TaskSpec{Title: "T", Goal: "G", AcceptanceCriteria: []string{"AC"}},
+		ContextFiles: []ContextFile{{
+			Path: "/repo/docs/brief.md", Bytes: 12, SHA256Short: "abc123", Content: "NET means internal/net",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "/repo/docs/brief.md")
+	assert.Contains(t, out.User, "NET means internal/net")
+	assert.Contains(t, out.User, "an attached file defines")
+}
+
+func TestRenderPre_NonceIsDerivedWhenUnset(t *testing.T) {
+	in := PreInput{
+		Spec:         session.TaskSpec{Title: "T", Goal: "G"},
+		ContextFiles: []ContextFile{{Path: "/repo/a.go", Bytes: 3, SHA256Short: "aaa", Content: "package a"}},
+	}
+	first, err := RenderPre(in)
+	require.NoError(t, err)
+	second, err := RenderPre(in)
+	require.NoError(t, err)
+	assert.Equal(t, first.User, second.User, "the same attachment set renders identically")
+	assert.NotContains(t, first.User, "BEGIN FILE :", "a derived nonce is never empty")
+}
+
 func TestRenderMid(t *testing.T) {
 	out, err := RenderMid(MidInput{
 		Spec: sampleSpec(),
