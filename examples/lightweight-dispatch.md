@@ -24,5 +24,8 @@ If the verdict is `fail` or contains `critical`/`major` findings, do not report 
 
 - `session_id`: pass an empty string `""`. Lightweight mode skips `validate_task_spec`, so there is no session_id to thread. The handler accepts the empty string when at least one piece of evidence is non-empty; it synthesizes a minimal task spec (Goal = summary; no ACs) for the reviewer.
 - `summary`: <one-paragraph summary of what was implemented>
+- `plan_run_id`: the controller's `plan_run_id`, when the task belongs to a plan run, with
+  `task_index` (the task's 1-based position in the plan) or `task_title` (its heading), so
+  `plan_run_report` counts the task. Without one of them the task is not recorded.
 - `final_files`, `final_diff`, `test_evidence`: at least one must be non-empty
 - `codescene`: required under `ANTI_TANGENT_CODESCENE=required` — pass the `analyze_change_set` result the same as any other task; see the CodeScene bullets above for the skip shape and what draws a major. Optional and may be omitted when `ANTI_TANGENT_CODESCENE` is unset.

@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or `task_title`, and the task then appears in `plan_run_report`, marked `(lite)`. Lightweight
   tasks were previously invisible to the report.
 
+### Changed
+
+- The controller protocol passes `task_index` with `plan_run_id` in every dispatch, and a
+  lightweight task passes both to `validate_completion`, so every dispatched task appears in
+  `plan_run_report`.
+
 ### Fixed
 
 - `plan_run_report` keeps one row per plan task. A task is found by its position in the plan or by
