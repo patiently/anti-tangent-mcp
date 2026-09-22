@@ -1258,10 +1258,17 @@ func ellipsisExemptPath(path string) bool {
 	return false
 }
 
+// finalDiffRegenerateSuggestion is the remedy for a rejection whose reason
+// names something wrong with final_diff itself: unlike a final_files defect,
+// the fix is to regenerate the diff, not to resend file contents.
+const finalDiffRegenerateSuggestion = "Regenerate the diff with `git diff`, and pass it as `final_diff_path`."
+
 // checkEvidenceShape inspects finalDiff/files for malformed evidence shapes.
-// Returns a non-empty human-readable reason string when a rule fires; empty
-// string when the evidence looks structurally sound. The reason is what
-// populates the rejection finding's Evidence field.
+// Returns a non-empty human-readable reason string when a rule fires (empty
+// string when the evidence looks structurally sound), plus a suggestion that
+// is either "" (the caller's generic remedy applies) or
+// finalDiffRegenerateSuggestion when the reason is final_diff-scoped. The
+// reason populates the rejection finding's Evidence field.
 //
 // Decoupled from ValidateCompletionArgs (rather than taking the whole args
 // struct) so it works identically for validate_completion's resolved
@@ -1275,31 +1282,31 @@ func ellipsisExemptPath(path string) bool {
 //     ellipsis-line scan, hunk-order scan
 //  2. final_files empty Path
 //  3. final_files content substring + ellipsis-line scan
-func checkEvidenceShape(finalDiff string, files []FileArg) string {
+func checkEvidenceShape(finalDiff string, files []FileArg) (reason, suggestion string) {
 	if finalDiff != "" {
-		if reason := finalDiffMalformedReason(finalDiff); reason != "" {
-			return reason
+		if r := finalDiffMalformedReason(finalDiff); r != "" {
+			return r, finalDiffRegenerateSuggestion
 		}
 	}
 	for i, f := range files {
 		if strings.TrimSpace(f.Path) == "" {
-			return fmt.Sprintf("final_files[%d].path is empty", i)
+			return fmt.Sprintf("final_files[%d].path is empty", i), ""
 		}
 	}
 	for i, f := range files {
 		lower := strings.ToLower(f.Content)
 		for _, p := range evidenceTruncationPatterns {
 			if idx := strings.Index(lower, p); idx >= 0 {
-				return fmt.Sprintf("final_files[%d].content (path %q) contains truncation marker %q at offset %d", i, f.Path, p, idx)
+				return fmt.Sprintf("final_files[%d].content (path %q) contains truncation marker %q at offset %d", i, f.Path, p, idx), ""
 			}
 		}
 		if !ellipsisExemptPath(f.Path) {
 			if loc := evidenceEllipsisLine.FindStringIndex(f.Content); loc != nil {
-				return fmt.Sprintf("final_files[%d].content (path %q) contains a placeholder line `...` at offset %d", i, f.Path, loc[0])
+				return fmt.Sprintf("final_files[%d].content (path %q) contains a placeholder line `...` at offset %d", i, f.Path, loc[0]), ""
 			}
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // finalDiffMalformedReason inspects finalDiff alone: truncation markers, an
@@ -1516,8 +1523,16 @@ func storeRejection(key [32]byte, env Envelope) {
 }
 
 // malformedEvidenceEnvelope builds the rejection envelope for a guard hit.
+// extraSuggestion, when non-empty, is appended to the generic remedy — used
+// for a reason specific enough to name its own fix (e.g. a final_diff shape
+// problem, whose fix is to regenerate the diff, not to resend file
+// contents); pass "" to get the generic remedy alone.
 // Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
-func malformedEvidenceEnvelope(tool, sessionID, reason, modelUsed string) Envelope {
+func malformedEvidenceEnvelope(tool, sessionID, reason, extraSuggestion, modelUsed string) Envelope {
+	suggestion := "Submit full file contents in final_files, or a complete unified diff (no truncation markers) in final_diff."
+	if extraSuggestion != "" {
+		suggestion += " " + extraSuggestion
+	}
 	return Envelope{
 		Tool:      tool,
 		SessionID: sessionID,
@@ -1527,7 +1542,7 @@ func malformedEvidenceEnvelope(tool, sessionID, reason, modelUsed string) Envelo
 			Category:   verdict.CategoryMalformedEvidence,
 			Criterion:  "evidence_shape",
 			Evidence:   reason,
-			Suggestion: "Submit full file contents in final_files, or a complete unified diff (no truncation markers) in final_diff. Regenerate the diff with `git diff`, and pass it as `final_diff_path`.",
+			Suggestion: suggestion,
 		}},
 		NextAction: "Re-submit with complete evidence; current submission appears truncated.",
 		ModelUsed:  modelUsed,
@@ -1740,7 +1755,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			// The empty-resolved path is the ONLY evidence on the call:
 			// hard reject, with no paid reviewer call when there is nothing
 			// to review.
-			env := malformedEvidenceEnvelope("validate_completion", args.SessionID, emptyPathReasons[0], h.deps.Cfg.PostModel.String())
+			env := malformedEvidenceEnvelope("validate_completion", args.SessionID, emptyPathReasons[0], "", h.deps.Cfg.PostModel.String())
 			env.Lightweight = lightweight
 			clamped := prependClamp(env, clamp)
 			h.recordStat(statParams{
@@ -1834,8 +1849,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		})
 		return rejectionEnvelopeResult(c)
 	}
-	if reason := checkEvidenceShape(args.FinalDiff, resolvedFiles); reason != "" {
-		env := malformedEvidenceEnvelope("validate_completion", args.SessionID, reason, h.deps.Cfg.PostModel.String())
+	if reason, suggestion := checkEvidenceShape(args.FinalDiff, resolvedFiles); reason != "" {
+		env := malformedEvidenceEnvelope("validate_completion", args.SessionID, reason, suggestion, h.deps.Cfg.PostModel.String())
 		env.Lightweight = lightweight
 		storeRejection(cacheKey, env)
 		clamped := prependClamp(env, clamp)

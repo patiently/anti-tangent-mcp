@@ -2668,7 +2668,7 @@ func TestTooLargeEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
 }
 
 func TestMalformedEvidenceEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
-	env := malformedEvidenceEnvelope("validate_completion", "sess-1", "reason", "model")
+	env := malformedEvidenceEnvelope("validate_completion", "sess-1", "reason", "", "model")
 	require.Equal(t, "fail", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
@@ -2768,13 +2768,13 @@ func TestCheckEvidenceShape_NewPatternsRejected(t *testing.T) {
 	}
 	for _, p := range patterns {
 		t.Run("final_diff:"+p, func(t *testing.T) {
-			reason := checkEvidenceShape("valid header\n"+p+"\nmore", nil)
+			reason, _ := checkEvidenceShape("valid header\n"+p+"\nmore", nil)
 			require.NotEmpty(t, reason, "must reject %q in final_diff", p)
 			require.Contains(t, reason, "final_diff")
 		})
 		t.Run("final_files:"+p, func(t *testing.T) {
 			files := []FileArg{{Path: "foo.go", Content: "valid header\n" + p + "\nmore"}}
-			reason := checkEvidenceShape("", files)
+			reason, _ := checkEvidenceShape("", files)
 			require.NotEmpty(t, reason, "must reject %q in final_files[].content", p)
 			require.Contains(t, reason, "final_files")
 		})
@@ -2806,13 +2806,13 @@ func TestCheckEvidenceShape_GoPackageRecursionAccepted(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run("final_diff:"+tc.name, func(t *testing.T) {
-			reason := checkEvidenceShape("diff --git a/x b/x\n@@ -1,1 +1,1 @@\n"+tc.content+"\n", nil)
+			reason, _ := checkEvidenceShape("diff --git a/x b/x\n@@ -1,1 +1,1 @@\n"+tc.content+"\n", nil)
 			require.Empty(t, reason,
 				"shape-guard must accept Go package-recursion / bare-ellipsis content: %q", tc.content)
 		})
 		t.Run("final_files:"+tc.name, func(t *testing.T) {
 			files := []FileArg{{Path: "x_test.go", Content: tc.content}}
-			reason := checkEvidenceShape("", files)
+			reason, _ := checkEvidenceShape("", files)
 			require.Empty(t, reason,
 				"shape-guard must accept Go package-recursion / bare-ellipsis content: %q", tc.content)
 		})
@@ -2845,7 +2845,7 @@ func TestCheckEvidenceShape_EllipsisPlaceholderLine(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reason := checkEvidenceShape(tc.diff, tc.files)
+			reason, _ := checkEvidenceShape(tc.diff, tc.files)
 			if tc.reject {
 				assert.NotEmpty(t, reason, "must reject")
 			} else {
@@ -2859,10 +2859,12 @@ func TestCheckEvidenceShape_PythonExemptionCoversOnlyTheEllipsis(t *testing.T) {
 	pyHunk := "diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n@@ -1,1 +1,2 @@\n def f():\n"
 	for _, marker := range evidenceTruncationPatterns {
 		t.Run("final_diff:"+marker, func(t *testing.T) {
-			assert.NotEmpty(t, checkEvidenceShape(pyHunk+"+    "+marker+"\n", nil))
+			reason, _ := checkEvidenceShape(pyHunk+"+    "+marker+"\n", nil)
+			assert.NotEmpty(t, reason)
 		})
 		t.Run("final_files:"+marker, func(t *testing.T) {
-			assert.NotEmpty(t, checkEvidenceShape("", []FileArg{{Path: "s.py", Content: "def f():\n    " + marker + "\n"}}))
+			reason, _ := checkEvidenceShape("", []FileArg{{Path: "s.py", Content: "def f():\n    " + marker + "\n"}})
+			assert.NotEmpty(t, reason)
 		})
 	}
 }
@@ -2876,6 +2878,8 @@ func TestDiffHunkOrderReason_AcceptsRealGitDiffs(t *testing.T) {
 			"diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
 		"new file": "diff --git a/new.go b/new.go\nnew file mode 100644\n--- /dev/null\n+++ b/new.go\n@@ -0,0 +1,2 @@\n+a\n+b\n",
 		"combined": "diff --cc a.go\n@@@ -1,2 -1,2 +1,3 @@@\n  a\n++b\n",
+		"two files, no diff --git headers (plain diff -u / diff -ruN)": "--- a/file1.go\n+++ b/file1.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+			"--- a/file2.go\n+++ b/file2.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			assert.Empty(t, diffHunkOrderReason(diff))
@@ -2893,6 +2897,26 @@ func TestDiffHunkOrderReason_RejectsTwoFilesUnderOneHeader(t *testing.T) {
 	assert.Contains(t, reason, "@@ -1,2 +1,3 @@")
 }
 
+// TestDiffHunkTracker_TrimsBothSectionHeaderPrefixes pins the fix for a
+// mislabeled path: a "diff --cc " line was previously trimmed with the
+// "diff --git " prefix, leaving the whole line as the path.
+func TestDiffHunkTracker_TrimsBothSectionHeaderPrefixes(t *testing.T) {
+	tr := &diffHunkTracker{}
+	tr.observe("diff --cc a.go")
+	assert.Equal(t, "a.go", tr.path)
+}
+
+// TestDiffHunkTracker_KeepsRealPathOverDevNull pins the fix for a deleted
+// file's "+++ /dev/null" line overwriting the tracked path with "/dev/null"
+// instead of keeping the last real (pre-image) path.
+func TestDiffHunkTracker_KeepsRealPathOverDevNull(t *testing.T) {
+	tr := &diffHunkTracker{}
+	tr.observe("diff --git a/x.go b/x.go")
+	tr.observe("--- a/x.go")
+	tr.observe("+++ /dev/null")
+	assert.Equal(t, "a/x.go b/x.go", tr.path)
+}
+
 func TestValidateCompletion_AMalformedDiffIsRejectedWithoutAReview(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("m")}
 	h := &handlers{deps: newDeps(t, rv)}
@@ -2906,6 +2930,59 @@ func TestValidateCompletion_AMalformedDiffIsRejectedWithoutAReview(t *testing.T)
 	assert.True(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
 	assert.Zero(t, rv.Calls, "a diff git could not have produced costs no reviewer call")
 	assert.Contains(t, env.Findings[0].Suggestion, "final_diff_path")
+}
+
+// TestCheckEvidenceShape_SuggestionOnlyForFinalDiffScopedReasons pins the fix
+// for the diff-specific remedy leaking onto final_files-scoped rejections: a
+// final_files defect needs no diff regenerated, since the caller is
+// submitting file contents, not a diff, and had nothing to do with
+// final_diff at all.
+func TestCheckEvidenceShape_SuggestionOnlyForFinalDiffScopedReasons(t *testing.T) {
+	t.Run("final_diff truncation marker", func(t *testing.T) {
+		_, suggestion := checkEvidenceShape("valid header\n/* ... */\nmore", nil)
+		assert.Equal(t, finalDiffRegenerateSuggestion, suggestion)
+	})
+	t.Run("final_diff ellipsis placeholder", func(t *testing.T) {
+		goHunk := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,3 +1,3 @@\n"
+		_, suggestion := checkEvidenceShape(goHunk+"+...\n", nil)
+		assert.Equal(t, finalDiffRegenerateSuggestion, suggestion)
+	})
+	t.Run("final_diff hunk order", func(t *testing.T) {
+		diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n" +
+			"@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+			"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+		_, suggestion := checkEvidenceShape(diff, nil)
+		assert.Equal(t, finalDiffRegenerateSuggestion, suggestion)
+	})
+	t.Run("final_files empty path", func(t *testing.T) {
+		_, suggestion := checkEvidenceShape("", []FileArg{{Path: "", Content: "x"}})
+		assert.Empty(t, suggestion, "a final_files defect needs no diff regenerated")
+	})
+	t.Run("final_files content truncation marker", func(t *testing.T) {
+		_, suggestion := checkEvidenceShape("", []FileArg{{Path: "f.go", Content: "x\n/* ... */\n"}})
+		assert.Empty(t, suggestion, "a final_files defect needs no diff regenerated")
+	})
+	t.Run("final_files content ellipsis placeholder", func(t *testing.T) {
+		_, suggestion := checkEvidenceShape("", []FileArg{{Path: "x.go", Content: "package x\n...\n"}})
+		assert.Empty(t, suggestion, "a final_files defect needs no diff regenerated")
+	})
+}
+
+func TestValidateCompletion_EvidenceGuard_FinalFilesRejectionSuggestionOmitsDiffRemedy(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		Summary:    "done",
+		FinalFiles: []CompletionFileArg{{Path: "", Content: strPtr("anything")}},
+	})
+	require.NoError(t, err)
+	require.True(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
+	for _, f := range env.Findings {
+		if f.Category == verdict.CategoryMalformedEvidence {
+			assert.NotContains(t, f.Suggestion, "final_diff_path",
+				"an empty final_files[].path has nothing to do with final_diff")
+		}
+	}
 }
 
 func TestValidateTaskSpec_CVRSuppressesUnverifiableClaim_ClaimLevel(t *testing.T) {

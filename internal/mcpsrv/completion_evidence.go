@@ -137,40 +137,59 @@ type diffHunkTracker struct {
 }
 
 // observe updates the tracker for one diff line and reports a rejection
-// reason when a "@@ " hunk header's old or new start falls at or before the
-// tracker's current end — see diffHunkOrderReason's doc comment for why that
-// means git could not have emitted this diff. A header the regex cannot
-// parse (e.g. a combined diff's "@@@" form) is left unjudged, and the
-// tracker's end positions are unchanged.
+// reason when a "@@ " hunk header names one via observeHunk — see
+// diffHunkOrderReason's doc comment for why that means git could not have
+// emitted this diff. A header the regex cannot parse (e.g. a combined
+// diff's "@@@" form) is left unjudged, and the tracker's end positions are
+// unchanged.
+//
+// "diff --git"/"diff --cc" bound a section in git's own output, but a plain
+// `diff -u`/`diff -ruN` file pair (no "diff --git" line at all) only ever
+// gets a "--- "/"+++ " pair, so both are treated as section boundaries too —
+// otherwise a second file's first hunk is judged against the first file's
+// end position. "+++ " additionally carries the section's display path,
+// preferring the pre-image path already on the tracker over "/dev/null" (a
+// deleted file's post-image) so the rejection names a real file.
 func (t *diffHunkTracker) observe(line string) string {
 	switch {
-	case strings.HasPrefix(line, "diff --git "), strings.HasPrefix(line, "diff --cc "):
+	case strings.HasPrefix(line, "diff --git "):
 		t.path, t.oldEnd, t.newEnd = strings.TrimPrefix(line, "diff --git "), 0, 0
+	case strings.HasPrefix(line, "diff --cc "):
+		t.path, t.oldEnd, t.newEnd = strings.TrimPrefix(line, "diff --cc "), 0, 0
+	case strings.HasPrefix(line, "--- "):
+		t.oldEnd, t.newEnd = 0, 0
 	case strings.HasPrefix(line, "+++ "):
-		t.path = strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
+		t.oldEnd, t.newEnd = 0, 0
+		if path := strings.TrimSpace(strings.TrimPrefix(line, "+++ ")); path != "/dev/null" {
+			t.path = path
+		}
 	case strings.HasPrefix(line, "@@ "):
-		m := hunkHeaderRe.FindStringSubmatch(line)
-		if m == nil {
-			return ""
+		if m := hunkHeaderRe.FindStringSubmatch(line); m != nil {
+			return t.observeHunk(m, line)
 		}
-		oldStart, oldLen := hunkRange(m, 1)
-		newStart, newLen := hunkRange(m, 3)
-		if oldStart < t.oldEnd || newStart < t.newEnd {
-			return fmt.Sprintf("%s: hunk %q starts before the previous hunk ends; git emits a file's hunks in ascending order, so this diff was not produced by git", t.path, line)
-		}
-		t.oldEnd, t.newEnd = oldStart+oldLen, newStart+newLen
 	}
 	return ""
 }
 
-// hunkRange parses the "start,len" pair at m[base] (start) and m[base+1]
-// (len) from a hunkHeaderRe match; an omitted length is 1, as the
-// unified-diff format defines it.
-func hunkRange(m []string, base int) (int, int) {
-	s, _ := strconv.Atoi(m[base])
-	if m[base+1] == "" {
-		return s, 1
+// observeHunk parses one "@@ " hunk header's captured old/new ranges (an
+// omitted length is 1, as the unified-diff format defines it) and reports a
+// rejection reason when the old or new start falls at or before the
+// tracker's current end — see diffHunkOrderReason's doc comment for why
+// that means git could not have produced this diff.
+func (t *diffHunkTracker) observeHunk(m []string, line string) string {
+	parseRange := func(start, length string) (int, int) {
+		s, _ := strconv.Atoi(start)
+		if length == "" {
+			return s, 1
+		}
+		n, _ := strconv.Atoi(length)
+		return s, n
 	}
-	n, _ := strconv.Atoi(m[base+1])
-	return s, n
+	oldStart, oldLen := parseRange(m[1], m[2])
+	newStart, newLen := parseRange(m[3], m[4])
+	if oldStart < t.oldEnd || newStart < t.newEnd {
+		return fmt.Sprintf("%s: hunk %q starts before the previous hunk ends; git emits a file's hunks in ascending order, so this diff was not produced by git", t.path, line)
+	}
+	t.oldEnd, t.newEnd = oldStart+oldLen, newStart+newLen
+	return ""
 }
