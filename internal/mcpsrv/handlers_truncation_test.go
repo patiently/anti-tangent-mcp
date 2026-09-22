@@ -3,10 +3,12 @@ package mcpsrv
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
@@ -118,4 +120,31 @@ func TestValidateCompletion_TruncatedReviewKeepsTheLastCompleteFindings(t *testi
 	require.True(t, ok)
 	assert.Contains(t, evidenceOf(sess.PostFindings), "first")
 	assert.NotContains(t, evidenceOf(sess.PostFindings), "second")
+}
+
+const truncationDelay = 20 * time.Millisecond
+
+func TestValidateTaskSpec_TruncatedReviewReportsElapsedTime(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated, delay: truncationDelay}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, env.ReviewMS, truncationDelay.Milliseconds())
+}
+
+func TestReviewPlanSingle_TruncationReportsElapsedTime(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated, delay: truncationDelay}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, _, ms, _, err := h.reviewPlanSingle(context.Background(), h.deps.Cfg.PlanModel, prompts.Output{System: "s", User: "u"}, 100)
+	require.ErrorIs(t, err, providers.ErrResponseTruncated)
+	assert.GreaterOrEqual(t, ms, truncationDelay.Milliseconds())
+}
+
+func TestReviewPlanChunked_PassOneTruncationReportsElapsedTime(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated, delay: truncationDelay}
+	h := &handlers{deps: newDeps(t, rv)}
+	rendered := renderedPlanReview{FindingsOnly: &prompts.Output{System: "s", User: "u"}}
+	_, _, ms, _, err := h.reviewPlanChunked(context.Background(), h.deps.Cfg.PlanModel, rendered, 100)
+	require.ErrorIs(t, err, providers.ErrResponseTruncated)
+	assert.GreaterOrEqual(t, ms, truncationDelay.Milliseconds())
 }

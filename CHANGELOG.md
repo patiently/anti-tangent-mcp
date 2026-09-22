@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A plan-run report recovered from the plan ledger after a restart matches the live one. Rows are
   written when a task attaches and again whenever they change, not only at completion, so a task
   still in progress survives a restart; the ledger header records the plan's task headings.
+- A truncated review reports the time the reviewer actually spent in `review_ms`, and in stats,
+  instead of 0.
 
 ## [0.24.0] - 2026-09-20
 

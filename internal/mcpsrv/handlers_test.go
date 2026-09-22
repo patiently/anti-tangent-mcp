@@ -35,6 +35,7 @@ type fakeReviewer struct {
 	name        string
 	resp        providers.Response
 	err         error
+	delay       time.Duration // slept before answering, so a test can observe elapsed reviewer time
 	Calls       int
 	LastRequest providers.Request // captured on every Review call; tests inspect rv.LastRequest.User to assert prompt content
 }
@@ -43,6 +44,9 @@ func (f *fakeReviewer) Name() string { return f.name }
 func (f *fakeReviewer) Review(ctx context.Context, req providers.Request) (providers.Response, error) {
 	f.Calls++
 	f.LastRequest = req
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
 	return f.resp, f.err
 }
 

@@ -371,7 +371,7 @@ func (h *handlers) runReview(ctx context.Context, model config.ModelRef, p promp
 	if !errors.Is(err, providers.ErrResponseTruncated) {
 		return reviewOutcome{}, err
 	}
-	out := reviewOutcome{ModelUsed: model.String(), Truncated: true}
+	out := reviewOutcome{ModelUsed: model.String(), ReviewMS: ms, Truncated: true}
 	if recovered, marker, ok := recoverPartialFindings(partialRaw, perTaskMaxTokensEnvVar); ok {
 		out.Result = recovered
 		out.Server = []verdict.Finding{marker}

@@ -269,7 +269,7 @@ func (h *handlers) review(ctx context.Context, model config.ModelRef, p prompts.
 	resp, err := rv.Review(ctx, req)
 	if err != nil {
 		if errors.Is(err, providers.ErrResponseTruncated) {
-			return verdict.Result{}, "", 0, resp.RawJSON, err
+			return verdict.Result{}, "", time.Since(start).Milliseconds(), resp.RawJSON, err
 		}
 		return verdict.Result{}, "", 0, nil, err
 	}
@@ -280,7 +280,7 @@ func (h *handlers) review(ctx context.Context, model config.ModelRef, p prompts.
 		resp, err = rv.Review(ctx, req)
 		if err != nil {
 			if errors.Is(err, providers.ErrResponseTruncated) {
-				return verdict.Result{}, "", 0, resp.RawJSON, err
+				return verdict.Result{}, "", time.Since(start).Milliseconds(), resp.RawJSON, err
 			}
 			return verdict.Result{}, "", 0, nil, err
 		}
@@ -2555,7 +2555,7 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 	resp, err := rv.Review(ctx, req)
 	if err != nil {
 		if errors.Is(err, providers.ErrResponseTruncated) {
-			return verdict.PlanResult{}, "", 0, resp.RawJSON, err
+			return verdict.PlanResult{}, "", time.Since(start).Milliseconds(), resp.RawJSON, err
 		}
 		return verdict.PlanResult{}, "", 0, nil, err
 	}
@@ -2566,7 +2566,7 @@ func (h *handlers) reviewPlanSingle(ctx context.Context, model config.ModelRef, 
 		resp, err = rv.Review(ctx, req)
 		if err != nil {
 			if errors.Is(err, providers.ErrResponseTruncated) {
-				return verdict.PlanResult{}, "", 0, resp.RawJSON, err
+				return verdict.PlanResult{}, "", time.Since(start).Milliseconds(), resp.RawJSON, err
 			}
 			return verdict.PlanResult{}, "", 0, nil, err
 		}
@@ -2807,7 +2807,7 @@ func (h *handlers) reviewPlanChunked(
 	resp, err := rv.Review(ctx, req)
 	if err != nil {
 		if errors.Is(err, providers.ErrResponseTruncated) {
-			return verdict.PlanResult{}, "", 0, resp.RawJSON, err
+			return verdict.PlanResult{}, "", totalMs + time.Since(start).Milliseconds(), resp.RawJSON, err
 		}
 		return verdict.PlanResult{}, "", 0, nil, err
 	}
@@ -2817,7 +2817,7 @@ func (h *handlers) reviewPlanChunked(
 		resp, err = rv.Review(ctx, req)
 		if err != nil {
 			if errors.Is(err, providers.ErrResponseTruncated) {
-				return verdict.PlanResult{}, "", 0, resp.RawJSON, err
+				return verdict.PlanResult{}, "", totalMs + time.Since(start).Milliseconds(), resp.RawJSON, err
 			}
 			return verdict.PlanResult{}, "", 0, nil, err
 		}
