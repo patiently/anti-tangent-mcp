@@ -2897,6 +2897,19 @@ func TestDiffHunkOrderReason_RejectsTwoFilesUnderOneHeader(t *testing.T) {
 	assert.Contains(t, reason, "@@ -1,2 +1,3 @@")
 }
 
+// TestDiffHunkOrderReason_RejectsASpuriousDashDashDashPairMidGitSection pins
+// the fix for a bypass round 1's headerless-diff fix opened: real git never
+// emits a second "--- "/"+++ " pair within one "diff --git"-opened section,
+// so a hand-assembled diff could defeat the whole check by inserting one to
+// reset the tracked end positions mid-section.
+func TestDiffHunkOrderReason_RejectsASpuriousDashDashDashPairMidGitSection(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ a/a.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+		"--- a/a.go\n+++ a/a.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "@@ -1,2 +1,3 @@")
+}
+
 // TestDiffHunkTracker_TrimsBothSectionHeaderPrefixes pins the fix for a
 // mislabeled path: a "diff --cc " line was previously trimmed with the
 // "diff --git " prefix, leaving the whole line as the path.

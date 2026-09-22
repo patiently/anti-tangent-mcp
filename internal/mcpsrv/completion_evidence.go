@@ -130,10 +130,16 @@ func diffHunkOrderReason(diff string) string {
 
 // diffHunkTracker carries the current file section's path and the previous
 // hunk's old/new end positions across the line-by-line scan in
-// diffHunkOrderReason.
+// diffHunkOrderReason. sawGitHeader distinguishes a section a "diff --git"/
+// "diff --cc" line opened from a headerless plain-diff section: real git
+// never emits a second "--- "/"+++ " pair within one header-opened section,
+// so once such a header is seen, a later "--- "/"+++ " pair must not reset
+// the tracked end positions again — doing so would let a hand-assembled
+// diff defeat the whole check by inserting a spurious pair mid-section.
 type diffHunkTracker struct {
 	path           string
 	oldEnd, newEnd int
+	sawGitHeader   bool
 }
 
 // observe updates the tracker for one diff line and reports a rejection
@@ -143,23 +149,31 @@ type diffHunkTracker struct {
 // diff's "@@@" form) is left unjudged, and the tracker's end positions are
 // unchanged.
 //
-// "diff --git"/"diff --cc" bound a section in git's own output, but a plain
-// `diff -u`/`diff -ruN` file pair (no "diff --git" line at all) only ever
-// gets a "--- "/"+++ " pair, so both are treated as section boundaries too —
-// otherwise a second file's first hunk is judged against the first file's
-// end position. "+++ " additionally carries the section's display path,
-// preferring the pre-image path already on the tracker over "/dev/null" (a
-// deleted file's post-image) so the rejection names a real file.
+// "diff --git"/"diff --cc" open a section and set sawGitHeader, so a later
+// "+++ " within that same section does not reset the end positions again:
+// resetting on every "+++ " regardless of section origin would let a
+// hand-assembled diff defeat the whole check by inserting a spurious
+// "--- "/"+++ " pair mid-section, since real git never emits a second such
+// pair inside one header-opened section. A plain `diff -u`/`diff -ruN` file
+// pair (no "diff --git" line at all) never sets sawGitHeader, so its "+++ "
+// line resets normally — what a headerless multi-file diff needs, since
+// otherwise a second file's first hunk would be judged against the first
+// file's end position. "--- " is not itself checked: a valid diff section
+// always pairs it immediately before "+++ ", so it carries no boundary
+// signal "+++ " doesn't already carry. "+++ " additionally carries the
+// section's display path, preferring the pre-image path already on the
+// tracker over "/dev/null" (a deleted file's post-image) so the rejection
+// names a real file.
 func (t *diffHunkTracker) observe(line string) string {
 	switch {
 	case strings.HasPrefix(line, "diff --git "):
-		t.path, t.oldEnd, t.newEnd = strings.TrimPrefix(line, "diff --git "), 0, 0
+		t.path, t.oldEnd, t.newEnd, t.sawGitHeader = strings.TrimPrefix(line, "diff --git "), 0, 0, true
 	case strings.HasPrefix(line, "diff --cc "):
-		t.path, t.oldEnd, t.newEnd = strings.TrimPrefix(line, "diff --cc "), 0, 0
-	case strings.HasPrefix(line, "--- "):
-		t.oldEnd, t.newEnd = 0, 0
+		t.path, t.oldEnd, t.newEnd, t.sawGitHeader = strings.TrimPrefix(line, "diff --cc "), 0, 0, true
 	case strings.HasPrefix(line, "+++ "):
-		t.oldEnd, t.newEnd = 0, 0
+		if !t.sawGitHeader {
+			t.oldEnd, t.newEnd = 0, 0
+		}
 		if path := strings.TrimSpace(strings.TrimPrefix(line, "+++ ")); path != "/dev/null" {
 			t.path = path
 		}
