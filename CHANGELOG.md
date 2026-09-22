@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-09-22
+
+### Fixed
+
+- `plan_run_report` keeps one row per plan task. A task is found by its position in the plan or by
+  its title matching a plan heading, and validating the same task again updates its row and counts
+  an attempt instead of adding a second row. Every session a task ever opened keeps updating that
+  row, so an implementer that re-validated and carried on with its first `session_id` still lands
+  on the right task.
+
 ## [0.24.0] - 2026-09-20
 
 ### Added

@@ -223,12 +223,8 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 
 	if args.PlanRunID != "" && env.SessionID != "" {
 		// Best-effort: an unknown or expired run must not fail the review.
-		if !h.deps.PlanRuns.AppendRow(args.PlanRunID, planrun.TaskRow{
-			SessionID:      env.SessionID,
-			TaskTitle:      args.TaskTitle,
-			PreVerdict:     env.Verdict,
-			CodesceneState: planrun.StateMissing,
-		}) {
+		_, ok := h.deps.PlanRuns.Attach(args.PlanRunID, env.SessionID, planrun.TaskRef{Title: args.TaskTitle}, env.Verdict)
+		if !ok {
 			slog.Warn("plan run row append failed; run unknown or expired",
 				"plan_run_id", args.PlanRunID, "session_id", env.SessionID)
 		}
@@ -540,9 +536,9 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		h.deps.Sessions.RecordIssuedIDs(sess.ID, envelopeIDs(env))
 
 		if sess.PlanRunID != "" {
-			if !h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
+			if _, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
 				row.Checkpoints++
-			}) {
+			}); !ok {
 				slog.Warn("plan run row update failed; run or row unknown",
 					"plan_run_id", sess.PlanRunID, "session_id", sess.ID)
 			}
@@ -1960,7 +1956,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				state = planrun.StateSkipped
 			}
 		}
-		if !h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
+		if _, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
 			row.PostVerdict = env.Verdict
 			row.Severity = sev
 			row.SubmissionOnly = env.SubmissionDefectOnly
@@ -1969,7 +1965,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			row.CompletedAt = time.Now().UTC()
 			row.Waived = len(env.WaivedFindings)
 			row.Escalated = row.Escalated || env.Escalate
-		}) {
+		}); !ok {
 			slog.Warn("plan run row update failed; run or row unknown",
 				"plan_run_id", sess.PlanRunID, "session_id", sess.ID)
 		}

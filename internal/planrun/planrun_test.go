@@ -1,6 +1,7 @@
 package planrun
 
 import (
+	"fmt"
 	"regexp"
 	"sync"
 	"testing"
@@ -11,6 +12,142 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 )
+
+// attach records one validate_task_spec session against the task named by title.
+func attach(t *testing.T, s *Store, runID, sessionID, title, pre string) TaskRow {
+	t.Helper()
+	row, ok := s.Attach(runID, sessionID, TaskRef{Title: title}, pre)
+	require.True(t, ok)
+	return row
+}
+
+func titledTasks(titles ...string) []PlanTask {
+	out := make([]PlanTask, len(titles))
+	for i, title := range titles {
+		out[i] = PlanTask{Index: i + 1, Title: title}
+	}
+	return out
+}
+
+func TestAttach_ReValidationUpdatesTheSameRow(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha", "Task 2: Beta"))
+	attach(t, s, r.ID, "s1", "Alpha", "fail")
+	attach(t, s, r.ID, "s2", "Task 1:  alpha", "fail")
+	row := attach(t, s, r.ID, "s3", "Task 1: Alpha", "warn")
+
+	assert.Equal(t, 1, row.Index)
+	assert.Equal(t, 3, row.Attempts)
+	assert.Equal(t, "warn", row.PreVerdict)
+	got, _ := s.Snapshot(r.ID)
+	assert.Len(t, got.Rows, 1, "a re-validation must not add a row")
+}
+
+func TestAttach_IndexWinsOverTitle(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha", "Task 2: Beta"))
+	row, ok := s.Attach(r.ID, "s1", TaskRef{Index: 2, Title: "Alpha"}, "pass")
+	require.True(t, ok)
+	assert.Equal(t, 2, row.Index)
+}
+
+func TestAttach_OutOfRangeIndexFallsBackToTitle(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha", "Task 2: Beta"))
+	row, ok := s.Attach(r.ID, "s1", TaskRef{Index: 9, Title: "Beta"}, "pass")
+	require.True(t, ok)
+	assert.Equal(t, 2, row.Index)
+	assert.False(t, row.Unmatched)
+}
+
+func TestAttach_AmbiguousHeadingIsUnmatchedButStillOneRow(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Same", "Task 2: Same"))
+	first := attach(t, s, r.ID, "s1", "Same", "fail")
+	again := attach(t, s, r.ID, "s2", "Same", "pass")
+
+	assert.True(t, first.Unmatched)
+	assert.Equal(t, 3, first.Index, "an unmatched row is numbered after the plan's tasks")
+	assert.Equal(t, first.Index, again.Index)
+	assert.Equal(t, 2, again.Attempts)
+}
+
+func TestAttach_UntitledPlanTakesDispatchOrder(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.Create("pass", "rigorous", 2)
+	assert.Equal(t, 1, attach(t, s, r.ID, "s1", "Task A", "pass").Index)
+	assert.Equal(t, 2, attach(t, s, r.ID, "s2", "Task B", "pass").Index)
+	assert.Equal(t, 1, attach(t, s, r.ID, "s3", "Task A", "warn").Index, "same title, same row")
+	extra := attach(t, s, r.ID, "s4", "Task C", "pass")
+	assert.True(t, extra.Unmatched, "a plan with every task dispatched has no slot left")
+	assert.Equal(t, 3, extra.Index)
+}
+
+func TestAttach_EmptyRefRecordsNothing(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.Create("pass", "rigorous", 2)
+	_, ok := s.Attach(r.ID, "s1", TaskRef{Title: "  "}, "pass")
+	assert.False(t, ok)
+	got, _ := s.Snapshot(r.ID)
+	assert.Empty(t, got.Rows)
+}
+
+func TestUpdateRow_EverySessionOfATaskUpdatesIt(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha"))
+	attach(t, s, r.ID, "s1", "Alpha", "fail")
+	attach(t, s, r.ID, "s2", "Alpha", "pass")
+
+	row, ok := s.UpdateRow(r.ID, "s1", func(row *TaskRow) { row.PostVerdict = "pass" })
+	require.True(t, ok, "the first session still names the task")
+	assert.Equal(t, "pass", row.PostVerdict)
+	_, ok = s.UpdateRow(r.ID, "never-attached", func(*TaskRow) {})
+	assert.False(t, ok)
+}
+
+func TestUpsertLite_AddsALiteRowTitledFromThePlan(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha", "Task 2: Beta"))
+	row, ok := s.UpsertLite(r.ID, TaskRef{Index: 2}, func(row *TaskRow) { row.PostVerdict = "pass" })
+	require.True(t, ok)
+	assert.True(t, row.Lite)
+	assert.Equal(t, 2, row.Index)
+	assert.Equal(t, "Task 2: Beta", row.TaskTitle)
+	assert.Equal(t, "pass", row.PostVerdict)
+	assert.Zero(t, row.Attempts, "a lightweight task has no validate_task_spec session")
+}
+
+func TestUpsertLite_UpdatesAnAttachedRowWithoutMarkingItLite(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha"))
+	attach(t, s, r.ID, "s1", "Alpha", "pass")
+	row, ok := s.UpsertLite(r.ID, TaskRef{Title: "Alpha"}, func(row *TaskRow) { row.PostVerdict = "warn" })
+	require.True(t, ok)
+	assert.False(t, row.Lite)
+	assert.Equal(t, "warn", row.PostVerdict)
+	got, _ := s.Snapshot(r.ID)
+	assert.Len(t, got.Rows, 1)
+}
+
+func TestRowsStayInIndexOrder(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: A", "Task 2: B", "Task 3: C"))
+	attach(t, s, r.ID, "s3", "C", "pass")
+	attach(t, s, r.ID, "s1", "A", "pass")
+	got, _ := s.Snapshot(r.ID)
+	require.Len(t, got.Rows, 2)
+	assert.Equal(t, []int{1, 3}, []int{got.Rows[0].Index, got.Rows[1].Index})
+}
+
+func TestPlanTaskCount(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: A", "Task 2: B"))
+	n, ok := s.PlanTaskCount(r.ID)
+	assert.True(t, ok)
+	assert.Equal(t, 2, n)
+	_, ok = s.PlanTaskCount("pr_000000000000")
+	assert.False(t, ok)
+}
 
 func TestCreate_IDShape(t *testing.T) {
 	s := NewStore(time.Hour)
@@ -23,14 +160,15 @@ func TestAppendAndUpdateRow_PreservesOrder(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "actionable", 2)
 
-	require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: "s1", TaskTitle: "first", PreVerdict: "pass"}))
-	require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: "s2", TaskTitle: "second", PreVerdict: "warn"}))
+	attach(t, s, r.ID, "s1", "first", "pass")
+	attach(t, s, r.ID, "s2", "second", "warn")
 
-	require.True(t, s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
+	_, ok := s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
 		row.PostVerdict = "pass"
 		row.CodesceneState = StateRan
 		row.Codescene = &codescene.Digest{Ran: true, QualityGate: "passed", NetPP: -1.5}
-	}))
+	})
+	require.True(t, ok)
 
 	got, ok := s.Get(r.ID)
 	require.True(t, ok)
@@ -44,8 +182,10 @@ func TestAppendAndUpdateRow_PreservesOrder(t *testing.T) {
 func TestUpdateRow_UnknownIDs(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 1)
-	assert.False(t, s.AppendRow("pr_deadbeefdead", TaskRow{SessionID: "x"}))
-	assert.False(t, s.UpdateRow(r.ID, "nope", func(*TaskRow) {}))
+	_, ok := s.Attach("pr_deadbeefdead", "x", TaskRef{Title: "t"}, "pass")
+	assert.False(t, ok)
+	_, ok = s.UpdateRow(r.ID, "nope", func(*TaskRow) {})
+	assert.False(t, ok)
 }
 
 func TestEvictExpired(t *testing.T) {
@@ -67,7 +207,7 @@ func TestConcurrentAppend(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			s.AppendRow(r.ID, TaskRow{SessionID: string(rune('a' + i%26))})
+			s.Attach(r.ID, fmt.Sprintf("s%d", i), TaskRef{Title: fmt.Sprintf("task %d", i)}, "pass")
 		}(i)
 	}
 	wg.Wait()
@@ -79,26 +219,26 @@ func TestConcurrentAppend(t *testing.T) {
 
 // TestSnapshot_IndependentOfLaterUpdate is the load-bearing proof that
 // Snapshot copies Rows rather than aliasing the live slice. The lever is
-// UpdateRow, not AppendRow: UpdateRow writes into the existing backing array
-// via mutate(&r.Rows[i]) with no reallocation, so a non-copying Snapshot
-// would alias that same array and the snapshot would observe the mutation.
-// (An append-based version of this test is NOT discriminating: appending to
-// a slice at cap==len forces Go to allocate a new backing array regardless
-// of whether Snapshot copied, so the isolation would come from the runtime's
-// realloc, not from the fix under test — see fix-round-2 notes in the task
-// report for the empirical proof.)
+// UpdateRow: it writes into the existing backing array via mutate(&r.Rows[i])
+// with no reallocation, so a non-copying Snapshot would alias that same array
+// and the snapshot would observe the mutation. An append-only write is NOT
+// discriminating here: appending to a slice at cap==len forces Go to
+// allocate a new backing array regardless of whether Snapshot copied, so the
+// isolation would come from the runtime's realloc, not from the fix under
+// test.
 func TestSnapshot_IndependentOfLaterUpdate(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 1)
-	require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: "s1", TaskTitle: "first"}))
+	attach(t, s, r.ID, "s1", "first", "pass")
 
 	snap, ok := s.Snapshot(r.ID)
 	require.True(t, ok)
 	require.Len(t, snap.Rows, 1)
 
-	require.True(t, s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
+	_, ok = s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
 		row.TaskTitle = "mutated-after-snapshot"
-	}))
+	})
+	require.True(t, ok)
 
 	assert.Equal(t, "first", snap.Rows[0].TaskTitle, "snapshot row must not observe the later in-place mutation")
 
@@ -117,11 +257,12 @@ func TestSnapshot_IndependentOfLaterUpdate(t *testing.T) {
 func TestSnapshot_DeepCopiesSeverityAndCodescene(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 1)
-	require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: "s1", TaskTitle: "first"}))
-	require.True(t, s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
+	attach(t, s, r.ID, "s1", "first", "pass")
+	_, ok := s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
 		row.Severity = map[string]int{"major": 1}
 		row.Codescene = &codescene.Digest{Ran: true, NetPP: -1.5}
-	}))
+	})
+	require.True(t, ok)
 
 	snap, ok := s.Snapshot(r.ID)
 	require.True(t, ok)
@@ -147,14 +288,15 @@ func TestSnapshot_DeepCopiesSeverityAndCodescene(t *testing.T) {
 func TestSnapshot_DeepCopiesCodesceneNestedFields(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.Create("pass", "rigorous", 1)
-	require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: "s1", TaskTitle: "first"}))
-	require.True(t, s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
+	attach(t, s, r.ID, "s1", "first", "pass")
+	_, ok := s.UpdateRow(r.ID, "s1", func(row *TaskRow) {
 		row.Codescene = &codescene.Digest{
 			Ran:            true,
 			Verdicts:       &codescene.Verdicts{Improved: 1},
 			CategoryCounts: map[string]int{"complexity": 1},
 		}
-	}))
+	})
+	require.True(t, ok)
 
 	snap, ok := s.Snapshot(r.ID)
 	require.True(t, ok)
@@ -172,16 +314,14 @@ func TestSnapshot_DeepCopiesCodesceneNestedFields(t *testing.T) {
 }
 
 // TestConcurrentSnapshotWhileUpdating is the race-detector counterpart to
-// TestSnapshot_IndependentOfLaterUpdate. It replaces a prior
-// TestConcurrentSnapshotWhileAppending, which raced Snapshot against
-// AppendRow only: AppendRow only ever writes into array slots beyond the
-// length any earlier-captured snapshot already saw (or, on reallocation,
-// leaves the old array's contents untouched), so a reader ranging over
-// snap.Rows (bounded by the length captured at Snapshot time) never
-// physically overlaps memory with an AppendRow write. That made it
-// structurally incapable of ever catching a non-copying Snapshot under
-// -race, no matter how many iterations — confirmed empirically (see the
-// task report). UpdateRow is the only operation that writes into an index a
+// TestSnapshot_IndependentOfLaterUpdate. An append-only write only ever
+// writes into array slots beyond the length any earlier-captured snapshot
+// already saw (or, on reallocation, leaves the old array's contents
+// untouched), so a reader ranging over snap.Rows (bounded by the length
+// captured at Snapshot time) never physically overlaps memory with an
+// append-only write. That makes append-only writes structurally incapable of
+// ever catching a non-copying Snapshot under -race, no matter how many
+// iterations. UpdateRow is the only operation that writes into an index a
 // prior snapshot's slice already exposed, so it is the only lever that can
 // produce a genuine overlapping, unsynchronized access against a broken
 // (aliasing) Snapshot.
@@ -190,8 +330,8 @@ func TestConcurrentSnapshotWhileUpdating(t *testing.T) {
 	r := s.Create("pass", "rigorous", 50)
 	sessionIDs := make([]string, 50)
 	for i := 0; i < 50; i++ {
-		sessionIDs[i] = string(rune('a'+i%26)) + string(rune('0'+i/26))
-		require.True(t, s.AppendRow(r.ID, TaskRow{SessionID: sessionIDs[i], TaskTitle: "x"}))
+		sessionIDs[i] = fmt.Sprintf("s%d", i)
+		attach(t, s, r.ID, sessionIDs[i], fmt.Sprintf("task %d", i), "pass")
 	}
 
 	stop := make(chan struct{})
