@@ -2910,6 +2910,22 @@ func TestDiffHunkOrderReason_RejectsASpuriousDashDashDashPairMidGitSection(t *te
 	assert.Contains(t, reason, "@@ -1,2 +1,3 @@")
 }
 
+// TestDiffHunkOrderReason_RejectsAnAddedLineDisguisedAsAFileHeader pins the
+// fix for a bypass CodeRabbit found in round 2's fix: in a headerless diff
+// (no "diff --git" line), an added line whose own content starts with
+// "++ " renders, once the "+" hunk-body marker is prepended, as a line that
+// starts with "+++ " — indistinguishable at the prefix-check level from a
+// real "+++ " file header. Without payload tracking, that line resets the
+// tracked end positions mid-hunk, so a later out-of-order hunk compares
+// against zero instead of the first hunk's real end and passes.
+func TestDiffHunkOrderReason_RejectsAnAddedLineDisguisedAsAFileHeader(t *testing.T) {
+	diff := "--- a/file.go\n+++ b/file.go\n@@ -1,3 +1,4 @@\n a\n+++ malicious\n b\n c\n" +
+		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "@@ -1,2 +1,3 @@")
+}
+
 // TestDiffHunkTracker_TrimsBothSectionHeaderPrefixes pins the fix for a
 // mislabeled path: a "diff --cc " line was previously trimmed with the
 // "diff --git " prefix, leaving the whole line as the path.

@@ -105,6 +105,15 @@ func pathTailMatches(candidate, tail string) bool {
 // range per parent and says nothing this guard can judge.
 var hunkHeaderRe = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
+// hunkLineSpend maps a hunk body line's leading marker byte to how many of
+// the enclosing hunk's declared old/new line counts (from its "@@ " header)
+// it accounts for: a context line (' ') accounts for one of each; a removed
+// line ('-') for one old line; an added line ('+') for one new line; and a
+// "\ No newline at end of file" marker ('\\') for neither. Byte 0 (never a
+// real marker) stands in for an empty line and is deliberately absent, so a
+// lookup miss covers both "empty line" and "not a body marker" uniformly.
+var hunkLineSpend = map[byte][2]int{' ': {1, 1}, '-': {1, 0}, '+': {0, 1}, '\\': {0, 0}}
+
 // diffHunkOrderReason reports why a diff cannot have come from git, or "" when
 // nothing says it did not. Within one file section git emits hunks in
 // ascending order and merges any that would touch, so a hunk that starts at or
@@ -115,12 +124,40 @@ var hunkHeaderRe = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? 
 // A new section starts at each "diff --git" line, so the same file appearing
 // twice — as git log -p emits it — is judged per section. Line-by-line state
 // lives in diffHunkTracker so each function's own branching stays small.
+//
+// A hunk body line can read exactly like a file header: an added line whose
+// own content starts with "++ " renders, once the "+" body marker is
+// prepended, as a line starting with "+++ " — indistinguishable from a real
+// "+++ " header at the prefix-check level. consumeIfPayload runs before
+// observe on every line so observe only ever sees a line once the hunk that
+// opened before it has consumed exactly the old/new line counts its "@@ "
+// header declared (see hunkLineSpend). A line whose marker byte isn't in
+// hunkLineSpend while a count is still outstanding means the hunk ended
+// without using its declared count — also not a shape git produces — so both
+// counts are dropped and the line is left for observe on the same pass.
 func diffHunkOrderReason(diff string) string {
-	if diff == "" {
-		return ""
-	}
 	t := &diffHunkTracker{}
+	consumeIfPayload := func(line string) bool {
+		if max(t.oldRemaining, t.newRemaining) <= 0 {
+			return false
+		}
+		marker := byte(0)
+		if line != "" {
+			marker = line[0]
+		}
+		spend, ok := hunkLineSpend[marker]
+		if !ok {
+			t.oldRemaining, t.newRemaining = 0, 0
+			return false
+		}
+		t.oldRemaining -= spend[0]
+		t.newRemaining -= spend[1]
+		return true
+	}
 	for _, line := range strings.Split(diff, "\n") {
+		if consumeIfPayload(line) {
+			continue
+		}
 		if reason := t.observe(line); reason != "" {
 			return reason
 		}
@@ -136,10 +173,13 @@ func diffHunkOrderReason(diff string) string {
 // so once such a header is seen, a later "--- "/"+++ " pair must not reset
 // the tracked end positions again — doing so would let a hand-assembled
 // diff defeat the whole check by inserting a spurious pair mid-section.
+// oldRemaining/newRemaining count down the current hunk's old/new lines still
+// due, per diffHunkOrderReason's consumeIfPayload doc comment.
 type diffHunkTracker struct {
-	path           string
-	oldEnd, newEnd int
-	sawGitHeader   bool
+	path                       string
+	oldEnd, newEnd             int
+	sawGitHeader               bool
+	oldRemaining, newRemaining int
 }
 
 // observe updates the tracker for one diff line and reports a rejection
@@ -205,5 +245,6 @@ func (t *diffHunkTracker) observeHunk(m []string, line string) string {
 		return fmt.Sprintf("%s: hunk %q starts before the previous hunk ends; git emits a file's hunks in ascending order, so this diff was not produced by git", t.path, line)
 	}
 	t.oldEnd, t.newEnd = oldStart+oldLen, newStart+newLen
+	t.oldRemaining, t.newRemaining = oldLen, newLen
 	return ""
 }
