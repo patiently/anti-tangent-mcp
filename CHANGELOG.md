@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The controller protocol passes `task_index` with `plan_run_id` in every dispatch, and a
   lightweight task passes both to `validate_completion`, so every dispatched task appears in
   `plan_run_report`.
+- The controller protocol asks for the task's brief in `context_paths` on the dispatch's
+  `validate_task_spec` call, so the spec reviewer reads what the implementer was told to read.
 - `verification` accepts 2000 characters per entry, its own cap rather than `pinned_by`'s 500: it carries
   a task's step text, and compressing steps to fit made the reviewer report them as undefined.
 - `controller_verified_references` accepts 200 entries on `validate_task_spec` and `validate_plan`. It is the
