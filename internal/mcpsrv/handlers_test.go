@@ -2806,7 +2806,22 @@ func TestCheckEvidenceShape_GoPackageRecursionAccepted(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run("final_diff:"+tc.name, func(t *testing.T) {
-			reason, _ := checkEvidenceShape("diff --git a/x b/x\n@@ -1,1 +1,1 @@\n"+tc.content+"\n", nil)
+			// A real hunk's declared old/new counts must match its body
+			// (round 4 of the hunk-order guard rejects a mismatch), so wrap
+			// tc.content as a single, correctly-declared body line rather
+			// than an unmarked raw line: content already carrying a "+"
+			// body marker is a 0-old/1-new added line; anything else is
+			// treated as a 1-old/1-new context line, prefixed with the
+			// context marker rather than altering tc.content itself, so
+			// the exact substring under test is unchanged.
+			line, oldLen := tc.content, 1
+			if !strings.HasPrefix(line, "+") {
+				line = " " + line
+			} else {
+				oldLen = 0
+			}
+			diff := fmt.Sprintf("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,%d +1,1 @@\n%s\n", oldLen, line)
+			reason, _ := checkEvidenceShape(diff, nil)
 			require.Empty(t, reason,
 				"shape-guard must accept Go package-recursion / bare-ellipsis content: %q", tc.content)
 		})
@@ -2880,6 +2895,11 @@ func TestDiffHunkOrderReason_AcceptsRealGitDiffs(t *testing.T) {
 		"combined": "diff --cc a.go\n@@@ -1,2 -1,2 +1,3 @@@\n  a\n++b\n",
 		"two files, no diff --git headers (plain diff -u / diff -ruN)": "--- a/file1.go\n+++ b/file1.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
 			"--- a/file2.go\n+++ b/file2.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"-U0 (no context)":          "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -5 +5 @@\n-old\n+new\n",
+		"-U1 (one line of context)": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -4,3 +4,3 @@\n before\n-old\n+new\n after\n",
+		"rename with content changes": "diff --git a/old.go b/new.go\nsimilarity index 90%\nrename from old.go\nrename to new.go\n" +
+			"--- a/old.go\n+++ b/new.go\n@@ -10,3 +10,4 @@\n a\n+b\n c\n d\n",
+		"deletion": "diff --git a/x.go b/x.go\ndeleted file mode 100644\n--- a/x.go\n+++ /dev/null\n@@ -1,5 +0,0 @@\n-a\n-b\n-c\n-d\n-e\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			assert.Empty(t, diffHunkOrderReason(diff))
@@ -2915,15 +2935,80 @@ func TestDiffHunkOrderReason_RejectsASpuriousDashDashDashPairMidGitSection(t *te
 // (no "diff --git" line), an added line whose own content starts with
 // "++ " renders, once the "+" hunk-body marker is prepended, as a line that
 // starts with "+++ " — indistinguishable at the prefix-check level from a
-// real "+++ " file header. Without payload tracking, that line resets the
-// tracked end positions mid-hunk, so a later out-of-order hunk compares
-// against zero instead of the first hunk's real end and passes.
+// real "+++ " file header. Here the first hunk's declared count (3 old/4
+// new) is accurate — "+++ malicious" is genuinely its 2nd new-side line —
+// so it is correctly spent as ordinary payload (round 4's under/over-decl
+// checks do not fire), and the diff is still rejected the original way: the
+// second hunk starts before the first hunk's real end.
 func TestDiffHunkOrderReason_RejectsAnAddedLineDisguisedAsAFileHeader(t *testing.T) {
 	diff := "--- a/file.go\n+++ b/file.go\n@@ -1,3 +1,4 @@\n a\n+++ malicious\n b\n c\n" +
 		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
 	reason := diffHunkOrderReason(diff)
 	require.NotEmpty(t, reason)
 	assert.Contains(t, reason, "@@ -1,2 +1,3 @@")
+}
+
+// TestDiffHunkOrderReason_RejectsAnUnderDeclaredHunkBody pins the fix for a
+// worse hole than round 3 closed: a hunk header declares fewer lines than
+// its body actually has (here 1 old/1 new, but the body runs 3 lines before
+// the next hunk), so consumeIfPayload's declared count exhausts early and
+// the disguised "+++ malicious" line — arriving right after — is no longer
+// automatically trusted as a real file header just because the count says
+// the hunk is "done". Exhaustion of an attacker-controlled count is not
+// proof the hunk ended.
+func TestDiffHunkOrderReason_RejectsAnUnderDeclaredHunkBody(t *testing.T) {
+	diff := "--- a/file.go\n+++ b/file.go\n@@ -1,1 +1,1 @@\n a\n+++ malicious\n b\n" +
+		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "+++ malicious")
+}
+
+// TestDiffHunkOrderReason_RejectsAZeroLengthHunkFollowedByDisguisedPayload is
+// the same bypass class via "@@ -0,0 +0,0 @@", which declares zero lines and
+// so is "exhausted" from the instant it opens — the coordinator's "even less
+// effort" variant.
+func TestDiffHunkOrderReason_RejectsAZeroLengthHunkFollowedByDisguisedPayload(t *testing.T) {
+	diff := "--- a/file.go\n+++ b/file.go\n@@ -0,0 +0,0 @@\n+++ malicious\n" +
+		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "+++ malicious")
+}
+
+// TestDiffHunkOrderReason_RejectsAnOverDeclaredHunk pins the fix making
+// over-declaration an explicit, named rejection rather than an incidental
+// side effect of the hunk-order comparison: a hunk declares 5 old/5 new
+// lines but only "a" follows before the next hunk header arrives, so the
+// header lied about how much body it covers.
+func TestDiffHunkOrderReason_RejectsAnOverDeclaredHunk(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,5 +1,5 @@\n a\n" +
+		"@@ -10,2 +10,3 @@\n x\n+y\n z\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "@@ -1,5 +1,5 @@")
+}
+
+// TestDiffHunkOrderReason_AcceptsAnEmptyContextLine is the false-positive
+// guard: some tools strip the trailing space from an empty context line,
+// producing a completely blank line inside a hunk's body. That blank line
+// must still spend one old and one new line like any other context line,
+// not be misread as an under-declared body ending.
+func TestDiffHunkOrderReason_AcceptsAnEmptyContextLine(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,3 +1,3 @@\n a\n\n b\n"
+	assert.Empty(t, diffHunkOrderReason(diff))
+}
+
+// TestDiffHunkOrderReason_AcceptsACorrectlyCountedHunkWithDisguisedPayloadLines
+// confirms the fix does not overreach: while a hunk's declared count is
+// still outstanding, lines that happen to start like "--- ", "+++ ",
+// "diff --git ", or "@@ " are still ordinary payload and must be spent, not
+// rejected — only a header-shaped line arriving once the count is actually
+// exhausted (or over-declared) is suspect.
+func TestDiffHunkOrderReason_AcceptsACorrectlyCountedHunkWithDisguisedPayloadLines(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,1 +1,5 @@\n a\n" +
+		"+++ malicious\n+--- also fake\n+diff --git also fake\n+@@ also fake\n"
+	assert.Empty(t, diffHunkOrderReason(diff))
 }
 
 // TestDiffHunkTracker_TrimsBothSectionHeaderPrefixes pins the fix for a
