@@ -106,11 +106,14 @@ func countCodescene(t *RunTotals, row TaskRow) {
 // asked for a branch-versus-base analysis, so rows sharing a base ref report
 // the same cumulative change and adding them would count it once per task.
 // Rows that named no base ref form one group. Keys are summed in sorted order
-// so the float result does not depend on map iteration.
+// so the float result does not depend on map iteration. A row that has not
+// completed is excluded even when its digest ran: an open task's own CodeScene
+// call is not yet a verdict on the task, so it must not stand in for the
+// branch delta.
 func branchNetPP(rows []TaskRow) float64 {
 	latest := map[string]TaskRow{}
 	for _, row := range rows {
-		if row.Codescene == nil || !row.Codescene.Ran {
+		if !countsTowardBranchNetPP(row) {
 			continue
 		}
 		key := row.Codescene.BaseRef
@@ -128,6 +131,12 @@ func branchNetPP(rows []TaskRow) float64 {
 		sum += latest[k].Codescene.NetPP
 	}
 	return sum
+}
+
+// countsTowardBranchNetPP reports whether row's CodeScene digest can stand in
+// for the branch delta: a completed row whose analysis actually ran.
+func countsTowardBranchNetPP(row TaskRow) bool {
+	return row.PostVerdict != "" && row.Codescene != nil && row.Codescene.Ran
 }
 
 // neverDispatched lists, by Index, the plan tasks no row names.
@@ -393,8 +402,8 @@ func Render(r *Run) string {
 }
 
 // renderNeverDispatched writes missing's plan tasks to b, one per line,
-// labeled by the plan's heading for that task or "task N" when the plan
-// carries none (a run created before headings were tracked).
+// labeled by the plan's heading for that task, or "task N" when the plan
+// carries no heading for that task.
 func renderNeverDispatched(b *strings.Builder, r *Run, missing []int) {
 	fmt.Fprintf(b, "  never dispatched: %d\n", len(missing))
 	for _, idx := range missing {

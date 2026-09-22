@@ -358,6 +358,16 @@ func TestTotals_BranchNetPPCountsEachBaseRefOnce(t *testing.T) {
 	assert.Contains(t, Render(r), "branch net problem points (latest per base ref): -2.0")
 }
 
+func TestTotals_BranchNetPPIgnoresARowThatHasNotCompleted(t *testing.T) {
+	ran := &codescene.Digest{Ran: true, QualityGate: "passed", NetPP: -5, BaseRef: "origin/main"}
+	r := &Run{ID: "pr_netpp0000002", TaskCount: 2, Rows: []TaskRow{
+		{Index: 1, PostVerdict: "pass", CodesceneState: StateRan, CompletedAt: time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC),
+			Codescene: &codescene.Digest{Ran: true, QualityGate: "passed", NetPP: -2, BaseRef: "origin/main"}},
+		{Index: 2, PreVerdict: "pass", Codescene: ran},
+	}}
+	assert.InDelta(t, -2, Totals(r).NetPP, 0.0001, "an open task's digest must not stand in for the branch delta")
+}
+
 func TestVerdictCell(t *testing.T) {
 	assert.Equal(t, "pass", verdictCell(TaskRow{PostVerdict: "pass"}))
 	assert.Equal(t, "warn (lite)", verdictCell(TaskRow{PostVerdict: "warn", Lite: true}))
