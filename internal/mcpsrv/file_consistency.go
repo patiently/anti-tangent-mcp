@@ -57,6 +57,57 @@ func looksLikePlanAbbreviation(root, rel string) bool {
 	return errors.Is(err, fs.ErrNotExist)
 }
 
+// diskTierFinding checks whether a path that was not created by an earlier
+// task exists on disk. It returns an evidence line if the path is missing,
+// a non-nil error if the check could not stat the path (permission denied,
+// I/O error, etc.), and the absolute path that caused the stat error. An
+// empty line and nil error means the path exists or the disk tier cannot
+// check it (abbreviation, out of bounds, etc.) and is not a finding.
+func diskTierFinding(repoRoot, p string, taskNum int) (line string, statErr error, problematicPath string) {
+	if looksLikePlanAbbreviation(repoRoot, p) {
+		return "", nil, ""
+	}
+	abs, ok := resolveUnderRoot(repoRoot, p)
+	if !ok {
+		return "", nil, ""
+	}
+	// resolveUnderRoot is LEXICAL only, and os.Stat follows symlinks.
+	// A link inside the repo pointing out of it ("vendor -> /etc") therefore
+	// makes the disk tier answer "does this path exist anywhere on this box"
+	// instead of "does this file exist in the repository" - the question it
+	// is documented to answer, and the only one a plan reviewer has any
+	// business asking.
+	//
+	// Resolve the PARENT and require it to stay under the root, then Lstat
+	// the leaf. Lstat, not Stat, because a symlink that lives in the repo IS
+	// a repo file: reporting it missing because its target is absent would be
+	// a false positive on every dangling in-repo link. A parent that will not
+	// resolve falls through to the os.Lstat below, whose error handling
+	// already separates "missing" from "could not look".
+	leaf := abs
+	if rp, rerr := filepath.EvalSymlinks(filepath.Dir(abs)); rerr == nil {
+		if !withinRoots(rp, []string{repoRoot}) {
+			return "", nil, ""
+		}
+		leaf = filepath.Join(rp, filepath.Base(abs))
+	}
+	// ONLY a genuine not-exists is a finding. A permission error, a
+	// too-long path, or an I/O error means the check could not look, not that
+	// the file is missing — reporting "does not exist" for those states a
+	// fact the server did not establish.
+	_, serr := os.Lstat(leaf)
+	switch {
+	case errors.Is(serr, fs.ErrNotExist):
+		line = fmt.Sprintf(
+			"Task %d modifies `%s`, which does not exist and is created by no earlier task",
+			taskNum, p)
+	case serr != nil:
+		statErr = serr
+		problematicPath = leaf
+	}
+	return line, statErr, problematicPath
+}
+
 // checkFileConsistency reports Modify: targets that cannot exist when their
 // task runs. Returns nil when the plan is consistent — which is the expected
 // outcome on a well-formed plan; this is a guard, not a source of findings.
@@ -133,55 +184,15 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 			if repoRoot == "" {
 				continue
 			}
-			if looksLikePlanAbbreviation(repoRoot, p) {
-				continue
+			line, serr, problematicPath := diskTierFinding(repoRoot, p, taskNum)
+			if line != "" {
+				lines = append(lines, line)
 			}
-			abs, ok := resolveUnderRoot(repoRoot, p)
-			if !ok {
-				continue
-			}
-			// resolveUnderRoot is LEXICAL only, and os.Stat follows
-			// symlinks. A link inside the repo pointing out of it
-			// ("vendor -> /etc") therefore makes the disk tier answer
-			// "does this path exist anywhere on this box" instead of
-			// "does this file exist in the repository" - the question it
-			// is documented to answer, and the only one a plan reviewer
-			// has any business asking.
-			//
-			// Resolve the PARENT and require it to stay under the root,
-			// then Lstat the leaf. Lstat, not Stat, because a symlink
-			// that lives in the repo IS a repo file: reporting it missing
-			// because its target is absent would be a false positive on
-			// every dangling in-repo link. A parent that will not resolve
-			// falls through to the os.Stat below, whose error handling
-			// already separates "missing" from "could not look".
-			leaf := abs
-			if rp, rerr := filepath.EvalSymlinks(filepath.Dir(abs)); rerr == nil {
-				if !withinRoots(rp, []string{repoRoot}) {
-					continue
-				}
-				leaf = filepath.Join(rp, filepath.Base(abs))
-			}
-			// ONLY a genuine not-exists is a finding. A permission error, a
-			// too-long path, or an I/O error means the check could not look,
-			// not that the file is missing — reporting "does not exist" for
-			// those states a fact the server did not establish.
-			//
-			// But "could not look" must not be silent either: an unreadable
-			// repo_root (wrong ownership, a mount that went away) makes the
-			// whole disk tier inert while the response is byte-identical to
-			// a clean run. The operator gets ONE stderr line per call naming
-			// how many targets could not be stat'd plus the first path and
-			// error; the finding list stays honest.
-			_, serr := os.Lstat(leaf)
-			switch {
-			case errors.Is(serr, fs.ErrNotExist):
-				lines = append(lines, fmt.Sprintf(
-					"Task %d modifies `%s`, which does not exist and is created by no earlier task", taskNum, p))
-			case serr != nil:
+			if serr != nil {
 				statErrs++
 				if firstStatErr == nil {
-					firstStatErrPath, firstStatErr = leaf, serr
+					firstStatErrPath = problematicPath
+					firstStatErr = serr
 				}
 			}
 		}
