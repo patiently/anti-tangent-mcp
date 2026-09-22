@@ -822,7 +822,20 @@ func TestValidatePlan_UnverifiableOnlyCalibratesToPass(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
 	assert.Equal(t, verdict.PlanQualityActionable, pr.PlanQuality)
-	assert.Contains(t, pr.NextAction, "No blocking plan-quality findings")
+	assert.True(t, strings.HasPrefix(pr.NextAction, "Plan passes: dispatch."), "got %q", pr.NextAction)
+	assert.Contains(t, pr.NextAction, "controller_verified_references")
+}
+
+func TestValidatePlan_AChecklistOnlyPassSaysDispatch(t *testing.T) {
+	raw := []byte(`{"plan_verdict":"warn","plan_quality":"actionable",
+		"plan_findings":[],
+		"tasks":[{"task_index":1,"task_title":"Task 1: t1","verdict":"warn","findings":[{"severity":"minor","category":"unverifiable_codebase_claim","criterion":"claim","evidence":"names parse()","suggestion":"grep"}],"suggested_header_block":"","suggested_header_reason":""}],
+		"next_action":"n"}`)
+	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
+	require.NoError(t, err)
+	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+	assert.True(t, strings.HasPrefix(pr.NextAction, "Plan passes: dispatch."), "got %q", pr.NextAction)
+	assert.Contains(t, pr.NextAction, "controller_verified_references")
 }
 
 // TestValidatePlan_UnverifiableOnly_PreservesRigorousQuality covers the

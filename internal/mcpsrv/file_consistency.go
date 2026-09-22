@@ -22,6 +22,12 @@ import (
 // planparser.RawTask.Title (e.g. "Task 4: Add /healthz endpoint").
 var taskNumberHeadingRe = regexp.MustCompile(`^Task (\d+):`)
 
+// planAbbreviationRe matches a path segment a plan uses as a name for a long
+// path: an ALL-CAPS identifier of two or more characters. A plan that writes
+// `NET` or `MAIN/foo/Bar.kt` means the path its Global Constraints define, and
+// the disk tier cannot resolve it.
+var planAbbreviationRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`)
+
 // taskNumber returns the plan's own declared number for tasks[i] — parsed
 // from its Title — falling back to the 1-based slice position when Title is
 // empty or does not match the "Task N:" shape. Findings must name the task
@@ -36,6 +42,19 @@ func taskNumber(tasks []planparser.RawTask, i int) int {
 		}
 	}
 	return i + 1
+}
+
+// looksLikePlanAbbreviation reports whether rel's first segment is an ALL-CAPS
+// identifier with no entry of that name at the repository root. A real
+// top-level name in that shape — VERSION, LICENSE, Makefile — exists on disk
+// and is checked like any other path.
+func looksLikePlanAbbreviation(root, rel string) bool {
+	first, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
+	if !planAbbreviationRe.MatchString(first) {
+		return false
+	}
+	_, err := os.Lstat(filepath.Join(root, first))
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // checkFileConsistency reports Modify: targets that cannot exist when their
@@ -112,6 +131,9 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 				continue
 			}
 			if repoRoot == "" {
+				continue
+			}
+			if looksLikePlanAbbreviation(repoRoot, p) {
 				continue
 			}
 			abs, ok := resolveUnderRoot(repoRoot, p)

@@ -52,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still in progress survives a restart; the ledger header records the plan's task headings.
 - A truncated review reports the time the reviewer actually spent in `review_ms`, and in stats,
   instead of 0.
+- The deterministic Create/Modify check no longer reports a plan's own path abbreviations as files that do
+  not exist. A reference whose first segment is an ALL-CAPS identifier with no entry of that name at
+  `repo_root` is a name the plan defines, and the check cannot resolve it; the finding it drew was major
+  and no controller ruling could clear it.
+- A plan whose only finding is the rolled-up codebase-reference checklist is told to dispatch, and to
+  pre-flight or list the references it has not verified, rather than being pointed back at the checklist.
 - Plan-level findings are fingerprinted apart from session findings. Every `over_building` finding
   outside a plan task shared one ID, `f_b720ec2d`, so a ruling on the plan-level finding could waive
   a `validate_completion` finding. Plan-level IDs change once with this release: a ruling carried

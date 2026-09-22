@@ -4,6 +4,7 @@
 package mcpsrv
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -97,7 +98,7 @@ func TestCalibratePlanVerdict_CountsAStrippedChecklist(t *testing.T) {
 	pr := verdict.PlanResult{PlanVerdict: verdict.VerdictWarn, PlanQuality: verdict.PlanQualityRough}
 	calibratePlanVerdictForUnverifiableOnly(&pr, true)
 	assert.Equal(t, verdict.PlanQualityActionable, pr.PlanQuality)
-	assert.Contains(t, pr.NextAction, "No blocking plan-quality findings")
+	assert.True(t, strings.HasPrefix(pr.NextAction, "Plan passes: dispatch."))
 
 	empty := verdict.PlanResult{PlanVerdict: verdict.VerdictWarn, NextAction: "reviewer text"}
 	calibratePlanVerdictForUnverifiableOnly(&empty, false)
