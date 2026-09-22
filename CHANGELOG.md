@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an attempt instead of adding a second row. Every session a task ever opened keeps updating that
   row, so an implementer that re-validated and carried on with its first `session_id` still lands
   on the right task.
+- `plan_run_report`'s counts are per plan task: tasks never dispatched are listed by heading, a row
+  that named no plan task is counted as unmatched instead of inflating the totals, a task still in
+  progress reads `open (pre: <verdict>)`, and a lightweight task's verdict is marked `(lite)`.
+  CodeScene runs are counted as missing only for tasks that completed.
+- The run's CodeScene total no longer adds up cumulative branch deltas. Each task is asked for a
+  branch-versus-base analysis, so the report now takes the most recent result for each base ref,
+  and the `codescene` argument accepts the `base_ref` that analysis compared against.
 
 ## [0.24.0] - 2026-09-20
 

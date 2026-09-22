@@ -40,7 +40,7 @@ func TestRender_Contents(t *testing.T) {
 	assert.Contains(t, got, "Add /healthz endpoint")
 	assert.Contains(t, got, "skipped (docs-only task)")
 	assert.Contains(t, got, "not run")
-	assert.Contains(t, got, "incomplete")
+	assert.Contains(t, got, "open (pre: warn)")
 }
 
 // TestRender_DeterministicWithCategoryCounts exists because sampleRun's rows
@@ -73,12 +73,12 @@ func TestRender_DeterministicWithCategoryCounts(t *testing.T) {
 	}
 }
 
-// TestRender_IncompleteIsNotFail pins the distinction the report exists to
+// TestRender_OpenIsNotFail pins the distinction the report exists to
 // make: a task with no PostVerdict is a different fact from a task that
 // failed. It isolates the row for "Config plumbing" (no PostVerdict) rather
 // than scanning the whole report, because the totals line legitimately
 // contains the substring "fail" (e.g. "fail 0") even when no row failed.
-func TestRender_IncompleteIsNotFail(t *testing.T) {
+func TestRender_OpenIsNotFail(t *testing.T) {
 	got := Render(sampleRun())
 	var row3 string
 	for _, line := range strings.Split(got, "\n") {
@@ -87,7 +87,7 @@ func TestRender_IncompleteIsNotFail(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, row3, "expected a rendered row for Config plumbing")
-	assert.Contains(t, row3, "incomplete")
+	assert.Contains(t, row3, "open (pre: warn)")
 	assert.NotContains(t, row3, "fail")
 }
 
@@ -118,27 +118,6 @@ func TestRender_MultiByteTitleTruncatesOnRuneBoundary(t *testing.T) {
 	assert.Contains(t, got, wantCell)
 }
 
-// TestRender_OverDispatchedRows pins the over-dispatch case: len(Rows) >
-// TaskCount is reachable when a task is re-dispatched after its first
-// subagent died (validate_task_spec called again with the same
-// plan_run_id), producing two rows for one task slot. Render's
-// under-dispatch branch (n := TaskCount - len(Rows)) goes negative and is
-// silently skipped in that case, so this pins the sibling branch that makes
-// the anomaly visible instead of leaving "tasks: 4 of 3 completed" (or
-// similar) unexplained.
-func TestRender_OverDispatchedRows(t *testing.T) {
-	r := &Run{
-		ID: "pr_over00000001", CreatedAt: time.Unix(0, 0).UTC(),
-		PlanVerdict: "warn", PlanQuality: "rigorous", TaskCount: 1,
-		Rows: []TaskRow{
-			{Index: 1, TaskTitle: "Flaky task", PostVerdict: "fail"},
-			{Index: 2, TaskTitle: "Flaky task (retry)", PostVerdict: "pass"},
-		},
-	}
-	got := Render(r)
-	assert.Contains(t, got, "2 rows for 1 tasks — includes re-dispatched or duplicate attempts")
-}
-
 func TestTotals(t *testing.T) {
 	tot := Totals(sampleRun())
 	assert.Equal(t, 1, tot.Pass)
@@ -147,8 +126,10 @@ func TestTotals(t *testing.T) {
 	assert.Equal(t, 1, tot.Incomplete)
 	assert.Equal(t, 1, tot.CodesceneRan)
 	assert.Equal(t, 1, tot.CodesceneSkipped)
-	assert.Equal(t, 1, tot.CodesceneMissing)
+	assert.Equal(t, 0, tot.CodesceneMissing, "an open task has not had its chance to run CodeScene")
 	assert.InDelta(t, -1.5, tot.NetPP, 0.0001)
+	assert.Equal(t, 0, tot.NeverDispatched)
+	assert.Equal(t, 0, tot.Unmatched)
 }
 
 func TestCodesceneCellShowsEvidence(t *testing.T) {
@@ -314,4 +295,72 @@ func TestRulingsCell(t *testing.T) {
 	assert.Equal(t, "1 waived", rulingsCell(TaskRow{Waived: 1}))
 	assert.Equal(t, "escalated", rulingsCell(TaskRow{Escalated: true}))
 	assert.Equal(t, "-", rulingsCell(TaskRow{}))
+}
+
+func TestTotals_CountsPlanTasksNotRows(t *testing.T) {
+	r := &Run{
+		ID: "pr_shape0000001", PlanVerdict: "pass", PlanQuality: "rigorous", TaskCount: 7,
+		Tasks: []PlanTask{
+			{Index: 1, Title: "Task 1: One"}, {Index: 2, Title: "Task 2: Two"}, {Index: 3, Title: "Task 3: Three"},
+			{Index: 4, Title: "Task 4: Four"}, {Index: 5, Title: "Task 5: Five"}, {Index: 6, Title: "Task 6: Six"},
+			{Index: 7, Title: "Task 7: Seven"},
+		},
+		Rows: []TaskRow{
+			{Index: 1, TaskTitle: "One", PreVerdict: "warn", PostVerdict: "pass", Attempts: 3},
+			{Index: 2, TaskTitle: "Two", PreVerdict: "warn", PostVerdict: "pass", Attempts: 1},
+			{Index: 3, TaskTitle: "Three", PreVerdict: "warn", PostVerdict: "pass", Attempts: 1},
+			{Index: 4, TaskTitle: "Task 4: Four", PostVerdict: "pass", Lite: true},
+			{Index: 5, TaskTitle: "Task 5: Five", PostVerdict: "warn", Lite: true},
+			{Index: 6, TaskTitle: "Task 6: Six", PostVerdict: "pass", Lite: true},
+			{Index: 8, TaskTitle: "Stray", PostVerdict: "fail", Unmatched: true},
+		},
+	}
+	tot := Totals(r)
+	assert.Equal(t, 7, tot.Tasks)
+	assert.Equal(t, 6, tot.Completed)
+	assert.Equal(t, 5, tot.Pass)
+	assert.Equal(t, 1, tot.Warn)
+	assert.Equal(t, 0, tot.Fail, "an unmatched row is not a plan task")
+	assert.Equal(t, 1, tot.NeverDispatched)
+	assert.Equal(t, 1, tot.Unmatched)
+
+	got := Render(r)
+	assert.Contains(t, got, "tasks: 6 of 7 completed")
+	assert.Contains(t, got, "never dispatched: 1\n")
+	assert.Contains(t, got, "Task 7: Seven")
+	assert.Contains(t, got, "unmatched: 1 row(s) named no plan task by task_index or title")
+	assert.Contains(t, got, "pass (lite)")
+	assert.NotContains(t, got, "rows for", "the duplicate-row note is gone")
+}
+
+func TestRender_NeverDispatchedWithoutHeadingsListsNumbers(t *testing.T) {
+	r := &Run{ID: "pr_legacy000001", TaskCount: 3, Rows: []TaskRow{{Index: 1, TaskTitle: "a", PostVerdict: "pass"}}}
+	got := Render(r)
+	assert.Contains(t, got, "never dispatched: 2\n")
+	assert.Contains(t, got, "    2  task 2\n")
+	assert.Contains(t, got, "    3  task 3\n")
+}
+
+func TestTotals_BranchNetPPCountsEachBaseRefOnce(t *testing.T) {
+	at := func(h int) time.Time { return time.Date(2026, 9, 22, h, 0, 0, 0, time.UTC) }
+	ran := func(base string, pp float64) *codescene.Digest {
+		return &codescene.Digest{Ran: true, QualityGate: "passed", NetPP: pp, BaseRef: base}
+	}
+	r := &Run{ID: "pr_netpp0000001", TaskCount: 5, Rows: []TaskRow{
+		{Index: 1, PostVerdict: "pass", CodesceneState: StateRan, Codescene: ran("origin/main", -2), CompletedAt: at(10)},
+		{Index: 2, PostVerdict: "pass", CodesceneState: StateRan, Codescene: ran("origin/main", -2), CompletedAt: at(11)},
+		{Index: 3, PostVerdict: "pass", CodesceneState: StateRan, Codescene: ran("origin/main", -3), CompletedAt: at(12)},
+		{Index: 4, PostVerdict: "pass", CodesceneState: StateRan, Codescene: ran("", 1), CompletedAt: at(9)},
+		{Index: 5, PostVerdict: "pass", CodesceneState: StateRan, Codescene: ran("", 4), CompletedAt: at(8)},
+	}}
+	tot := Totals(r)
+	assert.InDelta(t, -3+1, tot.NetPP, 0.0001, "latest per base ref: -3 for origin/main, +1 for the rows naming none")
+	assert.Contains(t, Render(r), "branch net problem points (latest per base ref): -2.0")
+}
+
+func TestVerdictCell(t *testing.T) {
+	assert.Equal(t, "pass", verdictCell(TaskRow{PostVerdict: "pass"}))
+	assert.Equal(t, "warn (lite)", verdictCell(TaskRow{PostVerdict: "warn", Lite: true}))
+	assert.Equal(t, "open (pre: fail)", verdictCell(TaskRow{PreVerdict: "fail"}))
+	assert.Equal(t, "open", verdictCell(TaskRow{}))
 }

@@ -3,6 +3,7 @@ package planrun
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -33,7 +34,9 @@ func escapeReportCell(s string) string {
 	return blocktext.EscapeContinuationLines(s, reportCellContIndent)
 }
 
-// RunTotals is the aggregate line of a plan-run report.
+// RunTotals is the aggregate line of a plan-run report. Completed, Pass,
+// Warn, Fail and Incomplete count rows that name a plan task; a row that
+// names none counts only in Unmatched.
 type RunTotals struct {
 	Tasks            int     `json:"tasks"`
 	Completed        int     `json:"completed"`
@@ -41,6 +44,8 @@ type RunTotals struct {
 	Warn             int     `json:"warn"`
 	Fail             int     `json:"fail"`
 	Incomplete       int     `json:"incomplete"`
+	NeverDispatched  int     `json:"never_dispatched"`
+	Unmatched        int     `json:"unmatched"`
 	CodesceneRan     int     `json:"codescene_ran"`
 	CodesceneSkipped int     `json:"codescene_skipped"`
 	CodesceneMissing int     `json:"codescene_missing"`
@@ -49,12 +54,23 @@ type RunTotals struct {
 	Escalated        int     `json:"escalated"`
 }
 
-// Totals aggregates a run's rows. Incomplete counts rows the plan created a
-// session for but which never reported completion; TaskCount minus the row
-// count is a separate thing — tasks never dispatched at all.
+// Totals aggregates a run's rows. The CodeScene counts cover completed rows
+// only: a task still open has not had its chance to run the analysis. NetPP
+// is the branch delta rather than a sum over tasks; see branchNetPP.
 func Totals(r *Run) RunTotals {
 	t := RunTotals{Tasks: r.TaskCount}
 	for _, row := range r.Rows {
+		t.Waived += row.Waived
+		if row.Escalated {
+			t.Escalated++
+		}
+		if row.PostVerdict != "" {
+			countCodescene(&t, row)
+		}
+		if row.Unmatched {
+			t.Unmatched++
+			continue
+		}
 		switch row.PostVerdict {
 		case "pass":
 			t.Pass++
@@ -68,23 +84,97 @@ func Totals(r *Run) RunTotals {
 		default:
 			t.Incomplete++
 		}
-		switch row.CodesceneState {
-		case StateRan:
-			t.CodesceneRan++
-		case StateSkipped:
-			t.CodesceneSkipped++
-		default:
-			t.CodesceneMissing++
+	}
+	t.NeverDispatched = len(neverDispatched(r))
+	t.NetPP = branchNetPP(r.Rows)
+	return t
+}
+
+func countCodescene(t *RunTotals, row TaskRow) {
+	switch row.CodesceneState {
+	case StateRan:
+		t.CodesceneRan++
+	case StateSkipped:
+		t.CodesceneSkipped++
+	default:
+		t.CodesceneMissing++
+	}
+}
+
+// branchNetPP sums, over each distinct base ref, the net problem points of
+// the most recently completed row whose analysis ran against it. Each task is
+// asked for a branch-versus-base analysis, so rows sharing a base ref report
+// the same cumulative change and adding them would count it once per task.
+// Rows that named no base ref form one group. Keys are summed in sorted order
+// so the float result does not depend on map iteration.
+func branchNetPP(rows []TaskRow) float64 {
+	latest := map[string]TaskRow{}
+	for _, row := range rows {
+		if row.Codescene == nil || !row.Codescene.Ran {
+			continue
 		}
-		if row.Codescene != nil && row.Codescene.Ran {
-			t.NetPP += row.Codescene.NetPP
-		}
-		t.Waived += row.Waived
-		if row.Escalated {
-			t.Escalated++
+		key := row.Codescene.BaseRef
+		if cur, ok := latest[key]; !ok || !row.CompletedAt.Before(cur.CompletedAt) {
+			latest[key] = row
 		}
 	}
-	return t
+	keys := make([]string, 0, len(latest))
+	for k := range latest {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sum float64
+	for _, k := range keys {
+		sum += latest[k].Codescene.NetPP
+	}
+	return sum
+}
+
+// neverDispatched lists, by Index, the plan tasks no row names.
+func neverDispatched(r *Run) []int {
+	has := matchedTaskIndexes(r.Rows)
+	var out []int
+	for i := 1; i <= r.TaskCount; i++ {
+		if !has[i] {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// matchedTaskIndexes returns the Index of every row that names a plan task,
+// i.e. every row that is not Unmatched.
+func matchedTaskIndexes(rows []TaskRow) map[int]bool {
+	has := map[int]bool{}
+	for _, row := range rows {
+		if !row.Unmatched {
+			has[row.Index] = true
+		}
+	}
+	return has
+}
+
+// verdictCell renders the AT column: the post-task verdict, marked when a
+// lightweight call recorded it, or "open" with the pre-task verdict for a
+// task that has not completed.
+func verdictCell(row TaskRow) string {
+	switch {
+	case row.PostVerdict != "" && row.Lite:
+		return row.PostVerdict + " (lite)"
+	case row.PostVerdict != "":
+		return row.PostVerdict
+	case row.PreVerdict != "":
+		return "open (pre: " + row.PreVerdict + ")"
+	default:
+		return "open"
+	}
+}
+
+func triesCell(row TaskRow) string {
+	if row.Attempts == 0 {
+		return "-"
+	}
+	return strconv.Itoa(row.Attempts)
 }
 
 // codesceneCell renders the CodeScene column for one row.
@@ -273,39 +363,45 @@ func Render(r *Run) string {
 		width = 40
 	}
 
-	fmt.Fprintf(&b, "  #  %-*s  %-10s %-20s %s\n", width, "Task", "AT", "Rulings", "CodeScene")
+	fmt.Fprintf(&b, "  #  %-*s  %-16s %-5s %-20s %s\n", width, "Task", "AT", "Tries", "Rulings", "CodeScene")
 	for _, row := range r.Rows {
 		title := row.TaskTitle
 		if n := utf8.RuneCountInString(title); n > width {
 			runes := []rune(title)
 			title = string(runes[:width-1]) + "…"
 		}
-		at := row.PostVerdict
-		if at == "" {
-			at = "incomplete"
-		}
 		// Escape AFTER truncation, and escape codesceneCell's COMPOSED output
 		// rather than its inputs: one call then covers every free-text field
 		// that can reach the cell — SkipReason, QualityGate, and the
 		// CategoryCounts map's keys — including any added later.
-		fmt.Fprintf(&b, "  %-2d %-*s  %-10s %-20s %s\n", row.Index, width,
-			escapeReportCell(title), escapeReportCell(at), rulingsCell(row), escapeReportCell(codesceneCell(row)))
+		fmt.Fprintf(&b, "  %-2d %-*s  %-16s %-5s %-20s %s\n", row.Index, width,
+			escapeReportCell(title), escapeReportCell(verdictCell(row)), triesCell(row),
+			rulingsCell(row), escapeReportCell(codesceneCell(row)))
 	}
 
 	fmt.Fprintf(&b, "\n  codescene: %d run, %d skipped, %d missing\n",
 		t.CodesceneRan, t.CodesceneSkipped, t.CodesceneMissing)
 	fmt.Fprintf(&b, "  rulings: %d findings waived, %d tasks escalated\n", t.Waived, t.Escalated)
-	fmt.Fprintf(&b, "  net problem points across run: %+.1f\n", t.NetPP)
-	if n := r.TaskCount - len(r.Rows); n > 0 {
-		fmt.Fprintf(&b, "  %d task(s) in the plan were never dispatched\n", n)
-	} else if len(r.Rows) > r.TaskCount {
-		// Reachable when a task is re-dispatched after its first subagent died:
-		// validate_task_spec runs again with the same plan_run_id and AppendRow
-		// stamps a new row rather than refusing the append (a re-dispatch is
-		// legitimate history, not an error). Without this branch the negative
-		// n above is silently skipped and "tasks: 4 of 3 completed" prints with
-		// no explanation.
-		fmt.Fprintf(&b, "  %d rows for %d tasks — includes re-dispatched or duplicate attempts\n", len(r.Rows), r.TaskCount)
+	fmt.Fprintf(&b, "  branch net problem points (latest per base ref): %+.1f\n", t.NetPP)
+	if missing := neverDispatched(r); len(missing) > 0 {
+		renderNeverDispatched(&b, r, missing)
+	}
+	if t.Unmatched > 0 {
+		fmt.Fprintf(&b, "  unmatched: %d row(s) named no plan task by task_index or title\n", t.Unmatched)
 	}
 	return b.String()
+}
+
+// renderNeverDispatched writes missing's plan tasks to b, one per line,
+// labeled by the plan's heading for that task or "task N" when the plan
+// carries none (a run created before headings were tracked).
+func renderNeverDispatched(b *strings.Builder, r *Run, missing []int) {
+	fmt.Fprintf(b, "  never dispatched: %d\n", len(missing))
+	for _, idx := range missing {
+		label := r.taskTitle(idx)
+		if strings.TrimSpace(label) == "" {
+			label = fmt.Sprintf("task %d", idx)
+		}
+		fmt.Fprintf(b, "    %-2d %s\n", idx, escapeReportCell(label))
+	}
 }
