@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `validate_task_spec` accepts `context_paths`: the server reads those files and shows the spec reviewer
   their whole contents, so a term, path or step the dispatch brief defines is no longer reported as
   missing from the spec. Same limits as `validate_plan`'s attachments.
+- The per-task reviewer budget defaults to 8192 output tokens, and a truncated per-task review is retried
+  once at `ANTI_TANGENT_MAX_TOKENS_CEILING` when the caller passed no `max_tokens_override`. A truncated
+  `validate_task_spec` opened no session, so each truncation used to cost a manual retry; the suggestion
+  now names the budget to pass.
 
 ### Fixed
 

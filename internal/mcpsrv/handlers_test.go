@@ -58,7 +58,11 @@ func passResp(model string) providers.Response {
 	}
 }
 
-func newDeps(t *testing.T, rv *fakeReviewer) Deps {
+// rv is providers.Reviewer, not *fakeReviewer: callers exercising a
+// retry (truncateThenPass in handlers_truncation_test.go) need a reviewer
+// whose behavior varies by call count, which fakeReviewer's fixed
+// resp/err fields cannot express.
+func newDeps(t *testing.T, rv providers.Reviewer) Deps {
 	cfg, err := config.Load(func(k string) string {
 		switch k {
 		case "ANTHROPIC_API_KEY":

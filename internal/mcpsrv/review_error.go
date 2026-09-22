@@ -357,27 +357,63 @@ type reviewOutcome struct {
 	Truncated bool
 }
 
+// reviewCall bundles runReview's inputs. Carrying model/prompt/maxTokens/retryAt
+// on a struct instead of four scalar parameters keeps the call under
+// CodeScene's "max arguments = 4" threshold (ctx + this struct = 2).
+type reviewCall struct {
+	Model     config.ModelRef
+	Prompt    prompts.Output
+	MaxTokens int
+	// RetryAt, when above MaxTokens, is the budget one automatic retry uses:
+	// a response truncated at the configured budget is worth re-asking once
+	// at the ceiling, and costs less than the round trip a caller spends
+	// passing max_tokens_override. RetryAt at or below MaxTokens means no
+	// retry — the caller chose the budget itself, or it is already the
+	// ceiling.
+	RetryAt int
+}
+
+// perTaskReviewCall builds a reviewCall for one of the three per-task hooks:
+// model and prompt pass through, and RetryAt comes from perTaskRetryBudget
+// against the server's configured ceiling. A one-line builder call at each of
+// the three call sites keeps them from re-growing past CodeScene's per-method
+// complexity threshold, which ValidateTaskSpec, CheckProgress and
+// ValidateCompletion already sit above.
+func (h *handlers) perTaskReviewCall(model config.ModelRef, p prompts.Output, maxTokens, override int) reviewCall {
+	return reviewCall{
+		Model:     model,
+		Prompt:    p,
+		MaxTokens: maxTokens,
+		RetryAt:   perTaskRetryBudget(override, maxTokens, h.deps.Cfg.MaxTokensCeiling),
+	}
+}
+
 // runReview runs the reviewer call and folds a truncated response into an
 // ordinary outcome, so each session tool runs one tail for both. A response
-// truncated after some complete findings yields those findings, marked
-// partial, and a minor marker; one truncated before any yields no reviewer
-// findings and the server's major truncation notice. Any other error is
-// returned.
-func (h *handlers) runReview(ctx context.Context, model config.ModelRef, p prompts.Output, maxTokens int) (reviewOutcome, error) {
-	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, p, maxTokens)
+// truncated at call.RetryAt, or with no retry attempted, yields the complete
+// findings it carries, marked partial, or the server's truncation notice.
+func (h *handlers) runReview(ctx context.Context, call reviewCall) (reviewOutcome, error) {
+	result, modelUsed, ms, partialRaw, err := h.review(ctx, call.Model, call.Prompt, call.MaxTokens)
+	if errors.Is(err, providers.ErrResponseTruncated) && call.RetryAt > call.MaxTokens {
+		slog.Warn("reviewer response truncated; retrying once at the ceiling",
+			"model", call.Model.String(), "max_tokens", call.MaxTokens, "retry_max_tokens", call.RetryAt)
+		var retryMS int64
+		result, modelUsed, retryMS, partialRaw, err = h.review(ctx, call.Model, call.Prompt, call.RetryAt)
+		ms += retryMS
+	}
 	if err == nil {
 		return reviewOutcome{Result: result, ModelUsed: modelUsed, ReviewMS: ms}, nil
 	}
 	if !errors.Is(err, providers.ErrResponseTruncated) {
 		return reviewOutcome{}, err
 	}
-	out := reviewOutcome{ModelUsed: model.String(), ReviewMS: ms, Truncated: true}
+	out := reviewOutcome{ModelUsed: call.Model.String(), ReviewMS: ms, Truncated: true}
 	if recovered, marker, ok := recoverPartialFindings(partialRaw, perTaskMaxTokensEnvVar); ok {
 		out.Result = recovered
 		out.Server = []verdict.Finding{marker}
 		return out, nil
 	}
-	notice := truncatedResult()
+	notice := truncatedResult(h.deps.Cfg.MaxTokensCeiling)
 	out.Server = notice.Findings
 	notice.Findings = nil
 	out.Result = notice

@@ -2,6 +2,7 @@ package mcpsrv
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -147,4 +148,72 @@ func TestReviewPlanChunked_PassOneTruncationReportsElapsedTime(t *testing.T) {
 	_, _, ms, _, err := h.reviewPlanChunked(context.Background(), h.deps.Cfg.PlanModel, rendered, 100)
 	require.ErrorIs(t, err, providers.ErrResponseTruncated)
 	assert.GreaterOrEqual(t, ms, truncationDelay.Milliseconds())
+}
+
+// truncateThenPass fails every odd-numbered call with ErrResponseTruncated
+// and answers every even-numbered call normally, so a test can tell an
+// automatic retry from its absence — including across two separate handler
+// calls sharing one instance (each handler's own first attempt truncates,
+// its retry passes), not only the instance's very first call ever.
+type truncateThenPass struct {
+	name     string
+	calls    int
+	maxToken []int
+}
+
+func (r *truncateThenPass) Name() string { return r.name }
+func (r *truncateThenPass) Review(_ context.Context, req providers.Request) (providers.Response, error) {
+	r.calls++
+	r.maxToken = append(r.maxToken, req.MaxTokens)
+	if r.calls%2 == 1 {
+		return providers.Response{}, providers.ErrResponseTruncated
+	}
+	return passResp("claude-opus-4-7"), nil
+}
+
+func TestValidateTaskSpec_TruncationRetriesOnceAtTheCeiling(t *testing.T) {
+	rv := &truncateThenPass{name: "anthropic"}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, rv.calls, "one automatic retry")
+	assert.Equal(t, h.deps.Cfg.MaxTokensCeiling, rv.maxToken[1], "the retry uses the ceiling")
+	assert.Equal(t, "pass", env.Verdict, "the retry's result is the result")
+	assert.NotEmpty(t, env.SessionID, "a recovered review still opens a session")
+}
+
+func TestValidateTaskSpec_AnOverriddenBudgetDoesNotRetry(t *testing.T) {
+	rv := &truncateThenPass{name: "anthropic"}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", MaxTokensOverride: 1024,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, rv.calls, "the caller chose the budget; the server does not overrule it")
+	assert.True(t, hasCriterion(env.Findings, "reviewer_response"))
+	assert.Contains(t, findingWithCriterion(env.Findings, "reviewer_response").Suggestion,
+		strconv.Itoa(h.deps.Cfg.MaxTokensCeiling), "the suggestion names the budget to pass")
+}
+
+func TestValidateCompletion_TruncationRetriesOnceAtTheCeiling(t *testing.T) {
+	rv := &truncateThenPass{name: "anthropic"}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, pre, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+	before := rv.calls
+	_, env, err := h.ValidateCompletion(context.Background(), nil, completionCallArgs(pre.SessionID))
+	require.NoError(t, err)
+	assert.Equal(t, before+2, rv.calls)
+	assert.Equal(t, "pass", env.Verdict)
+}
+
+// findingWithCriterion returns the first finding with the given criterion, or
+// the zero value if none matches.
+func findingWithCriterion(fs []verdict.Finding, criterion string) verdict.Finding {
+	for _, f := range fs {
+		if f.Criterion == criterion {
+			return f
+		}
+	}
+	return verdict.Finding{}
 }

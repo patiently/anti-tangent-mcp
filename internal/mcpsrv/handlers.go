@@ -180,7 +180,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, err
 	}
 
-	out, err := h.runReview(ctx, cc.Model, cc.Rendered, cc.MaxTokens)
+	out, err := h.runReview(ctx, h.perTaskReviewCall(cc.Model, cc.Rendered, cc.MaxTokens, args.MaxTokensOverride))
 	if err != nil {
 		return nil, Envelope{}, err
 	}
@@ -514,7 +514,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		return nil, Envelope{}, err
 	}
 
-	out, err := h.runReview(ctx, model, rendered, maxTokens)
+	out, err := h.runReview(ctx, h.perTaskReviewCall(model, rendered, maxTokens, args.MaxTokensOverride))
 	if err != nil {
 		return nil, Envelope{}, err
 	}
@@ -690,7 +690,7 @@ func notFoundEnvelope(tool, id string, model config.ModelRef) Envelope {
 // Findings, run FinalizeVerdict, and assemble the envelope. The synthetic
 // finding is SeverityMajor so the ladder derives warn, matching the Verdict
 // set here.
-func truncatedResult() verdict.Result {
+func truncatedResult(ceiling int) verdict.Result {
 	return verdict.Result{
 		Verdict: verdict.VerdictWarn,
 		Findings: []verdict.Finding{{
@@ -698,9 +698,9 @@ func truncatedResult() verdict.Result {
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
-			Suggestion: "Raise " + perTaskMaxTokensEnvVar + " or pass max_tokens_override and retry.",
+			Suggestion: fmt.Sprintf("Retry with max_tokens_override: %d, or raise %s.", ceiling, perTaskMaxTokensEnvVar),
 		}},
-		NextAction: "Retry with a higher max_tokens_override (or raise the configured max-tokens cap).",
+		NextAction: fmt.Sprintf("Retry with max_tokens_override: %d.", ceiling),
 	}
 }
 
@@ -734,6 +734,16 @@ func effectiveMaxTokens(override, defaultMaxTokens, ceiling int) (int, verdict.F
 		Suggestion: "Raise ANTI_TANGENT_MAX_TOKENS_CEILING if you need a larger budget.",
 	}
 	return ceiling, finding, nil
+}
+
+// perTaskRetryBudget is the budget one automatic retry of a truncated per-task
+// review uses: the ceiling, unless the caller chose the budget itself or the
+// budget already is the ceiling, in which case there is nothing to raise.
+func perTaskRetryBudget(override, maxTokens, ceiling int) int {
+	if override != 0 || maxTokens >= ceiling {
+		return 0
+	}
+	return ceiling
 }
 
 // prependClamp inserts the clamp finding at the head of the envelope's
@@ -1889,7 +1899,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, err
 	}
 
-	out, err := h.runReview(ctx, model, rendered, maxTokens)
+	out, err := h.runReview(ctx, h.perTaskReviewCall(model, rendered, maxTokens, args.MaxTokensOverride))
 	if err != nil {
 		return nil, Envelope{}, err
 	}
