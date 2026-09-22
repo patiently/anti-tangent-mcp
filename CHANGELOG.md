@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A lightweight `validate_completion` (empty `session_id`) accepts `plan_run_id` with `task_index`
   or `task_title`, and the task then appears in `plan_run_report`, marked `(lite)`. Lightweight
   tasks were previously invisible to the report.
+- A lightweight `validate_completion` (empty `session_id`) applies `controller_rulings`, shape-checked and
+  rendered the way `validate_plan` handles them. Without a session the rulings were dropped and the next
+  review raised the settled findings again; `finding_responses` still need a session, and their advisory
+  now says a ruling does not.
 
 ### Changed
 

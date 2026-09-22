@@ -1842,12 +1842,17 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	var sess *session.Session
 	var spec session.TaskSpec
 	var review completionReview
+	var lightweightMalformedRulingIDs []string
 	if lightweight {
 		// Synthesize a minimal spec for the reviewer. No session is created.
 		spec = session.TaskSpec{
 			Title: "(lightweight task)",
 			Goal:  args.Summary,
 		}
+		// A lightweight task has no session to remember a ruling, so the call
+		// carries them: shape-checked like validate_plan's, rendered as
+		// authoritative, and applied to this review's findings.
+		review.rulings, review.shown, lightweightMalformedRulingIDs = lightweightRulings(rulingArgs)
 	} else {
 		var ok bool
 		sess, ok = h.deps.Sessions.Get(args.SessionID)
@@ -1960,8 +1965,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			env.Findings = append(env.Findings, f)
 		}
 	}
-	if lightweight && (len(responses) > 0 || len(rulingArgs) > 0) {
-		env.Findings = append(env.Findings, noSessionRulingsAdvisory())
+	if len(lightweightMalformedRulingIDs) > 0 {
+		env.Findings = append(env.Findings, malformedPlanRulingsAdvisory(lightweightMalformedRulingIDs))
+	}
+	if lightweight && len(responses) > 0 {
+		env.Findings = append(env.Findings, noSessionResponsesAdvisory())
 	}
 	// An escalated response does not say resubmit: resubmitting without a code
 	// change is the loop escalation stops, and a repeated insufficient_evidence
