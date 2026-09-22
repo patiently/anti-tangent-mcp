@@ -154,17 +154,23 @@ func TestReviewPlanChunked_PassOneTruncationReportsElapsedTime(t *testing.T) {
 // and answers every even-numbered call normally, so a test can tell an
 // automatic retry from its absence — including across two separate handler
 // calls sharing one instance (each handler's own first attempt truncates,
-// its retry passes), not only the instance's very first call ever.
+// its retry passes), not only the instance's very first call ever. delay, when
+// set, is slept on every call, so a test can assert the reported ReviewMS
+// covers every attempt made, not just the last one.
 type truncateThenPass struct {
 	name     string
 	calls    int
 	maxToken []int
+	delay    time.Duration
 }
 
 func (r *truncateThenPass) Name() string { return r.name }
 func (r *truncateThenPass) Review(_ context.Context, req providers.Request) (providers.Response, error) {
 	r.calls++
 	r.maxToken = append(r.maxToken, req.MaxTokens)
+	if r.delay > 0 {
+		time.Sleep(r.delay)
+	}
 	if r.calls%2 == 1 {
 		return providers.Response{}, providers.ErrResponseTruncated
 	}
@@ -193,6 +199,51 @@ func TestValidateTaskSpec_AnOverriddenBudgetDoesNotRetry(t *testing.T) {
 	assert.True(t, hasCriterion(env.Findings, "reviewer_response"))
 	assert.Contains(t, findingWithCriterion(env.Findings, "reviewer_response").Suggestion,
 		strconv.Itoa(h.deps.Cfg.MaxTokensCeiling), "the suggestion names the budget to pass")
+}
+
+// TestValidateTaskSpec_RetryReviewMSCoversBothAttempts pins that the ReviewMS
+// the caller sees is the sum of the truncated first attempt and the retry,
+// not just the retry's own elapsed time — runReview accumulates `ms` across
+// both h.review calls (see review_error.go).
+func TestValidateTaskSpec_RetryReviewMSCoversBothAttempts(t *testing.T) {
+	rv := &truncateThenPass{name: "anthropic", delay: truncationDelay}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, rv.calls, "one automatic retry")
+	// A lower bound with margin, not an exact duration: two sleeps of
+	// truncationDelay must both be reflected, so anything below 2x (minus a
+	// little slack for scheduler jitter) means only the last attempt's time
+	// was reported.
+	assert.GreaterOrEqual(t, env.ReviewMS, 2*truncationDelay.Milliseconds()-5,
+		"ReviewMS must cover both attempts, not just the last one")
+}
+
+// TestValidateTaskSpec_BudgetAtCeilingNeverRetries pins the other half of
+// perTaskRetryBudget: a per-task budget already at the ceiling has nothing to
+// raise, so no automatic retry is attempted even though nothing was
+// caller-overridden.
+func TestValidateTaskSpec_BudgetAtCeilingNeverRetries(t *testing.T) {
+	rv := &truncateThenPass{name: "anthropic"}
+	d := newDeps(t, rv)
+	d.Cfg.PerTaskMaxTokens = d.Cfg.MaxTokensCeiling
+	h := &handlers{deps: d}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, rv.calls, "the configured budget is already the ceiling; there is nothing to retry at")
+	assert.Equal(t, "warn", env.Verdict)
+}
+
+// TestValidateTaskSpec_AlwaysTruncatingReviewerRetriesOnlyOnce pins that the
+// automatic retry fires at most once per call: a reviewer that truncates on
+// every attempt, retry included, must never be re-called a third time.
+func TestValidateTaskSpec_AlwaysTruncatingReviewerRetriesOnlyOnce(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, rv.Calls, "the retry is attempted exactly once, even when it also truncates")
+	assert.Equal(t, "warn", env.Verdict)
 }
 
 func TestValidateCompletion_TruncationRetriesOnceAtTheCeiling(t *testing.T) {

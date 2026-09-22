@@ -102,7 +102,14 @@ func calibratePlanVerdictForUnverifiableOnly(pr *verdict.PlanResult, stripped bo
 	if pr.PlanQuality != verdict.PlanQualityRigorous {
 		pr.PlanQuality = verdict.PlanQualityActionable
 	}
-	pr.NextAction = "Plan passes: dispatch. The codebase_reference_checklist finding lists references the " +
+	pr.NextAction = "Plan passes: dispatch."
+	if stripped {
+		pr.NextAction += " The codebase_reference_checklist finding lists references the " +
+			"reviewer could not verify: pre-flight any you have not already checked, or list them in " +
+			"controller_verified_references on the next call."
+		return
+	}
+	pr.NextAction += " The remaining unverifiable_codebase_claim finding(s) list references the " +
 		"reviewer could not verify: pre-flight any you have not already checked, or list them in " +
 		"controller_verified_references on the next call."
 }

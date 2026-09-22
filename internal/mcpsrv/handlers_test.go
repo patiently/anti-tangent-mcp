@@ -3988,3 +3988,18 @@ func TestValidateTaskSpec_NextActionPointsAtTheGuidance(t *testing.T) {
 	require.NotEmpty(t, env.ImplementationGuidance)
 	assert.Contains(t, env.NextAction, "Read `implementation_guidance` before writing code.")
 }
+
+// TestValidateTaskSpec_NextActionTrimsTrailingWhitespaceBeforeGuidance pins
+// that a reviewer-supplied next_action ending in a tab or newline — not just
+// a trailing space — never leaves a gap before the appended guidance
+// pointer.
+func TestValidateTaskSpec_NextActionTrimsTrailingWhitespaceBeforeGuidance(t *testing.T) {
+	resp := providers.Response{
+		RawJSON: []byte("{\"verdict\":\"pass\",\"findings\":[],\"next_action\":\"go review it\\n\\t\"}"),
+		Model:   "m",
+	}
+	h := &handlers{deps: newDeps(t, &fakeReviewer{name: "anthropic", resp: resp})}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+	assert.Equal(t, "go review it Read `implementation_guidance` before writing code.", env.NextAction)
+}

@@ -59,17 +59,17 @@ func looksLikePlanAbbreviation(root, rel string) bool {
 
 // diskTierFinding checks whether a path that was not created by an earlier
 // task exists on disk. It returns an evidence line if the path is missing,
-// a non-nil error if the check could not stat the path (permission denied,
-// I/O error, etc.), and the absolute path that caused the stat error. An
+// the absolute path that caused a stat error, and a non-nil error if the
+// check could not stat the path (permission denied, I/O error, etc.). An
 // empty line and nil error means the path exists or the disk tier cannot
 // check it (abbreviation, out of bounds, etc.) and is not a finding.
-func diskTierFinding(repoRoot, p string, taskNum int) (line string, statErr error, problematicPath string) {
+func diskTierFinding(repoRoot, p string, taskNum int) (line string, problematicPath string, statErr error) {
 	if looksLikePlanAbbreviation(repoRoot, p) {
-		return "", nil, ""
+		return "", "", nil
 	}
 	abs, ok := resolveUnderRoot(repoRoot, p)
 	if !ok {
-		return "", nil, ""
+		return "", "", nil
 	}
 	// resolveUnderRoot is LEXICAL only, and os.Stat follows symlinks.
 	// A link inside the repo pointing out of it ("vendor -> /etc") therefore
@@ -87,7 +87,7 @@ func diskTierFinding(repoRoot, p string, taskNum int) (line string, statErr erro
 	leaf := abs
 	if rp, rerr := filepath.EvalSymlinks(filepath.Dir(abs)); rerr == nil {
 		if !withinRoots(rp, []string{repoRoot}) {
-			return "", nil, ""
+			return "", "", nil
 		}
 		leaf = filepath.Join(rp, filepath.Base(abs))
 	}
@@ -105,7 +105,7 @@ func diskTierFinding(repoRoot, p string, taskNum int) (line string, statErr erro
 		statErr = serr
 		problematicPath = leaf
 	}
-	return line, statErr, problematicPath
+	return line, problematicPath, statErr
 }
 
 // checkFileConsistency reports Modify: targets that cannot exist when their
@@ -184,7 +184,7 @@ func checkFileConsistency(tasks []planparser.RawTask, repoRoot string) *verdict.
 			if repoRoot == "" {
 				continue
 			}
-			line, serr, problematicPath := diskTierFinding(repoRoot, p, taskNum)
+			line, problematicPath, serr := diskTierFinding(repoRoot, p, taskNum)
 			if line != "" {
 				lines = append(lines, line)
 			}

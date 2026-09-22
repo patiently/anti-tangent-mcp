@@ -89,6 +89,9 @@ func TestCalibratePlanVerdict_StillForcePassesUnverifiableOnly(t *testing.T) {
 	}
 	calibratePlanVerdictForUnverifiableOnly(&pr, false)
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+	assert.NotContains(t, pr.NextAction, "codebase_reference_checklist finding",
+		"no checklist was appended for this plan-level-only claim; next_action must not name it")
+	assert.Contains(t, pr.NextAction, "unverifiable_codebase_claim finding")
 }
 
 // A plan whose task-level unverifiable claims were stripped for the checklist

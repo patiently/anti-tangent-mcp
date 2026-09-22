@@ -218,7 +218,7 @@ ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES=524288 # cap for the attached set as a wh
 # context_paths also caps at 50 files total — fixed, not env-configurable
 
 # Output budgets + chunking (v0.1.4+):
-ANTI_TANGENT_PER_TASK_MAX_TOKENS=8192    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion); default 8192; a truncated per-task review retries once at ANTI_TANGENT_MAX_TOKENS_CEILING when the caller passed no max_tokens_override
+ANTI_TANGENT_PER_TASK_MAX_TOKENS=8192    # output cap for the per-task hooks (validate_task_spec / check_progress / validate_completion); default 8192; a truncated per-task review retries once at ANTI_TANGENT_MAX_TOKENS_CEILING when the caller passed no max_tokens_override AND this budget is below the ceiling — set it to the ceiling and there is nothing left to raise, so no retry happens
 ANTI_TANGENT_PLAN_MAX_TOKENS=4096        # output cap per reviewer call in validate_plan (single-call and per-chunk); raise if plan validation returns a truncation finding
 ANTI_TANGENT_PLAN_TASKS_PER_CHUNK=8      # plans above this task count are reviewed via the chunked path; also the per-chunk size
 ANTI_TANGENT_MAX_TOKENS_CEILING=16384    # cap on per-call max_tokens_override; over-ceiling values are clamped and emit a minor clamp finding (v0.3.0+)

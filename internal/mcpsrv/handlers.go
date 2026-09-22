@@ -206,7 +206,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, fmt.Errorf("render lean guidance: %w", err)
 	}
 	env.ImplementationGuidance = guidance
-	env.NextAction = strings.TrimRight(env.NextAction, " ") + " Read `implementation_guidance` before writing code."
+	env.NextAction = strings.TrimRight(env.NextAction, " \t\r\n") + " Read `implementation_guidance` before writing code."
 
 	if f, ok := h.taskSpecPlanRunAdvisory(args.PlanRunID, args.TaskIndex); ok {
 		env.Findings = append(env.Findings, f)
