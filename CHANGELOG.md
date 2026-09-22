@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.25.0] - 2026-09-22
 
+### Added
+
+- `validate_task_spec` accepts `task_index`, the task's 1-based position in the plan, which names
+  its `plan_run_report` row directly; without it the task is found by its title. An index outside
+  the plan draws a minor advisory and the title is used instead.
+- A lightweight `validate_completion` (empty `session_id`) accepts `plan_run_id` with `task_index`
+  or `task_title`, and the task then appears in `plan_run_report`, marked `(lite)`. Lightweight
+  tasks were previously invisible to the report.
+
 ### Fixed
 
 - `plan_run_report` keeps one row per plan task. A task is found by its position in the plan or by

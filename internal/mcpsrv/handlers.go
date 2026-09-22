@@ -102,6 +102,7 @@ type ValidateTaskSpecArgs struct {
 	// PlanRunID ties this task to a plan run minted by validate_plan. Best
 	// effort: an unknown or expired id must not fail the review.
 	PlanRunID string `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call."`
+	TaskIndex int    `json:"task_index,omitempty" jsonschema:"The task's 1-based position in the plan, from the controller's dispatch. With plan_run_id it names the plan task this call belongs to; without it the task is found by matching task_title against the plan's headings. Validating the same task again updates its plan_run_report row instead of adding one."`
 }
 
 type handlers struct {
@@ -196,10 +197,8 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 	}
 	env.ImplementationGuidance = guidance
 
-	if args.PlanRunID == "" {
-		if run, ok := h.deps.PlanRuns.Latest(); ok {
-			env.Findings = append(env.Findings, planRunIDAdvisory(run.ID))
-		}
+	if f, ok := h.taskSpecPlanRunAdvisory(args.PlanRunID, args.TaskIndex); ok {
+		env.Findings = append(env.Findings, f)
 	}
 	assignEnvelopeIDs(&env)
 
@@ -223,9 +222,11 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 
 	if args.PlanRunID != "" && env.SessionID != "" {
 		// Best-effort: an unknown or expired run must not fail the review.
-		_, ok := h.deps.PlanRuns.Attach(args.PlanRunID, env.SessionID, planrun.TaskRef{Title: args.TaskTitle}, env.Verdict)
-		if !ok {
-			slog.Warn("plan run row append failed; run unknown or expired",
+		ref := planrun.TaskRef{Index: args.TaskIndex, Title: args.TaskTitle}
+		if row, ok := h.deps.PlanRuns.Attach(args.PlanRunID, env.SessionID, ref, env.Verdict); ok {
+			h.appendPlanLedger(args.PlanRunID, row)
+		} else {
+			slog.Warn("plan run attach failed; run unknown or expired",
 				"plan_run_id", args.PlanRunID, "session_id", env.SessionID)
 		}
 	}
@@ -535,14 +536,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		})
 		h.deps.Sessions.RecordIssuedIDs(sess.ID, envelopeIDs(env))
 
-		if sess.PlanRunID != "" {
-			if _, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
-				row.Checkpoints++
-			}); !ok {
-				slog.Warn("plan run row update failed; run or row unknown",
-					"plan_run_id", sess.PlanRunID, "session_id", sess.ID)
-			}
-		}
+		h.recordCheckpointRow(sess)
 	}
 
 	// Re-fetch so LastAccessed reflects the final access.
@@ -796,22 +790,19 @@ func planRunIDAdvisory(runID string) verdict.Finding {
 // unattachedPlanRunFinding explains a known plan run with no task rows. The
 // cause differs by source: a run found in the live store has no rows because
 // rows are appended at validate_task_spec, so no call ever passed its id. A
-// run recovered from the ledger has no rows because the ledger records a task
-// only when it finishes validate_completion — a header-only run may have had
-// tasks attached and even in progress before a restart, and that live state
-// does not survive.
+// run recovered from the ledger has no rows because no task attached to it
+// while the ledger was enabled.
 func unattachedPlanRunFinding(run *planrun.Run, fromLedger bool) verdict.Finding {
 	if fromLedger {
 		return verdict.Finding{
 			Severity:  verdict.SeverityMinor,
 			Category:  verdict.CategoryOther,
 			Criterion: "plan_run_id",
-			Evidence: fmt.Sprintf("Plan run %s is known from the plan ledger (%d tasks in the plan), but no task "+
-				"attached to it finished validate_completion while the ledger was enabled; the ledger records a "+
-				"task only when it completes, and nothing about this run's live state survived the restart.",
-				run.ID, run.TaskCount),
-			Suggestion: "Report from the per-task DONE envelopes. If tasks did not pass plan_run_id on " +
-				"validate_task_spec, pass it on every call.",
+			Evidence: fmt.Sprintf("Plan run %s is known from the plan ledger (%d tasks in the plan), but no task attached to it "+
+				"while the ledger was enabled: the ledger records a task as soon as validate_task_spec, or a lightweight "+
+				"validate_completion, passes this plan_run_id.", run.ID, run.TaskCount),
+			Suggestion: "Report from the per-task DONE envelopes. Pass plan_run_id on every validate_task_spec call, " +
+				"and on a lightweight task's validate_completion.",
 		}
 	}
 	return verdict.Finding{
@@ -1065,6 +1056,9 @@ type ValidateCompletionArgs struct {
 	Codescene             *codescene.Digest     `json:"codescene,omitempty" jsonschema:"The CodeScene result for this task: analyze_change_set's raw JSON, or the reduced digest. Unknown keys are ignored. pre_commit_code_health_safeguard sees only uncommitted changes, so after a commit it reports zero files and is not a run of the task. When a run was attempted and failed, send ran false with skip_reason and skip_evidence."`
 	FindingResponses      []FindingResponseArg  `json:"finding_responses,omitempty" jsonschema:"Your answers to findings you dispute from this task's last validate_completion response that was not partial, one per finding id. If the reviewer raises a critical or major finding you answered again, the response sets escalate. At most 50 entries of at most 2000 characters each; not counted toward the payload cap."`
 	ControllerRulings     []ControllerRulingArg `json:"controller_rulings,omitempty" jsonschema:"Rulings your controller issued on findings from this task's session, copied verbatim. A ruling covers every later finding with the same id, ignoring any -n suffix, for the rest of the session, which keeps at most 50 rulings. At most 50 entries of at most 2000 characters each; not counted toward the payload cap."`
+	PlanRunID             string                `json:"plan_run_id,omitempty" jsonschema:"Lightweight calls only (empty session_id): the plan_run_id from the controller's final passing validate_plan call, so plan_run_report counts this task. Pass task_index or task_title with it. Ignored when session_id is set, because the session already carries it; an unknown or expired id does not fail the call."`
+	TaskIndex             int                   `json:"task_index,omitempty" jsonschema:"Lightweight calls only: the task's 1-based position in the plan. Ignored when session_id is set."`
+	TaskTitle             string                `json:"task_title,omitempty" jsonschema:"Lightweight calls only: the task's heading in the plan, used to find the task when task_index is absent. Ignored when session_id is set."`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
@@ -1128,7 +1122,6 @@ var evidenceTruncationPatterns = []string{
 	"[truncated]",
 	"// ... unchanged",
 	"<!-- truncated -->",
-	// Added in v0.5.2 from field reports:
 	"/* ... */",
 	"/* ...rest unchanged */",
 	"// snip",
@@ -1902,6 +1895,11 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	}
 	env.Findings = append(env.Findings, review.advisories...)
 	env.Findings = append(env.Findings, repoRootAdvisories...)
+	if lightweight {
+		if f, ok := h.lightweightPlanRunAdvisory(args.PlanRunID, args.TaskIndex, args.TaskTitle); ok {
+			env.Findings = append(env.Findings, f)
+		}
+	}
 	if lightweight && (len(responses) > 0 || len(rulingArgs) > 0) {
 		env.Findings = append(env.Findings, noSessionRulingsAdvisory())
 	}
@@ -1946,45 +1944,10 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		env = h.withSessionTTL(env, sess)
 	}
 
-	if !lightweight && sess.PlanRunID != "" {
-		sev, _, _, _ := stats.CountFindings(env.Findings)
-		state := planrun.StateMissing
-		if args.Codescene != nil {
-			if args.Codescene.Ran {
-				state = planrun.StateRan
-			} else {
-				state = planrun.StateSkipped
-			}
-		}
-		if _, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
-			row.PostVerdict = env.Verdict
-			row.Severity = sev
-			row.SubmissionOnly = env.SubmissionDefectOnly
-			row.Codescene = args.Codescene
-			row.CodesceneState = state
-			row.CompletedAt = time.Now().UTC()
-			row.Waived = len(env.WaivedFindings)
-			row.Escalated = row.Escalated || env.Escalate
-		}); !ok {
-			slog.Warn("plan run row update failed; run or row unknown",
-				"plan_run_id", sess.PlanRunID, "session_id", sess.ID)
-		}
-
-		// Best-effort ledger append. Never lets a write failure change the
-		// result: logged and swallowed, not returned.
-		//
-		// Snapshot, not Get: this walks run.Rows after the lock is released,
-		// and concurrent subagents under the same plan run may be appending.
-		if run, ok := h.deps.PlanRuns.Snapshot(sess.PlanRunID); ok {
-			for _, row := range run.Rows {
-				if row.SessionID == sess.ID {
-					if err := h.deps.PlanLedger.Append(run, row); err != nil {
-						slog.Warn("plan ledger append failed", "err", err)
-					}
-					break
-				}
-			}
-		}
+	if lightweight {
+		h.recordLightweightCompletionRow(args, env)
+	} else {
+		h.recordCompletionRow(sess, env, args.Codescene)
 	}
 
 	h.recordStat(statParams{

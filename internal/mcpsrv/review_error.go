@@ -235,11 +235,28 @@ func (c planCallContext) mintPlanRunID(pr *verdict.PlanResult) {
 	if pr.PlanRunID != "" {
 		return
 	}
-	run := c.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
+	run := c.PlanRuns.CreateWithTasks(string(pr.PlanVerdict), string(pr.PlanQuality), planRunTasks(*pr, c.Tasks))
 	pr.PlanRunID = run.ID
 	if err := c.PlanLedger.AppendHeader(run); err != nil {
 		slog.Warn("plan ledger header append failed", "plan_run_id", run.ID, "err", err)
 	}
+}
+
+// planRunTasks lists the plan's tasks for a new run: the parsed headings, in
+// order, or the reviewer's task titles when the plan parsed no tasks.
+func planRunTasks(pr verdict.PlanResult, tasks []planparser.RawTask) []planrun.PlanTask {
+	if len(tasks) > 0 {
+		out := make([]planrun.PlanTask, len(tasks))
+		for i, t := range tasks {
+			out[i] = planrun.PlanTask{Index: i + 1, Title: t.Title}
+		}
+		return out
+	}
+	out := make([]planrun.PlanTask, len(pr.Tasks))
+	for i, t := range pr.Tasks {
+		out[i] = planrun.PlanTask{Index: i + 1, Title: t.TaskTitle}
+	}
+	return out
 }
 
 // finish runs the post-ladder tail every validate_plan exit path shares:
