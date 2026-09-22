@@ -51,7 +51,7 @@ func TestValidatePlan_RulingsWaivePlanAndTaskFindings(t *testing.T) {
 		`{"severity":"major","category":"ambiguous_spec","criterion":"AC","evidence":"vague","suggestion":"s"}`,
 		"Task 1: t1",
 		`{"severity":"major","category":"quality","criterion":"spec","evidence":"thin","suggestion":"s"}`)
-	planID := verdict.Fingerprint(verdict.CategoryAmbiguousSpec, "", "AC")
+	planID := verdict.Fingerprint(verdict.CategoryAmbiguousSpec, planScopeKey, "AC")
 	taskID := verdict.Fingerprint(verdict.CategoryQuality, "t1", "spec")
 	pr, _, _ := runPlanWithArgs(t, raw, ValidatePlanArgs{
 		PlanText: buildPlanWithNTasks(1),
@@ -258,7 +258,7 @@ func TestValidatePlan_TheChecklistCannotBeWaived(t *testing.T) {
 	pr, _, _ := runPlanWithArgs(t, raw, ValidatePlanArgs{
 		PlanText: buildPlanWithNTasks(1),
 		ControllerRulings: []ControllerRulingArg{{
-			FindingID: verdict.Fingerprint(verdict.CategoryUnverifiableCodebaseClaim, "", "codebase_reference_checklist"),
+			FindingID: verdict.Fingerprint(verdict.CategoryUnverifiableCodebaseClaim, planScopeKey, "codebase_reference_checklist"),
 			Ruling:    "stop showing the checklist",
 		}},
 	})
@@ -272,7 +272,7 @@ func TestValidatePlan_CacheHitReproducesWaivers(t *testing.T) {
 	h := &handlers{deps: newDeps(t, rv)}
 	args := ValidatePlanArgs{
 		PlanText:          buildPlanWithNTasks(1),
-		ControllerRulings: []ControllerRulingArg{{FindingID: verdict.Fingerprint(verdict.CategoryAmbiguousSpec, "", "AC"), Ruling: "Intended"}},
+		ControllerRulings: []ControllerRulingArg{{FindingID: verdict.Fingerprint(verdict.CategoryAmbiguousSpec, planScopeKey, "AC"), Ruling: "Intended"}},
 	}
 
 	_, first, err := h.ValidatePlan(context.Background(), nil, args)

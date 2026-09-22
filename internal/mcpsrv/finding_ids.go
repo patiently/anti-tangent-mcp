@@ -7,6 +7,13 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
+// planScopeKey is the task key plan-level findings are fingerprinted under.
+// It starts with a control character that no plan heading carries, so a
+// plan-level finding never shares a fingerprint with a session tool's finding
+// (empty task key) or with a plan task's (its heading): a ruling on one can
+// never waive the other.
+const planScopeKey = "\x1eplan"
+
 // assignEnvelopeIDs gives every finding and waived entry of a session-tool
 // response its display ID, findings first, and clears same_as, which is the
 // reviewer's claim and is never echoed. Call it once the list is final and
@@ -75,11 +82,11 @@ func planTaskKeys(pr verdict.PlanResult, tasks []planparser.RawTask) []string {
 func assignPlanIDs(pr *verdict.PlanResult, tasks []planparser.RawTask) {
 	keys := planTaskKeys(*pr, tasks)
 	a := verdict.NewIDAssigner()
-	a.Assign(pr.PlanFindings, "")
+	a.Assign(pr.PlanFindings, planScopeKey)
 	for i := range pr.Tasks {
 		a.Assign(pr.Tasks[i].Findings, keys[i])
 	}
-	a.AssignWaived(pr.WaivedFindings, "")
+	a.AssignWaived(pr.WaivedFindings, planScopeKey)
 	for i := range pr.Tasks {
 		a.AssignWaived(pr.Tasks[i].WaivedFindings, keys[i])
 	}

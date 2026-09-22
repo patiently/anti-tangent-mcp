@@ -297,6 +297,21 @@ func TestValidateCompletion_AServerFindingIsNeverWaived(t *testing.T) {
 	assert.Empty(t, env.WaivedFindings)
 }
 
+func TestValidateCompletion_APlanLevelIDNeverWaivesASessionFinding(t *testing.T) {
+	const overBuilding = `{"severity":"minor","category":"quality","criterion":"over_building",` +
+		`"evidence":"x.go:3: yagni: a helper with one caller. Inline it.\nnet: -4 lines","suggestion":"inline it","same_as":null}`
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	sessionID := completeWith(t, h, rv, completionCallArgs(sid), reviewerFindingsResp(overBuilding)).Findings[0].ID
+	planID := verdict.Fingerprint(verdict.CategoryQuality, planScopeKey, "over_building")
+	require.NotEqual(t, verdict.BaseID(sessionID), planID)
+
+	args := completionCallArgs(sid)
+	args.ControllerRulings = []ControllerRulingArg{{FindingID: planID, Ruling: "the plan asked for this helper"}}
+	env := completeWith(t, h, rv, args, reviewerFindingsResp(overBuilding))
+	assert.Empty(t, env.WaivedFindings, "a ruling on a plan-level id must not waive a completion finding")
+}
+
 func TestValidateCompletion_UnknownIDsDrawOneAdvisoryEachAndKeepTheVerdict(t *testing.T) {
 	h, rv := newRulingsHandlers(t)
 	sid := startTask(t, h, rv)

@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still in progress survives a restart; the ledger header records the plan's task headings.
 - A truncated review reports the time the reviewer actually spent in `review_ms`, and in stats,
   instead of 0.
+- Plan-level findings are fingerprinted apart from session findings. Every `over_building` finding
+  outside a plan task shared one ID, `f_b720ec2d`, so a ruling on the plan-level finding could waive
+  a `validate_completion` finding. Plan-level IDs change once with this release: a ruling carried
+  over from an earlier round on a plan-level finding needs to be given again under the new ID.
 
 ## [0.24.0] - 2026-09-20
 

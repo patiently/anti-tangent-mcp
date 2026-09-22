@@ -147,12 +147,12 @@ func suppressPlanVerifiedReferences(pr *verdict.PlanResult, refs []string) {
 }
 
 // waivePlanFindings moves every reviewer finding a ruling covers into
-// WaivedFindings, plan-level and per task, fingerprinting a task's findings
-// under the task key planTaskKeys derives from tasks, the parsed plan. The
-// assignment replaces any waived entries the parsed response carried, since
-// only the server fills them.
+// WaivedFindings, plan-level and per task, fingerprinting plan-level findings
+// under planScopeKey and a task's findings under the task key planTaskKeys
+// derives from tasks, the parsed plan. The assignment replaces any waived
+// entries the parsed response carried, since only the server fills them.
 func waivePlanFindings(pr *verdict.PlanResult, rulings map[string]session.Ruling, tasks []planparser.RawTask) {
-	pr.PlanFindings, pr.WaivedFindings = waiveRuled(pr.PlanFindings, "", rulings, nil)
+	pr.PlanFindings, pr.WaivedFindings = waiveRuled(pr.PlanFindings, planScopeKey, rulings, nil)
 	keys := planTaskKeys(*pr, tasks)
 	for i := range pr.Tasks {
 		t := &pr.Tasks[i]
