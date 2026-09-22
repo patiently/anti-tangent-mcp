@@ -14,8 +14,8 @@ import (
 
 const ledgerFile = "plan-runs.jsonl"
 
-// ledgerLine is one line of the ledger file, either a completed task row or a
-// run header: Header is true for a header line, written once when
+// ledgerLine is one line of the ledger file: a task row, written each time the
+// row changes, or a run header. Header is true for a header line, written once when
 // validate_plan mints a run before any task attaches to it, and false for a
 // task row. Both kinds carry the run's PlanVerdict, PlanQuality, and
 // TaskCount, denormalized so the file can be replayed without a separate
@@ -28,12 +28,13 @@ const ledgerFile = "plan-runs.jsonl"
 // of pruning them.
 //
 // PRIVACY: unlike events.jsonl and codescene-events.jsonl, which are
-// deliberately content-free, this record carries TaskTitle. That is why it
-// requires its own opt-in (ANTI_TANGENT_PLAN_LEDGER=1) on top of
-// ANTI_TANGENT_STATS_DIR rather than inheriting the stats opt-in. Silently
-// changing the privacy posture of every operator who already set
-// ANTI_TANGENT_STATS_DIR would be wrong, so this is a second, explicit flag —
-// do not fold it into the stats opt-in as a "simplification".
+// deliberately content-free, this record carries task titles and the header
+// carries the plan's task headings. That is why it requires its own opt-in
+// (ANTI_TANGENT_PLAN_LEDGER=1) on top of ANTI_TANGENT_STATS_DIR rather than
+// inheriting the stats opt-in. Silently changing the privacy posture of every
+// operator who already set ANTI_TANGENT_STATS_DIR would be wrong, so this is
+// a second, explicit flag — do not fold it into the stats opt-in as a
+// "simplification".
 //
 // Row embeds TaskRow, whose SessionID field carries `json:"-"`: that tag is
 // deliberate (SessionID is an in-process join key, not for disk) and must be
@@ -55,6 +56,11 @@ type ledgerLine struct {
 	// CreatedAt is set on header lines only. Prune keys task rows on
 	// Row.CompletedAt, and a header has no row to key on.
 	CreatedAt time.Time `json:"created_at,omitzero"`
+	// Tasks is set on header lines: the plan's task numbers and headings.
+	Tasks []PlanTask `json:"tasks,omitempty"`
+	// WrittenAt is set on task-row lines: when the line was appended. Prune
+	// keys a row that has not completed on it.
+	WrittenAt time.Time `json:"written_at,omitzero"`
 }
 
 // ledgerHeaderLine is the on-disk shape of a header. It is marshalled from its
@@ -63,17 +69,18 @@ type ledgerLine struct {
 // reader that matches task rows on plan_run_id never mistakes this line for
 // one.
 type ledgerHeaderLine struct {
-	HeaderPlanRunID string    `json:"header_plan_run_id"`
-	PlanVerdict     string    `json:"plan_verdict,omitempty"`
-	PlanQuality     string    `json:"plan_quality,omitempty"`
-	TaskCount       int       `json:"task_count,omitempty"`
-	Header          bool      `json:"header"`
-	CreatedAt       time.Time `json:"created_at"`
+	HeaderPlanRunID string     `json:"header_plan_run_id"`
+	PlanVerdict     string     `json:"plan_verdict,omitempty"`
+	PlanQuality     string     `json:"plan_quality,omitempty"`
+	TaskCount       int        `json:"task_count,omitempty"`
+	Header          bool       `json:"header"`
+	CreatedAt       time.Time  `json:"created_at"`
+	Tasks           []PlanTask `json:"tasks,omitempty"`
 }
 
-// Ledger appends completed task rows to plan-runs.jsonl, plus one header
-// line per run validate_plan mints. A nil *Ledger is a no-op, so the disabled
-// path is a single nil check.
+// Ledger appends a task row each time one changes to plan-runs.jsonl, plus
+// one header line per run validate_plan mints. A nil *Ledger is a no-op, so
+// the disabled path is a single nil check.
 //
 // mu serializes Append against Prune. Append does a raw O_APPEND write;
 // Prune reads the whole file, filters, and atomically replaces it via a
@@ -117,6 +124,7 @@ func (l *Ledger) Append(run *Run, row TaskRow) error {
 	b, err := json.Marshal(ledgerLine{
 		PlanRunID: run.ID, PlanVerdict: run.PlanVerdict,
 		PlanQuality: run.PlanQuality, TaskCount: run.TaskCount, Row: row,
+		WrittenAt: time.Now().UTC(),
 	})
 	if err != nil {
 		return err
@@ -125,14 +133,15 @@ func (l *Ledger) Append(run *Run, row TaskRow) error {
 }
 
 // AppendHeader records a run when validate_plan mints it, so a run that no
-// task was ever attached to is still known to Load. It carries no task title.
+// task was ever attached to is still known to Load. It carries the plan's
+// task headings, which the report lists for tasks never dispatched.
 func (l *Ledger) AppendHeader(run *Run) error {
 	if l == nil || l.Dir == "" {
 		return nil
 	}
 	b, err := json.Marshal(ledgerHeaderLine{
 		HeaderPlanRunID: run.ID, PlanVerdict: run.PlanVerdict, PlanQuality: run.PlanQuality,
-		TaskCount: run.TaskCount, Header: true, CreatedAt: run.CreatedAt.UTC(),
+		TaskCount: run.TaskCount, Header: true, CreatedAt: run.CreatedAt.UTC(), Tasks: run.Tasks,
 	})
 	if err != nil {
 		return err
@@ -176,19 +185,10 @@ func ledgerLineMatch(ln ledgerLine, planRunID string) (id string, matches bool) 
 // a header line — one that no task has attached to yet — comes back with ok
 // true and Rows empty, not as not-found.
 //
-// validate_completion may legitimately run more than once for the same
-// session — that is exactly the submission-defect re-submit loop
-// (isSubmissionDefectOnly / resubmitNextAction in mcpsrv), and Append is
-// deliberately dumb and best-effort, so a resubmitted task writes one ledger
-// line per completion call, all sharing the same Row.Index (UpdateRow's
-// mutate closure never touches Index — it is stable across resubmissions).
-// Load, not Append, is where that gets collapsed back down: it keeps the
-// *last* line seen per Index — the final outcome, which is the one that
-// actually stands — rather than suppressing earlier writes at append time,
-// so a crash between resubmissions never loses the earlier line. Rows are
-// then sorted by Index so a ledger-recovered run's ordering matches the live
-// store's dispatch order, regardless of the order tasks happened to
-// *complete* in.
+// A task's row is written when validate_task_spec attaches it and again
+// whenever it changes, and a row's Index is its plan task number, so Load
+// keeps the last line seen per Index: the task's current state, whether or
+// not it completed. Rows are then sorted by Index.
 func (l *Ledger) Load(planRunID string) (*Run, bool) {
 	if l == nil || l.Dir == "" {
 		return nil, false
@@ -222,6 +222,9 @@ func (l *Ledger) Load(planRunID string) (*Run, bool) {
 			if run.CreatedAt.IsZero() {
 				run.CreatedAt = ln.CreatedAt
 			}
+			if run.Tasks == nil {
+				run.Tasks = ln.Tasks
+			}
 			continue
 		}
 		byIndex[ln.Row.Index] = ln.Row // last-seen wins: a resubmission overwrites its own index
@@ -237,22 +240,33 @@ func (l *Ledger) Load(planRunID string) (*Run, bool) {
 	return run, true
 }
 
+// shouldPrune returns true if ln should be discarded during a prune at cutoff.
+// A task row is keyed on Row.CompletedAt, or on WrittenAt when it has not
+// completed; a header line is keyed on CreatedAt. A line with no timestamp is
+// retained.
+func shouldPrune(ln ledgerLine, cutoff time.Time) bool {
+	stamp := ln.Row.CompletedAt
+	switch {
+	case ln.Header:
+		stamp = ln.CreatedAt
+	case stamp.IsZero():
+		stamp = ln.WrittenAt
+	}
+	return !stamp.IsZero() && stamp.Before(cutoff)
+}
+
 // Prune rewrites plan-runs.jsonl, keeping only lines at or after cutoff. A
-// task row is keyed on Row.CompletedAt; a header line carries its own
-// CreatedAt (see ledgerLine) and is keyed on that instead, since it has no
-// embedded row to draw a timestamp from.
+// task row is keyed on Row.CompletedAt, or on WrittenAt when it has not
+// completed, and a line with neither timestamp is retained.
 //
-// A row whose CompletedAt is the zero value is always retained, never
-// treated as "at or after" nor "before" cutoff by a literal comparison. Zero
-// means "no completion time was recorded" — some code path wrote the row
-// without stamping CompletedAt — not "this row is infinitely old". A naive
-// `CompletedAt.Before(cutoff)` would evaluate true for the zero value (since
-// the zero time predates any real cutoff) and silently drop rows we have no
-// actual evidence are old. Keeping them is the conservative choice: at worst
-// a timestamp-less row lingers past retention; the alternative is a
-// data-loss bug indistinguishable from a real timestamp check. Not reachable
-// via today's single call site (Append always follows a CompletedAt stamp);
-// kept for forward compatibility.
+// A row whose CompletedAt is the zero value is keyed on WrittenAt instead.
+// Zero means "no completion time was recorded" — the task is still in progress
+// — not "this row is infinitely old". A naive `CompletedAt.Before(cutoff)`
+// would evaluate true for the zero value (since the zero time predates any
+// real cutoff) and silently drop rows we have no actual evidence are old.
+// Keeping them is the conservative choice: at worst a timestamp-less row
+// lingers past retention; the alternative is a data-loss bug indistinguishable
+// from a real timestamp check.
 //
 // A torn trailing line (unparseable JSON, e.g. a partial write from a killed
 // process) is skipped exactly like Load already does, and is never written
@@ -289,11 +303,7 @@ func (l *Ledger) Prune(cutoff time.Time) error {
 		if err := json.Unmarshal(line, &ln); err != nil {
 			continue // tolerate (drop) a torn trailing line, same as Load
 		}
-		stamp := ln.Row.CompletedAt
-		if ln.Header {
-			stamp = ln.CreatedAt
-		}
-		if !stamp.IsZero() && stamp.Before(cutoff) {
+		if shouldPrune(ln, cutoff) {
 			continue // has a real timestamp and it is stale: drop
 		}
 		kept = append(kept, append([]byte(nil), line...)) // copy: sc.Bytes() is reused by the next Scan

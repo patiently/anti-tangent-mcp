@@ -202,7 +202,9 @@ func TestLedger_PruneRetainsZeroCompletedAt(t *testing.T) {
 	l := &Ledger{Dir: dir}
 	run := &Run{ID: "pr_zero"}
 
-	require.NoError(t, l.Append(run, TaskRow{Index: 1, TaskTitle: "no-timestamp"})) // CompletedAt left zero
+	raw := `{"plan_run_id":"pr_zero","row":{"index":1,"task_title":"no-timestamp","pre_verdict":"","checkpoints":0}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ledgerFile), []byte(raw), 0o600))
+
 	require.NoError(t, l.Append(run, TaskRow{Index: 2, TaskTitle: "old", CompletedAt: time.Now().Add(-48 * time.Hour)}))
 
 	// A cutoff of "now" would drop both rows under a naive comparison; the
@@ -213,6 +215,55 @@ func TestLedger_PruneRetainsZeroCompletedAt(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, got.Rows, 1)
 	assert.Equal(t, "no-timestamp", got.Rows[0].TaskTitle)
+}
+
+func TestLedger_HeaderCarriesTaskHeadings(t *testing.T) {
+	l := &Ledger{Dir: t.TempDir()}
+	run := &Run{ID: "pr_titles000001", CreatedAt: time.Now().UTC(), TaskCount: 2,
+		Tasks: []PlanTask{{Index: 1, Title: "Task 1: Alpha"}, {Index: 2, Title: "Task 2: Beta"}}}
+	require.NoError(t, l.AppendHeader(run))
+
+	got, ok := l.Load(run.ID)
+	require.True(t, ok)
+	assert.Equal(t, run.Tasks, got.Tasks)
+}
+
+func TestLedger_OpenRowLoadsAndTheLastLineWins(t *testing.T) {
+	l := &Ledger{Dir: t.TempDir()}
+	run := &Run{ID: "pr_open00000001", TaskCount: 1}
+	require.NoError(t, l.Append(run, TaskRow{Index: 1, TaskTitle: "Alpha", PreVerdict: "fail", Attempts: 1}))
+	require.NoError(t, l.Append(run, TaskRow{Index: 1, TaskTitle: "Alpha", PreVerdict: "warn", Attempts: 2}))
+
+	got, ok := l.Load(run.ID)
+	require.True(t, ok)
+	require.Len(t, got.Rows, 1)
+	assert.Equal(t, "warn", got.Rows[0].PreVerdict)
+	assert.Equal(t, 2, got.Rows[0].Attempts)
+	assert.Empty(t, got.Rows[0].PostVerdict)
+}
+
+func TestLedger_PruneKeysAnOpenRowOnWrittenAt(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+	cutoff := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	lines := `{"plan_run_id":"pr_stale0000001","row":{"index":1,"task_title":"stale","pre_verdict":"pass","checkpoints":0},"written_at":"2026-08-01T00:00:00Z"}` + "\n" +
+		`{"plan_run_id":"pr_fresh0000001","row":{"index":1,"task_title":"fresh","pre_verdict":"pass","checkpoints":0},"written_at":"2026-09-10T00:00:00Z"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ledgerFile), []byte(lines), 0o600))
+
+	require.NoError(t, l.Prune(cutoff))
+	_, ok := l.Load("pr_stale0000001")
+	assert.False(t, ok, "an open row written before the cutoff is pruned")
+	_, ok = l.Load("pr_fresh0000001")
+	assert.True(t, ok)
+}
+
+func TestLedger_AppendStampsWrittenAt(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+	require.NoError(t, l.Append(&Run{ID: "pr_stamp0000001"}, TaskRow{Index: 1, TaskTitle: "a"}))
+	b, err := os.ReadFile(filepath.Join(dir, ledgerFile))
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"written_at":"`)
 }
 
 // TestLedger_PruneDropsTornTrailingLineNotPromoted proves Prune's torn-line
@@ -332,10 +383,6 @@ func TestLedger_HeaderOnlyRunLoads(t *testing.T) {
 	assert.Equal(t, 18, got.TaskCount)
 	assert.True(t, got.CreatedAt.Equal(created))
 	assert.Empty(t, got.Rows)
-
-	b, err := os.ReadFile(filepath.Join(dir, ledgerFile))
-	require.NoError(t, err)
-	assert.NotContains(t, string(b), "task_title", "a header carries no task title")
 }
 
 // TestLedger_HeaderLineKeyedOnHeaderPlanRunID pins the key a header line
