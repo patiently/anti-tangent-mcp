@@ -55,7 +55,7 @@
     {
       "id": 7,
       "subject": "P2-7: DONE hold and guidance pointer",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** an implementer is told not to report DONE while a real finding is open, and is pointed at the build guidance it already receives.\n\n**Files:**\n- Modify: `internal/mcpsrv/handlers.go` (`ValidateCompletion`'s next_action switch, `ValidateTaskSpec`'s envelope)\n- Modify: `internal/mcpsrv/submission_defect.go` (or wherever the prefix helpers live)\n- Modify: `internal/mcpsrv/handlers_test.go`\n- Modify: `CHANGELOG.md`\n\n**Acceptance Criteria:**\n- [ ] When a `validate_completion` result still carries a critical or major finding outside the submission-defect categories, and neither `escalate` nor `submission_defect_only` applies, `next_action` is prefixed \"Do not report DONE: N critical/major finding(s) remain open (ids). Fix and re-validate, or ask the controller for a ruling.\"\n- [ ] The prefix appears for a lightweight call too, and never alongside the escalation or resubmit prefix.\n- [ ] A `pass`, or a result whose only findings are minor, gets no prefix.\n- [ ] `validate_task_spec`'s `next_action` ends with \"Read `implementation_guidance` before writing code.\" whenever the envelope carries that field.\n- [ ] `go test -race ./...` passes.\n\n**Verify:** `go test -race ./internal/mcpsrv/... -run 'NextAction|Guidance|DONE'` → `ok`\n\nFull steps: docs/superpowers/plans/2026-09-22-part2-friction-and-lightweight.md, Task 7.\n\n```json:metadata\n{\"files\": [\"internal/mcpsrv/handlers.go\", \"internal/mcpsrv/submission_defect.go\", \"internal/mcpsrv/handlers_test.go\", \"CHANGELOG.md\"], \"verifyCommand\": \"go test -race ./internal/mcpsrv/...\", \"acceptanceCriteria\": [\"DONE prefix on an open critical/major code finding, ids included\", \"never alongside escalation or resubmit prefixes; none on pass or minors\", \"prefix applies in lightweight mode\", \"validate_task_spec next_action names implementation_guidance\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         6
@@ -64,12 +64,12 @@
     {
       "id": 8,
       "subject": "P2-8: protocol, example, README",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** the controller protocol tells controllers to attach the brief, and the lightweight example and README describe the new inputs and behaviour.\n\n**Files:**\n- Modify: `docs/protocol/controller.md` (§5.1 step 6 and two paragraphs trimmed to pay for it)\n- Modify: `plugin/anti-tangent-protocol/protocol/controller.md` (resync)\n- Modify: `examples/lightweight-dispatch.md`\n- Modify: `README.md`\n- Modify: `CHANGELOG.md`\n\n**Acceptance Criteria:**\n- [ ] `controller.md` step 6 also tells the controller to name the task's brief in `context_paths`; the part stays **under 15,900 bytes** so Part 3 has room, and the plugin copy is identical.\n- [ ] Two paragraphs are trimmed as in Step 1, and no section number changes.\n- [ ] `examples/lightweight-dispatch.md` names `final_diff_path` with the `git diff` recipe, and says `controller_rulings` work without a session.\n- [ ] `README.md` documents `context_paths` on `validate_task_spec`, the automatic truncation retry with the new default budget, the lightweight rulings, and the malformed-diff rejection.\n- [ ] `go test -race ./...` passes; the protocol byte and bundle checks pass locally.\n\n**Verify:** `for f in docs/protocol/*.md; do wc -c \"$f\"; done; diff -r docs/protocol plugin/anti-tangent-protocol/protocol && echo identical` → every part under 16000 (controller.md under 15900), then `identical`\n\nFull steps: docs/superpowers/plans/2026-09-22-part2-friction-and-lightweight.md, Task 8.\n\n```json:metadata\n{\"files\": [\"docs/protocol/controller.md\", \"plugin/anti-tangent-protocol/protocol/controller.md\", \"examples/lightweight-dispatch.md\", \"README.md\", \"CHANGELOG.md\"], \"verifyCommand\": \"for f in docs/protocol/*.md; do wc -c \\\"$f\\\"; done; diff -r docs/protocol plugin/anti-tangent-protocol/protocol && echo identical && go test -race ./...\", \"acceptanceCriteria\": [\"step 6 names context_paths for the brief; controller.md under 15900 bytes; plugin copy identical\", \"two paragraphs trimmed, no section renumbering\", \"lightweight example covers final_diff_path and sessionless rulings\", \"README covers context_paths, the retry and budget, lightweight rulings, malformed diffs\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         7
       ]
     }
   ],
-  "lastUpdated": "2026-09-22T20:55:59Z"
+  "lastUpdated": "2026-09-22T21:16:05Z"
 }
