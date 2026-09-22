@@ -53,8 +53,9 @@ type ledgerLine struct {
 	// one, or an older binary sharing the same ledger file) never mistakes a
 	// header line for a row.
 	HeaderPlanRunID string `json:"header_plan_run_id,omitempty"`
-	// CreatedAt is set on header lines only. Prune keys task rows on
-	// Row.CompletedAt, and a header has no row to key on.
+	// CreatedAt is set on header lines only. Prune keys a task row on
+	// Row.CompletedAt, or WrittenAt when it has not completed; a header has
+	// no row to key on.
 	CreatedAt time.Time `json:"created_at,omitzero"`
 	// Tasks is set on header lines: the plan's task numbers and headings.
 	Tasks []PlanTask `json:"tasks,omitempty"`
@@ -259,14 +260,10 @@ func shouldPrune(ln ledgerLine, cutoff time.Time) bool {
 // task row is keyed on Row.CompletedAt, or on WrittenAt when it has not
 // completed, and a line with neither timestamp is retained.
 //
-// A row whose CompletedAt is the zero value is keyed on WrittenAt instead.
-// Zero means "no completion time was recorded" — the task is still in progress
-// — not "this row is infinitely old". A naive `CompletedAt.Before(cutoff)`
-// would evaluate true for the zero value (since the zero time predates any
-// real cutoff) and silently drop rows we have no actual evidence are old.
-// Keeping them is the conservative choice: at worst a timestamp-less row
-// lingers past retention; the alternative is a data-loss bug indistinguishable
-// from a real timestamp check.
+// A row that has not completed is keyed on WrittenAt. A line carrying neither
+// timestamp is always retained, because a zero time means no time was recorded,
+// not that the line is infinitely old, and dropping it would be data loss
+// indistinguishable from a real timestamp check.
 //
 // A torn trailing line (unparseable JSON, e.g. a partial write from a killed
 // process) is skipped exactly like Load already does, and is never written
