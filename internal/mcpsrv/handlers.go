@@ -1061,8 +1061,8 @@ func contextTooLargeTaskSpecEnvelope(err *contextTooLargeError, model config.Mod
 // validate_task_spec into its response: a cap breach (contextTooLargeError)
 // becomes a rejection envelope with no reviewer call, and any other
 // resolution failure (bad path, outside ANTI_TANGENT_PLAN_ROOTS) stays a
-// transport error. Split out of ValidateTaskSpec so that branch does not
-// count against its own cyclomatic complexity.
+// transport error. Kept out of ValidateTaskSpec, whose own branch count is
+// what this rejection would otherwise add to.
 func (h *handlers) rejectTaskSpecContextPaths(cerr error) (*mcp.CallToolResult, Envelope, error) {
 	var tle *contextTooLargeError
 	if !errors.As(cerr, &tle) {
