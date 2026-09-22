@@ -144,6 +144,16 @@ func TestValidateCompletion_LightweightWithoutATaskIsAdvised(t *testing.T) {
 	assert.Empty(t, rowsOf(t, h, run.ID))
 }
 
+func TestValidateCompletion_LightweightWithAnUnknownPlanRunIsStillReviewed(t *testing.T) {
+	h := &handlers{deps: newDeps(t, &fakeReviewer{name: "anthropic", resp: passResp("m")})}
+	args := completionCallArgs("")
+	args.PlanRunID, args.TaskIndex = "pr_does_not_exist", 1
+	_, env, err := h.ValidateCompletion(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, "pass", env.Verdict, "an unknown plan run is bookkeeping, and must not change the review")
+	assert.True(t, env.Lightweight)
+}
+
 func TestValidateCompletion_ASessionCallIgnoresTheTaskFields(t *testing.T) {
 	h := &handlers{deps: newDeps(t, &fakeReviewer{name: "anthropic", resp: passResp("m")})}
 	run := titledRun(h, "Task 1: One", "Task 2: Two")

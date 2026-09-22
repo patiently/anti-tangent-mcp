@@ -454,3 +454,22 @@ func TestLedger_RulingsFieldsRoundTripAndOlderLinesStillLoad(t *testing.T) {
 	assert.Equal(t, 0, older.Rows[0].Waived)
 	assert.False(t, older.Rows[0].Escalated)
 }
+
+func TestLedger_HeaderAfterRowsStillCarriesThePlansTasks(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+	row := `{"plan_run_id":"pr_order00000001","row":{"index":1,"task_title":"Alpha","pre_verdict":"pass","checkpoints":0},"written_at":"2026-09-22T10:00:00Z"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ledgerFile), []byte(row), 0o600))
+	require.NoError(t, l.AppendHeader(&Run{
+		ID: "pr_order00000001", CreatedAt: time.Date(2026, 9, 22, 9, 0, 0, 0, time.UTC), TaskCount: 2,
+		Tasks: []PlanTask{{Index: 1, Title: "Task 1: Alpha"}, {Index: 2, Title: "Task 2: Beta"}},
+	}))
+
+	got, ok := l.Load("pr_order00000001")
+	require.True(t, ok)
+	assert.Equal(t, 2, got.TaskCount)
+	require.Len(t, got.Tasks, 2)
+	assert.Equal(t, "Task 2: Beta", got.Tasks[1].Title)
+	assert.False(t, got.CreatedAt.IsZero())
+	require.Len(t, got.Rows, 1)
+}

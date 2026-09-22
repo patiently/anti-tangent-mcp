@@ -220,12 +220,7 @@ func (l *Ledger) Load(planRunID string) (*Run, bool) {
 			}
 		}
 		if ln.Header {
-			if run.CreatedAt.IsZero() {
-				run.CreatedAt = ln.CreatedAt
-			}
-			if run.Tasks == nil {
-				run.Tasks = ln.Tasks
-			}
+			mergeHeaderLine(run, ln)
 			continue
 		}
 		byIndex[ln.Row.Index] = ln.Row // last-seen wins: a resubmission overwrites its own index
@@ -239,6 +234,22 @@ func (l *Ledger) Load(planRunID string) (*Run, bool) {
 	}
 	sort.Slice(run.Rows, func(i, j int) bool { return run.Rows[i].Index < run.Rows[j].Index })
 	return run, true
+}
+
+// mergeHeaderLine folds header line ln into run, field by field, so Load
+// gets the header's CreatedAt, Tasks and TaskCount regardless of whether the
+// header line is read before or after the task rows that reference the same
+// run.
+func mergeHeaderLine(run *Run, ln ledgerLine) {
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = ln.CreatedAt
+	}
+	if run.Tasks == nil {
+		run.Tasks = ln.Tasks
+	}
+	if run.TaskCount == 0 {
+		run.TaskCount = ln.TaskCount
+	}
 }
 
 // shouldPrune returns true if ln should be discarded during a prune at cutoff.

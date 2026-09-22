@@ -273,7 +273,8 @@ func (s *Store) Attach(runID, sessionID string, ref TaskRef, preVerdict string) 
 	if !ok || ref.empty() {
 		return TaskRow{}, false
 	}
-	row := &r.Rows[r.rowFor(ref, false)]
+	pos := r.rowFor(ref, false)
+	row := &r.Rows[pos]
 	row.SessionID = sessionID
 	row.PreVerdict = preVerdict
 	row.Attempts++
