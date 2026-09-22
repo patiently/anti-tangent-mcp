@@ -28,6 +28,31 @@ var submissionDefectCategories = map[verdict.Category]bool{
 const resubmitNextAction = "Re-submit with the missing evidence — every blocking finding is " +
 	"about the submission, not the code; no rework is implied. Then: "
 
+// openFindingNextAction is prefixed onto next_action while a finding about the
+// code itself is still open. The protocol forbids reporting DONE with one, and
+// a warn verdict reads like permission to stop.
+func openFindingNextAction(ids []string) string {
+	return fmt.Sprintf("Do not report DONE: %d critical/major finding(s) remain open (%s). "+
+		"Fix and re-validate, or ask the controller for a ruling. Then: ", len(ids), strings.Join(ids, ", "))
+}
+
+// blockingCodeFindingIDs lists the ids of findings that block DONE: critical
+// or major, and about the code rather than the submission. A submission defect
+// has its own prefix, which says no rework is implied.
+func blockingCodeFindingIDs(fs []verdict.Finding) []string {
+	var ids []string
+	for _, f := range fs {
+		if f.Severity != verdict.SeverityCritical && f.Severity != verdict.SeverityMajor {
+			continue
+		}
+		if submissionDefectCategories[f.Category] {
+			continue
+		}
+		ids = append(ids, f.ID)
+	}
+	return ids
+}
+
 // isSubmissionDefectOnly reports whether the envelope is blocked solely by
 // submission defects. Minor findings are ignored: they never blocked DONE, so
 // an envelope carrying only minors has nothing to excuse and returns false.

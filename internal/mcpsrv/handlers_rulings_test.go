@@ -693,3 +693,30 @@ func TestValidateCompletionAndCheckProgress_ConcurrentCallsDoNotRace(t *testing.
 	}()
 	wg.Wait()
 }
+
+// Next-action prefix tests.
+
+func TestValidateCompletion_AnOpenMajorSaysDoNotReportDone(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	openCodeFinding := findingObj("major", "quality", "drift", "code changed task", "")
+	env := completeWith(t, h, rv, completionCallArgs(sid), reviewerFindingsResp(openCodeFinding))
+	assert.True(t, strings.HasPrefix(env.NextAction, "Do not report DONE:"), "got %q", env.NextAction)
+	assert.Contains(t, env.NextAction, env.Findings[0].ID)
+}
+
+func TestValidateCompletion_APassGetsNoDoneWarning(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	env := completeWith(t, h, rv, completionCallArgs(sid), passResp("claude-opus-4-7"))
+	assert.NotContains(t, env.NextAction, "Do not report DONE")
+}
+
+func TestValidateCompletion_ASubmissionDefectKeepsItsOwnPrefix(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	insufficientEvidence := findingObj("major", "insufficient_evidence", "evidence", "no diff", "")
+	env := completeWith(t, h, rv, completionCallArgs(sid), reviewerFindingsResp(insufficientEvidence))
+	assert.True(t, env.SubmissionDefectOnly)
+	assert.NotContains(t, env.NextAction, "Do not report DONE")
+}

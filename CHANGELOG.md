@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once at `ANTI_TANGENT_MAX_TOKENS_CEILING` when the caller passed no `max_tokens_override`. A truncated
   `validate_task_spec` opened no session, so each truncation used to cost a manual retry; the suggestion
   now names the budget to pass.
+- `validate_completion` prefixes `next_action` with "Do not report DONE" while a critical or major finding
+  about the code is open, so a `warn` verdict no longer reads as permission to stop, and
+  `validate_task_spec` ends its `next_action` by pointing at the `implementation_guidance` it returns.
 
 ### Fixed
 

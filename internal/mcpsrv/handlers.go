@@ -206,6 +206,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, fmt.Errorf("render lean guidance: %w", err)
 	}
 	env.ImplementationGuidance = guidance
+	env.NextAction = strings.TrimRight(env.NextAction, " ") + " Read `implementation_guidance` before writing code."
 
 	if f, ok := h.taskSpecPlanRunAdvisory(args.PlanRunID, args.TaskIndex); ok {
 		env.Findings = append(env.Findings, f)
@@ -2001,13 +2002,6 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// An escalated response does not say resubmit: resubmitting without a code
 	// change is the loop escalation stops, and a repeated insufficient_evidence
 	// finding is both a submission defect and an escalation.
-	switch {
-	case env.Escalate:
-		env.NextAction = escalationNextAction(escalateIDs) + env.NextAction
-	case isSubmissionDefectOnly(env.Findings):
-		env.SubmissionDefectOnly = true
-		env.NextAction = resubmitNextAction + env.NextAction
-	}
 	assignEnvelopeIDs(&env)
 	// Restored after assignEnvelopeIDs, which clears same_as unconditionally:
 	// this is the one case where the reviewer's same_as is the actual answer,
@@ -2015,6 +2009,17 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	for i, id := range preTaskLinks {
 		idCopy := id
 		env.Findings[len(head)+i].SameAs = &idCopy
+	}
+	switch {
+	case env.Escalate:
+		env.NextAction = escalationNextAction(escalateIDs) + env.NextAction
+	case isSubmissionDefectOnly(env.Findings):
+		env.SubmissionDefectOnly = true
+		env.NextAction = resubmitNextAction + env.NextAction
+	default:
+		if ids := blockingCodeFindingIDs(env.Findings); len(ids) > 0 {
+			env.NextAction = openFindingNextAction(ids) + env.NextAction
+		}
 	}
 
 	if !lightweight {

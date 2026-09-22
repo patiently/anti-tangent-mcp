@@ -3980,3 +3980,11 @@ func TestValidateTaskSpec_PayloadTooLarge_NoImplementationGuidance(t *testing.T)
 	require.Error(t, err, "over the cap is rejected before review")
 	assert.Empty(t, env.ImplementationGuidance)
 }
+
+func TestValidateTaskSpec_NextActionPointsAtTheGuidance(t *testing.T) {
+	h := &handlers{deps: newDeps(t, &fakeReviewer{name: "anthropic", resp: passResp("m")})}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+	require.NotEmpty(t, env.ImplementationGuidance)
+	assert.Contains(t, env.NextAction, "Read `implementation_guidance` before writing code.")
+}
