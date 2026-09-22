@@ -2867,6 +2867,47 @@ func TestCheckEvidenceShape_PythonExemptionCoversOnlyTheEllipsis(t *testing.T) {
 	}
 }
 
+func TestDiffHunkOrderReason_AcceptsRealGitDiffs(t *testing.T) {
+	for name, diff := range map[string]string{
+		"single file": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,3 +1,4 @@\n a\n+b\n c\n d\n",
+		"two files": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,3 @@\n a\n+b\n c\n" +
+			"diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"same file twice (git log -p)": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -10,2 +10,3 @@\n a\n+b\n c\n" +
+			"diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"new file": "diff --git a/new.go b/new.go\nnew file mode 100644\n--- /dev/null\n+++ b/new.go\n@@ -0,0 +1,2 @@\n+a\n+b\n",
+		"combined": "diff --cc a.go\n@@@ -1,2 -1,2 +1,3 @@@\n  a\n++b\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Empty(t, diffHunkOrderReason(diff))
+		})
+	}
+}
+
+func TestDiffHunkOrderReason_RejectsTwoFilesUnderOneHeader(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n" +
+		"@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "a.go")
+	assert.Contains(t, reason, "@@ -1,2 +1,3 @@")
+}
+
+func TestValidateCompletion_AMalformedDiffIsRejectedWithoutAReview(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("m")}
+	h := &handlers{deps: newDeps(t, rv)}
+	args := ValidateCompletionArgs{
+		SessionID: "", Summary: "done",
+		FinalDiff: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+	}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, "fail", env.Verdict)
+	assert.True(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
+	assert.Zero(t, rv.Calls, "a diff git could not have produced costs no reviewer call")
+	assert.Contains(t, env.Findings[0].Suggestion, "final_diff_path")
+}
+
 func TestValidateTaskSpec_CVRSuppressesUnverifiableClaim_ClaimLevel(t *testing.T) {
 	rv := &fakeReviewer{
 		name: "anthropic",

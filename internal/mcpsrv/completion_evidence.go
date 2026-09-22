@@ -3,7 +3,9 @@
 package mcpsrv
 
 import (
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -96,4 +98,79 @@ func pathTailMatches(candidate, tail string) bool {
 	}
 	i := len(candidate) - len(tail)
 	return candidate[i-1] == '/'
+}
+
+// hunkHeaderRe matches a unified-diff hunk header's old and new ranges. A
+// combined diff's "@@@" header does not match, and is not checked: it has one
+// range per parent and says nothing this guard can judge.
+var hunkHeaderRe = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+
+// diffHunkOrderReason reports why a diff cannot have come from git, or "" when
+// nothing says it did not. Within one file section git emits hunks in
+// ascending order and merges any that would touch, so a hunk that starts at or
+// before the previous hunk's end means two files' hunks were concatenated
+// under one header, or a section was assembled by hand. Such a diff reads to
+// the reviewer as evidence that contradicts itself.
+//
+// A new section starts at each "diff --git" line, so the same file appearing
+// twice — as git log -p emits it — is judged per section. Line-by-line state
+// lives in diffHunkTracker so each function's own branching stays small.
+func diffHunkOrderReason(diff string) string {
+	if diff == "" {
+		return ""
+	}
+	t := &diffHunkTracker{}
+	for _, line := range strings.Split(diff, "\n") {
+		if reason := t.observe(line); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+// diffHunkTracker carries the current file section's path and the previous
+// hunk's old/new end positions across the line-by-line scan in
+// diffHunkOrderReason.
+type diffHunkTracker struct {
+	path           string
+	oldEnd, newEnd int
+}
+
+// observe updates the tracker for one diff line and reports a rejection
+// reason when a "@@ " hunk header's old or new start falls at or before the
+// tracker's current end — see diffHunkOrderReason's doc comment for why that
+// means git could not have emitted this diff. A header the regex cannot
+// parse (e.g. a combined diff's "@@@" form) is left unjudged, and the
+// tracker's end positions are unchanged.
+func (t *diffHunkTracker) observe(line string) string {
+	switch {
+	case strings.HasPrefix(line, "diff --git "), strings.HasPrefix(line, "diff --cc "):
+		t.path, t.oldEnd, t.newEnd = strings.TrimPrefix(line, "diff --git "), 0, 0
+	case strings.HasPrefix(line, "+++ "):
+		t.path = strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
+	case strings.HasPrefix(line, "@@ "):
+		m := hunkHeaderRe.FindStringSubmatch(line)
+		if m == nil {
+			return ""
+		}
+		oldStart, oldLen := hunkRange(m, 1)
+		newStart, newLen := hunkRange(m, 3)
+		if oldStart < t.oldEnd || newStart < t.newEnd {
+			return fmt.Sprintf("%s: hunk %q starts before the previous hunk ends; git emits a file's hunks in ascending order, so this diff was not produced by git", t.path, line)
+		}
+		t.oldEnd, t.newEnd = oldStart+oldLen, newStart+newLen
+	}
+	return ""
+}
+
+// hunkRange parses the "start,len" pair at m[base] (start) and m[base+1]
+// (len) from a hunkHeaderRe match; an omitted length is 1, as the
+// unified-diff format defines it.
+func hunkRange(m []string, base int) (int, int) {
+	s, _ := strconv.Atoi(m[base])
+	if m[base+1] == "" {
+		return s, 1
+	}
+	n, _ := strconv.Atoi(m[base+1])
+	return s, n
 }

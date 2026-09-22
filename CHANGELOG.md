@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rendered the way `validate_plan` handles them. Without a session the rulings were dropped and the next
   review raised the settled findings again; `finding_responses` still need a session, and their advisory
   now says a ruling does not.
+- `validate_completion` rejects a diff git could not have produced — two files' hunks concatenated under
+  one header, or hunks that run backwards within a file — as `malformed_evidence`, before the reviewer
+  call. Such a diff was reviewed as real evidence and reported as internally inconsistent.
 
 ### Changed
 

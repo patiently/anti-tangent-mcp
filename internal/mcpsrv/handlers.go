@@ -1271,19 +1271,14 @@ func ellipsisExemptPath(path string) bool {
 //
 // Order of checks (fail-fast on the first hit so the reason points at the
 // most-likely cause):
-//  1. final_diff substring + ellipsis-line scan
+//  1. final_diff checks (finalDiffMalformedReason): substring scan,
+//     ellipsis-line scan, hunk-order scan
 //  2. final_files empty Path
 //  3. final_files content substring + ellipsis-line scan
 func checkEvidenceShape(finalDiff string, files []FileArg) string {
 	if finalDiff != "" {
-		lower := strings.ToLower(finalDiff)
-		for _, p := range evidenceTruncationPatterns {
-			if idx := strings.Index(lower, p); idx >= 0 {
-				return fmt.Sprintf("final_diff contains truncation marker %q at offset %d", p, idx)
-			}
-		}
-		if off := diffEllipsisPlaceholderOffset(finalDiff); off >= 0 {
-			return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", off)
+		if reason := finalDiffMalformedReason(finalDiff); reason != "" {
+			return reason
 		}
 	}
 	for i, f := range files {
@@ -1305,6 +1300,23 @@ func checkEvidenceShape(finalDiff string, files []FileArg) string {
 		}
 	}
 	return ""
+}
+
+// finalDiffMalformedReason inspects finalDiff alone: truncation markers, an
+// elided "..." placeholder line, and a hunk order git could not have
+// produced. It stays separate from checkEvidenceShape's final_files loop so
+// each function's own decision points stay easy to follow.
+func finalDiffMalformedReason(finalDiff string) string {
+	lower := strings.ToLower(finalDiff)
+	for _, p := range evidenceTruncationPatterns {
+		if idx := strings.Index(lower, p); idx >= 0 {
+			return fmt.Sprintf("final_diff contains truncation marker %q at offset %d", p, idx)
+		}
+	}
+	if off := diffEllipsisPlaceholderOffset(finalDiff); off >= 0 {
+		return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", off)
+	}
+	return diffHunkOrderReason(finalDiff)
 }
 
 // completionInputTooLargeError distinguishes an oversized final_diff_path or
@@ -1515,7 +1527,7 @@ func malformedEvidenceEnvelope(tool, sessionID, reason, modelUsed string) Envelo
 			Category:   verdict.CategoryMalformedEvidence,
 			Criterion:  "evidence_shape",
 			Evidence:   reason,
-			Suggestion: "Submit full file contents in final_files, or a complete unified diff (no truncation markers) in final_diff.",
+			Suggestion: "Submit full file contents in final_files, or a complete unified diff (no truncation markers) in final_diff. Regenerate the diff with `git diff`, and pass it as `final_diff_path`.",
 		}},
 		NextAction: "Re-submit with complete evidence; current submission appears truncated.",
 		ModelUsed:  modelUsed,
