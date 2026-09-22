@@ -1999,9 +1999,6 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if lightweight && len(responses) > 0 {
 		env.Findings = append(env.Findings, noSessionResponsesAdvisory())
 	}
-	// An escalated response does not say resubmit: resubmitting without a code
-	// change is the loop escalation stops, and a repeated insufficient_evidence
-	// finding is both a submission defect and an escalation.
 	assignEnvelopeIDs(&env)
 	// Restored after assignEnvelopeIDs, which clears same_as unconditionally:
 	// this is the one case where the reviewer's same_as is the actual answer,
@@ -2010,6 +2007,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		idCopy := id
 		env.Findings[len(head)+i].SameAs = &idCopy
 	}
+	// An escalated response does not say resubmit: resubmitting without a code
+	// change is the loop escalation stops, and a repeated insufficient_evidence
+	// finding is both a submission defect and an escalation.
 	switch {
 	case env.Escalate:
 		env.NextAction = escalationNextAction(escalateIDs) + env.NextAction
