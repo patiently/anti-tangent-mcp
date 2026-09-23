@@ -102,6 +102,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   large enough to swallow the rest of the diff as payload without ever looking over- or
   under-declared mid-scan. The check previously judged only the lines it saw; reaching end of input
   with a hunk still owed lines returned no rejection at all.
+- A truncated per-task review's finding `suggestion` and `next_action` no longer advise retrying at
+  `max_tokens_override: <ceiling>` when the attempt that just truncated already ran at or above the
+  ceiling — an automatic retry exhausted at the ceiling, an explicit override already at or above it,
+  or a configured `ANTI_TANGENT_PER_TASK_MAX_TOKENS` default already there. That advice reproduced
+  the same attempt; the message now says to raise `ANTI_TANGENT_MAX_TOKENS_CEILING` or shrink the
+  input instead.
 
 ## [0.24.0] - 2026-09-20
 

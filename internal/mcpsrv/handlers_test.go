@@ -597,7 +597,15 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarn(t *testing.T) {
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
 	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
-	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	// The default per-task budget (8192) is below the ceiling (16384) and no
+	// override was passed, so runReview auto-retries once at the ceiling —
+	// which also truncates here, since rv always errors. The final attempt
+	// already ran at the ceiling, so the suggestion must not tell the caller
+	// to retry at that same budget.
+	assert.Equal(t, 2, rv.Calls, "truncation with headroom below the ceiling draws one automatic retry")
+	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+	assert.NotContains(t, env.Findings[0].Suggestion, "max_tokens_override:",
+		"the retry already ran at the ceiling; a same-budget retry suggestion would not help")
 
 	// No session should be created on truncation.
 	assert.Empty(t, env.SessionID)
@@ -618,7 +626,8 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now override the reviewer on h.deps directly to return truncation.
-	h.deps.Reviews = providers.Registry{"anthropic": &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}}
+	rv2 := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+	h.deps.Reviews = providers.Registry{"anthropic": rv2}
 
 	_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
 		SessionID:    pre.SessionID,
@@ -630,7 +639,13 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
 	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
-	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	// Same auto-retry-to-the-ceiling shape as ValidateTaskSpec's version of
+	// this test (see its comment): the final attempt used the ceiling, so
+	// the suggestion must point at raising it, not at retrying again there.
+	assert.Equal(t, 2, rv2.Calls, "truncation with headroom below the ceiling draws one automatic retry")
+	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+	assert.NotContains(t, env.Findings[0].Suggestion, "max_tokens_override:",
+		"the retry already ran at the ceiling; a same-budget retry suggestion would not help")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 
 	// Pins the tool name on this tool's truncated-review envelope.
@@ -648,7 +663,8 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now override the reviewer on h.deps directly to return truncation.
-	h.deps.Reviews = providers.Registry{"anthropic": &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}}
+	rv2 := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+	h.deps.Reviews = providers.Registry{"anthropic": rv2}
 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
@@ -660,11 +676,97 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
 	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
-	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	// Same auto-retry-to-the-ceiling shape as ValidateTaskSpec's version of
+	// this test (see its comment): the final attempt used the ceiling, so
+	// the suggestion must point at raising it, not at retrying again there.
+	assert.Equal(t, 2, rv2.Calls, "truncation with headroom below the ceiling draws one automatic retry")
+	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+	assert.NotContains(t, env.Findings[0].Suggestion, "max_tokens_override:",
+		"the retry already ran at the ceiling; a same-budget retry suggestion would not help")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 
 	// Pins the tool name on this tool's truncated-review envelope.
 	require.Equal(t, "validate_completion", env.Tool)
+}
+
+// TestRunReview_TruncatedBelowCeilingStillAdvisesRetryingAtTheCeiling is the
+// non-buggy counterpart pinned alongside the ceiling fix: an explicit
+// max_tokens_override draws no automatic retry (perTaskRetryBudget returns 0
+// once the caller supplies one), so the single attempt here runs well below
+// the ceiling and there IS room left to retry higher — the original
+// "Retry with max_tokens_override: <ceiling>" advice is still correct and
+// must survive the fix for the at-ceiling case.
+func TestRunReview_TruncatedBelowCeilingStillAdvisesRetryingAtTheCeiling(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", MaxTokensOverride: 4000,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, rv.Calls, "an explicit override draws no automatic retry")
+	require.Len(t, env.Findings, 1)
+	assert.Contains(t, env.Findings[0].Suggestion,
+		fmt.Sprintf("Retry with max_tokens_override: %d, or raise %s.", d.Cfg.MaxTokensCeiling, perTaskMaxTokensEnvVar))
+	assert.Contains(t, env.NextAction, fmt.Sprintf("max_tokens_override: %d", d.Cfg.MaxTokensCeiling))
+}
+
+// TestRunReview_TruncatedAtCeilingAdvisesRaisingIt covers the finding's
+// remaining two no-good-retry paths, which share one shape (a single attempt
+// that already used the ceiling, so perTaskRetryBudget's own conditions rule
+// out an automatic retry) and so share one assertion helper:
+//
+//   - "explicit override": the caller already passed max_tokens_override at
+//     (or above) the ceiling. effectiveMaxTokens clamps it to the ceiling,
+//     and override != 0 disables the automatic retry on its own.
+//   - "configured default": ANTI_TANGENT_PER_TASK_MAX_TOKENS is already at or
+//     above the ceiling with no override involved. effectiveMaxTokens passes
+//     an override==0 default through unclamped, so maxTokens can sit at or
+//     above the ceiling before perTaskRetryBudget ever runs; either way
+//     maxTokens>=ceiling disables the retry.
+//
+// Both land on the same lone attempt already having used at least the
+// ceiling, so the suggestion must say so instead of proposing the same
+// budget again.
+func TestRunReview_TruncatedAtCeilingAdvisesRaisingIt(t *testing.T) {
+	cases := []struct {
+		name          string
+		configure     func(d *Deps)
+		override      func(ceiling int) int
+		noRetryReason string
+	}{
+		{
+			name:          "explicit override",
+			override:      func(ceiling int) int { return ceiling },
+			noRetryReason: "an override already at the ceiling draws no automatic retry",
+		},
+		{
+			name:          "configured default",
+			configure:     func(d *Deps) { d.Cfg.PerTaskMaxTokens = d.Cfg.MaxTokensCeiling },
+			override:      func(int) int { return 0 },
+			noRetryReason: "a configured default already at the ceiling draws no automatic retry",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+			d := newDeps(t, rv)
+			if tc.configure != nil {
+				tc.configure(&d)
+			}
+			h := &handlers{deps: d}
+
+			_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G", MaxTokensOverride: tc.override(d.Cfg.MaxTokensCeiling),
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, rv.Calls, tc.noRetryReason)
+			require.Len(t, env.Findings, 1)
+			assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+			assert.NotContains(t, env.Findings[0].Suggestion, "max_tokens_override:")
+		})
+	}
 }
 
 func TestValidateTaskSpec_PartialFindingsRecoveredOnTruncation(t *testing.T) {

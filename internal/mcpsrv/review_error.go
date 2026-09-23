@@ -400,12 +400,14 @@ func (h *handlers) perTaskReviewCall(model config.ModelRef, p prompts.Output, ma
 // findings it carries, marked partial, or the server's truncation notice.
 func (h *handlers) runReview(ctx context.Context, call reviewCall) (reviewOutcome, error) {
 	result, modelUsed, ms, partialRaw, err := h.review(ctx, call.Model, call.Prompt, call.MaxTokens)
+	used := call.MaxTokens
 	if errors.Is(err, providers.ErrResponseTruncated) && call.RetryAt > call.MaxTokens {
 		slog.Warn("reviewer response truncated; retrying once at the ceiling",
 			"model", call.Model.String(), "max_tokens", call.MaxTokens, "retry_max_tokens", call.RetryAt)
 		var retryMS int64
 		result, modelUsed, retryMS, partialRaw, err = h.review(ctx, call.Model, call.Prompt, call.RetryAt)
 		ms += retryMS
+		used = call.RetryAt
 	}
 	if err == nil {
 		return reviewOutcome{Result: result, ModelUsed: modelUsed, ReviewMS: ms}, nil
@@ -419,7 +421,7 @@ func (h *handlers) runReview(ctx context.Context, call reviewCall) (reviewOutcom
 		out.Server = []verdict.Finding{marker}
 		return out, nil
 	}
-	notice := truncatedResult(h.deps.Cfg.MaxTokensCeiling)
+	notice := truncatedResult(used, h.deps.Cfg.MaxTokensCeiling)
 	out.Server = notice.Findings
 	notice.Findings = nil
 	out.Result = notice
