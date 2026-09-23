@@ -86,6 +86,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside a plan task shared one ID, `f_b720ec2d`, so a ruling on the plan-level finding could waive
   a `validate_completion` finding. Plan-level IDs change once with this release: a ruling carried
   over from an earlier round on a plan-level finding needs to be given again under the new ID.
+- `validate_plan`'s Create/Modify check strips a line anchor written with spaces after its commas
+  (`a.go:6-22, 29`) or ending in `, …`, and reads every path a Files bullet lists rather than the
+  first. It reported such a file as missing when it existed, and never looked at the other paths on
+  the line, so a Modify: of a file only a later task creates went unreported. Patterns
+  (`testdata/*.golden`) and a bare file name after a nested path, which plans write as shorthand for
+  a sibling, are not checked.
 
 ## [0.24.0] - 2026-09-20
 

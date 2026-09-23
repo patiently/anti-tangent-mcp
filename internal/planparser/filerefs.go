@@ -3,6 +3,7 @@ package planparser
 import (
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -50,11 +51,20 @@ var (
 	//
 	// An anchor is a comma-separated LIST of lines-or-ranges, not a single
 	// line or a single pair: "a.md:60,166,174,419" and "a.md:27-30,40-50"
-	// are both ordinary plan bullets. A form permitting only one separator
-	// per group matches ":60,166" and then fails the whole anchor, leaving
-	// the digits attached to the path — which the disk tier stats verbatim
-	// and reports as a file that does not exist.
-	lineAnchorRe = regexp.MustCompile(`(?::\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)+$`)
+	// are both ordinary plan bullets, written with or without a space after
+	// each comma, and a list may end in ", …" or ", ..." that elides the
+	// rest. Any list shape the pattern does not accept leaves the digits
+	// attached to the path, which the disk tier stats verbatim and reports as
+	// a file that does not exist.
+	lineAnchorRe = regexp.MustCompile(`(?::\d+(?:-\d+)?(?:,\s*\d+(?:-\d+)?)*(?:,\s*(?:…|\.\.\.))?)+$`)
+	// pathListSepRe matches what may stand between two backticked paths of
+	// one bullet's list. Anything else after a span — a dash, a verb, an
+	// opening parenthesis — starts prose, whose code spans (`Foo`,
+	// `## Configure`) are not paths.
+	pathListSepRe = regexp.MustCompile(`^(?:[\s,;&+]|\band\b)*$`)
+	// anchorContinuationRe matches an unquoted comma piece that only carries
+	// more lines of the previous path's anchor: the " 29" of "a.go:6-22, 29".
+	anchorContinuationRe = regexp.MustCompile(`^(?:\d+(?:-\d+)?|…|\.\.\.)$`)
 )
 
 // FileRefs extracts a task body's declared file operations.
@@ -90,49 +100,135 @@ func FileRefs(body string) TaskFileRefs {
 			}
 			break
 		}
-		path := cleanRefPath(m[2])
-		if path == "" {
-			continue
-		}
-		for _, verb := range strings.Split(strings.ToLower(m[1]), "/") {
-			switch verb {
-			case "create":
-				refs.Create = append(refs.Create, path)
-			case "modify":
-				refs.Modify = append(refs.Modify, path)
-			case "delete":
-				refs.Delete = append(refs.Delete, path)
-			}
+		for _, path := range refPaths(m[2]) {
+			applyVerbs(&refs, m[1], path)
 		}
 	}
 	return refs
 }
 
-// cleanRefPath takes the path out of a bullet's tail: backtick-quoted when
-// present, else the first whitespace-delimited token, with any trailing
-// parenthetical annotation and any trailing line anchor removed.
-func cleanRefPath(tail string) string {
-	tail = strings.TrimSpace(trailingParenRe.ReplaceAllString(strings.TrimSpace(tail), ""))
-	if i := strings.Index(tail, "`"); i >= 0 {
-		rest := tail[i+1:]
-		if j := strings.Index(rest, "`"); j >= 0 {
-			return canonRefPath(stripLineAnchor(strings.TrimSpace(rest[:j])))
+// applyVerbs appends path to refs under each verb verbGroup names, so a
+// "Create/Modify:" bullet puts the same path in both lists.
+func applyVerbs(refs *TaskFileRefs, verbGroup, path string) {
+	for _, verb := range strings.Split(strings.ToLower(verbGroup), "/") {
+		switch verb {
+		case "create":
+			refs.Create = append(refs.Create, path)
+		case "modify":
+			refs.Modify = append(refs.Modify, path)
+		case "delete":
+			refs.Delete = append(refs.Delete, path)
 		}
-		// Unterminated backtick: use the part after the opening backtick
-		tail = rest
 	}
-	fields := strings.Fields(tail)
-	if len(fields) == 0 {
-		return ""
-	}
-	return canonRefPath(stripLineAnchor(strings.TrimSpace(fields[0])))
 }
 
-// stripLineAnchor removes a trailing ":N", ":N-M", ":N,M", or repeated
-// (":N:C", ":N-M:C") line anchor (see lineAnchorRe). A reference that is
-// NOTHING but an anchor collapses to
-// the empty string, which FileRefs already skips — an anchor with no path in
-// front of it names no file.
+// refPaths takes the paths out of a bullet's tail, after removing a trailing
+// parenthetical annotation: the backticked list when the tail has a backtick,
+// else the comma-separated unquoted list.
+func refPaths(tail string) []string {
+	tail = strings.TrimSpace(trailingParenRe.ReplaceAllString(strings.TrimSpace(tail), ""))
+	if i := strings.Index(tail, "`"); i >= 0 {
+		return backtickPaths(tail[i+1:])
+	}
+	return barePaths(tail)
+}
+
+// backtickPaths reads the spans of a backticked list, rest starting just after
+// the first opening backtick. The list ends at the first span followed by
+// anything pathListSepRe does not accept. An unterminated span contributes its
+// first word.
+func backtickPaths(rest string) []string {
+	var l refPathList
+	for {
+		j := strings.Index(rest, "`")
+		if j < 0 {
+			if fields := strings.Fields(rest); len(fields) > 0 {
+				l.add(fields[0])
+			}
+			return l.paths
+		}
+		l.add(rest[:j])
+		rest = rest[j+1:]
+		k := strings.Index(rest, "`")
+		if k < 0 || !pathListSepRe.MatchString(rest[:k]) {
+			return l.paths
+		}
+		rest = rest[k+1:]
+	}
+}
+
+// barePaths reads an unquoted list. The first piece contributes its first
+// word, and ends the list if prose follows that word; a later piece counts
+// only as a single word, so "a.go — edit it, then b.go" is not read as a
+// path named "then".
+func barePaths(tail string) []string {
+	var l refPathList
+	for i, piece := range strings.Split(tail, ",") {
+		fields := strings.Fields(piece)
+		if i == 0 {
+			if len(fields) == 0 {
+				return nil
+			}
+			l.add(fields[0])
+			if len(fields) > 1 {
+				return l.paths
+			}
+			continue
+		}
+		if len(fields) != 1 {
+			return l.paths
+		}
+		if anchorContinuationRe.MatchString(fields[0]) {
+			continue
+		}
+		l.add(fields[0])
+	}
+	return l.paths
+}
+
+// refPathList collects one bullet's paths, cleaned by stripLineAnchor and
+// canonRefPath. It drops three shapes that would otherwise be statted as
+// files that do not exist:
+//
+//   - a pattern (`*`, `?`, `{`), which names a set of files, not one;
+//   - a slash-free path after a path with a directory, which plans write as
+//     shorthand for a sibling of that path (`testdata/a.golden`,
+//     `b.golden`); a bare name could as well be a root file, and the text
+//     cannot tell which, so it is not checked at all;
+//   - a repeat, which would report the same file twice.
+//
+// hasDir counts dropped paths too: a shorthand after a directory pattern is
+// still a sibling of it.
+type refPathList struct {
+	paths  []string
+	hasDir bool
+}
+
+func (l *refPathList) add(raw string) {
+	p := canonRefPath(stripLineAnchor(strings.TrimSpace(raw)))
+	hasDir := strings.Contains(p, "/")
+	sibling := l.hasDir && !hasDir
+	l.hasDir = l.hasDir || hasDir
+	if l.skip(p, sibling) {
+		return
+	}
+	l.paths = append(l.paths, p)
+}
+
+// skip reports whether p must be dropped rather than added: empty, a sibling
+// shorthand, a pattern, or already present.
+func (l *refPathList) skip(p string, sibling bool) bool {
+	if p == "" || sibling {
+		return true
+	}
+	return strings.ContainsAny(p, "*?{") || slices.Contains(l.paths, p)
+}
+
+// stripLineAnchor removes a trailing ":N", ":N-M", ":N,M", ":N, M", or
+// repeated (":N:C", ":N-M:C") line anchor (see lineAnchorRe). A reference
+// that is NOTHING but an anchor collapses to the empty string, which
+// FileRefs already skips — an anchor with no path in front of it names no
+// file.
 func stripLineAnchor(p string) string {
 	return lineAnchorRe.ReplaceAllString(p, "")
 }
