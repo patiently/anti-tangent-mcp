@@ -10,6 +10,22 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-22-field-report-0.24.0-improvements-design.md`, Part 3 (§3.1–§3.5). The brief is `.superpowers/HANDOVER-part3.md`.
 
+## Outcome
+
+Replay gate (Task 8), `openai:gpt-5.6-sol` deciding and `openai:gpt-5.6-terra` alongside, 5 runs per fixture:
+
+| Change | Fixture | B0 sol / terra | Final sol / terra | Result |
+|---|---|---|---|---|
+| §3.4 `context_paths` + `reuse:` (Task 3) | `reuse-sibling` | 0/5 / 0/5 | 5/5 / 5/5, every hit a real `reuse:` citing `Slugify` | ships |
+| §3.2 one-caller test (Task 4) | `shared-helper` | absent 5/5 / 5/5; variant with the exit contract only, sol 5/5 | — | problem not reproduced: reverted |
+| §3.3 extractions (Task 4) | `testability-extraction` | absent 5/5 / 5/5; exported variant, sol 4/5 | — | problem not reproduced: reverted |
+| §3.3 test-side seams (Task 5) | `pin-directly` | direct-pinning finding 5/5, every suggestion already test-side, 0/5 production symbol | — | problem not reproduced: not implemented |
+| existing rule | `ac-mandated` | 5/5 / 5/5 | 5/5 / 3/5 | no change needed |
+| controls | `over-built`, `lean` | sol 5/2/5, lean 0/5 | sol 5/2/5, lean 0/5 | no drop |
+
+§3.1 (Task 6) is not replay-gated and ships on its golden test. A Task 2b, added during execution, made the
+report keep every reviewer finding per run and hardened two fixtures for the variant baseline.
+
 ## Global Constraints
 
 - **Branch:** all work is on `feature/lean-coherence-replay-gated`, cut from `version/0.25.0` at `de4214d`. Its pull request targets **`version/0.25.0`**, never `main`. Do not bump `VERSION`.
