@@ -16,6 +16,14 @@ const (
 	maxPinnedByEntries = 50
 	maxPinnedByChars   = 500
 
+	// verification carries step text, not the short anchors pinned_by holds,
+	// and the payload cap already bounds the whole call.
+	maxVerificationChars = 2000
+
+	// A plan cites more code facts than a short list can hold, and this list
+	// is the only way to clear the rolled-up codebase-reference checklist.
+	maxVerifiedReferenceEntries = 200
+
 	maxNormativeTestBodyEntries = 20
 	maxNormativeTestBodyChars   = 4000
 
@@ -169,9 +177,9 @@ func normalizeTaskSpecInputs(args ValidateTaskSpecArgs, maxPayload int) (taskSpe
 	// Order matters: it is the order in which a call with several bad fields
 	// reports its first error.
 	lists := []boundedListField{
-		{"verification", args.Verification, maxPinnedByEntries, maxPinnedByChars, &in.Verification},
+		{"verification", args.Verification, maxPinnedByEntries, maxVerificationChars, &in.Verification},
 		{"pinned_by", args.PinnedBy, maxPinnedByEntries, maxPinnedByChars, &in.PinnedBy},
-		{"controller_verified_references", args.ControllerVerifiedReferences, maxPinnedByEntries, maxPinnedByChars, &in.ControllerVerifiedReferences},
+		{"controller_verified_references", args.ControllerVerifiedReferences, maxVerifiedReferenceEntries, maxPinnedByChars, &in.ControllerVerifiedReferences},
 		{"test_strategy_notes", args.TestStrategyNotes, maxPinnedByEntries, maxPinnedByChars, &in.TestStrategyNotes},
 		{"codebase_conventions", args.CodebaseConventions, maxPinnedByEntries, maxPinnedByChars, &in.CodebaseConventions},
 		{"testability_extractions", args.TestabilityExtractions, maxPinnedByEntries, maxPinnedByChars, &in.TestabilityExtractions},

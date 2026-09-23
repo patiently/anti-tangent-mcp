@@ -1,0 +1,35 @@
+{
+  "name": "pin-directly",
+  "validate_task_spec": {
+    "task_title": "Task 5: Keep the old config when a reload fails",
+    "goal": "When a SIGHUP reload reads an invalid config file, the server keeps the config it was running with.",
+    "acceptance_criteria": [
+      "After a SIGHUP whose config file fails Validate, the active config is the same *Config value that was active before the signal — not a re-read copy — and the validation error is logged once at error level.",
+      "After a SIGHUP whose config file passes Validate, the active config is the newly read one."
+    ],
+    "non_goals": [
+      "No file watching: a reload happens only on SIGHUP."
+    ],
+    "context": "The SIGHUP handler runs in the goroutine Serve starts. It reads the file, validates it, and stores the result in the server's atomic.Pointer[Config]; nothing outside that goroutine triggers a reload.",
+    "verification": [
+      "go test ./internal/server/ -run TestServe_SIGHUPReload — starts the server on a temporary config file, overwrites the file with an invalid config, sends SIGHUP to the test process, then GETs /config and checks the served JSON equals the original config.",
+      "go test -race ./..."
+    ]
+  },
+  "expectations": [
+    {
+      "call": "validate_task_spec",
+      "any_of_keywords": [
+        "test-side:"
+      ]
+    },
+    {
+      "call": "validate_task_spec",
+      "any_of_keywords": [
+        "extract",
+        "expose",
+        "export"
+      ]
+    }
+  ]
+}

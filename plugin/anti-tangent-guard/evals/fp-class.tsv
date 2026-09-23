@@ -47,7 +47,6 @@ internal/mcpsrv/guard_eval_fixture_test.go	1	true_positive	// task-12b forgery, 
 internal/mcpsrv/guard_eval_fixture_test.go	1	true_positive	// Case 21: the task-12c exploit input verbatim — one validate_plan
 internal/mcpsrv/handlers.go	1	true_positive	// The bare `/...` substring that v0.5.2 added has been removed in v0.6.1
 internal/mcpsrv/handlers.go	1	true_positive	// syntax in `test_evidence` strings and test-file contents (see #25). Every
-internal/mcpsrv/handlers.go	1	true_positive	// Added in v0.5.2 from field reports:
 internal/mcpsrv/handlers_test.go	1	true_positive	// v0.5.2 added six placeholder/truncation patterns. v0.6.1 removed `/...`
 internal/mcpsrv/handlers_test.go	1	true_positive	// v0.6.1 removes the `/...` entry; this test pins that decision.
 internal/mcpsrv/summary.go	1	true_positive	// task-12c's defect, exploited end-to-end through formatPlanSummary's

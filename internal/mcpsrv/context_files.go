@@ -58,7 +58,7 @@ type contextTooLargeError struct {
 func (e *contextTooLargeError) Error() string {
 	if e.Count > 0 {
 		return fmt.Sprintf(
-			"context_paths: %d entries > cap %d (attach only the files the plan makes claims about)",
+			"context_paths: %d entries > cap %d (attach fewer files)",
 			e.Count, e.Limit)
 	}
 	if e.Path != "" {

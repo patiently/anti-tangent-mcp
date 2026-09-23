@@ -115,7 +115,10 @@ func (h *handlers) resolveModelAndRender(
 //   - it never runs checkFileConsistency, so FileConsistency is nil there
 //     (design §3.9). store() caches only a `pass` result (plan_cache.go),
 //     and repo_root — the argument that gates the disk tier — is part of the
-//     cache key, so a hit reproduces a run in which the check found nothing.
+//     cache key, so a hit reproduces a run in which the check found nothing
+//     a ruling did not waive: rulings are part of the cache key too, so a
+//     cached pass can still carry a task_order_contradiction a controller
+//     ruling waived.
 //   - it never calls store(), because the entry it is reading is the entry
 //     it would write.
 type planCallContext struct {
@@ -216,30 +219,51 @@ func (c planCallContext) applyPreLadder(pr *verdict.PlanResult) {
 	// claim a verified reference suppresses; before the ladder's rollup
 	// collects what remains into the checklist.
 	suppressPlanVerifiedReferences(pr, c.VerifiedReferences)
-	// Before the file-consistency finding and the clamp join the list, so only
-	// reviewer findings are waived.
-	waivePlanFindings(pr, c.Rulings, c.Tasks)
+	// The file-consistency finding joins before the waiver, so a ruling reaches
+	// it: it is the plan-level finding a controller can most often prove wrong
+	// by listing a directory, and an unwaivable major would hold the verdict
+	// down every round. The clamp joins after: it reports this call's token
+	// budget, not the plan, so there is nothing to rule on.
 	if c.FileConsistency != nil {
 		pr.PlanFindings = append(pr.PlanFindings, *c.FileConsistency)
 	}
+	waivePlanFindings(pr, c.Rulings, c.Tasks)
 	*pr = prependPlanClamp(*pr, c.Clamp)
 }
 
 // mintPlanRunID assigns a plan_run_id when pr does not already carry one.
 // Idempotent by that guard, which is what lets finish() call it
 // unconditionally while the fresh-review path hoists it above store(). On a
-// freshly minted run it also appends a best-effort ledger header (no task
-// title, just the run id, verdict, quality and task count); the early return
-// on an existing id is what keeps a cache hit from writing a second header.
+// freshly minted run it also appends a best-effort ledger header, recording
+// the run's id, verdict, quality and the plan's task headings; the early
+// return on an existing id is what keeps a cache hit from writing a second
+// header.
 func (c planCallContext) mintPlanRunID(pr *verdict.PlanResult) {
 	if pr.PlanRunID != "" {
 		return
 	}
-	run := c.PlanRuns.Create(string(pr.PlanVerdict), string(pr.PlanQuality), len(pr.Tasks))
+	run := c.PlanRuns.CreateWithTasks(string(pr.PlanVerdict), string(pr.PlanQuality), planRunTasks(*pr, c.Tasks))
 	pr.PlanRunID = run.ID
 	if err := c.PlanLedger.AppendHeader(run); err != nil {
 		slog.Warn("plan ledger header append failed", "plan_run_id", run.ID, "err", err)
 	}
+}
+
+// planRunTasks lists the plan's tasks for a new run: the parsed headings, in
+// order, or the reviewer's task titles when the plan parsed no tasks.
+func planRunTasks(pr verdict.PlanResult, tasks []planparser.RawTask) []planrun.PlanTask {
+	if len(tasks) > 0 {
+		out := make([]planrun.PlanTask, len(tasks))
+		for i, t := range tasks {
+			out[i] = planrun.PlanTask{Index: i + 1, Title: t.Title}
+		}
+		return out
+	}
+	out := make([]planrun.PlanTask, len(pr.Tasks))
+	for i, t := range pr.Tasks {
+		out[i] = planrun.PlanTask{Index: i + 1, Title: t.TaskTitle}
+	}
+	return out
 }
 
 // finish runs the post-ladder tail every validate_plan exit path shares:
@@ -339,27 +363,65 @@ type reviewOutcome struct {
 	Truncated bool
 }
 
+// reviewCall bundles runReview's inputs. Carrying model/prompt/maxTokens/retryAt
+// on a struct instead of four scalar parameters keeps the call under
+// CodeScene's "max arguments = 4" threshold (ctx + this struct = 2).
+type reviewCall struct {
+	Model     config.ModelRef
+	Prompt    prompts.Output
+	MaxTokens int
+	// RetryAt, when above MaxTokens, is the budget one automatic retry uses:
+	// a response truncated at the configured budget is worth re-asking once
+	// at the ceiling, and costs less than the round trip a caller spends
+	// passing max_tokens_override. RetryAt at or below MaxTokens means no
+	// retry — the caller chose the budget itself, or it is already the
+	// ceiling.
+	RetryAt int
+}
+
+// perTaskReviewCall builds a reviewCall for one of the three per-task hooks:
+// model and prompt pass through, and RetryAt comes from perTaskRetryBudget
+// against the server's configured ceiling. A one-line builder call at each of
+// the three call sites keeps them from re-growing past CodeScene's per-method
+// complexity threshold, which ValidateTaskSpec, CheckProgress and
+// ValidateCompletion already sit above.
+func (h *handlers) perTaskReviewCall(model config.ModelRef, p prompts.Output, maxTokens, override int) reviewCall {
+	return reviewCall{
+		Model:     model,
+		Prompt:    p,
+		MaxTokens: maxTokens,
+		RetryAt:   perTaskRetryBudget(override, maxTokens, h.deps.Cfg.MaxTokensCeiling),
+	}
+}
+
 // runReview runs the reviewer call and folds a truncated response into an
 // ordinary outcome, so each session tool runs one tail for both. A response
-// truncated after some complete findings yields those findings, marked
-// partial, and a minor marker; one truncated before any yields no reviewer
-// findings and the server's major truncation notice. Any other error is
-// returned.
-func (h *handlers) runReview(ctx context.Context, model config.ModelRef, p prompts.Output, maxTokens int) (reviewOutcome, error) {
-	result, modelUsed, ms, partialRaw, err := h.review(ctx, model, p, maxTokens)
+// truncated at call.RetryAt, or with no retry attempted, yields the complete
+// findings it carries, marked partial, or the server's truncation notice.
+func (h *handlers) runReview(ctx context.Context, call reviewCall) (reviewOutcome, error) {
+	result, modelUsed, ms, partialRaw, err := h.review(ctx, call.Model, call.Prompt, call.MaxTokens)
+	used := call.MaxTokens
+	if errors.Is(err, providers.ErrResponseTruncated) && call.RetryAt > call.MaxTokens {
+		slog.Warn("reviewer response truncated; retrying once at the ceiling",
+			"model", call.Model.String(), "max_tokens", call.MaxTokens, "retry_max_tokens", call.RetryAt)
+		var retryMS int64
+		result, modelUsed, retryMS, partialRaw, err = h.review(ctx, call.Model, call.Prompt, call.RetryAt)
+		ms += retryMS
+		used = call.RetryAt
+	}
 	if err == nil {
 		return reviewOutcome{Result: result, ModelUsed: modelUsed, ReviewMS: ms}, nil
 	}
 	if !errors.Is(err, providers.ErrResponseTruncated) {
 		return reviewOutcome{}, err
 	}
-	out := reviewOutcome{ModelUsed: model.String(), Truncated: true}
+	out := reviewOutcome{ModelUsed: call.Model.String(), ReviewMS: ms, Truncated: true}
 	if recovered, marker, ok := recoverPartialFindings(partialRaw, perTaskMaxTokensEnvVar); ok {
 		out.Result = recovered
 		out.Server = []verdict.Finding{marker}
 		return out, nil
 	}
-	notice := truncatedResult()
+	notice := truncatedResult(used, h.deps.Cfg.MaxTokensCeiling)
 	out.Server = notice.Findings
 	notice.Findings = nil
 	out.Result = notice

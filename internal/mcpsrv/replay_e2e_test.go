@@ -68,9 +68,11 @@ func replayReviewers(cfg config.Config, dryRun bool) providers.Registry {
 }
 
 // TestReplay_E2E replays recorded task fixtures against the configured
-// reviewers and reports, per expectation, how many runs raised the issue. The
-// fixtures hold a consumer project's code, so they live outside this
-// repository; replayFixture documents their shape.
+// reviewers and reports, per expectation, how many runs raised the issue.
+// Fixtures recorded from a consumer project hold its code and live outside
+// this repository; the synthetic lean fixtures in testdata/replay/lean are
+// committed. replayFixture documents the shape, and relative context_paths
+// and final_diff_path resolve against the fixture's directory.
 //
 //	ANTI_TANGENT_REPLAY_DIR       directory of *.json fixtures; the test skips when unset
 //	ANTI_TANGENT_REPLAY_RUNS      runs per fixture, default 5
@@ -99,6 +101,7 @@ func TestReplay_E2E(t *testing.T) {
 	dryRun := os.Getenv("ANTI_TANGENT_REPLAY_DRY_RUN") == "1"
 	cfg, err := replayConfigForDryRun(dryRun)
 	require.NoError(t, err)
+	cfg = replayConfigCovering(cfg, dir)
 	reviewers := replayReviewers(cfg, dryRun)
 	require.NotEmpty(t, reviewers, "no provider key is set, so every fixture would record a handler error: set one, or set ANTI_TANGENT_REPLAY_DRY_RUN=1")
 	re := newReplayEnv(cfg, reviewers)

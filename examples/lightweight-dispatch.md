@@ -24,5 +24,17 @@ If the verdict is `fail` or contains `critical`/`major` findings, do not report 
 
 - `session_id`: pass an empty string `""`. Lightweight mode skips `validate_task_spec`, so there is no session_id to thread. The handler accepts the empty string when at least one piece of evidence is non-empty; it synthesizes a minimal task spec (Goal = summary; no ACs) for the reviewer.
 - `summary`: <one-paragraph summary of what was implemented>
+- `plan_run_id`: the controller's `plan_run_id`, when the task belongs to a plan run, with
+  `task_index` (the task's 1-based position in the plan) or `task_title` (its heading), so
+  `plan_run_report` counts the task. Without one of them the task is not recorded.
 - `final_files`, `final_diff`, `test_evidence`: at least one must be non-empty
+- `final_diff` / `final_diff_path`: generate the diff with git — `git add -- <task paths> && git diff <base> -- <task paths> > /abs/path/final.diff` — and pass `final_diff_path`. `git diff <base>..HEAD` compares committed revisions only, so uncommitted work (the common case for a lightweight task) can be left out or produce an empty diff; `git add` first, then diff the working tree against `<base>`, scoped to the task's own paths. Within each `diff --git`- or `diff --cc`-headered section, a hunk that runs backwards or a hunk whose declared line count doesn't match its body is rejected as malformed evidence before the review. The check does not identify file boundaries, so do not concatenate two files' hunks under one header. A diff with no such header is not checked this way, so generate it with git rather than assembling it by hand.
+- `context_paths`: optional. Absolute paths to related files the change does not touch — the package's
+  existing helpers, say — so the reviewer can report a helper the diff re-implements, an over-building
+  `reuse:` instance that needs a diff (`final_diff` or `final_diff_path`); with `final_files` alone the
+  completion review makes no over-building finding. The reviewer is told they are never evidence that the
+  work is done — the server cannot enforce what a model counts. Same limits as `validate_task_spec`'s
+  `context_paths`: under `ANTI_TANGENT_PLAN_ROOTS` when it is set, at most 50 files, within
+  `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` and `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES`.
+- `controller_rulings`: a ruling your controller issued on a finding from an earlier review of this task, copied verbatim. Rulings apply without a session; `finding_responses` do not.
 - `codescene`: required under `ANTI_TANGENT_CODESCENE=required` — pass the `analyze_change_set` result the same as any other task; see the CodeScene bullets above for the skip shape and what draws a major. Optional and may be omitted when `ANTI_TANGENT_CODESCENE` is unset.

@@ -496,7 +496,7 @@ func (planRunReportFakeReviewer) Review(_ context.Context, req providers.Request
 // calls (both threading plan_run_id) → two validate_completion calls (one
 // with a ran:true CodeScene digest, one with none) → plan_run_report — rather
 // than constructing a *planrun.Run by hand, so the test actually exercises
-// AppendRow/UpdateRow/Snapshot wiring across the real handlers, not just
+// Attach/UpdateRow/Snapshot wiring across the real handlers, not just
 // Render() in isolation.
 func TestIntegration_PlanRunReport(t *testing.T) {
 	cfg, err := config.Load(func(k string) string {

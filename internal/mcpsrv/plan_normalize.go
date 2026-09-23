@@ -89,10 +89,11 @@ func appendCodebaseReferenceChecklist(pr *verdict.PlanResult, lines []string) {
 // calibratePlanVerdictForUnverifiableOnly treats a plan whose only findings
 // are minor unverifiable_codebase_claim entries as a checklist rather than a
 // blocker: plan_quality rises to at least actionable, unless the reviewer said
-// rigorous, and next_action says so. stripped reports whether task-level
-// unverifiable findings were removed for the checklist, which counts as one
-// such finding although it is appended only after the ladder. The ladder that
-// runs next derives the verdict from the findings either way.
+// rigorous, and next_action says so. The checklist is a list of references to
+// pre-flight before dispatch, not work the plan owes. stripped reports whether
+// task-level unverifiable findings were removed for the checklist, which counts
+// as one such finding although it is appended only after the ladder. The ladder
+// that runs next derives the verdict from the findings either way.
 func calibratePlanVerdictForUnverifiableOnly(pr *verdict.PlanResult, stripped bool) {
 	if !allPlanFindingsAreMinorUnverifiable(*pr, stripped) {
 		return
@@ -101,7 +102,16 @@ func calibratePlanVerdictForUnverifiableOnly(pr *verdict.PlanResult, stripped bo
 	if pr.PlanQuality != verdict.PlanQualityRigorous {
 		pr.PlanQuality = verdict.PlanQualityActionable
 	}
-	pr.NextAction = "No blocking plan-quality findings remain; pre-flight the rolled-up codebase references before dispatch."
+	pr.NextAction = "Plan passes: dispatch."
+	if stripped {
+		pr.NextAction += " The codebase_reference_checklist finding lists references the " +
+			"reviewer could not verify: pre-flight any you have not already checked, or list them in " +
+			"controller_verified_references on the next call."
+		return
+	}
+	pr.NextAction += " The remaining unverifiable_codebase_claim finding(s) list references the " +
+		"reviewer could not verify: pre-flight any you have not already checked, or list them in " +
+		"controller_verified_references on the next call."
 }
 
 // isMinorUnverifiable reports whether f is a minor-severity
@@ -146,13 +156,13 @@ func suppressPlanVerifiedReferences(pr *verdict.PlanResult, refs []string) {
 	}
 }
 
-// waivePlanFindings moves every reviewer finding a ruling covers into
-// WaivedFindings, plan-level and per task, fingerprinting a task's findings
-// under the task key planTaskKeys derives from tasks, the parsed plan. The
-// assignment replaces any waived entries the parsed response carried, since
-// only the server fills them.
+// waivePlanFindings moves every finding a ruling covers into
+// WaivedFindings, plan-level and per task, fingerprinting plan-level findings
+// under planScopeKey and a task's findings under the task key planTaskKeys
+// derives from tasks, the parsed plan. The assignment replaces any waived
+// entries the parsed response carried, since only the server fills them.
 func waivePlanFindings(pr *verdict.PlanResult, rulings map[string]session.Ruling, tasks []planparser.RawTask) {
-	pr.PlanFindings, pr.WaivedFindings = waiveRuled(pr.PlanFindings, "", rulings, nil)
+	pr.PlanFindings, pr.WaivedFindings = waiveRuled(pr.PlanFindings, planScopeKey, rulings, nil)
 	keys := planTaskKeys(*pr, tasks)
 	for i := range pr.Tasks {
 		t := &pr.Tasks[i]

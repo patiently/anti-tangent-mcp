@@ -5,6 +5,114 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-09-23
+
+### Added
+
+- `validate_task_spec` accepts `task_index`, the task's 1-based position in the plan, which names
+  its `plan_run_report` row directly; without it the task is found by its title. An index outside
+  the plan draws a minor advisory and the title is used instead.
+- A lightweight `validate_completion` (empty `session_id`) accepts `plan_run_id` with `task_index`
+  or `task_title`, and the task then appears in `plan_run_report`, marked `(lite)`. Lightweight
+  tasks were previously invisible to the report.
+- A lightweight `validate_completion` (empty `session_id`) applies `controller_rulings`, shape-checked and
+  rendered the way `validate_plan` handles them. Without a session the rulings were dropped and the next
+  review raised the settled findings again; `finding_responses` still need a session, and their advisory
+  now says a ruling does not.
+- `validate_completion` rejects a diff git could not have produced, as `malformed_evidence` before the
+  reviewer call: within a section a `diff --git`/`diff --cc` header opened, a hunk that runs backwards
+  or whose declared line count doesn't match its body. A diff carrying no git header is not judged.
+- `validate_task_spec` accepts `context_paths`: the server reads those files and shows the spec reviewer
+  their whole contents, so a term, path or step the dispatch brief defines is no longer reported as
+  missing from the spec. Same limits as `validate_plan`'s attachments.
+- Synthetic replay fixtures for the lean check's coherence: a shared helper, an AC-mandated structure, a
+  declared testability extraction, a finding asking for direct pinning, and a helper re-implemented from
+  sibling code. The replay harness can require a finding's absence.
+- `validate_completion` accepts `context_paths`, with or without a session: related files the change does not
+  touch, such as a sibling helper. The reviewer reads them to report a helper the diff re-implements as
+  `reuse:` — which needs a diff (`final_diff` or `final_diff_path`); `final_files` alone raises no
+  over-building finding — and is told never to count them as evidence for an acceptance criterion, since the
+  server cannot enforce what a model counts. Same limits as `validate_task_spec`'s.
+
+### Changed
+
+- The controller protocol passes `task_index` with `plan_run_id` in every dispatch, and a
+  lightweight task passes both to `validate_completion`, so every dispatched task appears in
+  `plan_run_report`.
+- The controller protocol asks for the task's brief in `context_paths` on the dispatch's
+  `validate_task_spec` call, so the spec reviewer reads what the implementer was told to read.
+- `verification` accepts 2000 characters per entry, its own cap rather than `pinned_by`'s 500: it carries
+  a task's step text, and compressing steps to fit made the reviewer report them as undefined.
+- `controller_verified_references` accepts 200 entries on `validate_task_spec` and `validate_plan`. It is the
+  only way to clear the rolled-up codebase-reference checklist, and a plan can cite more than 50 code facts.
+- The per-task reviewer budget defaults to 8192 output tokens, and a truncated per-task review is retried
+  once at `ANTI_TANGENT_MAX_TOKENS_CEILING` when the caller passed no `max_tokens_override` AND the
+  configured budget is below the ceiling — at the ceiling already, there is nothing left to raise, so no
+  retry happens. A truncated `validate_task_spec` opened no session, so each truncation used to cost a
+  manual retry; the suggestion now names the budget to pass.
+- `validate_completion` prefixes `next_action` with "Do not report DONE" while a critical or major finding
+  about the code is open, so a `warn` verdict no longer reads as permission to stop, and
+  `validate_task_spec` ends its `next_action` by pointing at the `implementation_guidance` it returns.
+- A plan-level `reuse:` asking a later task to reuse what an earlier task introduces gives, in its suggestion,
+  the `Context:` line to add to the introducing task, so that task's completion review reads the shared helper
+  as deliberate.
+
+### Fixed
+
+- `plan_run_report` keeps one row per plan task. A task is found by its position in the plan or by
+  its title matching a plan heading, and validating the same task again updates its row and counts
+  an attempt instead of adding a second row. Every session a task ever opened keeps updating that
+  row, so an implementer that re-validated and carried on with its first `session_id` still lands
+  on the right task.
+- `plan_run_report`'s counts are per plan task: tasks never dispatched are listed by heading, a row
+  that named no plan task is counted as unmatched instead of inflating the totals, a task still in
+  progress reads `open (pre: <verdict>)`, and a lightweight task's verdict is marked `(lite)`.
+  CodeScene runs are counted as missing only for tasks that completed.
+- The run's CodeScene total no longer adds up cumulative branch deltas. Each task is asked for a
+  branch-versus-base analysis, so the report now takes the most recent result for each base ref,
+  and the `codescene` argument accepts the `base_ref` that analysis compared against.
+- A plan-run report recovered from the plan ledger after a restart matches the live one. Rows are
+  written when a task attaches and again whenever they change, not only at completion, so a task
+  still in progress survives a restart; the ledger header records the plan's task headings.
+- A truncated review reports the time the reviewer actually spent in `review_ms`, and in stats,
+  instead of 0.
+- The deterministic Create/Modify check no longer reports a plan's own path abbreviations as files that do
+  not exist. A reference whose first segment is an ALL-CAPS identifier with no entry of that name at
+  `repo_root` is a name the plan defines, and the check cannot resolve it; the finding it drew was major
+  and no controller ruling could clear it.
+- A plan whose only finding is the rolled-up codebase-reference checklist is told to dispatch, and to
+  pre-flight or list the references it has not verified, rather than being pointed back at the checklist.
+- Plan-level findings are fingerprinted apart from session findings. Every `over_building` finding
+  outside a plan task shared one ID, `f_b720ec2d`, so a ruling on the plan-level finding could waive
+  a `validate_completion` finding. Plan-level IDs change once with this release: a ruling carried
+  over from an earlier round on a plan-level finding needs to be given again under the new ID.
+- `validate_plan`'s Create/Modify check strips a line anchor written with spaces after its commas
+  (`a.go:6-22, 29`) or ending in `, …`, and reads every path a Files bullet lists rather than the
+  first. It reported such a file as missing when it existed, and never looked at the other paths on
+  the line, so a Modify: of a file only a later task creates went unreported. Patterns
+  (`testdata/*.golden`), a bare file name after a nested path, which plans write as shorthand for
+  a sibling, and a later item on the line that is not a file name (a symbol, a bare word) are not
+  read.
+- A `validate_plan` `controller_rulings` entry waives the deterministic `task_order_contradiction`
+  finding, which then appears under `waived_findings` with its evidence, as the argument's
+  description says. The finding could not be waived, so a false positive held the verdict down every
+  round. A ruling covers every violation the finding lists, including one a later round adds.
+- `validate_completion`'s malformed-diff guard now also rejects a `final_diff` that ends before an
+  open hunk's declared line count is reached — a truncated diff, or a header whose declared count is
+  large enough to swallow the rest of the diff as payload without ever looking over- or
+  under-declared mid-scan. The check previously judged only the lines it saw; reaching end of input
+  with a hunk still owed lines returned no rejection at all.
+- A truncated per-task review's finding `suggestion` and `next_action` no longer advise retrying at
+  `max_tokens_override: <ceiling>` when the attempt that just truncated already ran at or above the
+  ceiling — an automatic retry exhausted at the ceiling, an explicit override already at or above it,
+  or a configured `ANTI_TANGENT_PER_TASK_MAX_TOKENS` default already there. That advice reproduced
+  the same attempt; the message now says to raise `ANTI_TANGENT_MAX_TOKENS_CEILING` or shrink the
+  input instead.
+- `examples/lightweight-dispatch.md`'s `final_diff` recipe compared committed revisions only
+  (`git diff <base>..HEAD`), which can leave out or empty out a lightweight task's uncommitted
+  changes — the common case for a trivial task. It now stages the task's own paths first and diffs
+  the working tree against `<base>`, scoped to those paths.
+
 ## [0.24.0] - 2026-09-20
 
 ### Added

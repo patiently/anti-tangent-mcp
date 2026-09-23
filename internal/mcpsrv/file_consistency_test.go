@@ -148,6 +148,23 @@ func TestCheckFileConsistency_OrderTier_UsesTitleNumberNotPosition(t *testing.T)
 	assert.NotContains(t, f.Evidence, "Task 2 ")
 }
 
+func TestCheckFileConsistency_DiskTier_SkipsPlanAbbreviations(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "VERSION"), []byte("0.25.0\n"), 0o600))
+
+	f := checkFileConsistency(tasksFrom(
+		"**Files:**\n- Modify: `NET`\n- Modify: `MAIN/foo/Bar.kt`\n- Modify: `VERSION`\n"), root)
+	require.Nil(t, f, "an ALL-CAPS first segment with no such entry at the root is a plan abbreviation, not a path")
+}
+
+func TestCheckFileConsistency_DiskTier_StillFlagsARealMissingPath(t *testing.T) {
+	root := t.TempDir()
+
+	f := checkFileConsistency(tasksFrom("**Files:**\n- Modify: `internal/gone/missing.go`\n"), root)
+	require.NotNil(t, f)
+	assert.Contains(t, f.Evidence, "internal/gone/missing.go")
+}
+
 // TestCheckFileConsistency_OrderTier_FallsBackToPositionWhenTitleUnparseable
 // covers the fallback half of the same fix: when Title is empty or does not
 // match the "Task N:" shape, the finding must still name a task — via the
@@ -384,4 +401,26 @@ func TestCheckFileConsistency_OrderTier_CanonicalisesEquivalentSpellings(t *test
 		require.NotNil(t, f, "Modify %q / Create %q should contradict", tc.modify, tc.create)
 		assert.Equal(t, "task_order_contradiction", f.Criterion)
 	}
+}
+
+// A Files bullet can list several paths, each anchored with a spaced line
+// list. The disk tier must find every one of them on disk, and the order tier
+// must see a later path on the line, not just the first.
+func TestCheckFileConsistency_MultiPathBullets(t *testing.T) {
+	t.Run("existing files with spaced anchors draw no finding", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("x"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "b.go"), []byte("x"), 0o600))
+		f := checkFileConsistency(tasksFrom("**Files:**\n- Modify: `a.go:6-22, 29`, `b.go:1-2, 5, …`\n"), dir)
+		assert.Nil(t, f)
+	})
+
+	t.Run("a later path created by a later task is reported", func(t *testing.T) {
+		f := checkFileConsistency(tasksFrom(
+			"**Files:**\n- Modify: `a.go`, `b.go:10-12, 40`\n",
+			"**Files:**\n- Create: `b.go`\n",
+		), "")
+		require.NotNil(t, f)
+		assert.Contains(t, f.Evidence, "Task 1 modifies `b.go`, which is not created until Task 2")
+	})
 }

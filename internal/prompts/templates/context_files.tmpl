@@ -1,10 +1,12 @@
-{{define "context_files"}}{{if .ContextFiles -}}
-## Attached source files (complete contents, read from disk by the server)
-
-{{range .ContextFiles}}--- BEGIN FILE {{$.ContextFilesNonce}}: {{.Path}} ({{.Bytes}} bytes, sha256 {{.SHA256Short}}…) ---
+{{define "context_files_body"}}{{range .ContextFiles}}--- BEGIN FILE {{$.ContextFilesNonce}}: {{.Path}} ({{.Bytes}} bytes, sha256 {{.SHA256Short}}…) ---
 {{.Content}}
 --- END FILE {{$.ContextFilesNonce}}: {{.Path}} ---
 
 {{end -}}
+{{end}}
+{{define "context_files"}}{{if .ContextFiles -}}
+## Attached source files (complete contents, read from disk by the server)
+
+{{template "context_files_body" . -}}
 {{end -}}
 {{end}}

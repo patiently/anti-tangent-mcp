@@ -115,9 +115,10 @@ func TestPlanRunReport_NoProviderCall(t *testing.T) {
 
 	store := planrun.NewStore(1 * time.Hour)
 	run := store.Create("pass", "rigorous", 2)
-	store.AppendRow(run.ID, planrun.TaskRow{
-		TaskTitle: "Task one", PreVerdict: "pass", PostVerdict: "pass", CodesceneState: planrun.StateMissing,
-	})
+	_, ok := store.Attach(run.ID, "s1", planrun.TaskRef{Title: "Task one"}, "pass")
+	require.True(t, ok)
+	_, ok = store.UpdateRow(run.ID, "s1", func(row *planrun.TaskRow) { row.PostVerdict = "pass" })
+	require.True(t, ok)
 
 	t.Run("nil registry", func(t *testing.T) {
 		h := &handlers{deps: Deps{

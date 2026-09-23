@@ -95,7 +95,9 @@ func sameAsID(f verdict.Finding, shown map[string]bool) string {
 // waiveRuled splits fs into the findings no ruling covers and waived entries
 // for the rest. A finding is covered when its fingerprint carries a ruling, or
 // when its same_as names a shown finding whose fingerprint does. Pass only
-// reviewer findings: a server finding reports something a resubmission fixes,
+// findings a ruling can settle: the reviewer's, and a deterministic finding a
+// controller can prove wrong, such as validate_plan's task-order check. An
+// advisory about this call's own input reports something a resubmission fixes,
 // which no ruling settles.
 func waiveRuled(fs []verdict.Finding, taskKey string, rulings map[string]session.Ruling, shown map[string]bool) ([]verdict.Finding, []verdict.WaivedFinding) {
 	if len(rulings) == 0 {
@@ -325,12 +327,15 @@ func ignoredArgumentAdvisory(criterion, evidence, suggestion string) verdict.Fin
 	}
 }
 
-// noSessionRulingsAdvisory reports finding_responses or controller_rulings
-// sent on a call with no session_id.
-func noSessionRulingsAdvisory() verdict.Finding {
+// noSessionResponsesAdvisory reports finding_responses sent without a session.
+// A response answers a finding the reviewer raised in an earlier review of the
+// same session; without one there is no earlier review, and the server has no
+// finding to show. A controller ruling needs no session and is the way to
+// settle a finding here.
+func noSessionResponsesAdvisory() verdict.Finding {
 	return ignoredArgumentAdvisory("session_id",
-		"finding_responses and controller_rulings were sent without a session_id; without a session there is no earlier review to answer or rule on, so they were ignored.",
-		"Pass the session_id from this task's validate_task_spec call.")
+		"finding_responses were sent without a session_id; without a session there is no earlier review to answer, so they were ignored.",
+		"Fix the finding, or have the controller settle it with controller_rulings, which apply without a session.")
 }
 
 // escalationNextAction is prefixed onto next_action when a critical or major
@@ -419,4 +424,19 @@ func malformedPlanRulingsAdvisory(ids []string) verdict.Finding {
 	return ignoredArgumentAdvisory("controller_rulings",
 		"These controller_rulings ids are not finding ids, so they were ignored: "+strings.Join(ids, ", ")+".",
 		"Copy each id exactly as a validate_plan response showed it: f_ and eight hex digits, with an optional -n suffix.")
+}
+
+// lightweightRulings builds a lightweight validate_completion review's ruling
+// state from the call's own controller_rulings: shape-checked with
+// planRulings, like validate_plan's, since a lightweight task keeps no
+// session to check an ID against. shown marks every ruling's ID so a
+// reviewer's same_as naming it renders through waiveRuled and markRepeats the
+// same way a session-backed review's shown set does.
+func lightweightRulings(rulingArgs []ControllerRulingArg) (rulings map[string]session.Ruling, shown map[string]bool, malformed []string) {
+	rulings, malformed = planRulings(rulingArgs)
+	shown = make(map[string]bool, len(rulings))
+	for _, r := range rulings {
+		shown[r.ID] = true
+	}
+	return rulings, shown, malformed
 }

@@ -264,6 +264,23 @@ func TestDigest_UnmarshalJSON_NullQualityGatesIsAbsent(t *testing.T) {
 	assert.Equal(t, "", d.QualityGate)
 }
 
+func TestNormalize_TrimsAndCapsBaseRef(t *testing.T) {
+	d := Digest{BaseRef: "  " + strings.Repeat("a", 250) + "  "}
+	d.Normalize()
+	assert.Equal(t, strings.Repeat("a", 200)+"…", d.BaseRef)
+
+	short := Digest{BaseRef: " origin/main "}
+	short.Normalize()
+	assert.Equal(t, "origin/main", short.BaseRef)
+}
+
+func TestUnmarshal_RawShapeKeepsBaseRef(t *testing.T) {
+	var d Digest
+	require.NoError(t, json.Unmarshal([]byte(`{"quality_gates":"passed","results":[],"base_ref":"origin/main"}`), &d))
+	assert.True(t, d.Ran)
+	assert.Equal(t, "origin/main", d.BaseRef)
+}
+
 func TestDigest_UnmarshalJSON_DigestShapeRoundTrips(t *testing.T) {
 	want := Digest{Ran: true, Tool: "analyze_change_set", QualityGate: "passed", FilesAnalyzed: 2,
 		Verdicts: &Verdicts{Improved: 1, Stable: 1}, Trend: TrendImprovement, NetPP: -1,

@@ -35,6 +35,7 @@ type fakeReviewer struct {
 	name        string
 	resp        providers.Response
 	err         error
+	delay       time.Duration // slept before answering, so a test can observe elapsed reviewer time
 	Calls       int
 	LastRequest providers.Request // captured on every Review call; tests inspect rv.LastRequest.User to assert prompt content
 }
@@ -43,6 +44,9 @@ func (f *fakeReviewer) Name() string { return f.name }
 func (f *fakeReviewer) Review(ctx context.Context, req providers.Request) (providers.Response, error) {
 	f.Calls++
 	f.LastRequest = req
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
 	return f.resp, f.err
 }
 
@@ -54,7 +58,11 @@ func passResp(model string) providers.Response {
 	}
 }
 
-func newDeps(t *testing.T, rv *fakeReviewer) Deps {
+// rv is providers.Reviewer, not *fakeReviewer: callers exercising a
+// retry (truncateThenPass in handlers_truncation_test.go) need a reviewer
+// whose behavior varies by call count, which fakeReviewer's fixed
+// resp/err fields cannot express.
+func newDeps(t *testing.T, rv providers.Reviewer) Deps {
 	cfg, err := config.Load(func(k string) string {
 		switch k {
 		case "ANTHROPIC_API_KEY":
@@ -322,7 +330,7 @@ func TestValidateTaskSpec_ControllerVerifiedReferencesLimitsRejected(t *testing.
 	d := newDeps(t, rv)
 	h := &handlers{deps: d}
 
-	tooMany := make([]string, 51)
+	tooMany := make([]string, 201)
 	for i := range tooMany {
 		tooMany[i] = "internal/foo.go"
 	}
@@ -332,7 +340,7 @@ func TestValidateTaskSpec_ControllerVerifiedReferencesLimitsRejected(t *testing.
 		ControllerVerifiedReferences: tooMany,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "controller_verified_references must contain at most 50 entries")
+	assert.Contains(t, err.Error(), "controller_verified_references must contain at most 200 entries")
 
 	_, _, err = h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
 		TaskTitle:                    "T",
@@ -589,7 +597,15 @@ func TestValidateTaskSpec_TruncatedResponseSurfacesWarn(t *testing.T) {
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
 	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
-	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	// The default per-task budget (8192) is below the ceiling (16384) and no
+	// override was passed, so runReview auto-retries once at the ceiling —
+	// which also truncates here, since rv always errors. The final attempt
+	// already ran at the ceiling, so the suggestion must not tell the caller
+	// to retry at that same budget.
+	assert.Equal(t, 2, rv.Calls, "truncation with headroom below the ceiling draws one automatic retry")
+	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+	assert.NotContains(t, env.Findings[0].Suggestion, "max_tokens_override:",
+		"the retry already ran at the ceiling; a same-budget retry suggestion would not help")
 
 	// No session should be created on truncation.
 	assert.Empty(t, env.SessionID)
@@ -610,7 +626,8 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now override the reviewer on h.deps directly to return truncation.
-	h.deps.Reviews = providers.Registry{"anthropic": &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}}
+	rv2 := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+	h.deps.Reviews = providers.Registry{"anthropic": rv2}
 
 	_, env, err := h.CheckProgress(context.Background(), nil, CheckProgressArgs{
 		SessionID:    pre.SessionID,
@@ -622,7 +639,13 @@ func TestCheckProgress_TruncatedResponseSurfacesWarn(t *testing.T) {
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
 	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
-	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	// Same auto-retry-to-the-ceiling shape as ValidateTaskSpec's version of
+	// this test (see its comment): the final attempt used the ceiling, so
+	// the suggestion must point at raising it, not at retrying again there.
+	assert.Equal(t, 2, rv2.Calls, "truncation with headroom below the ceiling draws one automatic retry")
+	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+	assert.NotContains(t, env.Findings[0].Suggestion, "max_tokens_override:",
+		"the retry already ran at the ceiling; a same-budget retry suggestion would not help")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 
 	// Pins the tool name on this tool's truncated-review envelope.
@@ -640,7 +663,8 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now override the reviewer on h.deps directly to return truncation.
-	h.deps.Reviews = providers.Registry{"anthropic": &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}}
+	rv2 := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+	h.deps.Reviews = providers.Registry{"anthropic": rv2}
 
 	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
 		SessionID:  pre.SessionID,
@@ -652,11 +676,97 @@ func TestValidateCompletion_TruncatedResponseSurfacesWarn(t *testing.T) {
 	require.Len(t, env.Findings, 1)
 	assert.Equal(t, verdict.CategoryOther, env.Findings[0].Category)
 	assert.Equal(t, verdict.SeverityMajor, env.Findings[0].Severity)
-	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_PER_TASK_MAX_TOKENS")
+	// Same auto-retry-to-the-ceiling shape as ValidateTaskSpec's version of
+	// this test (see its comment): the final attempt used the ceiling, so
+	// the suggestion must point at raising it, not at retrying again there.
+	assert.Equal(t, 2, rv2.Calls, "truncation with headroom below the ceiling draws one automatic retry")
+	assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+	assert.NotContains(t, env.Findings[0].Suggestion, "max_tokens_override:",
+		"the retry already ran at the ceiling; a same-budget retry suggestion would not help")
 	assert.Equal(t, pre.SessionID, env.SessionID)
 
 	// Pins the tool name on this tool's truncated-review envelope.
 	require.Equal(t, "validate_completion", env.Tool)
+}
+
+// TestRunReview_TruncatedBelowCeilingStillAdvisesRetryingAtTheCeiling is the
+// non-buggy counterpart pinned alongside the ceiling fix: an explicit
+// max_tokens_override draws no automatic retry (perTaskRetryBudget returns 0
+// once the caller supplies one), so the single attempt here runs well below
+// the ceiling and there IS room left to retry higher — the original
+// "Retry with max_tokens_override: <ceiling>" advice is still correct and
+// must survive the fix for the at-ceiling case.
+func TestRunReview_TruncatedBelowCeilingStillAdvisesRetryingAtTheCeiling(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+	d := newDeps(t, rv)
+	h := &handlers{deps: d}
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+		TaskTitle: "T", Goal: "G", MaxTokensOverride: 4000,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, rv.Calls, "an explicit override draws no automatic retry")
+	require.Len(t, env.Findings, 1)
+	assert.Contains(t, env.Findings[0].Suggestion,
+		fmt.Sprintf("Retry with max_tokens_override: %d, or raise %s.", d.Cfg.MaxTokensCeiling, perTaskMaxTokensEnvVar))
+	assert.Contains(t, env.NextAction, fmt.Sprintf("max_tokens_override: %d", d.Cfg.MaxTokensCeiling))
+}
+
+// TestRunReview_TruncatedAtCeilingAdvisesRaisingIt covers the finding's
+// remaining two no-good-retry paths, which share one shape (a single attempt
+// that already used the ceiling, so perTaskRetryBudget's own conditions rule
+// out an automatic retry) and so share one assertion helper:
+//
+//   - "explicit override": the caller already passed max_tokens_override at
+//     (or above) the ceiling. effectiveMaxTokens clamps it to the ceiling,
+//     and override != 0 disables the automatic retry on its own.
+//   - "configured default": ANTI_TANGENT_PER_TASK_MAX_TOKENS is already at or
+//     above the ceiling with no override involved. effectiveMaxTokens passes
+//     an override==0 default through unclamped, so maxTokens can sit at or
+//     above the ceiling before perTaskRetryBudget ever runs; either way
+//     maxTokens>=ceiling disables the retry.
+//
+// Both land on the same lone attempt already having used at least the
+// ceiling, so the suggestion must say so instead of proposing the same
+// budget again.
+func TestRunReview_TruncatedAtCeilingAdvisesRaisingIt(t *testing.T) {
+	cases := []struct {
+		name          string
+		configure     func(d *Deps)
+		override      func(ceiling int) int
+		noRetryReason string
+	}{
+		{
+			name:          "explicit override",
+			override:      func(ceiling int) int { return ceiling },
+			noRetryReason: "an override already at the ceiling draws no automatic retry",
+		},
+		{
+			name:          "configured default",
+			configure:     func(d *Deps) { d.Cfg.PerTaskMaxTokens = d.Cfg.MaxTokensCeiling },
+			override:      func(int) int { return 0 },
+			noRetryReason: "a configured default already at the ceiling draws no automatic retry",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rv := &fakeReviewer{name: "anthropic", err: providers.ErrResponseTruncated}
+			d := newDeps(t, rv)
+			if tc.configure != nil {
+				tc.configure(&d)
+			}
+			h := &handlers{deps: d}
+
+			_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G", MaxTokensOverride: tc.override(d.Cfg.MaxTokensCeiling),
+			})
+			require.NoError(t, err)
+			require.Equal(t, 1, rv.Calls, tc.noRetryReason)
+			require.Len(t, env.Findings, 1)
+			assert.Contains(t, env.Findings[0].Suggestion, "ANTI_TANGENT_MAX_TOKENS_CEILING")
+			assert.NotContains(t, env.Findings[0].Suggestion, "max_tokens_override:")
+		})
+	}
 }
 
 func TestValidateTaskSpec_PartialFindingsRecoveredOnTruncation(t *testing.T) {
@@ -2660,7 +2770,7 @@ func TestTooLargeEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
 }
 
 func TestMalformedEvidenceEnvelope_SyntheticFindingSeverityIsCritical(t *testing.T) {
-	env := malformedEvidenceEnvelope("validate_completion", "sess-1", "reason", "model")
+	env := malformedEvidenceEnvelope("validate_completion", "sess-1", "reason", "", "model")
 	require.Equal(t, "fail", env.Verdict)
 	require.Len(t, env.Findings, 1)
 	require.Equal(t, verdict.SeverityCritical, env.Findings[0].Severity)
@@ -2760,13 +2870,13 @@ func TestCheckEvidenceShape_NewPatternsRejected(t *testing.T) {
 	}
 	for _, p := range patterns {
 		t.Run("final_diff:"+p, func(t *testing.T) {
-			reason := checkEvidenceShape("valid header\n"+p+"\nmore", nil)
+			reason, _ := checkEvidenceShape("valid header\n"+p+"\nmore", nil)
 			require.NotEmpty(t, reason, "must reject %q in final_diff", p)
 			require.Contains(t, reason, "final_diff")
 		})
 		t.Run("final_files:"+p, func(t *testing.T) {
 			files := []FileArg{{Path: "foo.go", Content: "valid header\n" + p + "\nmore"}}
-			reason := checkEvidenceShape("", files)
+			reason, _ := checkEvidenceShape("", files)
 			require.NotEmpty(t, reason, "must reject %q in final_files[].content", p)
 			require.Contains(t, reason, "final_files")
 		})
@@ -2798,13 +2908,28 @@ func TestCheckEvidenceShape_GoPackageRecursionAccepted(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run("final_diff:"+tc.name, func(t *testing.T) {
-			reason := checkEvidenceShape("diff --git a/x b/x\n@@ -1,1 +1,1 @@\n"+tc.content+"\n", nil)
+			// A real hunk's declared old/new counts must match its body
+			// (round 4 of the hunk-order guard rejects a mismatch), so wrap
+			// tc.content as a single, correctly-declared body line rather
+			// than an unmarked raw line: content already carrying a "+"
+			// body marker is a 0-old/1-new added line; anything else is
+			// treated as a 1-old/1-new context line, prefixed with the
+			// context marker rather than altering tc.content itself, so
+			// the exact substring under test is unchanged.
+			line, oldLen := tc.content, 1
+			if !strings.HasPrefix(line, "+") {
+				line = " " + line
+			} else {
+				oldLen = 0
+			}
+			diff := fmt.Sprintf("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,%d +1,1 @@\n%s\n", oldLen, line)
+			reason, _ := checkEvidenceShape(diff, nil)
 			require.Empty(t, reason,
 				"shape-guard must accept Go package-recursion / bare-ellipsis content: %q", tc.content)
 		})
 		t.Run("final_files:"+tc.name, func(t *testing.T) {
 			files := []FileArg{{Path: "x_test.go", Content: tc.content}}
-			reason := checkEvidenceShape("", files)
+			reason, _ := checkEvidenceShape("", files)
 			require.Empty(t, reason,
 				"shape-guard must accept Go package-recursion / bare-ellipsis content: %q", tc.content)
 		})
@@ -2814,14 +2939,21 @@ func TestCheckEvidenceShape_GoPackageRecursionAccepted(t *testing.T) {
 func TestCheckEvidenceShape_EllipsisPlaceholderLine(t *testing.T) {
 	goHunk := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,3 +1,3 @@\n"
 	pyHunk := "diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n@@ -1,1 +1,2 @@\n def f():\n"
+	// These two cases' bodies are shorter than goHunk's declared @@ -1,3 +1,3 @@
+	// count, so each carries its own header declaring exactly what its two-line
+	// body spends (diffHunkOrderReason now rejects a hunk the body never
+	// finishes, so a mismatched declaration here would fail for the wrong
+	// reason: hunk completeness, not the ellipsis-exemption this test covers).
+	goHunkUnchanged := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,2 @@\n"
+	goHunkRemoved := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,1 @@\n"
 	cases := []struct {
 		name   string
 		diff   string
 		files  []FileArg
 		reject bool
 	}{
-		{name: "unchanged line in a diff", diff: goHunk + " ...\n+ok := true\n"},
-		{name: "removed line in a diff", diff: goHunk + "-...\n+ok := true\n"},
+		{name: "unchanged line in a diff", diff: goHunkUnchanged + " ...\n+ok := true\n"},
+		{name: "removed line in a diff", diff: goHunkRemoved + "-...\n+ok := true\n"},
 		{name: "added line in a diff", diff: goHunk + "+...\n", reject: true},
 		{name: "added indented line in a diff", diff: goHunk + "+    ...\n", reject: true},
 		{name: "added stub line in a python diff", diff: pyHunk + "+    ...\n"},
@@ -2837,7 +2969,7 @@ func TestCheckEvidenceShape_EllipsisPlaceholderLine(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reason := checkEvidenceShape(tc.diff, tc.files)
+			reason, _ := checkEvidenceShape(tc.diff, tc.files)
 			if tc.reject {
 				assert.NotEmpty(t, reason, "must reject")
 			} else {
@@ -2851,11 +2983,266 @@ func TestCheckEvidenceShape_PythonExemptionCoversOnlyTheEllipsis(t *testing.T) {
 	pyHunk := "diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n@@ -1,1 +1,2 @@\n def f():\n"
 	for _, marker := range evidenceTruncationPatterns {
 		t.Run("final_diff:"+marker, func(t *testing.T) {
-			assert.NotEmpty(t, checkEvidenceShape(pyHunk+"+    "+marker+"\n", nil))
+			reason, _ := checkEvidenceShape(pyHunk+"+    "+marker+"\n", nil)
+			assert.NotEmpty(t, reason)
 		})
 		t.Run("final_files:"+marker, func(t *testing.T) {
-			assert.NotEmpty(t, checkEvidenceShape("", []FileArg{{Path: "s.py", Content: "def f():\n    " + marker + "\n"}}))
+			reason, _ := checkEvidenceShape("", []FileArg{{Path: "s.py", Content: "def f():\n    " + marker + "\n"}})
+			assert.NotEmpty(t, reason)
 		})
+	}
+}
+
+func TestDiffHunkOrderReason_AcceptsRealGitDiffs(t *testing.T) {
+	for name, diff := range map[string]string{
+		"single file": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,3 +1,4 @@\n a\n+b\n c\n d\n",
+		"two files": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,3 @@\n a\n+b\n c\n" +
+			"diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"same file twice (git log -p)": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -10,2 +10,3 @@\n a\n+b\n c\n" +
+			"diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"new file":                  "diff --git a/new.go b/new.go\nnew file mode 100644\n--- /dev/null\n+++ b/new.go\n@@ -0,0 +1,2 @@\n+a\n+b\n",
+		"combined":                  "diff --cc a.go\n@@@ -1,2 -1,2 +1,3 @@@\n  a\n++b\n",
+		"-U0 (no context)":          "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -5 +5 @@\n-old\n+new\n",
+		"-U1 (one line of context)": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -4,3 +4,3 @@\n before\n-old\n+new\n after\n",
+		"rename with content changes": "diff --git a/old.go b/new.go\nsimilarity index 90%\nrename from old.go\nrename to new.go\n" +
+			"--- a/old.go\n+++ b/new.go\n@@ -10,3 +10,4 @@\n a\n+b\n c\n d\n",
+		"deletion": "diff --git a/x.go b/x.go\ndeleted file mode 100644\n--- a/x.go\n+++ /dev/null\n@@ -1,5 +0,0 @@\n-a\n-b\n-c\n-d\n-e\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Empty(t, diffHunkOrderReason(diff))
+		})
+	}
+}
+
+func TestDiffHunkOrderReason_RejectsTwoFilesUnderOneHeader(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n" +
+		"@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "a.go")
+	assert.Contains(t, reason, "@@ -1,2 +1,3 @@")
+}
+
+// TestDiffHunkOrderReason_RejectsASpuriousDashDashDashPairMidGitSection pins
+// the fix for a bypass round 1's headerless-diff fix opened: real git never
+// emits a second "--- "/"+++ " pair within one "diff --git"-opened section,
+// so a hand-assembled diff could defeat the whole check by inserting one to
+// reset the tracked end positions mid-section. Since round 5, "--- "/"+++ "
+// never reset anything at all — the spurious "--- " is instead caught
+// directly by the under-declared-body check, since it is unexplained
+// content once the first hunk's declared count is exhausted.
+func TestDiffHunkOrderReason_RejectsASpuriousDashDashDashPairMidGitSection(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ a/a.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+		"--- a/a.go\n+++ a/a.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "a.go")
+}
+
+// TestDiffHunkOrderReason_HeaderlessDiffsAreNotJudged pins round 5's scope
+// decision: a diff with no "diff --git"/"diff --cc" line anywhere is not
+// judged at all, deliberately, rather than fixed with a fifth guard on the
+// headerless path. Four rounds each closed one hole in that path and had a
+// reviewer demonstrate another; the last was an injected "--- "/"+++ " pair
+// between two hunks of a headerless section, which reset the tracked end
+// positions and let the backwards second hunk through the same way round
+// 1's own multi-file support always could have been tricked. Removing
+// headerless judging entirely removes the mechanism every one of those
+// holes lived in — including bypasses from earlier rounds that would
+// otherwise still need a rejection here, and now correctly don't.
+func TestDiffHunkOrderReason_HeaderlessDiffsAreNotJudged(t *testing.T) {
+	for name, diff := range map[string]string{
+		"multi-file (plain diff -u / diff -ruN)": "--- a/file1.go\n+++ b/file1.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+			"--- a/file2.go\n+++ b/file2.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"injected --- /+++ pair between two hunks of one file (round 5's reviewer repro)": "--- a/file.go\n+++ b/file.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+			"--- a/file.go\n+++ b/file.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"under-declared hunk body (round 4's reviewer repro)": "--- a/file.go\n+++ b/file.go\n@@ -1,1 +1,1 @@\n a\n+++ malicious\n b\n" +
+			"@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"zero-length hunk followed by disguised payload (round 4's reviewer repro)": "--- a/file.go\n+++ b/file.go\n@@ -0,0 +0,0 @@\n+++ malicious\n" +
+			"@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Empty(t, diffHunkOrderReason(diff), "a diff with no \"diff --git\"/\"diff --cc\" line anywhere is not judged at all")
+		})
+	}
+}
+
+// TestDiffHunkOrderReason_RejectsAnUnderDeclaredHunkBodyInAGitHeaderedSection
+// keeps round 4's declared-count validation covered now that it only
+// applies inside a git-headered section: the hunk header declares fewer
+// lines than its body actually has (1 old/1 new, but the body runs 3 lines
+// before the next hunk), so it is still rejected — whether the specific
+// reason is the hunk-order comparison or the under-declaration check
+// itself, both mechanisms live in the same judged section and either one
+// firing proves the diff was not produced by git.
+func TestDiffHunkOrderReason_RejectsAnUnderDeclaredHunkBodyInAGitHeaderedSection(t *testing.T) {
+	diff := "diff --git a/file.go b/file.go\n--- a/file.go\n+++ b/file.go\n@@ -1,1 +1,1 @@\n a\n+++ malicious\n b\n" +
+		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+	require.NotEmpty(t, diffHunkOrderReason(diff))
+}
+
+// TestDiffHunkOrderReason_RejectsAZeroLengthHunkInAGitHeaderedSection is the
+// git-headered counterpart to the "@@ -0,0 +0,0 @@" case: a zero-length hunk
+// is exhausted the instant it opens, and the disguised "+++ malicious" line
+// right after it is still rejected now that the section is judged.
+func TestDiffHunkOrderReason_RejectsAZeroLengthHunkInAGitHeaderedSection(t *testing.T) {
+	diff := "diff --git a/file.go b/file.go\n--- a/file.go\n+++ b/file.go\n@@ -0,0 +0,0 @@\n+++ malicious\n" +
+		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "+++ malicious")
+}
+
+// TestDiffHunkOrderReason_RejectsAnOverDeclaredHunk pins the fix making
+// over-declaration an explicit, named rejection rather than an incidental
+// side effect of the hunk-order comparison: a hunk declares 5 old/5 new
+// lines but only "a" follows before the next hunk header arrives, so the
+// header lied about how much body it covers.
+func TestDiffHunkOrderReason_RejectsAnOverDeclaredHunk(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,5 +1,5 @@\n a\n" +
+		"@@ -10,2 +10,3 @@\n x\n+y\n z\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "@@ -1,5 +1,5 @@")
+}
+
+// TestDiffHunkOrderReason_RejectsADiffThatEndsMidHunk pins the fix for the
+// declared count never being checked against end of input: the header
+// declares 5 old/5 new lines, the body supplies one, and the diff simply
+// stops. Before the fix, exhausting the loop with lines still owed against
+// the declared count returned "" unconditionally, so truncated evidence —
+// the main failure mode the malformed-evidence guard exists to catch — was
+// accepted as if it were a complete, if oddly-counted, git diff.
+func TestDiffHunkOrderReason_RejectsADiffThatEndsMidHunk(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,5 +1,5 @@\n a\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "@@ -1,5 +1,5 @@")
+	assert.Contains(t, reason, "truncated")
+}
+
+// TestDiffHunkOrderReason_RejectsAHugeDeclaredCountThatOutlivesTheDiff is the
+// attacker-controlled-declaration case the doc comment on
+// diffHunkOrderReason warns about: a header's declared count is not a fact,
+// so a huge one (99999/99999) makes every remaining line spendable payload
+// — none of it ever looks like an over- or under-declared body mid-loop —
+// and only checking the leftover count at end of input catches that the
+// header never came close to being satisfied.
+func TestDiffHunkOrderReason_RejectsAHugeDeclaredCountThatOutlivesTheDiff(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,99999 +1,99999 @@\n a\n-old\n+new\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "@@ -1,99999 +1,99999 @@")
+}
+
+// TestDiffHunkOrderReason_AcceptsAnEmptyContextLine is the false-positive
+// guard: some tools strip the trailing space from an empty context line,
+// producing a completely blank line inside a hunk's body. That blank line
+// must still spend one old and one new line like any other context line,
+// not be misread as an under-declared body ending.
+func TestDiffHunkOrderReason_AcceptsAnEmptyContextLine(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,3 +1,3 @@\n a\n\n b\n"
+	assert.Empty(t, diffHunkOrderReason(diff))
+}
+
+// TestDiffHunkOrderReason_AcceptsACorrectlyCountedHunkWithDisguisedPayloadLines
+// confirms the fix does not overreach: while a hunk's declared count is
+// still outstanding, lines that happen to start like "--- ", "+++ ",
+// "diff --git ", or "@@ " are still ordinary payload and must be spent, not
+// rejected — only a header-shaped line arriving once the count is actually
+// exhausted (or over-declared) is suspect.
+func TestDiffHunkOrderReason_AcceptsACorrectlyCountedHunkWithDisguisedPayloadLines(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,1 +1,5 @@\n a\n" +
+		"+++ malicious\n+--- also fake\n+diff --git also fake\n+@@ also fake\n"
+	assert.Empty(t, diffHunkOrderReason(diff))
+}
+
+// TestDiffHunkTracker_TrimsBothSectionHeaderPrefixes pins the fix for a
+// mislabeled path: a "diff --cc " line was previously trimmed with the
+// "diff --git " prefix, leaving the whole line as the path.
+func TestDiffHunkTracker_TrimsBothSectionHeaderPrefixes(t *testing.T) {
+	tr := &diffHunkTracker{}
+	tr.observe("diff --cc a.go")
+	assert.Equal(t, "a.go", tr.path)
+}
+
+// TestDiffHunkTracker_KeepsRealPathOverDevNull pins the fix for a deleted
+// file's "+++ /dev/null" line overwriting the tracked path with "/dev/null"
+// instead of keeping the last real (pre-image) path.
+func TestDiffHunkTracker_KeepsRealPathOverDevNull(t *testing.T) {
+	tr := &diffHunkTracker{}
+	tr.observe("diff --git a/x.go b/x.go")
+	tr.observe("--- a/x.go")
+	tr.observe("+++ /dev/null")
+	assert.Equal(t, "a/x.go b/x.go", tr.path)
+}
+
+func TestValidateCompletion_AMalformedDiffIsRejectedWithoutAReview(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("m")}
+	h := &handlers{deps: newDeps(t, rv)}
+	args := ValidateCompletionArgs{
+		SessionID: "", Summary: "done",
+		FinalDiff: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+	}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, "fail", env.Verdict)
+	assert.True(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
+	assert.Zero(t, rv.Calls, "a diff git could not have produced costs no reviewer call")
+	assert.Contains(t, env.Findings[0].Suggestion, "final_diff_path")
+}
+
+// TestCheckEvidenceShape_SuggestionOnlyForFinalDiffScopedReasons pins the fix
+// for the diff-specific remedy leaking onto final_files-scoped rejections: a
+// final_files defect needs no diff regenerated, since the caller is
+// submitting file contents, not a diff, and had nothing to do with
+// final_diff at all.
+func TestCheckEvidenceShape_SuggestionOnlyForFinalDiffScopedReasons(t *testing.T) {
+	t.Run("final_diff truncation marker", func(t *testing.T) {
+		_, suggestion := checkEvidenceShape("valid header\n/* ... */\nmore", nil)
+		assert.Equal(t, finalDiffRegenerateSuggestion, suggestion)
+	})
+	t.Run("final_diff ellipsis placeholder", func(t *testing.T) {
+		goHunk := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,3 +1,3 @@\n"
+		_, suggestion := checkEvidenceShape(goHunk+"+...\n", nil)
+		assert.Equal(t, finalDiffRegenerateSuggestion, suggestion)
+	})
+	t.Run("final_diff hunk order", func(t *testing.T) {
+		diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n" +
+			"@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+			"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
+		_, suggestion := checkEvidenceShape(diff, nil)
+		assert.Equal(t, finalDiffRegenerateSuggestion, suggestion)
+	})
+	t.Run("final_files empty path", func(t *testing.T) {
+		_, suggestion := checkEvidenceShape("", []FileArg{{Path: "", Content: "x"}})
+		assert.Empty(t, suggestion, "a final_files defect needs no diff regenerated")
+	})
+	t.Run("final_files content truncation marker", func(t *testing.T) {
+		_, suggestion := checkEvidenceShape("", []FileArg{{Path: "f.go", Content: "x\n/* ... */\n"}})
+		assert.Empty(t, suggestion, "a final_files defect needs no diff regenerated")
+	})
+	t.Run("final_files content ellipsis placeholder", func(t *testing.T) {
+		_, suggestion := checkEvidenceShape("", []FileArg{{Path: "x.go", Content: "package x\n...\n"}})
+		assert.Empty(t, suggestion, "a final_files defect needs no diff regenerated")
+	})
+}
+
+func TestValidateCompletion_EvidenceGuard_FinalFilesRejectionSuggestionOmitsDiffRemedy(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+	h := &handlers{deps: newDeps(t, rv)}
+	_, env, err := h.ValidateCompletion(context.Background(), nil, ValidateCompletionArgs{
+		Summary:    "done",
+		FinalFiles: []CompletionFileArg{{Path: "", Content: strPtr("anything")}},
+	})
+	require.NoError(t, err)
+	require.True(t, hasCategory(env.Findings, verdict.CategoryMalformedEvidence))
+	for _, f := range env.Findings {
+		if f.Category == verdict.CategoryMalformedEvidence {
+			assert.NotContains(t, f.Suggestion, "final_diff_path",
+				"an empty final_files[].path has nothing to do with final_diff")
+		}
 	}
 }
 
@@ -3840,4 +4227,27 @@ func TestValidateTaskSpec_PayloadTooLarge_NoImplementationGuidance(t *testing.T)
 	})
 	require.Error(t, err, "over the cap is rejected before review")
 	assert.Empty(t, env.ImplementationGuidance)
+}
+
+func TestValidateTaskSpec_NextActionPointsAtTheGuidance(t *testing.T) {
+	h := &handlers{deps: newDeps(t, &fakeReviewer{name: "anthropic", resp: passResp("m")})}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+	require.NotEmpty(t, env.ImplementationGuidance)
+	assert.Contains(t, env.NextAction, "Read `implementation_guidance` before writing code.")
+}
+
+// TestValidateTaskSpec_NextActionTrimsTrailingWhitespaceBeforeGuidance pins
+// that a reviewer-supplied next_action ending in a tab or newline — not just
+// a trailing space — never leaves a gap before the appended guidance
+// pointer.
+func TestValidateTaskSpec_NextActionTrimsTrailingWhitespaceBeforeGuidance(t *testing.T) {
+	resp := providers.Response{
+		RawJSON: []byte("{\"verdict\":\"pass\",\"findings\":[],\"next_action\":\"go review it\\n\\t\"}"),
+		Model:   "m",
+	}
+	h := &handlers{deps: newDeps(t, &fakeReviewer{name: "anthropic", resp: resp})}
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "T", Goal: "G"})
+	require.NoError(t, err)
+	assert.Equal(t, "go review it Read `implementation_guidance` before writing code.", env.NextAction)
 }

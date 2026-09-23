@@ -163,7 +163,9 @@ func TestValidatePlan_FindingsCarryDisplayIDs(t *testing.T) {
 	pr, err := runValidatePlanWithReviewerJSON(t, raw, 1)
 	require.NoError(t, err)
 	require.Len(t, pr.PlanFindings, 1)
-	assert.Equal(t, verdict.Fingerprint(verdict.CategoryAmbiguousSpec, "", "AC"), pr.PlanFindings[0].ID)
+	assert.Equal(t, verdict.Fingerprint(verdict.CategoryAmbiguousSpec, planScopeKey, "AC"), pr.PlanFindings[0].ID)
+	assert.NotEqual(t, verdict.Fingerprint(verdict.CategoryAmbiguousSpec, "", "AC"), pr.PlanFindings[0].ID,
+		"a plan-level finding must not share a session finding's fingerprint")
 	require.Len(t, pr.Tasks[0].Findings, 1)
 	assert.Equal(t, verdict.Fingerprint(verdict.CategoryQuality, "t1", "spec"), pr.Tasks[0].Findings[0].ID)
 	assert.Contains(t, pr.SummaryBlock, pr.Tasks[0].Findings[0].ID)

@@ -147,7 +147,7 @@ validate_completion and reports departures as quality / over_building, minor.
 
 Check the change against it. Judge ONLY what this change adds, and ONLY when a diff is present: with `final_files` and no diff you cannot tell a new interface from one that was already there, and the summary is not evidence — emit no over-building finding at all. Tag each instance:
 
-- `reuse:` the diff adds a helper that a submitted file already has, or that the task spec's `Context:` or pinned-by entries name. Only from the evidence in front of you: you never see the rest of the codebase, and absence there is silence, not approval.
+- `reuse:` the diff adds a helper that a submitted file or an attached related file already has, or that the task spec's `Context:` or pinned-by entries name. Cite the path and the symbol that already has it. Only from the evidence in front of you: you never see the rest of the codebase, and absence there is silence, not approval.
 - `stdlib:` a hand-rolled utility, or a new dependency, for what the language's standard library covers. Language from the paths; general knowledge, not a codebase claim.
 - `native:` application code for what the platform provides — a uniqueness check in a service instead of a database constraint, a date-picker library over `<input type="date">`, JavaScript over CSS.
 - `yagni:` an interface with one implementation, a factory for one product, a config value nothing varies, a layer with one caller — within the evidence.

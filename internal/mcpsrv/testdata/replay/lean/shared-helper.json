@@ -1,0 +1,34 @@
+{
+  "name": "shared-helper",
+  "validate_task_spec": {
+    "task_title": "Task 2: Daily digest email",
+    "goal": "The notify package renders a day's items as a plain-text digest and sends it as the daily email.",
+    "acceptance_criteria": [
+      "SendDaily(s, items) sends one message with subject \"Daily digest\" whose body lists each item as \"- <Title> (<Time formatted 15:04>)\", one per line, in the order given.",
+      "SendDaily with no items sends nothing and returns nil."
+    ],
+    "non_goals": [
+      "No weekly digest: Task 3 adds it."
+    ],
+    "context": "Items arrive sorted by Time. Sender is the interface in sender.go; tests use its fake."
+  },
+  "validate_completion": {
+    "summary": "FormatDigest renders the body; SendDaily sends it, and sends nothing for an empty list.",
+    "exit_contracts": [
+      "FormatDigest(items []Item) string in internal/notify/digest.go, which Task 3's weekly digest calls"
+    ],
+    "exit_contracts_inferred": false,
+    "test_evidence": "=== RUN   TestSendDaily\n--- PASS: TestSendDaily (0.00s)\n=== RUN   TestSendDaily_NoItems\n--- PASS: TestSendDaily_NoItems (0.00s)\nPASS\nok  \texample.com/app/internal/notify\t0.004s",
+    "final_diff": "diff --git a/internal/notify/digest.go b/internal/notify/digest.go\nnew file mode 100644\nindex 0000000..eaa0bb4\n--- /dev/null\n+++ b/internal/notify/digest.go\n@@ -0,0 +1,21 @@\n+package notify\n+\n+import (\n+\t\"fmt\"\n+\t\"strings\"\n+)\n+\n+func FormatDigest(items []Item) string {\n+\tvar b strings.Builder\n+\tfor _, it := range items {\n+\t\tfmt.Fprintf(&b, \"- %s (%s)\\n\", it.Title, it.Time.Format(\"15:04\"))\n+\t}\n+\treturn b.String()\n+}\n+\n+func SendDaily(s Sender, items []Item) error {\n+\tif len(items) == 0 {\n+\t\treturn nil\n+\t}\n+\treturn s.Send(\"Daily digest\", FormatDigest(items))\n+}\n"
+  },
+  "expectations": [
+    {
+      "call": "validate_completion",
+      "any_of_keywords": [
+        "FormatDigest"
+      ],
+      "criterion": "over_building",
+      "absent": true
+    }
+  ]
+}

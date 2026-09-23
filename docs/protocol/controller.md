@@ -24,18 +24,19 @@ not on disk; it is deprecated and will be removed in 1.0.0.
 3. **Apply the proposed header blocks** (apply automatically when verdicts are `pass`/`warn` and the human approves; defer to the human for `fail`).
 4. If anything material changed, call `validate_plan` again. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified). Each round, pass `controller_verified_references` for references you grepped and `controller_rulings` (§5.9) for findings you decided.
 5. **Only proceed to dispatch when the plan-level gate passes.**
-6. **Capture `plan_run_id`** from the passing `validate_plan` response and pass it as
-   `plan_run_id` in each implementing subagent's `validate_task_spec` call — add it to the
-   dispatch clause's task-spec field list. After the last task reports DONE, call
-   `plan_run_report` with that id and surface the table to the user. The report is
-   deterministic and free (no reviewer call). If you re-validate the plan after the 3-minute
-   cache window expires, use the id from your **final** passing call.
+6. **Capture `plan_run_id`** from the final passing `validate_plan` call and add it, with the
+   task's 1-based `task_index`, to the dispatch clause: implementers pass both to
+   `validate_task_spec`, lightweight ones to `validate_completion`. When the dispatch tells the
+   implementer to work from a brief file, name that file in `context_paths` on the same call, so
+   the reviewer reads what the implementer was told to read. After the last task reports DONE, call
+   `plan_run_report` with that id and surface the table to the user. The report is deterministic
+   and free (no reviewer call).
 
 A `pass` on round N is not an audit of rounds 1..N-1. The reviewer re-reads the whole plan each round, but a defect present since round 1 can first surface in round 4 — earlier rounds finding other things is not evidence they inspected everything. Treat each round's findings as additive, not as a regression you introduced.
 
-The implementing subagent still calls `validate_task_spec` at task start in its own session — see §4. The plan-level gate and the per-task implementer gate are two different responsibilities at two different moments.
+The implementing subagent still calls `validate_task_spec` in its own session (§4): two gates, two moments.
 
-**Why this matters:** catching a vague AC at handoff costs one `validate_plan` call — cents without `context_paths`, more with a large attached set (see §5.8) — versus a wasted dispatch after a subagent spent 10 minutes against a misread spec.
+**Why this matters:** a vague AC caught at handoff costs one `validate_plan` call (§5.8 on attachment cost); missed, it costs a wasted dispatch.
 
 **Skip this gate** when the plan has only one task (go straight to per-task validation), or when the work didn't come from a plan at all (see §1).
 

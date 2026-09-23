@@ -230,7 +230,7 @@ func TestValidateCompletion_ResubmitDedupesLedgerRow(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(dir, "plan-runs.jsonl"))
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	require.Len(t, lines, 2, "Append must write one line per completion call, with no suppression")
+	require.Len(t, lines, 3, "one line when validate_task_spec attaches the task, then one per completion call")
 
 	// Simulate a restart: only the ledger survives, so the recovered report
 	// can only be right if Load itself deduped.

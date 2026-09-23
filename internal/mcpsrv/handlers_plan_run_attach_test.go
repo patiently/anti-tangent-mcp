@@ -126,7 +126,7 @@ func TestValidatePlan_LedgerHeaderKeepsAnUnattachedRunKnown(t *testing.T) {
 	assert.False(t, hasCategory(res.Findings, verdict.CategorySessionMissing), "a header-only run is known: %+v", res.Findings)
 	got := planRunIDFindings(res.Findings)
 	require.Len(t, got, 1)
-	assert.Contains(t, got[0].Evidence, "finished validate_completion")
+	assert.Contains(t, got[0].Evidence, "no task attached to it while the ledger was enabled")
 	assert.NotContains(t, got[0].Evidence, "no validate_task_spec call passed")
 	assert.Equal(t, string(pr.PlanVerdict), res.PlanVerdict)
 }

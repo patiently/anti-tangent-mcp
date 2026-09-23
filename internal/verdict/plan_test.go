@@ -761,7 +761,7 @@ func TestDemoteUnattachedContradictions_EmptyAttachedSetDemotesAll(t *testing.T)
 // it existed. Reading evidence alone made a correct, ground-truth refutation
 // vanish from the gate verdict: demoted to a minor unverifiable claim, then
 // force-passed by calibratePlanVerdictForUnverifiableOnly, which rewrites
-// next_action to "No blocking plan-quality findings remain".
+// next_action to its dispatch message.
 func TestDemoteUnattachedContradictions_MatchesPathInCriterion(t *testing.T) {
 	pr := contradictionResult("the plan's claim is refuted", "the plan's claim is refuted")
 	pr.PlanFindings[0].Criterion = "internal/mcpsrv/handlers.go"

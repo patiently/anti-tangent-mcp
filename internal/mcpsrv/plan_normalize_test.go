@@ -4,6 +4,7 @@
 package mcpsrv
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,6 +89,9 @@ func TestCalibratePlanVerdict_StillForcePassesUnverifiableOnly(t *testing.T) {
 	}
 	calibratePlanVerdictForUnverifiableOnly(&pr, false)
 	assert.Equal(t, verdict.VerdictPass, pr.PlanVerdict)
+	assert.NotContains(t, pr.NextAction, "codebase_reference_checklist finding",
+		"no checklist was appended for this plan-level-only claim; next_action must not name it")
+	assert.Contains(t, pr.NextAction, "unverifiable_codebase_claim finding")
 }
 
 // A plan whose task-level unverifiable claims were stripped for the checklist
@@ -97,7 +101,7 @@ func TestCalibratePlanVerdict_CountsAStrippedChecklist(t *testing.T) {
 	pr := verdict.PlanResult{PlanVerdict: verdict.VerdictWarn, PlanQuality: verdict.PlanQualityRough}
 	calibratePlanVerdictForUnverifiableOnly(&pr, true)
 	assert.Equal(t, verdict.PlanQualityActionable, pr.PlanQuality)
-	assert.Contains(t, pr.NextAction, "No blocking plan-quality findings")
+	assert.True(t, strings.HasPrefix(pr.NextAction, "Plan passes: dispatch."))
 
 	empty := verdict.PlanResult{PlanVerdict: verdict.VerdictWarn, NextAction: "reviewer text"}
 	calibratePlanVerdictForUnverifiableOnly(&empty, false)

@@ -42,6 +42,7 @@ type Digest struct {
 	Trend          string         `json:"trend,omitempty" jsonschema:"Ignored on input; the server derives it from net_pp."` // improvement|regression|neutral
 	NetPP          float64        `json:"net_pp,omitempty" jsonschema:"Net change in problem points: the sum of new-pp minus old-pp over every finding. Positive means worse."`
 	CategoryCounts map[string]int `json:"category_counts,omitempty" jsonschema:"Number of findings per CodeScene category, such as Complex Method. The 20 largest are kept."`
+	BaseRef        string         `json:"base_ref,omitempty" jsonschema:"The base ref the analysis compared against, as passed to analyze_change_set. plan_run_report counts the latest result for each base ref once, so tasks that each measured the whole branch are not added together. The first 200 characters are kept."`
 }
 
 // Trend values.
@@ -198,6 +199,9 @@ const codesceneCategoryCountsMax = 20
 // input, not to accommodate legitimate long names.
 const codesceneCategoryKeyMaxRunes = 100
 
+// codesceneBaseRefMaxRunes caps a caller's base ref: a ref name, never content.
+const codesceneBaseRefMaxRunes = 200
+
 // Normalize derives Trend from NetPP, lowercases and validates QualityGate,
 // and bounds the two caller-supplied free-form fields (SkipReason,
 // CategoryCounts). It is the only integrity/size check applied to an inbound
@@ -221,6 +225,7 @@ func (d *Digest) Normalize() {
 	d.SkipReason = truncateRunes(strings.TrimSpace(d.SkipReason), codesceneSkipReasonMaxRunes)
 	d.SkipEvidence = truncateRunes(strings.TrimSpace(d.SkipEvidence), codesceneSkipEvidenceMaxRunes)
 	d.CategoryCounts = capCategoryCounts(d.CategoryCounts, codesceneCategoryCountsMax, codesceneCategoryKeyMaxRunes)
+	d.BaseRef = truncateRunes(strings.TrimSpace(d.BaseRef), codesceneBaseRefMaxRunes)
 }
 
 // truncateRunes returns s if its rune count is at or below max; otherwise the
