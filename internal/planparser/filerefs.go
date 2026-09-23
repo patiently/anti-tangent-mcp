@@ -296,18 +296,17 @@ func (l *refPathList) skip(p string, sibling, first bool) bool {
 // is never closed — and returns the index of the last piece consumed, so the
 // caller's loop resumes just after it.
 //
-// The group is marked as the list's current candidate (so a real path after
-// it is never mistaken for the bullet's first) without running it through
-// add()'s hasDir bookkeeping: a brace pattern names a set of files sharing a
-// directory, not one file at a specific path, so a later bare word on the
-// same bullet is not a sibling of it the way it would be of a real
-// directory-rooted path.
+// The rejoined group is passed to add() like any other candidate, so it goes
+// through the same hasDir bookkeeping as a dropped pattern: a bare word later
+// on the same bullet, after a brace group whose text names a directory, is
+// read as a sibling shorthand of it and dropped too, the same as it would be
+// after a dropped glob.
 func (l *refPathList) dropBraceGroup(pieces []string, start int) int {
 	end := start
 	for end < len(pieces)-1 && !strings.Contains(pieces[end], "}") {
 		end++
 	}
-	l.started = true
+	l.add(strings.Join(pieces[start:end+1], ","))
 	return end
 }
 
