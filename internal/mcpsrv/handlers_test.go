@@ -2891,10 +2891,8 @@ func TestDiffHunkOrderReason_AcceptsRealGitDiffs(t *testing.T) {
 			"diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
 		"same file twice (git log -p)": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -10,2 +10,3 @@\n a\n+b\n c\n" +
 			"diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
-		"new file": "diff --git a/new.go b/new.go\nnew file mode 100644\n--- /dev/null\n+++ b/new.go\n@@ -0,0 +1,2 @@\n+a\n+b\n",
-		"combined": "diff --cc a.go\n@@@ -1,2 -1,2 +1,3 @@@\n  a\n++b\n",
-		"two files, no diff --git headers (plain diff -u / diff -ruN)": "--- a/file1.go\n+++ b/file1.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
-			"--- a/file2.go\n+++ b/file2.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"new file":                  "diff --git a/new.go b/new.go\nnew file mode 100644\n--- /dev/null\n+++ b/new.go\n@@ -0,0 +1,2 @@\n+a\n+b\n",
+		"combined":                  "diff --cc a.go\n@@@ -1,2 -1,2 +1,3 @@@\n  a\n++b\n",
 		"-U0 (no context)":          "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -5 +5 @@\n-old\n+new\n",
 		"-U1 (one line of context)": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -4,3 +4,3 @@\n before\n-old\n+new\n after\n",
 		"rename with content changes": "diff --git a/old.go b/new.go\nsimilarity index 90%\nrename from old.go\nrename to new.go\n" +
@@ -2921,55 +2919,66 @@ func TestDiffHunkOrderReason_RejectsTwoFilesUnderOneHeader(t *testing.T) {
 // the fix for a bypass round 1's headerless-diff fix opened: real git never
 // emits a second "--- "/"+++ " pair within one "diff --git"-opened section,
 // so a hand-assembled diff could defeat the whole check by inserting one to
-// reset the tracked end positions mid-section.
+// reset the tracked end positions mid-section. Since round 5, "--- "/"+++ "
+// never reset anything at all — the spurious "--- " is instead caught
+// directly by the under-declared-body check, since it is unexplained
+// content once the first hunk's declared count is exhausted.
 func TestDiffHunkOrderReason_RejectsASpuriousDashDashDashPairMidGitSection(t *testing.T) {
 	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ a/a.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
 		"--- a/a.go\n+++ a/a.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n"
 	reason := diffHunkOrderReason(diff)
 	require.NotEmpty(t, reason)
-	assert.Contains(t, reason, "@@ -1,2 +1,3 @@")
+	assert.Contains(t, reason, "a.go")
 }
 
-// TestDiffHunkOrderReason_RejectsAnAddedLineDisguisedAsAFileHeader pins the
-// fix for a bypass CodeRabbit found in round 2's fix: in a headerless diff
-// (no "diff --git" line), an added line whose own content starts with
-// "++ " renders, once the "+" hunk-body marker is prepended, as a line that
-// starts with "+++ " — indistinguishable at the prefix-check level from a
-// real "+++ " file header. Here the first hunk's declared count (3 old/4
-// new) is accurate — "+++ malicious" is genuinely its 2nd new-side line —
-// so it is correctly spent as ordinary payload (round 4's under/over-decl
-// checks do not fire), and the diff is still rejected the original way: the
-// second hunk starts before the first hunk's real end.
-func TestDiffHunkOrderReason_RejectsAnAddedLineDisguisedAsAFileHeader(t *testing.T) {
-	diff := "--- a/file.go\n+++ b/file.go\n@@ -1,3 +1,4 @@\n a\n+++ malicious\n b\n c\n" +
+// TestDiffHunkOrderReason_HeaderlessDiffsAreNotJudged pins round 5's scope
+// decision: a diff with no "diff --git"/"diff --cc" line anywhere is not
+// judged at all, deliberately, rather than fixed with a fifth guard on the
+// headerless path. Four rounds each closed one hole in that path and had a
+// reviewer demonstrate another; the last was an injected "--- "/"+++ " pair
+// between two hunks of a headerless section, which reset the tracked end
+// positions and let the backwards second hunk through the same way round
+// 1's own multi-file support always could have been tricked. Removing
+// headerless judging entirely removes the mechanism every one of those
+// holes lived in — including bypasses from earlier rounds that would
+// otherwise still need a rejection here, and now correctly don't.
+func TestDiffHunkOrderReason_HeaderlessDiffsAreNotJudged(t *testing.T) {
+	for name, diff := range map[string]string{
+		"multi-file (plain diff -u / diff -ruN)": "--- a/file1.go\n+++ b/file1.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+			"--- a/file2.go\n+++ b/file2.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"injected --- /+++ pair between two hunks of one file (round 5's reviewer repro)": "--- a/file.go\n+++ b/file.go\n@@ -40,3 +40,4 @@\n a\n+b\n c\n d\n" +
+			"--- a/file.go\n+++ b/file.go\n@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"under-declared hunk body (round 4's reviewer repro)": "--- a/file.go\n+++ b/file.go\n@@ -1,1 +1,1 @@\n a\n+++ malicious\n b\n" +
+			"@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+		"zero-length hunk followed by disguised payload (round 4's reviewer repro)": "--- a/file.go\n+++ b/file.go\n@@ -0,0 +0,0 @@\n+++ malicious\n" +
+			"@@ -1,2 +1,3 @@\n x\n+y\n z\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Empty(t, diffHunkOrderReason(diff), "a diff with no \"diff --git\"/\"diff --cc\" line anywhere is not judged at all")
+		})
+	}
+}
+
+// TestDiffHunkOrderReason_RejectsAnUnderDeclaredHunkBodyInAGitHeaderedSection
+// keeps round 4's declared-count validation covered now that it only
+// applies inside a git-headered section: the hunk header declares fewer
+// lines than its body actually has (1 old/1 new, but the body runs 3 lines
+// before the next hunk), so it is still rejected — whether the specific
+// reason is the hunk-order comparison or the under-declaration check
+// itself, both mechanisms live in the same judged section and either one
+// firing proves the diff was not produced by git.
+func TestDiffHunkOrderReason_RejectsAnUnderDeclaredHunkBodyInAGitHeaderedSection(t *testing.T) {
+	diff := "diff --git a/file.go b/file.go\n--- a/file.go\n+++ b/file.go\n@@ -1,1 +1,1 @@\n a\n+++ malicious\n b\n" +
 		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
-	reason := diffHunkOrderReason(diff)
-	require.NotEmpty(t, reason)
-	assert.Contains(t, reason, "@@ -1,2 +1,3 @@")
+	require.NotEmpty(t, diffHunkOrderReason(diff))
 }
 
-// TestDiffHunkOrderReason_RejectsAnUnderDeclaredHunkBody pins the fix for a
-// worse hole than round 3 closed: a hunk header declares fewer lines than
-// its body actually has (here 1 old/1 new, but the body runs 3 lines before
-// the next hunk), so consumeIfPayload's declared count exhausts early and
-// the disguised "+++ malicious" line — arriving right after — is no longer
-// automatically trusted as a real file header just because the count says
-// the hunk is "done". Exhaustion of an attacker-controlled count is not
-// proof the hunk ended.
-func TestDiffHunkOrderReason_RejectsAnUnderDeclaredHunkBody(t *testing.T) {
-	diff := "--- a/file.go\n+++ b/file.go\n@@ -1,1 +1,1 @@\n a\n+++ malicious\n b\n" +
-		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
-	reason := diffHunkOrderReason(diff)
-	require.NotEmpty(t, reason)
-	assert.Contains(t, reason, "+++ malicious")
-}
-
-// TestDiffHunkOrderReason_RejectsAZeroLengthHunkFollowedByDisguisedPayload is
-// the same bypass class via "@@ -0,0 +0,0 @@", which declares zero lines and
-// so is "exhausted" from the instant it opens — the coordinator's "even less
-// effort" variant.
-func TestDiffHunkOrderReason_RejectsAZeroLengthHunkFollowedByDisguisedPayload(t *testing.T) {
-	diff := "--- a/file.go\n+++ b/file.go\n@@ -0,0 +0,0 @@\n+++ malicious\n" +
+// TestDiffHunkOrderReason_RejectsAZeroLengthHunkInAGitHeaderedSection is the
+// git-headered counterpart to the "@@ -0,0 +0,0 @@" case: a zero-length hunk
+// is exhausted the instant it opens, and the disguised "+++ malicious" line
+// right after it is still rejected now that the section is judged.
+func TestDiffHunkOrderReason_RejectsAZeroLengthHunkInAGitHeaderedSection(t *testing.T) {
+	diff := "diff --git a/file.go b/file.go\n--- a/file.go\n+++ b/file.go\n@@ -0,0 +0,0 @@\n+++ malicious\n" +
 		"@@ -1,2 +1,3 @@\n x\n+y\n z\n"
 	reason := diffHunkOrderReason(diff)
 	require.NotEmpty(t, reason)
