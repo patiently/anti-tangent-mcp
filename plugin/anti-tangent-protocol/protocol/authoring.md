@@ -105,18 +105,26 @@ Rules the parser actually applies:
   `-` or `*` followed by one space; without it, collection stops at that line.
 - The verb is `Create`, `Modify`, or `Delete`, case-insensitive. Two verbs may be joined with
   `/` (`Create/Modify:`) for a file one task creates and another edits; both are recorded.
-- The path may be backtick-quoted or bare. Bare takes the first whitespace-delimited token.
+- A bullet may list several paths, not just one. Backtick-quoted spans are separated only by a
+  comma, semicolon, `&`, `+`, or `and`, and the list reads up to the first span followed by
+  anything else — so a code span used in prose (`` `Foo`, `## Configure` ``) is not read as
+  another path. Unquoted, the list is comma-separated single words after the first word.
 - A trailing parenthetical (`(the roots parsing)`) is dropped, and so is a trailing line anchor
   — `:57`, `:57-70`, `:57,70`, a comma-separated list of either (`:60,166,174,419`,
   `:57-70,90-95`), and repeated forms like `:57:12` — so anchoring a `Modify:` to the lines you
-  are editing is safe.
+  are editing is safe. The list may have a space after each comma and may end in `, …`
+  (`:6-22, 29`).
+- Not checked: a pattern (`*`, `?`, `{`), a slash-free name after a path that has a directory
+  (read as a sibling shorthand of it), and a later item on the bullet that is not a file name (a
+  symbol, a bare word).
 - Paths are repo-relative. Collection stops at the first line that is neither a bullet nor
   blank, so a following `**Steps:**` section is never harvested.
 
 The section is OPTIONAL. A task without it yields no file operations and no findings — the check
 guards plans that opt into the structure, it does not demand that they do. The `json:metadata`
 fence's `files` array is a flat list with no verb, so it cannot drive this check; the bullets are
-the only source.
+the only source. A `task_order_contradiction` a controller has checked and found wrong is waived
+with a `controller_rulings` entry on its `id`, like any other finding.
 
 **State the comment policy, or point at it.** A plan is the one artifact every implementing
 subagent reads, and an implementer working without this plugin loaded has no comment policy
