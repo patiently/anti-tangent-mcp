@@ -321,6 +321,12 @@ In addition to the existing `task_title` / `goal` / `acceptance_criteria` / `non
 
 `validate_task_spec` rolls task-level `unverifiable_codebase_claim` findings into a single `codebase_reference_checklist` finding so implementers get one consistent checklist shape instead of raw text-only-reference findings.
 
+### `validate_completion` arguments
+
+In addition to `final_files` / `final_diff` / `final_diff_path` and other documented fields:
+
+- `context_paths` (optional, v0.25.0+): absolute paths to files the change does not touch, such as the package's existing helpers. The server reads them and shows the reviewer their contents, so the reviewer can report a helper the diff re-implements as an over-building `reuse:` instance. They are never evidence that an acceptance criterion is met. Same roots and limits as `validate_task_spec`'s `context_paths` (see above).
+
 ### Lightweight protocol mode (v0.3.1+)
 
 For trivial tasks (doc-only edits, mechanical relocations, dependency bumps), the full anti-tangent dispatch protocol is overhead-heavy. As of v0.3.1 the project ships a lightweight dispatch template at [`examples/lightweight-dispatch.md`](examples/lightweight-dispatch.md) that skips `validate_task_spec` and `check_progress`, keeping only `validate_completion` as a sanity gate. See [`docs/protocol/implementer.md`](docs/protocol/implementer.md)'s "Lightweight protocol mode" section for when to use it.
