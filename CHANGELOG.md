@@ -97,6 +97,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finding, which then appears under `waived_findings` with its evidence, as the argument's
   description says. The finding could not be waived, so a false positive held the verdict down every
   round. A ruling covers every violation the finding lists, including one a later round adds.
+- `validate_completion`'s malformed-diff guard now also rejects a `final_diff` that ends before an
+  open hunk's declared line count is reached — a truncated diff, or a header whose declared count is
+  large enough to swallow the rest of the diff as payload without ever looking over- or
+  under-declared mid-scan. The check previously judged only the lines it saw; reaching end of input
+  with a hunk still owed lines returned no rejection at all.
+- A truncated per-task review's finding `suggestion` and `next_action` no longer advise retrying at
+  `max_tokens_override: <ceiling>` when the attempt that just truncated already ran at or above the
+  ceiling — an automatic retry exhausted at the ceiling, an explicit override already at or above it,
+  or a configured `ANTI_TANGENT_PER_TASK_MAX_TOKENS` default already there. That advice reproduced
+  the same attempt; the message now says to raise `ANTI_TANGENT_MAX_TOKENS_CEILING` or shrink the
+  input instead.
+- `examples/lightweight-dispatch.md`'s `final_diff` recipe compared committed revisions only
+  (`git diff <base>..HEAD`), which can leave out or empty out a lightweight task's uncommitted
+  changes — the common case for a trivial task. It now stages the task's own paths first and diffs
+  the working tree against `<base>`, scoped to those paths.
 
 ## [0.24.0] - 2026-09-20
 

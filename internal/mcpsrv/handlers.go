@@ -691,7 +691,24 @@ func notFoundEnvelope(tool, id string, model config.ModelRef) Envelope {
 // Findings, run FinalizeVerdict, and assemble the envelope. The synthetic
 // finding is SeverityMajor so the ladder derives warn, matching the Verdict
 // set here.
-func truncatedResult(ceiling int) verdict.Result {
+//
+// used is the token budget the LAST reviewer attempt actually ran at —
+// distinct from ceiling, the configured maximum. The three ways used can
+// already equal or exceed ceiling (runReview's own automatic retry lands
+// exactly on ceiling; the caller passed max_tokens_override at or above it;
+// or the configured default, which effectiveMaxTokens passes through
+// unclamped when override is 0, already sits there) all share one property:
+// re-issuing the same call at max_tokens_override: ceiling reproduces the
+// attempt that just truncated, so that advice would send the caller back
+// for a second, equally futile review instead of telling them the budget
+// itself needs to grow.
+func truncatedResult(used, ceiling int) verdict.Result {
+	suggestion := fmt.Sprintf("Retry with max_tokens_override: %d, or raise %s.", ceiling, perTaskMaxTokensEnvVar)
+	next := fmt.Sprintf("Retry with max_tokens_override: %d.", ceiling)
+	if used >= ceiling {
+		suggestion = fmt.Sprintf("The review already ran at %d tokens, at or above the %d-token ceiling, and was still truncated. Raise ANTI_TANGENT_MAX_TOKENS_CEILING, or shrink the input.", used, ceiling)
+		next = "Raise ANTI_TANGENT_MAX_TOKENS_CEILING or shrink the input before retrying."
+	}
 	return verdict.Result{
 		Verdict: verdict.VerdictWarn,
 		Findings: []verdict.Finding{{
@@ -699,9 +716,9 @@ func truncatedResult(ceiling int) verdict.Result {
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
-			Suggestion: fmt.Sprintf("Retry with max_tokens_override: %d, or raise %s.", ceiling, perTaskMaxTokensEnvVar),
+			Suggestion: suggestion,
 		}},
-		NextAction: fmt.Sprintf("Retry with max_tokens_override: %d.", ceiling),
+		NextAction: next,
 	}
 }
 

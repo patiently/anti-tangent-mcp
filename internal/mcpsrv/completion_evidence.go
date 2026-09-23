@@ -164,9 +164,22 @@ var hunkBodyMarker = map[byte]bool{' ': true, '-': true, '+': true, '\\': true}
 // (see observe's doc comment), so all four body markers are judged equally
 // here — unlike a hypothetical headerless section, there is no legitimate
 // next-file transition to exempt "-"/"+" for.
+//
+// The declared count being attacker-controlled cuts both ways: it can also
+// swallow the rest of the diff as payload without the body ever looking
+// over- or under-declared mid-loop (a header can simply claim more lines
+// than the diff has left, e.g. to consume a later backwards hunk or an
+// injected "--- "/"+++ " pair as if it were ordinary body). So the count is
+// checked once more after the loop ends: a hunk still owed lines when input
+// runs out means the diff was truncated, or the count never matched a real
+// git hunk to begin with.
 func diffHunkOrderReason(diff string) string {
 	t := &diffHunkTracker{}
-	for _, line := range strings.Split(diff, "\n") {
+	// Drop only the final newline: a blank context line just before it is
+	// still body, but the terminator itself is not a line, and Split would
+	// otherwise hand the loop a trailing "" that (per hunkLineSpend) spends
+	// as an empty context line, silently forgiving a one-line shortfall.
+	for _, line := range strings.Split(strings.TrimSuffix(diff, "\n"), "\n") {
 		if t.sawGitHeader && max(t.oldRemaining, t.newRemaining) > 0 {
 			// Spend this line against the open hunk's declared count (see
 			// hunkLineSpend for the empty-line special case — "+ \x00"
@@ -191,6 +204,9 @@ func diffHunkOrderReason(diff string) string {
 		if reason := t.observe(line); reason != "" {
 			return reason
 		}
+	}
+	if t.sawGitHeader && max(t.oldRemaining, t.newRemaining) > 0 {
+		return fmt.Sprintf("%s: hunk %q declared more lines than its body has; the diff ended before the declared count was reached, so this diff was truncated or not produced by git", t.path, t.hunkLine)
 	}
 	return ""
 }
