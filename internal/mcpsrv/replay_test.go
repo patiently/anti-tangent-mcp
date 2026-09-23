@@ -210,6 +210,38 @@ func TestRunReplayFixture_ADryRunMeasuresPromptsWithoutFindings(t *testing.T) {
 	assert.Greater(t, report.Calls[replayCallTaskSpec].PromptBytes, 1000)
 }
 
+// TestRunReplayFixture_RecordsEveryReviewerFindingPerRun pins B0's report
+// gap: the tally kept only the finding that met an expectation, so a run's
+// other reviewer findings were unreadable. Findings must line up with run
+// numbers even when a run raised none, and a server advisory (the unusable
+// relative repo_root here) must never be among them — the length-2 result
+// alone proves that, since the advisory would make it 3.
+func TestRunReplayFixture_RecordsEveryReviewerFindingPerRun(t *testing.T) {
+	first := `{"severity":"major","category":"scope_drift","criterion":"AC 1","evidence":"wires the dispatcher","suggestion":"revert the dispatcher wiring"}`
+	second := `{"severity":"minor","category":"quality","criterion":"over_building","evidence":"digest.go:9: yagni: FormatDigest has one caller","suggestion":"inline it"}`
+	sr := &scriptedReviewer{responses: []providers.Response{reviewerFindingsResp(first, second), reviewerFindingsResp()}}
+	cfg := newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg
+	fx := replayFixture{
+		Name: "findings",
+		ValidateCompletion: &ValidateCompletionArgs{
+			Summary:   "done",
+			FinalDiff: replayTestDiff,
+			RepoRoot:  "relative/path", // resolveDirInput rejects a relative repo_root -> advisory
+		},
+	}
+
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 2)
+
+	require.Equal(t, 2, sr.calls)
+	completion := report.Calls[replayCallCompletion]
+	require.Len(t, completion.Findings, 2)
+	assert.Equal(t, []string{
+		"major scope_drift AC 1: wires the dispatcher | suggestion: revert the dispatcher wiring",
+		"minor quality over_building: digest.go:9: yagni: FormatDigest has one caller | suggestion: inline it",
+	}, completion.Findings[0])
+	assert.Empty(t, completion.Findings[1])
+}
+
 func TestLoadReplayFixtures_RejectsADuplicateName(t *testing.T) {
 	dir := t.TempDir()
 	writeReplayFixture(t, dir, "a.json", `{"name":"same","validate_task_spec":{"task_title":"T","goal":"G"}}`)

@@ -301,6 +301,13 @@ type replayCallStats struct {
 	Errors     []string       `json:"errors,omitempty"`
 	// PromptBytes is the largest prompt the call sent a reviewer in any run.
 	PromptBytes int `json:"prompt_bytes"`
+	// Findings is one entry per run (index run-1): the REVIEWER's own
+	// findings on that call in that run, each rendered as "<severity>
+	// <category> <criterion>: <evidence> | suggestion: <suggestion>" (never a
+	// server advisory). A run whose call did not complete records an empty
+	// list at its index, so indices always line up with run numbers. Read
+	// from the JSON report only — String() does not print it.
+	Findings [][]string `json:"findings,omitempty"`
 }
 
 // replayMeter records the size of the last prompt sent through a reviewer,
@@ -405,10 +412,18 @@ func runReplayFixture(ctx context.Context, re replayEnv, fx replayFixture, runs 
 		report.Expectations = append(report.Expectations, replayTally{replayExpectation: e})
 	}
 	for run := 1; run <= runs; run++ {
-		results := replayOneRun(ctx, re, fx, &report)
+		results := replayOneRun(ctx, re, fx, replayRun{report: &report, run: run})
 		tallyExpectations(&report, run, results)
 	}
 	return report
+}
+
+// replayRun is one numbered run of a fixture: the report its calls record
+// onto and the run's number, kept together so a call site threading both
+// through does not grow its own argument count.
+type replayRun struct {
+	report *replayReport
+	run    int
 }
 
 // replayCallResult is one call's outcome in one run: the reviewer's own
@@ -420,11 +435,11 @@ type replayCallResult struct {
 }
 
 // replayOneRun runs fx's calls once, on fresh session and plan-run stores,
-// records each call's outcome onto report, and returns each call's result,
-// keyed by call name, for the expectation tally — findings are the
-// REVIEWER's own, not the envelope's, which also carries the server's own
-// advisories.
-func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, report *replayReport) map[string]replayCallResult {
+// records each call's outcome onto rr.report at index rr.run-1, and returns
+// each call's result, keyed by call name, for the expectation tally —
+// findings are the REVIEWER's own, not the envelope's, which also carries
+// the server's own advisories.
+func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, rr replayRun) map[string]replayCallResult {
 	h := &handlers{deps: Deps{
 		Cfg:      re.cfg,
 		Sessions: session.NewStore(re.cfg.SessionTTL),
@@ -435,15 +450,17 @@ func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, report *r
 	sessionID := ""
 	if fx.ValidateTaskSpec != nil {
 		_, taskEnv, err := h.ValidateTaskSpec(ctx, nil, *fx.ValidateTaskSpec)
-		complete := report.record(replayCallTaskSpec, taskEnv, err, re.meters.largest())
-		results[replayCallTaskSpec] = replayCallResult{findings: re.meters.lastFindings(), complete: complete}
+		findings := re.meters.lastFindings()
+		complete := rr.report.record(replayCallTaskSpec, replayCallOutcome{run: rr.run, env: taskEnv, err: err, promptBytes: re.meters.largest(), findings: findings})
+		results[replayCallTaskSpec] = replayCallResult{findings: findings, complete: complete}
 		sessionID = taskEnv.SessionID
 	}
 	if fx.ValidateCompletion == nil {
 		return results
 	}
 	if fx.ValidateTaskSpec != nil && sessionID == "" {
-		report.record(replayCallCompletion, Envelope{}, errors.New("skipped: validate_task_spec opened no session"), 0)
+		skipped := errors.New("skipped: validate_task_spec opened no session")
+		rr.report.record(replayCallCompletion, replayCallOutcome{run: rr.run, err: skipped})
 		return results
 	}
 	args := *fx.ValidateCompletion
@@ -455,8 +472,9 @@ func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, report *r
 		args.SessionID = ""
 	}
 	_, completionEnv, err := h.ValidateCompletion(ctx, nil, args)
-	complete := report.record(replayCallCompletion, completionEnv, err, re.meters.largest())
-	results[replayCallCompletion] = replayCallResult{findings: re.meters.lastFindings(), complete: complete}
+	findings := re.meters.lastFindings()
+	complete := rr.report.record(replayCallCompletion, replayCallOutcome{run: rr.run, env: completionEnv, err: err, promptBytes: re.meters.largest(), findings: findings})
+	results[replayCallCompletion] = replayCallResult{findings: findings, complete: complete}
 	return results
 }
 
@@ -492,22 +510,68 @@ func describeMatch(f verdict.Finding) string {
 	return s
 }
 
-// record tallies call's outcome onto r and reports whether it completed with
-// a whole response: no handler error and not a partial (truncated) envelope.
-func (r *replayReport) record(call string, env Envelope, err error, promptBytes int) bool {
+// replayCallOutcome is one call's raw outcome in one numbered run: the
+// handler's envelope and error, the largest prompt byte size the call sent
+// a reviewer, and the REVIEWER's own findings (never a server advisory)
+// from that call.
+type replayCallOutcome struct {
+	run         int
+	env         Envelope
+	err         error
+	promptBytes int
+	findings    []verdict.Finding
+}
+
+// record tallies out onto r for call, appends out.run's rendered reviewer
+// findings, and reports whether the call completed with a whole response:
+// no handler error and not a partial (truncated) envelope.
+func (r *replayReport) record(call string, out replayCallOutcome) bool {
 	st := r.Calls[call]
 	if st == nil {
 		st = &replayCallStats{Verdicts: map[string]int{}, Blocking: map[string]int{}, Advisories: map[string]int{}}
 		r.Calls[call] = st
 	}
-	st.PromptBytes = max(st.PromptBytes, promptBytes)
-	if err != nil {
-		st.Errors = append(st.Errors, err.Error())
-		return false
+	st.PromptBytes = max(st.PromptBytes, out.promptBytes)
+	complete := out.err == nil
+	if out.err != nil {
+		st.Errors = append(st.Errors, out.err.Error())
+	} else {
+		st.Verdicts[out.env.Verdict]++
+		tallyServerFindings(st, out.env.Findings)
+		complete = !out.env.Partial
 	}
-	st.Verdicts[env.Verdict]++
-	tallyServerFindings(st, env.Findings)
-	return !env.Partial
+	recordCallFindings(st, out, complete)
+	return complete
+}
+
+// recordCallFindings appends out's rendered reviewer findings to
+// st.Findings at index out.run-1, so indices always line up with run
+// numbers. A run whose call did not complete keeps the empty placeholder
+// list, since a truncated response's partial findings are not that run's
+// real result.
+func recordCallFindings(st *replayCallStats, out replayCallOutcome, complete bool) {
+	for len(st.Findings) < out.run {
+		st.Findings = append(st.Findings, []string{})
+	}
+	if !complete {
+		return
+	}
+	rendered := make([]string, len(out.findings))
+	for i, f := range out.findings {
+		rendered[i] = renderReplayFinding(f)
+	}
+	st.Findings[out.run-1] = rendered
+}
+
+// renderReplayFinding renders one reviewer finding for the JSON replay
+// report, with evidence and suggestion truncated at 400 runes each and the
+// " | suggestion: …" tail included only when the suggestion is non-empty.
+func renderReplayFinding(f verdict.Finding) string {
+	s := fmt.Sprintf("%s %s %s: %s", f.Severity, f.Category, f.Criterion, truncate(f.Evidence, 400))
+	if f.Suggestion != "" {
+		s += " | suggestion: " + truncate(f.Suggestion, 400)
+	}
+	return s
 }
 
 // tallyServerFindings counts, at most once per finding kind, each blocking

@@ -10,7 +10,7 @@
     "non_goals": [
       "No weekly digest: Task 3 adds it."
     ],
-    "context": "Items arrive sorted by Time. Sender is the interface in sender.go; tests use its fake. Task 3 builds the weekly digest on FormatDigest."
+    "context": "Items arrive sorted by Time. Sender is the interface in sender.go; tests use its fake."
   },
   "validate_completion": {
     "summary": "FormatDigest renders the body; SendDaily sends it, and sends nothing for an empty list.",
