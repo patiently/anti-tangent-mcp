@@ -381,8 +381,8 @@ A Files bullet yields every path in its **leading path list**:
 Each path is cleaned as today (trailing parenthetical, line anchor, `path.Clean`), and a path
 repeated on one bullet counts once. A bullet's verbs apply to every path on it.
 
-Two shapes are dropped rather than checked, because reading them as paths would add false
-positives the check never raised before. Both occur in this repo's own plans:
+Three shapes are dropped rather than checked, because reading them as paths would add false
+positives the check never raised before. The first two occur in this repo's own plans:
 
 - **A pattern** — a path containing `*`, `?` or `{` (`testdata/pre_*.golden`,
   `{pre,post}.tmpl`). It names a set of files, not one; statting it reports a file that does not
@@ -392,6 +392,10 @@ positives the check never raised before. Both occur in this repo's own plans:
   beside the first, and the root file it would otherwise be statted as does not exist. Whether a
   bare name means a sibling or a root file (`README.md`) cannot be told from the text, so it is not
   checked at all, which is what it was before.
+- **A word that is not a file name** — an item containing whitespace or parentheses, `etc.`, or a
+  later item with neither `/` nor `.`: `` `main.go` and `Run` ``, `` `main.go`, `run()` ``. A code span
+  naming a symbol would otherwise be statted as a missing file. The cost is that a first path
+  containing a space is not checked either.
 
 ### 4.3 A ruling waives the deterministic finding
 
