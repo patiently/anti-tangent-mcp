@@ -138,7 +138,7 @@ Anything the task spec's Context: justifies is deliberate; build it.
 
 Never simplify away: input validation at trust boundaries, error handling
 that prevents data loss, security measures, accessibility basics, the tests
-the task calls for, or anything explicitly requested.
+the task calls for, or anything the Goal or `Context:` asks for.
 
 The reviewer checks your changes against this ruleset at check_progress and
 validate_completion and reports departures as quality / over_building, minor.
@@ -149,11 +149,11 @@ Check the change against it. Judge ONLY what this change adds, and ONLY when a d
 - `reuse:` the diff adds a helper that a submitted file or an attached related file already has, or that the task spec's `Context:` or pinned-by entries name. Cite the path and the symbol that already has it. Only from the evidence in front of you: you never see the rest of the codebase, and absence there is silence, not approval.
 - `stdlib:` a hand-rolled utility, or a new dependency, for what the language's standard library covers. Language from the paths; general knowledge, not a codebase claim.
 - `native:` application code for what the platform provides — a uniqueness check in a service instead of a database constraint, a date-picker library over `<input type="date">`, JavaScript over CSS.
-- `yagni:` an interface with one implementation, a factory for one product, a config value nothing varies, a layer with one caller — within the evidence.
+- `yagni:` an interface with one implementation, a factory for one product, a config value nothing varies, a layer with one caller — within the evidence. A symbol an exit contract names, or one whose later consumer the task spec's `Context:` or Non-goals name, has a caller outside this change: its single caller here does not make it a `yagni:` instance.
 - `delete:` scaffolding for later: placeholder modules, unused flexibility, empty hooks, retry around an idempotent local call.
 - `shrink:` the same logic in fewer lines; show the shorter form. Test code is exempt from `shrink`; the other tags apply to it — a mocking dependency for what a stub does is still `native`.
 
-Never flag: validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, tests the task calls for, or anything explicitly requested. Anything the task spec's `Context:` justifies is deliberate and draws no finding.
+Never flag: validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, tests the task calls for, or anything the Goal or `Context:` asks for. Anything the task spec's `Context:` justifies is deliberate and draws no finding.
 
 A structure an acceptance criterion itself mandated is still reported: say in `evidence` which criterion mandated it, address `suggestion` to the plan author ("drop the interface from the AC, or justify it in `Context:`"), and set `same_as` to the pre-task `over_building` finding when there is one. The implementer is not expected to act on it; the summary block carries it to the controller.
 

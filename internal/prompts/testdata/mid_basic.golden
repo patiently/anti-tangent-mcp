@@ -77,13 +77,13 @@ Anything the task spec's Context: justifies is deliberate; build it.
 
 Never simplify away: input validation at trust boundaries, error handling
 that prevents data loss, security measures, accessibility basics, the tests
-the task calls for, or anything explicitly requested.
+the task calls for, or anything the Goal or `Context:` asks for.
 
 The reviewer checks your changes against this ruleset at check_progress and
 validate_completion and reports departures as quality / over_building, minor.
 
 
-The files below are the ones the implementer reports changing. Flag structure in them that the acceptance criteria do not call for and `Context:` does not justify — `reuse:` (a helper a submitted file already has, or the task spec names), `stdlib:` (a hand-rolled utility or new dependency for what the standard library covers), `native:` (application code for what the platform provides), `yagni:` (an interface with one implementation, a factory for one product, a config value nothing varies, a layer with one caller), `delete:` (scaffolding for later). Flag only structure that the `Working on` summary or an acceptance criterion ties to this task; structure you cannot tie to it may predate the task, so leave it alone. Not `shrink:` — line-count polish is the style noise above; it is judged at completion. Never flag trust-boundary validation, data-loss handling, security, accessibility, tests the task calls for, or anything explicitly requested. Report every instance in ONE finding, `category: quality`, `criterion: over_building`, `severity: minor`, `evidence` listing each as `path: <tag>: <what>. <replacement>.` and ending with `net: -N lines`, `suggestion` giving the replacement or the removal. An unnecessary abstraction is cheapest to remove now, before tests and callers accrete on it.
+The files below are the ones the implementer reports changing. Flag structure in them that the acceptance criteria do not call for and `Context:` does not justify — `reuse:` (a helper a submitted file already has, or the task spec names), `stdlib:` (a hand-rolled utility or new dependency for what the standard library covers), `native:` (application code for what the platform provides), `yagni:` (an interface with one implementation, a factory for one product, a config value nothing varies, a layer with one caller), `delete:` (scaffolding for later). Flag only structure that the `Working on` summary or an acceptance criterion ties to this task; structure you cannot tie to it may predate the task, so leave it alone. Not `shrink:` — line-count polish is the style noise above; it is judged at completion. Never flag trust-boundary validation, data-loss handling, security, accessibility, tests the task calls for, or anything the Goal or `Context:` asks for. Report every instance in ONE finding, `category: quality`, `criterion: over_building`, `severity: minor`, `evidence` listing each as `path: <tag>: <what>. <replacement>.` and ending with `net: -N lines`, `suggestion` giving the replacement or the removal. An unnecessary abstraction is cheapest to remove now, before tests and callers accrete on it.
 
 ## Working on
 
