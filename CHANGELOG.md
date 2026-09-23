@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `validate_task_spec` accepts `context_paths`: the server reads those files and shows the spec reviewer
   their whole contents, so a term, path or step the dispatch brief defines is no longer reported as
   missing from the spec. Same limits as `validate_plan`'s attachments.
+- Synthetic replay fixtures for the lean check's coherence: a shared helper, an AC-mandated structure, a
+  declared testability extraction, a finding asking for direct pinning, and a helper re-implemented from
+  sibling code. The replay harness can require a finding's absence.
 
 ### Changed
 

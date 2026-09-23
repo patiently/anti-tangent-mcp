@@ -1,0 +1,38 @@
+{
+  "name": "ac-mandated",
+  "validate_task_spec": {
+    "task_title": "Task 4: Token expiry check",
+    "goal": "The auth package can tell whether a token has expired.",
+    "acceptance_criteria": [
+      "Add a Clock interface with a Now() time.Time method, and a SystemClock type implementing it with time.Now().",
+      "Expired(tok Token, c Clock) returns true when tok.ExpiresAt is before c.Now(), and false otherwise."
+    ],
+    "non_goals": [
+      "No token refresh."
+    ],
+    "context": "Token is the struct in token.go; ExpiresAt is a time.Time."
+  },
+  "validate_completion": {
+    "summary": "Clock interface and SystemClock as the ACs ask; Expired compares ExpiresAt with the clock.",
+    "test_evidence": "=== RUN   TestExpired\n--- PASS: TestExpired (0.00s)\nPASS\nok  \texample.com/app/internal/auth\t0.003s",
+    "final_diff": "diff --git a/internal/auth/clock.go b/internal/auth/clock.go\nnew file mode 100644\nindex 0000000..2eab3e3\n--- /dev/null\n+++ b/internal/auth/clock.go\n@@ -0,0 +1,15 @@\n+package auth\n+\n+import \"time\"\n+\n+type Clock interface {\n+\tNow() time.Time\n+}\n+\n+type SystemClock struct{}\n+\n+func (SystemClock) Now() time.Time { return time.Now() }\n+\n+func Expired(tok Token, c Clock) bool {\n+\treturn tok.ExpiresAt.Before(c.Now())\n+}\n"
+  },
+  "expectations": [
+    {
+      "call": "validate_completion",
+      "any_of_keywords": [
+        "Clock"
+      ],
+      "criterion": "over_building"
+    },
+    {
+      "call": "validate_completion",
+      "any_of_keywords": [
+        "plan author",
+        "acceptance criterion",
+        "from the AC"
+      ],
+      "criterion": "over_building"
+    }
+  ]
+}

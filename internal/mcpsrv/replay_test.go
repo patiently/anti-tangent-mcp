@@ -303,18 +303,38 @@ func TestReplayConfigCovering(t *testing.T) {
 func TestLoadReplayFixtures_LeanFixtures(t *testing.T) {
 	fixtures, err := loadReplayFixtures("testdata/replay/lean")
 	require.NoError(t, err)
-	require.Len(t, fixtures, 2)
 
-	names := []string{fixtures[0].Name, fixtures[1].Name}
-	assert.ElementsMatch(t, []string{"lean", "over-built"}, names)
-
+	names := make([]string, 0, len(fixtures))
 	for _, fx := range fixtures {
-		require.NotNil(t, fx.ValidateTaskSpec, "fixture %q", fx.Name)
-		require.NotNil(t, fx.ValidateCompletion, "fixture %q", fx.Name)
+		names = append(names, fx.Name)
 		require.NotEmpty(t, fx.Expectations, "fixture %q", fx.Name)
 		for _, e := range fx.Expectations {
+			if fx.Name == "pin-directly" {
+				assert.Equal(t, replayCallTaskSpec, e.Call, "fixture %q", fx.Name)
+				continue
+			}
 			assert.Equal(t, replayCallCompletion, e.Call, "fixture %q", fx.Name)
 			assert.Equal(t, "over_building", e.Criterion, "fixture %q", fx.Name)
+		}
+	}
+	assert.Equal(t, []string{"ac-mandated", "lean", "over-built", "pin-directly", "reuse-sibling", "shared-helper", "testability-extraction"}, names)
+}
+
+// TestReplay_LeanFixturesDryRunCleanly replays every committed lean fixture
+// against an empty-pass reviewer, so a fixture whose diff the server rejects
+// or whose attached file it cannot read fails here rather than on a paid run.
+func TestReplay_LeanFixturesDryRunCleanly(t *testing.T) {
+	const dir = "testdata/replay/lean"
+	fixtures, err := loadReplayFixtures(dir)
+	require.NoError(t, err)
+	cfg := replayConfigCovering(newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg, dir)
+	re := newReplayEnv(cfg, providers.Registry{"anthropic": replayDryRunReviewer{name: "anthropic"}})
+
+	for _, fx := range fixtures {
+		report := runReplayFixture(context.Background(), re, fx, 1)
+		for call, st := range report.Calls {
+			assert.Empty(t, st.Errors, "fixture %q %s", fx.Name, call)
+			assert.Empty(t, st.Blocking, "fixture %q %s", fx.Name, call)
 		}
 	}
 }
