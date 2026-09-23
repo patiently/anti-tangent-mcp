@@ -198,6 +198,13 @@ func diffHunkOrderReason(diff string) string {
 // once it is true. oldRemaining/newRemaining count down the current hunk's
 // old/new lines still due; hunkLine holds its "@@ " text, for naming it in
 // a rejection when its declaration turns out to be wrong.
+//
+// sawGitHeader is sticky for the whole diff, not per section: once set, a
+// headerless tail following a git-headered section is still judged, against
+// the end positions the last git-headered hunk left behind. Real git never
+// emits that shape — a diff is either entirely git-headered or entirely
+// headerless — so this only ever judges something the stated boundary would
+// otherwise leave alone, never the reverse: it rejects more, not less.
 type diffHunkTracker struct {
 	path                       string
 	oldEnd, newEnd             int
