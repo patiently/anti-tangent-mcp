@@ -2401,7 +2401,7 @@ func TestRenderPost_OneCallerTestSparesANamedLaterConsumer(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out.User, "A symbol an exit contract names, or one whose later consumer the task spec's `Context:` or Non-goals name, has a caller outside this change")
 	assert.Contains(t, out.User, "or anything the Goal or `Context:` asks for")
-	assert.NotContains(t, out.User, "anything explicitly requested")
+	assert.NotContains(t, out.User, "or anything explicitly requested. Anything the task spec's")
 	assert.Contains(t, out.User, "A structure an acceptance criterion itself mandated is still reported")
 	assert.NotContains(t, out.User, "Testability extractions")
 }

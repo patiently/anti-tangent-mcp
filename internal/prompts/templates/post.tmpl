@@ -207,8 +207,8 @@ Check the change against it. Judge ONLY what this change adds, and ONLY when a d
 
 Never flag: validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, tests the task calls for, or anything the Goal or `Context:` asks for. Anything the task spec's `Context:` justifies is deliberate and draws no finding.{{if .Spec.TestabilityExtractions}} Nor, under any tag, a testability extraction the task-start review accepted — a helper that exists in production code so tests can call it directly:
 {{range .Spec.TestabilityExtractions}}- {{.}}
-{{end}}{{end}}
-
+{{end -}}
+{{end}}
 A structure an acceptance criterion itself mandated is still reported: say in `evidence` which criterion mandated it, address `suggestion` to the plan author ("drop the interface from the AC, or justify it in `Context:`"), and set `same_as` to the pre-task `over_building` finding when there is one. The implementer is not expected to act on it; the summary block carries it to the controller.
 
 Report every instance in ONE finding: `category: quality`, `criterion: over_building`, `severity: minor`. `evidence` lists each instance as `path:line: <tag>: <what>. <replacement>.` — line numbers from the diff's hunk headers, never invented — and ends with `net: -N lines`, your estimate of what the replacements remove. `suggestion` gives the replacement code or the removal. If there is nothing to cut, emit no over-building finding.
