@@ -1092,13 +1092,17 @@ func (h *handlers) rejectTaskSpecContextPaths(cerr error) (*mcp.CallToolResult, 
 
 // rejectCompletionContextPaths is rejectTaskSpecContextPaths for
 // validate_completion: a cap breach is a rejection envelope with no reviewer
-// call, anything else a transport error.
-func (h *handlers) rejectCompletionContextPaths(cerr error, lightweight bool, clamp verdict.Finding) (*mcp.CallToolResult, Envelope, error) {
+// call, anything else a transport error. sessionID is the caller's own
+// args.SessionID, carried onto the envelope the same way the payload-cap
+// rejection does, so a controller reading the rejection still knows which
+// session it belongs to.
+func (h *handlers) rejectCompletionContextPaths(cerr error, sessionID string, lightweight bool, clamp verdict.Finding) (*mcp.CallToolResult, Envelope, error) {
 	var tle *contextTooLargeError
 	if !errors.As(cerr, &tle) {
 		return nil, Envelope{}, cerr
 	}
 	env := prependClamp(contextTooLargeEnvelope("validate_completion", tle, h.deps.Cfg.PostModel), clamp)
+	env.SessionID = sessionID
 	env.Lightweight = lightweight
 	h.recordStat(statParams{tool: "validate_completion", verdict: env.Verdict, findings: env.Findings, modelUsed: env.ModelUsed, sessionID: env.SessionID})
 	return rejectionEnvelopeResult(env)
@@ -1125,7 +1129,7 @@ type ValidateCompletionArgs struct {
 	FinalDiff             string                `json:"final_diff,omitempty" jsonschema:"A unified diff of the task's changes. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; when it is large, generate it with -U1 and leave out generated, lockfile and snapshot files."`
 	FinalDiffPath         string                `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, for example inside the repository; a per-session scratch directory under /tmp usually is not."`
 	RepoRoot              string                `json:"repo_root,omitempty" jsonschema:"Absolute path to the checkout the diff applies to. The server reads the post-change version of each file the diff names beneath it, within ANTI_TANGENT_PLAN_ROOTS and the context_paths byte caps, and shows the reviewer only the comment lines that still name a symbol the diff removes, so nothing it reads counts toward the payload cap. Without it those comments are looked for in the evidence alone; an unusable repo_root draws a minor finding."`
-	ContextPaths          []string              `json:"context_paths,omitempty" jsonschema:"Absolute paths to related files that are not part of the change, such as a sibling helper the change might re-implement: the server reads them and shows the reviewer their whole contents. They are never evidence that an acceptance criterion is met. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the validate_completion payload cap."`
+	ContextPaths          []string              `json:"context_paths,omitempty" jsonschema:"Absolute paths to related files that are not part of the change, such as a sibling helper the change might re-implement: the server reads them and shows the reviewer their whole contents. The reviewer is told they are never evidence for an acceptance criterion — the server cannot enforce what a model counts — and that the reuse: check needs a diff (final_diff or final_diff_path); with final_files alone it raises no over-building finding. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the validate_completion payload cap."`
 	TestEvidence          string                `json:"test_evidence,omitempty" jsonschema:"The test run output that proves the change, verbatim. Output showing no test executed draws a finding."`
 	ExitContracts         []string              `json:"exit_contracts,omitempty" jsonschema:"Symbols or behavior later tasks rely on this task leaving in place, copied from validate_plan's exit_contracts for this task; a hard miss draws missing_acceptance_criterion. At most 50 entries of at most 500 characters each."`
 	ExitContractsInferred bool                  `json:"exit_contracts_inferred,omitempty" jsonschema:"validate_plan's exit_contracts_inferred for this task: true when the contracts were inferred from cross-task references rather than written in the plan, which caps a miss at minor."`
@@ -1769,7 +1773,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// key, which leaves them out.
 	relatedFiles, _, cerr := resolveContextPaths(args.ContextPaths, h.deps.Cfg)
 	if cerr != nil {
-		return h.rejectCompletionContextPaths(cerr, lightweight, clamp)
+		return h.rejectCompletionContextPaths(cerr, args.SessionID, lightweight, clamp)
 	}
 
 	// 2e. Check the RESOLVED content for path inputs that came back empty.

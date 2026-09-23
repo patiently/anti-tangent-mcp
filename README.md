@@ -325,7 +325,7 @@ In addition to the existing `task_title` / `goal` / `acceptance_criteria` / `non
 
 In addition to `final_files` / `final_diff` / `final_diff_path` and other documented fields:
 
-- `context_paths` (optional, v0.25.0+): absolute paths to files the change does not touch, such as the package's existing helpers. The server reads them and shows the reviewer their contents, so the reviewer can report a helper the diff re-implements as an over-building `reuse:` instance. They are never evidence that an acceptance criterion is met. Under `ANTI_TANGENT_PLAN_ROOTS` when it is set, at most 50 files, within `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` and `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES`; they do not count toward the payload cap.
+- `context_paths` (optional, v0.25.0+): absolute paths to files the change does not touch, such as the package's existing helpers. The server reads them and shows the reviewer their contents, so the reviewer can report a helper the diff re-implements as an over-building `reuse:` instance — which needs a diff (`final_diff` or `final_diff_path`); with `final_files` alone the completion review makes no over-building finding. The reviewer is told they are never evidence for an acceptance criterion; the server cannot enforce what a model counts. Under `ANTI_TANGENT_PLAN_ROOTS` when it is set, at most 50 files, within `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` and `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES`; they do not count toward the payload cap.
 
 ### Lightweight protocol mode (v0.3.1+)
 

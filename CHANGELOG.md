@@ -30,7 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sibling code. The replay harness can require a finding's absence.
 - `validate_completion` accepts `context_paths`, with or without a session: related files the change does not
   touch, such as a sibling helper. The reviewer reads them to report a helper the diff re-implements as
-  `reuse:`, and never counts them as evidence for an acceptance criterion. Same limits as `validate_task_spec`'s.
+  `reuse:` — which needs a diff (`final_diff` or `final_diff_path`); `final_files` alone raises no
+  over-building finding — and is told never to count them as evidence for an acceptance criterion, since the
+  server cannot enforce what a model counts. Same limits as `validate_task_spec`'s.
 
 ### Changed
 
