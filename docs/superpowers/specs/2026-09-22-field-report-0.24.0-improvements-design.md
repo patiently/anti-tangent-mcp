@@ -343,6 +343,89 @@ description and the examples; it enters `controller.md` only if the byte trim le
   who writes the `Context:` line by hand gets the same completion behaviour.
 - **Spend** is estimated and approved before any paid run.
 
+## Part 4 — the task-order false positive
+
+A field report on v0.24.0: `validate_plan` with `repo_root` raised a **major**
+`task_order_contradiction` saying an existing file "does not exist", on three rounds running, and a
+`controller_rulings` entry naming the finding's id did not waive it. Every change here is
+deterministic Go; there is no replay gate.
+
+### 4.1 A line list with spaces is an anchor
+
+`lineAnchorRe` accepts a comma-separated list of lines and ranges only with no space after a comma.
+`a.go:6-22, 29` kept its suffix, the disk tier statted `a.go:6-22, 29` and reported it missing.
+The anchor admits optional whitespace after each comma, and a trailing `, …` or `, ...` that
+elides the rest of the list. Everything the strip already leaves alone stays alone: a Windows drive
+letter, a URL, `line:col`, a colon followed by anything but digits.
+
+### 4.2 Every path on a Files bullet is read
+
+`cleanRefPath` returns the first backtick span of a bullet and drops the rest, so on
+``- Modify: `a.go`, `b.go` `` the check never looks at `b.go` — neither on disk nor against the
+Create: bullets of later tasks, which hides a genuine ordering violation whenever it is not first
+on its line.
+
+A Files bullet yields every path in its **leading path list**:
+
+- **Backticked:** the spans from the first one onward, as long as what separates two spans is only
+  commas, semicolons, `&`, `+`, whitespace or the word `and`. The first span followed by anything
+  else ends the list, so a description — ``- Modify: `a.go` (replace the `Foo` stub)`` or
+  ``- Modify: `README.md` — add a row under `## Configure` `` — never turns a code span into a
+  path. This repo's own plans carry hundreds of bullets with more than one backtick span, most
+  of them prose of exactly that shape.
+- **Unquoted** (no backtick on the line): the comma-separated pieces. The first piece contributes its
+  first word, as before; a later piece counts only when it is a single word, and the list ends at
+  the first that is not. A piece that is only line numbers (`29`, `40-50`, `…`) continues the
+  previous path's anchor and is skipped.
+
+Each path is cleaned as today (trailing parenthetical, line anchor, `path.Clean`), and a path
+repeated on one bullet counts once. A bullet's verbs apply to every path on it.
+
+Three shapes are dropped rather than checked, because reading them as paths would add false
+positives the check never raised before. The first two occur in this repo's own plans:
+
+- **A pattern** — a path containing `*`, `?` or `{` (`testdata/pre_*.golden`,
+  `{pre,post}.tmpl`). It names a set of files, not one; statting it reports a file that does not
+  exist. This applies to the first path of a bullet too.
+- **A sibling shorthand** — a path with no `/` that follows, on the same bullet, a path that has a
+  directory: `` `internal/prompts/testdata/pre_basic.golden`, `post_basic.golden` `` means a file
+  beside the first, and the root file it would otherwise be statted as does not exist. Whether a
+  bare name means a sibling or a root file (`README.md`) cannot be told from the text, so it is not
+  checked at all, which is what it was before.
+- **A word that is not a file name** — an item containing whitespace or parentheses, `etc.`, or a
+  later item with neither `/` nor `.`: `` `main.go` and `Run` ``, `` `main.go`, `run()` ``. A code span
+  naming a symbol would otherwise be statted as a missing file. The cost is that a first path
+  containing a space is not checked either.
+
+### 4.3 A ruling waives the deterministic finding
+
+`validate_plan`'s schema says a ruling "waives every finding with the same id". `applyPreLadder`
+waived before it appended the file-consistency finding, so the one finding a controller had
+proven false could not be ruled away, and it held the verdict down every round.
+
+The waiver runs after the finding joins the list, so a ruling covers it like any other plan-level
+finding and it moves into `waived_findings`. The clamp advisory still joins after the waiver: it
+describes this call's budget, not the plan. The finding's id is its fingerprint of category,
+plan scope and criterion — not its evidence — so it is the same every round, and a ruling keeps
+matching as the plan is edited.
+
+**Cost, accepted (Patrick, 2026-09-23):** the check reports every violation in one finding, so a
+ruling on it also covers a genuine violation that a later round adds. The waived entry keeps the
+full evidence, and the summary block shows it on its `waived:` line.
+
+### 4.4 Tests
+
+- `planparser`: `a.go:6-22, 29`; `a.go:1-2, 5, …`; a backticked and an unquoted multi-path bullet;
+  a bullet whose later spans are prose (only the first span is a path); an unquoted list with a
+  line-number continuation; a repeated path; a glob and a brace pattern (dropped); a sibling
+  shorthand (dropped) next to a slash-free list (`go.mod`, `go.sum`, kept); the existing
+  drive-letter, URL, `line:col` and anchor-only cases.
+- `checkFileConsistency`: a multi-path bullet of existing files with comma-space anchors draws no
+  finding; a multi-path bullet whose second path a later task creates is reported.
+- `validate_plan`: a ruling on the finding's id waives it into `waived_findings` with its evidence
+  and lets the verdict pass; the id a first round reports is the id the waived entry carries on the
+  next round, after the evidence changed.
+
 ---
 
 ## Input and envelope changes
@@ -395,6 +478,7 @@ description and the examples; it enters `controller.md` only if the byte trim le
   every new input and limit.
 - **Part 3:** golden files for every template change; `absent` expectations in the harness unit
   tests; then the replay gate.
+- **Part 4:** the cases in §4.4; no replay gate.
 - Protocol parts stay under 16,000 bytes, `INTEGRATION.md` under 2,000, and the plugin bundle
   identical to `docs/protocol/`, as CI enforces.
 

@@ -402,3 +402,25 @@ func TestCheckFileConsistency_OrderTier_CanonicalisesEquivalentSpellings(t *test
 		assert.Equal(t, "task_order_contradiction", f.Criterion)
 	}
 }
+
+// A Files bullet can list several paths, each anchored with a spaced line
+// list. The disk tier must find every one of them on disk, and the order tier
+// must see a later path on the line, not just the first.
+func TestCheckFileConsistency_MultiPathBullets(t *testing.T) {
+	t.Run("existing files with spaced anchors draw no finding", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("x"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "b.go"), []byte("x"), 0o600))
+		f := checkFileConsistency(tasksFrom("**Files:**\n- Modify: `a.go:6-22, 29`, `b.go:1-2, 5, …`\n"), dir)
+		assert.Nil(t, f)
+	})
+
+	t.Run("a later path created by a later task is reported", func(t *testing.T) {
+		f := checkFileConsistency(tasksFrom(
+			"**Files:**\n- Modify: `a.go`, `b.go:10-12, 40`\n",
+			"**Files:**\n- Create: `b.go`\n",
+		), "")
+		require.NotNil(t, f)
+		assert.Contains(t, f.Evidence, "Task 1 modifies `b.go`, which is not created until Task 2")
+	})
+}
