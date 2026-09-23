@@ -156,7 +156,7 @@ func suppressPlanVerifiedReferences(pr *verdict.PlanResult, refs []string) {
 	}
 }
 
-// waivePlanFindings moves every reviewer finding a ruling covers into
+// waivePlanFindings moves every finding a ruling covers into
 // WaivedFindings, plan-level and per task, fingerprinting plan-level findings
 // under planScopeKey and a task's findings under the task key planTaskKeys
 // derives from tasks, the parsed plan. The assignment replaces any waived

@@ -47,9 +47,9 @@ type replayFixture struct {
 // replayExpectation names a call and the keywords that identify the issue it
 // should raise. A run meets it when any finding the REVIEWER itself raised on
 // that call contains any keyword, ignoring case, in its category, criterion,
-// evidence or suggestion — a server advisory prepended to the envelope (for
-// example an unusable repo_root) never counts, even when its text happens to
-// share a keyword.
+// evidence or suggestion, or, with Absent, when none is — a server advisory
+// prepended to the envelope (for example an unusable repo_root) never counts,
+// even when its text happens to share a keyword.
 type replayExpectation struct {
 	Call          string   `json:"call"`
 	AnyOfKeywords []string `json:"any_of_keywords"`
@@ -59,6 +59,10 @@ type replayExpectation struct {
 	// from a different check entirely — and that finding must not stand in
 	// for the one this expectation is actually measuring.
 	Criterion string `json:"criterion,omitempty"`
+	// Absent inverts the expectation: a run meets it when the call completed
+	// and NO reviewer finding matches. A call that errored, was skipped or
+	// came back partial proves nothing absent, so it never meets one.
+	Absent bool `json:"absent,omitempty"`
 }
 
 const (
@@ -74,32 +78,116 @@ func loadReplayFixtures(dir string) ([]replayFixture, error) {
 		return nil, err
 	}
 	sort.Strings(paths)
+	base, err := replayFixtureBase(dir)
+	if err != nil {
+		return nil, err
+	}
+	loader := replayFixtureLoader{base: base, named: make(map[string]string, len(paths))}
 	fixtures := make([]replayFixture, 0, len(paths))
-	// Names address fixtures in ANTI_TANGENT_REPLAY_ONLY, which matches each
-	// name once, so two fixtures sharing one name would silently run once.
-	named := make(map[string]string, len(paths))
 	for _, p := range paths {
-		raw, err := os.ReadFile(p)
+		fx, err := loader.load(p)
 		if err != nil {
 			return nil, err
-		}
-		var fx replayFixture
-		if err := json.Unmarshal(raw, &fx); err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
-		}
-		if fx.Name == "" {
-			fx.Name = strings.TrimSuffix(filepath.Base(p), ".json")
-		}
-		if first, dup := named[fx.Name]; dup {
-			return nil, fmt.Errorf("%s: fixture name %q is already used by %s", p, fx.Name, first)
-		}
-		named[fx.Name] = p
-		if err := fx.validate(); err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
 		}
 		fixtures = append(fixtures, fx)
 	}
 	return fixtures, nil
+}
+
+// replayFixtureLoader reads and validates fixture files sharing one base
+// directory, for resolving their relative paths, and one named set.
+type replayFixtureLoader struct {
+	base string
+	// named maps each fixture name already claimed to the file that claimed
+	// it. Names address fixtures in ANTI_TANGENT_REPLAY_ONLY, which matches
+	// each name once, so two fixtures sharing one name would silently run
+	// once.
+	named map[string]string
+}
+
+// load reads and validates the fixture at p, resolving its relative paths
+// against l.base and rejecting a fixture name a prior file already claimed.
+func (l *replayFixtureLoader) load(p string) (replayFixture, error) {
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return replayFixture{}, err
+	}
+	var fx replayFixture
+	if err := json.Unmarshal(raw, &fx); err != nil {
+		return replayFixture{}, fmt.Errorf("%s: %w", p, err)
+	}
+	fx.resolveRelativePaths(l.base)
+	if fx.Name == "" {
+		fx.Name = strings.TrimSuffix(filepath.Base(p), ".json")
+	}
+	if first, dup := l.named[fx.Name]; dup {
+		return replayFixture{}, fmt.Errorf("%s: fixture name %q is already used by %s", p, fx.Name, first)
+	}
+	l.named[fx.Name] = p
+	if err := fx.validate(); err != nil {
+		return replayFixture{}, fmt.Errorf("%s: %w", p, err)
+	}
+	return fx, nil
+}
+
+// replayFixtureBase is the absolute, symlink-resolved fixture directory that
+// relative paths in a fixture join onto. Resolved, so the joined paths pass a
+// PlanRoots check that compares symlink-resolved paths.
+func replayFixtureBase(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
+}
+
+// resolveRelativePaths joins each relative file path the fixture names onto
+// base. The handlers require absolute paths, and a committed fixture cannot
+// know the absolute path of the checkout it runs in.
+func (fx *replayFixture) resolveRelativePaths(base string) {
+	if ts := fx.ValidateTaskSpec; ts != nil {
+		ts.ContextPaths = joinRelative(base, ts.ContextPaths)
+	}
+	vc := fx.ValidateCompletion
+	if vc == nil {
+		return
+	}
+	vc.ContextPaths = joinRelative(base, vc.ContextPaths)
+	if vc.FinalDiffPath != "" && !filepath.IsAbs(vc.FinalDiffPath) {
+		vc.FinalDiffPath = filepath.Join(base, vc.FinalDiffPath)
+	}
+}
+
+// joinRelative joins base onto each relative, non-empty path in paths.
+// len(paths) == 0 returns paths unchanged rather than a fresh empty slice, so
+// a fixture with no context_paths keeps its nil ContextPaths.
+func joinRelative(base string, paths []string) []string {
+	if len(paths) == 0 {
+		return paths
+	}
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		if p != "" && !filepath.IsAbs(p) {
+			p = filepath.Join(base, p)
+		}
+		out[i] = p
+	}
+	return out
+}
+
+// replayConfigCovering lets the handlers read the files a fixture in dir
+// names. With PlanRoots empty every absolute path is already readable, so the
+// config is left as the operator set it.
+func replayConfigCovering(cfg config.Config, dir string) config.Config {
+	if len(cfg.PlanRoots) == 0 {
+		return cfg
+	}
+	base, err := replayFixtureBase(dir)
+	if err != nil {
+		return cfg
+	}
+	cfg.PlanRoots = append(append([]string(nil), cfg.PlanRoots...), base)
+	return cfg
 }
 
 func (fx replayFixture) validate() error {
@@ -213,6 +301,13 @@ type replayCallStats struct {
 	Errors     []string       `json:"errors,omitempty"`
 	// PromptBytes is the largest prompt the call sent a reviewer in any run.
 	PromptBytes int `json:"prompt_bytes"`
+	// Findings is one entry per run (index run-1): the REVIEWER's own
+	// findings on that call in that run, each rendered as "<severity>
+	// <category> <criterion>: <evidence> | suggestion: <suggestion>" (never a
+	// server advisory). A run whose call did not complete records an empty
+	// list at its index, so indices always line up with run numbers. Read
+	// from the JSON report only — String() does not print it.
+	Findings [][]string `json:"findings,omitempty"`
 }
 
 // replayMeter records the size of the last prompt sent through a reviewer,
@@ -317,37 +412,56 @@ func runReplayFixture(ctx context.Context, re replayEnv, fx replayFixture, runs 
 		report.Expectations = append(report.Expectations, replayTally{replayExpectation: e})
 	}
 	for run := 1; run <= runs; run++ {
-		findings := replayOneRun(ctx, re, fx, &report)
-		tallyExpectations(&report, run, findings)
+		results := replayOneRun(ctx, re, fx, replayRun{report: &report, run: run})
+		tallyExpectations(&report, run, results)
 	}
 	return report
 }
 
+// replayRun is one numbered run of a fixture: the report its calls record
+// onto and the run's number, kept together so a call site threading both
+// through does not grow its own argument count.
+type replayRun struct {
+	report *replayReport
+	run    int
+}
+
+// replayCallResult is one call's outcome in one run: the reviewer's own
+// findings, and whether the call completed with a whole response — no
+// handler error, not skipped, and not a partial (truncated) envelope.
+type replayCallResult struct {
+	findings []verdict.Finding
+	complete bool
+}
+
 // replayOneRun runs fx's calls once, on fresh session and plan-run stores,
-// records each call's outcome onto report, and returns the REVIEWER's own
-// findings from each call, keyed by call name, for the expectation tally —
-// not the envelope's findings, which also carry the server's own advisories.
-func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, report *replayReport) map[string][]verdict.Finding {
+// records each call's outcome onto rr.report at index rr.run-1, and returns
+// each call's result, keyed by call name, for the expectation tally —
+// findings are the REVIEWER's own, not the envelope's, which also carries
+// the server's own advisories.
+func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, rr replayRun) map[string]replayCallResult {
 	h := &handlers{deps: Deps{
 		Cfg:      re.cfg,
 		Sessions: session.NewStore(re.cfg.SessionTTL),
 		Reviews:  re.registry,
 		PlanRuns: planrun.NewStore(re.cfg.SessionTTL),
 	}}
-	findings := map[string][]verdict.Finding{}
+	results := map[string]replayCallResult{}
 	sessionID := ""
 	if fx.ValidateTaskSpec != nil {
 		_, taskEnv, err := h.ValidateTaskSpec(ctx, nil, *fx.ValidateTaskSpec)
-		report.record(replayCallTaskSpec, taskEnv, err, re.meters.largest())
-		findings[replayCallTaskSpec] = re.meters.lastFindings()
+		findings := re.meters.lastFindings()
+		complete := rr.report.record(replayCallTaskSpec, replayCallOutcome{run: rr.run, env: taskEnv, err: err, promptBytes: re.meters.largest(), findings: findings})
+		results[replayCallTaskSpec] = replayCallResult{findings: findings, complete: complete}
 		sessionID = taskEnv.SessionID
 	}
 	if fx.ValidateCompletion == nil {
-		return findings
+		return results
 	}
 	if fx.ValidateTaskSpec != nil && sessionID == "" {
-		report.record(replayCallCompletion, Envelope{}, errors.New("skipped: validate_task_spec opened no session"), 0)
-		return findings
+		skipped := errors.New("skipped: validate_task_spec opened no session")
+		rr.report.record(replayCallCompletion, replayCallOutcome{run: rr.run, err: skipped})
+		return results
 	}
 	args := *fx.ValidateCompletion
 	if fx.ValidateTaskSpec != nil {
@@ -358,38 +472,111 @@ func replayOneRun(ctx context.Context, re replayEnv, fx replayFixture, report *r
 		args.SessionID = ""
 	}
 	_, completionEnv, err := h.ValidateCompletion(ctx, nil, args)
-	report.record(replayCallCompletion, completionEnv, err, re.meters.largest())
-	findings[replayCallCompletion] = re.meters.lastFindings()
-	return findings
+	findings := re.meters.lastFindings()
+	complete := rr.report.record(replayCallCompletion, replayCallOutcome{run: rr.run, env: completionEnv, err: err, promptBytes: re.meters.largest(), findings: findings})
+	results[replayCallCompletion] = replayCallResult{findings: findings, complete: complete}
+	return results
 }
 
 // tallyExpectations records, for run, which of report's expectations the
-// findings from that run met.
-func tallyExpectations(report *replayReport, run int, findings map[string][]verdict.Finding) {
+// results from that run met.
+func tallyExpectations(report *replayReport, run int, results map[string]replayCallResult) {
 	for i := range report.Expectations {
 		tally := &report.Expectations[i]
-		f, ok := firstMatchingFinding(findings[tally.Call], tally.AnyOfKeywords, tally.Criterion)
-		if !ok {
-			continue
+		res := results[tally.Call]
+		f, found := firstMatchingFinding(res.findings, tally.AnyOfKeywords, tally.Criterion)
+		switch {
+		case tally.Absent && found:
+			tally.Matches = append(tally.Matches, fmt.Sprintf("run %d: present: %s", run, describeMatch(f)))
+		case tally.Absent:
+			if res.complete {
+				tally.Matched++
+			}
+		case found:
+			tally.Matched++
+			tally.Matches = append(tally.Matches, fmt.Sprintf("run %d: %s", run, describeMatch(f)))
 		}
-		tally.Matched++
-		tally.Matches = append(tally.Matches, fmt.Sprintf("run %d: %s %s: %s", run, f.Category, f.Criterion, truncate(f.Evidence, 200)))
 	}
 }
 
-func (r *replayReport) record(call string, env Envelope, err error, promptBytes int) {
+// describeMatch quotes a finding for a tally line: category, criterion and
+// evidence, and the suggestion when there is one, since a finding addressed to
+// the plan author says so only there.
+func describeMatch(f verdict.Finding) string {
+	s := fmt.Sprintf("%s %s: %s", f.Category, f.Criterion, truncate(f.Evidence, 200))
+	if f.Suggestion != "" {
+		s += " | suggestion: " + truncate(f.Suggestion, 200)
+	}
+	return s
+}
+
+// replayCallOutcome is one call's raw outcome in one numbered run: the
+// handler's envelope and error, the largest prompt byte size the call sent
+// a reviewer, and the REVIEWER's own findings (never a server advisory)
+// from that call.
+type replayCallOutcome struct {
+	run         int
+	env         Envelope
+	err         error
+	promptBytes int
+	findings    []verdict.Finding
+}
+
+// record tallies out onto r for call, appends out.run's rendered reviewer
+// findings, and reports whether the call completed with a whole response: no
+// handler error, not a partial (truncated) envelope, AND a reviewer actually
+// ran. A server-side rejection (an oversized attachment, malformed evidence,
+// an unknown session) also returns err == nil and Partial == false, but no
+// reviewer answered, so promptBytes stays 0 and such a call must not count as
+// complete — an absent expectation would otherwise be met by a run where
+// nothing was checked.
+func (r *replayReport) record(call string, out replayCallOutcome) bool {
 	st := r.Calls[call]
 	if st == nil {
 		st = &replayCallStats{Verdicts: map[string]int{}, Blocking: map[string]int{}, Advisories: map[string]int{}}
 		r.Calls[call] = st
 	}
-	st.PromptBytes = max(st.PromptBytes, promptBytes)
-	if err != nil {
-		st.Errors = append(st.Errors, err.Error())
+	st.PromptBytes = max(st.PromptBytes, out.promptBytes)
+	complete := out.err == nil
+	if out.err != nil {
+		st.Errors = append(st.Errors, out.err.Error())
+	} else {
+		st.Verdicts[out.env.Verdict]++
+		tallyServerFindings(st, out.env.Findings)
+		complete = !out.env.Partial && out.promptBytes > 0
+	}
+	recordCallFindings(st, out, complete)
+	return complete
+}
+
+// recordCallFindings appends out's rendered reviewer findings to
+// st.Findings at index out.run-1, so indices always line up with run
+// numbers. A run whose call did not complete keeps the empty placeholder
+// list, since a truncated response's partial findings are not that run's
+// real result.
+func recordCallFindings(st *replayCallStats, out replayCallOutcome, complete bool) {
+	for len(st.Findings) < out.run {
+		st.Findings = append(st.Findings, []string{})
+	}
+	if !complete {
 		return
 	}
-	st.Verdicts[env.Verdict]++
-	tallyServerFindings(st, env.Findings)
+	rendered := make([]string, len(out.findings))
+	for i, f := range out.findings {
+		rendered[i] = renderReplayFinding(f)
+	}
+	st.Findings[out.run-1] = rendered
+}
+
+// renderReplayFinding renders one reviewer finding for the JSON replay
+// report, with evidence and suggestion truncated at 400 runes each and the
+// " | suggestion: …" tail included only when the suggestion is non-empty.
+func renderReplayFinding(f verdict.Finding) string {
+	s := fmt.Sprintf("%s %s %s: %s", f.Severity, f.Category, f.Criterion, truncate(f.Evidence, 400))
+	if f.Suggestion != "" {
+		s += " | suggestion: " + truncate(f.Suggestion, 400)
+	}
+	return s
 }
 
 // tallyServerFindings counts, at most once per finding kind, each blocking
@@ -458,7 +645,11 @@ func (r replayReport) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "fixture %s (%d runs)\n", r.Fixture, r.Runs)
 	for _, e := range r.Expectations {
-		fmt.Fprintf(&b, "  %s %q: %d/%d\n", e.Call, e.AnyOfKeywords, e.Matched, r.Runs)
+		if e.Absent {
+			fmt.Fprintf(&b, "  %s absent %q: %d/%d\n", e.Call, e.AnyOfKeywords, e.Matched, r.Runs)
+		} else {
+			fmt.Fprintf(&b, "  %s %q: %d/%d\n", e.Call, e.AnyOfKeywords, e.Matched, r.Runs)
+		}
 		for _, m := range e.Matches {
 			fmt.Fprintf(&b, "    %s\n", m)
 		}

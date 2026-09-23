@@ -1,0 +1,32 @@
+{
+  "name": "reuse-sibling",
+  "validate_task_spec": {
+    "task_title": "Task 6: Episode permalinks",
+    "goal": "Every episode the feed exports carries a permalink built from its title.",
+    "acceptance_criteria": [
+      "Permalink(ep) returns \"/episodes/\" followed by ep.Title lower-cased, with each run of characters that are not letters or digits replaced by one hyphen and no leading or trailing hyphen.",
+      "Export sets Permalink on every episode it writes."
+    ],
+    "non_goals": [
+      "No redirects from old URLs."
+    ],
+    "context": "Export is in internal/feed/export.go."
+  },
+  "validate_completion": {
+    "summary": "Permalink builds the path from a slug of the title; Export sets it.",
+    "context_paths": [
+      "reuse-sibling/slug.go"
+    ],
+    "test_evidence": "=== RUN   TestPermalink\n--- PASS: TestPermalink (0.00s)\n=== RUN   TestExport_SetsPermalink\n--- PASS: TestExport_SetsPermalink (0.00s)\nPASS\nok  \texample.com/app/internal/feed\t0.005s",
+    "final_diff": "diff --git a/internal/feed/permalink.go b/internal/feed/permalink.go\nnew file mode 100644\nindex 0000000..f5c8e3e\n--- /dev/null\n+++ b/internal/feed/permalink.go\n@@ -0,0 +1,29 @@\n+package feed\n+\n+import (\n+\t\"strings\"\n+\t\"unicode\"\n+)\n+\n+func Permalink(ep Episode) string {\n+\treturn \"/episodes/\" + slugTitle(ep.Title)\n+}\n+\n+func slugTitle(title string) string {\n+\tvar parts []string\n+\tvar cur strings.Builder\n+\tfor _, r := range strings.ToLower(title) {\n+\t\tif unicode.IsLetter(r) || unicode.IsDigit(r) {\n+\t\t\tcur.WriteRune(r)\n+\t\t\tcontinue\n+\t\t}\n+\t\tif cur.Len() > 0 {\n+\t\t\tparts = append(parts, cur.String())\n+\t\t\tcur.Reset()\n+\t\t}\n+\t}\n+\tif cur.Len() > 0 {\n+\t\tparts = append(parts, cur.String())\n+\t}\n+\treturn strings.Join(parts, \"-\")\n+}\n"
+  },
+  "expectations": [
+    {
+      "call": "validate_completion",
+      "any_of_keywords": [
+        "Slugify"
+      ],
+      "criterion": "over_building"
+    }
+  ]
+}

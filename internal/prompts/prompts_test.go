@@ -195,6 +195,31 @@ func TestRenderPost(t *testing.T) {
 	golden(t, "post_basic", out.System+"\n---USER---\n"+out.User)
 }
 
+func TestRenderPost_WithContextFiles_Golden(t *testing.T) {
+	out, err := RenderPost(PostInput{
+		Spec:              sampleSpec(),
+		Summary:           "Added Gin handler at /healthz returning \"ok\".",
+		FinalDiff:         "diff --git a/h.go b/h.go\n--- a/h.go\n+++ b/h.go\n@@ -1 +1 @@\n-a\n+b\n",
+		ContextFiles:      ctxFiles(),
+		ContextFilesNonce: testContextNonce,
+	})
+	require.NoError(t, err)
+	golden(t, "post_with_context_files", out.System+"\n---USER---\n"+out.User)
+}
+
+func TestRenderPost_RelatedFilesSectionOnlyWhenAttached(t *testing.T) {
+	without, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", TestEvidence: "ok"})
+	require.NoError(t, err)
+	assert.NotContains(t, without.User, "## Related code")
+	assert.Contains(t, without.User, "or an attached related file already has")
+
+	with, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", TestEvidence: "ok", ContextFiles: ctxFiles()})
+	require.NoError(t, err)
+	assert.Contains(t, with.User, "## Related code")
+	assert.Contains(t, with.User, "never evidence that an acceptance criterion is met")
+	assert.Contains(t, with.User, "/repo/internal/config/config.go")
+}
+
 func TestRenderPost_WithCodescene(t *testing.T) {
 	out, err := RenderPost(PostInput{
 		Spec:    sampleSpec(),
@@ -2440,4 +2465,27 @@ func TestOverBuildingSectionsIncludeTheOneRuleset(t *testing.T) {
 	for _, tag := range []string{"`reuse:`", "`stdlib:`", "`native:`", "`yagni:`", "`delete:`"} {
 		assert.Contains(t, mid.User, tag)
 	}
+}
+
+func TestPrompts_PlanReuseCarriesItsContextLine(t *testing.T) {
+	const want = "Task 2 Context: `FormatDigest` is shared; Task 3 reuses it."
+	plan, err := RenderPlan(PlanInput{PlanText: "# Plan\n\n### Task 1: t1\n\n**Goal:** g1\n"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(plan.User, want), "cross-task rule only")
+
+	findingsOnly, err := RenderPlanFindingsOnly(PlanInput{PlanText: "# Plan\n"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(findingsOnly.User, want), "cross-task rule")
+
+	chunk, err := RenderPlanTasksChunk(PlanChunkInput{
+		ChunkTasks: []planparser.RawTask{
+			{Title: "Task 1: t1", Body: "**Goal:** g1\n"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, strings.Count(chunk.User, want), "not in task chunk")
+
+	pre, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	assert.Equal(t, 0, strings.Count(pre.User, want), "not in single task spec")
 }

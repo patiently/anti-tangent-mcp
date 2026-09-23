@@ -153,3 +153,70 @@ func TestLineAnchorStripsCommaLists(t *testing.T) {
 		}
 	}
 }
+
+// A line list is written with and without a space after each comma, and may
+// end in an ellipsis that elides the rest of it. Left on the path, the suffix
+// is statted as part of the file name and the file reported missing.
+func TestLineAnchorStripsSpacedAndElidedLists(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"a.go:6-22, 29", "a.go"},
+		{"a.go:51-54, 748-753, 1394", "a.go"},
+		{"a.go:1-2, 5, …", "a.go"},
+		{"a.go:1-2, 5, ...", "a.go"},
+		{"a.go:14-15,  64", "a.go"},
+	} {
+		if got := stripLineAnchor(tc.in); got != tc.want {
+			t.Errorf("stripLineAnchor(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A Files bullet can list several paths. Each must be read, or a Modify: of a
+// file a later task creates goes unreported whenever it is not first on its
+// line. Prose after the list must not be read as more paths.
+func TestFileRefs_EveryPathOnABullet(t *testing.T) {
+	cases := []struct {
+		name   string
+		bullet string
+		want   []string
+	}{
+		{"backticked list with spaced anchors", "- Modify: `a/x.go:6-22, 29`, `b/y.go:1-6`, `c/z.go:1-18, 165-222`",
+			[]string{"a/x.go", "b/y.go", "c/z.go"}},
+		{"and and semicolon separators", "- Modify: `a.go` and `b.go`; `c.go`", []string{"a.go", "b.go", "c.go"}},
+		{"prose after the first span", "- Modify: `README.md` — add a row under `## Configure`", []string{"README.md"}},
+		{"code span in a sentence", "- Modify: `a.go` to call `Helper` from `b.go`", []string{"a.go"}},
+		{"unquoted list", "- Modify: a.go, b.go", []string{"a.go", "b.go"}},
+		{"unquoted anchor continuation", "- Modify: a.go:6-22, 29, b.go", []string{"a.go", "b.go"}},
+		{"unquoted prose ends the list", "- Modify: a.go — edit it, then b.go", []string{"a.go"}},
+		{"repeated path counts once", "- Modify: `a.go:1-3`, `a.go:9`", []string{"a.go"}},
+		{"glob dropped", "- Modify: `testdata/pre_*.golden`, `testdata/b.golden`", []string{"testdata/b.golden"}},
+		{"brace pattern dropped", "- Modify: `tmpl/{pre,post}.tmpl`", nil},
+		{"unquoted brace pattern dropped whole", "- Modify: main.go, {pre,post}.tmpl", []string{"main.go"}},
+		{"unquoted brace pattern with directory prefix drops a later bare name as its sibling", "- Modify: a.go, tmpl/{x,y,z}.tmpl, b.go", []string{"a.go"}},
+		{"unquoted brace pattern with no directory keeps a later bare name", "- Modify: a.go, {x,y}.tmpl, b.go", []string{"a.go", "b.go"}},
+		{"sibling shorthand dropped", "- Modify: `testdata/pre.golden`, `post.golden`", []string{"testdata/pre.golden"}},
+		{"sibling after a dropped pattern", "- Modify: `testdata/*.golden`, `post.golden`", nil},
+		{"slash-free list kept", "- Modify: `go.mod`, `go.sum`", []string{"go.mod", "go.sum"}},
+		{"stray word after the first path dropped", "- Modify: `main.go` and `Run`", []string{"main.go"}},
+		{"symbol after the first path dropped", "- Modify: `main.go`, `run()`", []string{"main.go"}},
+		{"etc. dropped", "- Modify: a.go, b.go, etc.", []string{"a.go", "b.go"}},
+		{"bare stray word dropped", "- Modify: README.md, twice", []string{"README.md"}},
+		{"later dotted path kept", "- Modify: `Makefile`, `go.mod`", []string{"Makefile", "go.mod"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FileRefs("**Files:**\n" + tc.bullet + "\n").Modify
+			if len(tc.want) == 0 {
+				assert.Empty(t, got)
+				return
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestFileRefs_VerbsApplyToEveryPath(t *testing.T) {
+	refs := FileRefs("**Files:**\n- Create/Modify: `a.go`, `b.go`\n")
+	assert.Equal(t, []string{"a.go", "b.go"}, refs.Create)
+	assert.Equal(t, []string{"a.go", "b.go"}, refs.Modify)
+}

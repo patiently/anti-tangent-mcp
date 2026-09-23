@@ -1,0 +1,34 @@
+{
+  "name": "testability-extraction",
+  "validate_task_spec": {
+    "task_title": "Task 3: Retry with backoff",
+    "goal": "The fetch package retries a failing call with exponential backoff.",
+    "acceptance_criteria": [
+      "Do(ctx, f) calls f at most 4 times, stops at the first nil error, and returns the last error when every attempt fails.",
+      "Between attempts Do waits 100ms, then 200ms, then 400ms.",
+      "When ctx is cancelled during a wait, Do returns ctx.Err() without calling f again."
+    ],
+    "non_goals": [
+      "No jitter."
+    ],
+    "context": "Do waits with time.After inside a select on ctx.Done().",
+    "testability_extractions": [
+      "NextBackoff(attempt int) time.Duration in internal/fetch/retry.go: the wait before retry attempt+1, a function of its own so TestNextBackoff asserts the schedule without sleeping"
+    ]
+  },
+  "validate_completion": {
+    "summary": "Do loops over at most four attempts, waiting NextBackoff(attempt) between them; TestNextBackoff pins the schedule.",
+    "test_evidence": "=== RUN   TestNextBackoff\n--- PASS: TestNextBackoff (0.00s)\n=== RUN   TestDo_StopsAtFirstSuccess\n--- PASS: TestDo_StopsAtFirstSuccess (0.30s)\n=== RUN   TestDo_ReturnsLastError\n--- PASS: TestDo_ReturnsLastError (0.70s)\n=== RUN   TestDo_Cancelled\n--- PASS: TestDo_Cancelled (0.00s)\nPASS\nok  \texample.com/app/internal/fetch\t1.004s",
+    "final_diff": "diff --git a/internal/fetch/retry.go b/internal/fetch/retry.go\nnew file mode 100644\nindex 0000000..e80c782\n--- /dev/null\n+++ b/internal/fetch/retry.go\n@@ -0,0 +1,30 @@\n+package fetch\n+\n+import (\n+\t\"context\"\n+\t\"time\"\n+)\n+\n+const maxAttempts = 4\n+\n+func NextBackoff(attempt int) time.Duration {\n+\treturn 100 * time.Millisecond << attempt\n+}\n+\n+func Do(ctx context.Context, f func() error) error {\n+\tvar err error\n+\tfor attempt := 0; attempt < maxAttempts; attempt++ {\n+\t\tif err = f(); err == nil {\n+\t\t\treturn nil\n+\t\t}\n+\t\tif attempt == maxAttempts-1 {\n+\t\t\tbreak\n+\t\t}\n+\t\tselect {\n+\t\tcase <-ctx.Done():\n+\t\t\treturn ctx.Err()\n+\t\tcase <-time.After(NextBackoff(attempt)):\n+\t\t}\n+\t}\n+\treturn err\n+}\n"
+  },
+  "expectations": [
+    {
+      "call": "validate_completion",
+      "any_of_keywords": [
+        "NextBackoff"
+      ],
+      "criterion": "over_building",
+      "absent": true
+    }
+  ]
+}

@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `validate_task_spec` accepts `context_paths`: the server reads those files and shows the spec reviewer
   their whole contents, so a term, path or step the dispatch brief defines is no longer reported as
   missing from the spec. Same limits as `validate_plan`'s attachments.
+- Synthetic replay fixtures for the lean check's coherence: a shared helper, an AC-mandated structure, a
+  declared testability extraction, a finding asking for direct pinning, and a helper re-implemented from
+  sibling code. The replay harness can require a finding's absence.
+- `validate_completion` accepts `context_paths`, with or without a session: related files the change does not
+  touch, such as a sibling helper. The reviewer reads them to report a helper the diff re-implements as
+  `reuse:` — which needs a diff (`final_diff` or `final_diff_path`); `final_files` alone raises no
+  over-building finding — and is told never to count them as evidence for an acceptance criterion, since the
+  server cannot enforce what a model counts. Same limits as `validate_task_spec`'s.
 
 ### Changed
 
@@ -45,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `validate_completion` prefixes `next_action` with "Do not report DONE" while a critical or major finding
   about the code is open, so a `warn` verdict no longer reads as permission to stop, and
   `validate_task_spec` ends its `next_action` by pointing at the `implementation_guidance` it returns.
+- A plan-level `reuse:` asking a later task to reuse what an earlier task introduces gives, in its suggestion,
+  the `Context:` line to add to the introducing task, so that task's completion review reads the shared helper
+  as deliberate.
 
 ### Fixed
 
@@ -75,6 +86,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside a plan task shared one ID, `f_b720ec2d`, so a ruling on the plan-level finding could waive
   a `validate_completion` finding. Plan-level IDs change once with this release: a ruling carried
   over from an earlier round on a plan-level finding needs to be given again under the new ID.
+- `validate_plan`'s Create/Modify check strips a line anchor written with spaces after its commas
+  (`a.go:6-22, 29`) or ending in `, …`, and reads every path a Files bullet lists rather than the
+  first. It reported such a file as missing when it existed, and never looked at the other paths on
+  the line, so a Modify: of a file only a later task creates went unreported. Patterns
+  (`testdata/*.golden`), a bare file name after a nested path, which plans write as shorthand for
+  a sibling, and a later item on the line that is not a file name (a symbol, a bare word) are not
+  read.
+- A `validate_plan` `controller_rulings` entry waives the deterministic `task_order_contradiction`
+  finding, which then appears under `waived_findings` with its evidence, as the argument's
+  description says. The finding could not be waived, so a false positive held the verdict down every
+  round. A ruling covers every violation the finding lists, including one a later round adds.
 
 ## [0.24.0] - 2026-09-20
 

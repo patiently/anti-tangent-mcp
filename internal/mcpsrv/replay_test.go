@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 )
 
@@ -80,7 +81,7 @@ func TestRunReplayFixture_TalliesEachExpectationAcrossRuns(t *testing.T) {
 	require.Equal(t, 4, sr.calls)
 	assert.Contains(t, sr.requests[1].User, "Title: T", "validate_completion runs on the session validate_task_spec opened")
 	assert.Equal(t, 1, report.Expectations[0].Matched)
-	assert.Equal(t, []string{"run 1: quality stale_comments: f.go:3 still names handleRetired"}, report.Expectations[0].Matches)
+	assert.Equal(t, []string{"run 1: quality stale_comments: f.go:3 still names handleRetired | suggestion: s"}, report.Expectations[0].Matches)
 	assert.Equal(t, 1, report.Expectations[1].Matched)
 	assert.Equal(t, 0, report.Expectations[2].Matched)
 	completion := report.Calls[replayCallCompletion]
@@ -120,9 +121,9 @@ func TestRunReplayFixture_CriterionRestrictsTheMatch(t *testing.T) {
 
 	require.Equal(t, 1, sr.calls)
 	assert.Equal(t, 1, report.Expectations[0].Matched)
-	assert.Equal(t, []string{"run 1: missing_acceptance_criterion spec: CursorStore is not wired to the poller"}, report.Expectations[0].Matches, "without Criterion, the first keyword match wins")
+	assert.Equal(t, []string{"run 1: missing_acceptance_criterion spec: CursorStore is not wired to the poller | suggestion: s"}, report.Expectations[0].Matches, "without Criterion, the first keyword match wins")
 	assert.Equal(t, 1, report.Expectations[1].Matched)
-	assert.Equal(t, []string{"run 1: quality over_building: CursorStore is an unrequested interface"}, report.Expectations[1].Matches, "with Criterion set, only the over_building finding can meet the expectation")
+	assert.Equal(t, []string{"run 1: quality over_building: CursorStore is an unrequested interface | suggestion: s"}, report.Expectations[1].Matches, "with Criterion set, only the over_building finding can meet the expectation")
 }
 
 // TestRunReplayFixture_MatchesOnlyTheReviewersOwnFindings pins A1: a keyword
@@ -209,6 +210,37 @@ func TestRunReplayFixture_ADryRunMeasuresPromptsWithoutFindings(t *testing.T) {
 	assert.Greater(t, report.Calls[replayCallTaskSpec].PromptBytes, 1000)
 }
 
+// TestRunReplayFixture_RecordsEveryReviewerFindingPerRun: every reviewer
+// finding of every run is kept, indexed by run, even a run that raises
+// none; a server advisory (the unusable relative repo_root here) is never
+// among them — the length-2 result alone proves that, since the advisory
+// would make it 3.
+func TestRunReplayFixture_RecordsEveryReviewerFindingPerRun(t *testing.T) {
+	first := `{"severity":"major","category":"scope_drift","criterion":"AC 1","evidence":"wires the dispatcher","suggestion":"revert the dispatcher wiring"}`
+	second := `{"severity":"minor","category":"quality","criterion":"over_building","evidence":"digest.go:9: yagni: FormatDigest has one caller","suggestion":"inline it"}`
+	sr := &scriptedReviewer{responses: []providers.Response{reviewerFindingsResp(first, second), reviewerFindingsResp()}}
+	cfg := newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg
+	fx := replayFixture{
+		Name: "findings",
+		ValidateCompletion: &ValidateCompletionArgs{
+			Summary:   "done",
+			FinalDiff: replayTestDiff,
+			RepoRoot:  "relative/path", // resolveDirInput rejects a relative repo_root -> advisory
+		},
+	}
+
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 2)
+
+	require.Equal(t, 2, sr.calls)
+	completion := report.Calls[replayCallCompletion]
+	require.Len(t, completion.Findings, 2)
+	assert.Equal(t, []string{
+		"major scope_drift AC 1: wires the dispatcher | suggestion: revert the dispatcher wiring",
+		"minor quality over_building: digest.go:9: yagni: FormatDigest has one caller | suggestion: inline it",
+	}, completion.Findings[0])
+	assert.Empty(t, completion.Findings[1])
+}
+
 func TestLoadReplayFixtures_RejectsADuplicateName(t *testing.T) {
 	dir := t.TempDir()
 	writeReplayFixture(t, dir, "a.json", `{"name":"same","validate_task_spec":{"task_title":"T","goal":"G"}}`)
@@ -229,21 +261,139 @@ func TestLoadReplayFixtures_RejectsBlankKeywords(t *testing.T) {
 	require.ErrorContains(t, err, "expectations[0] has no any_of_keywords that are not blank")
 }
 
+// TestRunReplayFixture_AbsentIsMetOnlyWhenNoFindingMatches uses a raw finding
+// literal (rather than findingObj, whose suggestion is fixed to "s") for the
+// first response, so the match line's " | suggestion: …" tail has real text
+// to quote.
+func TestRunReplayFixture_AbsentIsMetOnlyWhenNoFindingMatches(t *testing.T) {
+	named := reviewerFindingsResp(`{"severity":"minor","category":"quality","criterion":"over_building","evidence":"digest.go:9: yagni: FormatDigest has one caller","suggestion":"inline it"}`)
+	other := reviewerFindingsResp(findingObj("minor", "quality", "over_building", "digest.go:3: stdlib: hand-rolled join", ""))
+	sr := &scriptedReviewer{responses: []providers.Response{named, other, reviewerFindingsResp()}}
+	cfg := newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg
+	fx := replayFixture{
+		Name:               "shared",
+		ValidateCompletion: &ValidateCompletionArgs{Summary: "done", FinalDiff: replayTestDiff},
+		Expectations: []replayExpectation{
+			{Call: replayCallCompletion, AnyOfKeywords: []string{"FormatDigest"}, Criterion: "over_building", Absent: true},
+		},
+	}
+
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 3)
+
+	require.Equal(t, 3, sr.calls)
+	assert.Equal(t, 2, report.Expectations[0].Matched, "runs 2 and 3 raised nothing naming FormatDigest")
+	assert.Equal(t, []string{"run 1: present: quality over_building: digest.go:9: yagni: FormatDigest has one caller | suggestion: inline it"}, report.Expectations[0].Matches)
+	assert.Contains(t, report.String(), `validate_completion absent ["FormatDigest"]: 2/3`)
+}
+
+func TestRunReplayFixture_AbsentIsNotMetByACallThatDidNotComplete(t *testing.T) {
+	sr := &scriptedReviewer{}
+	cfg := newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg
+	fx := replayFixture{
+		Name:               "broken",
+		ValidateTaskSpec:   &ValidateTaskSpecArgs{Goal: "G"},
+		ValidateCompletion: &ValidateCompletionArgs{Summary: "s", FinalDiff: replayTestDiff},
+		Expectations: []replayExpectation{
+			{Call: replayCallCompletion, AnyOfKeywords: []string{"anything"}, Absent: true},
+			{Call: replayCallTaskSpec, AnyOfKeywords: []string{"anything"}, Absent: true},
+		},
+	}
+
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 1)
+
+	assert.Equal(t, 0, report.Expectations[0].Matched, "a skipped call proves nothing absent")
+	assert.Equal(t, 0, report.Expectations[1].Matched, "an errored call proves nothing absent")
+}
+
+// TestRunReplayFixture_AbsentIsNotMetByAServerSideRejection pins the fix for
+// a call the server rejects before any reviewer runs — an oversized
+// attachment, an unknown session, or malformed evidence, as exercised here:
+// a completion-only fixture whose final_diff declares a hunk of 1 old/1 new
+// line but carries a second added line, which diffHunkOrderReason rejects as
+// under-declared. Such a rejection returns err == nil and Partial == false,
+// the same shape as a real completed review, so without the promptBytes > 0
+// guard in record() an absent expectation would be met even though no
+// reviewer ever checked anything.
+func TestRunReplayFixture_AbsentIsNotMetByAServerSideRejection(t *testing.T) {
+	sr := &scriptedReviewer{}
+	cfg := newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg
+	malformedDiff := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,1 @@\n-old\n+new\n+extra\n"
+	fx := replayFixture{
+		Name:               "malformed-diff",
+		ValidateCompletion: &ValidateCompletionArgs{Summary: "done", FinalDiff: malformedDiff},
+		Expectations: []replayExpectation{
+			{Call: replayCallCompletion, AnyOfKeywords: []string{"anything"}, Absent: true},
+		},
+	}
+
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 1)
+
+	assert.Equal(t, 0, sr.calls, "the malformed-evidence guard rejects before any reviewer call")
+	assert.Equal(t, 0, report.Expectations[0].Matched, "a server-side rejection ran no reviewer, so it proves nothing absent")
+}
+
+func TestLoadReplayFixtures_ResolvesRelativePathsAgainstTheFixtureDirectory(t *testing.T) {
+	dir := t.TempDir()
+	writeReplayFixture(t, dir, "x.json", `{"validate_task_spec":{"task_title":"T","goal":"G","context_paths":["brief.md","/abs/kept.md"]},
+		"validate_completion":{"summary":"s","final_diff_path":"sub/final.diff","context_paths":["rel.go"]}}`)
+
+	fixtures, err := loadReplayFixtures(dir)
+	require.NoError(t, err)
+
+	resolved, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join(resolved, "brief.md"), "/abs/kept.md"}, fixtures[0].ValidateTaskSpec.ContextPaths)
+	assert.Equal(t, filepath.Join(resolved, "sub", "final.diff"), fixtures[0].ValidateCompletion.FinalDiffPath)
+	assert.Equal(t, []string{filepath.Join(resolved, "rel.go")}, fixtures[0].ValidateCompletion.ContextPaths)
+}
+
+func TestReplayConfigCovering(t *testing.T) {
+	dir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+
+	open := replayConfigCovering(config.Config{}, dir)
+	assert.Empty(t, open.PlanRoots, "no roots already admits every path")
+
+	rooted := replayConfigCovering(config.Config{PlanRoots: []string{"/elsewhere"}}, dir)
+	assert.Equal(t, []string{"/elsewhere", resolved}, rooted.PlanRoots)
+}
+
 func TestLoadReplayFixtures_LeanFixtures(t *testing.T) {
 	fixtures, err := loadReplayFixtures("testdata/replay/lean")
 	require.NoError(t, err)
-	require.Len(t, fixtures, 2)
 
-	names := []string{fixtures[0].Name, fixtures[1].Name}
-	assert.ElementsMatch(t, []string{"lean", "over-built"}, names)
-
+	names := make([]string, 0, len(fixtures))
 	for _, fx := range fixtures {
-		require.NotNil(t, fx.ValidateTaskSpec, "fixture %q", fx.Name)
-		require.NotNil(t, fx.ValidateCompletion, "fixture %q", fx.Name)
+		names = append(names, fx.Name)
 		require.NotEmpty(t, fx.Expectations, "fixture %q", fx.Name)
 		for _, e := range fx.Expectations {
+			if fx.Name == "pin-directly" {
+				assert.Equal(t, replayCallTaskSpec, e.Call, "fixture %q", fx.Name)
+				continue
+			}
 			assert.Equal(t, replayCallCompletion, e.Call, "fixture %q", fx.Name)
 			assert.Equal(t, "over_building", e.Criterion, "fixture %q", fx.Name)
+		}
+	}
+	assert.Equal(t, []string{"ac-mandated", "lean", "over-built", "pin-directly", "reuse-sibling", "shared-helper", "testability-extraction"}, names)
+}
+
+// TestReplay_LeanFixturesDryRunCleanly replays every committed lean fixture
+// against an empty-pass reviewer, so a fixture whose diff the server rejects
+// or whose attached file it cannot read fails here rather than on a paid run.
+func TestReplay_LeanFixturesDryRunCleanly(t *testing.T) {
+	const dir = "testdata/replay/lean"
+	fixtures, err := loadReplayFixtures(dir)
+	require.NoError(t, err)
+	cfg := replayConfigCovering(newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg, dir)
+	re := newReplayEnv(cfg, providers.Registry{"anthropic": replayDryRunReviewer{name: "anthropic"}})
+
+	for _, fx := range fixtures {
+		report := runReplayFixture(context.Background(), re, fx, 1)
+		for call, st := range report.Calls {
+			assert.Empty(t, st.Errors, "fixture %q %s", fx.Name, call)
+			assert.Empty(t, st.Blocking, "fixture %q %s", fx.Name, call)
 		}
 	}
 }
