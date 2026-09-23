@@ -2396,25 +2396,6 @@ func TestRenderPost_PreFindingsToVerifyExplainsMinorAmbiguities(t *testing.T) {
 	assert.Contains(t, out.User, "- ID: f_0123abcd\n  Severity: minor")
 }
 
-func TestRenderPost_OneCallerTestSparesANamedLaterConsumer(t *testing.T) {
-	out, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", TestEvidence: "ok"})
-	require.NoError(t, err)
-	assert.Contains(t, out.User, "A symbol an exit contract names, or one whose later consumer the task spec's `Context:` or Non-goals name, has a caller outside this change")
-	assert.Contains(t, out.User, "or anything the Goal or `Context:` asks for")
-	assert.NotContains(t, out.User, "or anything explicitly requested. Anything the task spec's")
-	assert.Contains(t, out.User, "A structure an acceptance criterion itself mandated is still reported")
-	assert.NotContains(t, out.User, "Testability extractions")
-}
-
-func TestRenderPost_WithTestabilityExtractions_Golden(t *testing.T) {
-	spec := sampleSpec()
-	spec.TestabilityExtractions = []string{"nextBackoff(attempt int) time.Duration in retry.go: asserted directly by TestNextBackoff"}
-	out, err := RenderPost(PostInput{Spec: spec, Summary: "s", FinalDiff: "diff --git a/r.go b/r.go\n--- a/r.go\n+++ b/r.go\n@@ -1 +1 @@\n-a\n+b\n"})
-	require.NoError(t, err)
-	assert.Contains(t, out.User, "- nextBackoff(attempt int) time.Duration in retry.go: asserted directly by TestNextBackoff")
-	golden(t, "post_with_testability_extractions", out.System+"\n---USER---\n"+out.User)
-}
-
 func TestLeanGuidance(t *testing.T) {
 	got, err := LeanGuidance()
 	require.NoError(t, err)

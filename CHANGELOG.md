@@ -84,13 +84,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outside a plan task shared one ID, `f_b720ec2d`, so a ruling on the plan-level finding could waive
   a `validate_completion` finding. Plan-level IDs change once with this release: a ruling carried
   over from an earlier round on a plan-level finding needs to be given again under the new ID.
-- The completion review no longer reports a helper as a one-caller `yagni:` layer when an exit contract, the
-  task's `Context:` or its Non-goals name the later task that calls it, so a helper the plan asked to share is
-  not called unrequested on the task that builds it. "Never flag anything explicitly requested" now means what
-  the Goal or `Context:` asks for; a structure an acceptance criterion mandated is still reported, to the plan
-  author.
-- `testability_extractions` declared at task start reach the completion review, which no longer flags those
-  helpers as over-building.
 
 ## [0.24.0] - 2026-09-20
 
