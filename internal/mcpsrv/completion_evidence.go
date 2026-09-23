@@ -129,17 +129,22 @@ var hunkBodyMarker = map[byte]bool{' ': true, '-': true, '+': true, '\\': true}
 // "diff --cc" line anywhere, since only a section such a line opened is
 // judged. That boundary is deliberate: this is a guard against a malformed
 // submission, not a proof of authenticity. The protocol tells callers to
-// produce `git diff` output, and the field defect this check exists for —
-// two files' hunks concatenated under one header — happens inside a
+// produce `git diff` output, and the field defect that motivated this check
+// — two files' hunks concatenated under one header, with the second file's
+// ranges running backwards relative to the first — happens inside a
 // git-headered section, so a headerless diff is out of scope rather than
 // presumed safe.
 //
 // Within a git-headered section, git emits hunks in ascending order and
 // merges any that would touch, so a hunk that starts at or before the
-// previous hunk's end means two files' hunks were concatenated under one
-// header, or a section was assembled by hand. A new section starts at each
-// "diff --git"/"diff --cc" line, so the same file appearing twice — as git
-// log -p emits it — is judged per section.
+// previous hunk's end means the section was assembled by hand. This does
+// not identify file boundaries: it catches a concatenation of two files'
+// hunks only when the second file's ranges happen to run backwards
+// relative to the first, which is what the field defect above did, not
+// what concatenation itself guarantees — two files' hunks concatenated
+// under one header whose ranges keep increasing pass unnoticed. A new
+// section starts at each "diff --git"/"diff --cc" line, so the same file
+// appearing twice — as git log -p emits it — is judged per section.
 //
 // A hunk's own "@@ " header declares how many old/new lines its body has,
 // but that declaration is attacker-controlled input, not a fact — exhausting

@@ -20,9 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   review raised the settled findings again; `finding_responses` still need a session, and their advisory
   now says a ruling does not.
 - `validate_completion` rejects a diff git could not have produced, as `malformed_evidence` before the
-  reviewer call: within a section a `diff --git`/`diff --cc` header opened, hunks that run backwards,
-  files' hunks concatenated under one header, or a hunk whose declared line count doesn't match its
-  body. A diff carrying no git header is not judged.
+  reviewer call: within a section a `diff --git`/`diff --cc` header opened, a hunk that runs backwards
+  or whose declared line count doesn't match its body. A diff carrying no git header is not judged.
 - `validate_task_spec` accepts `context_paths`: the server reads those files and shows the spec reviewer
   their whole contents, so a term, path or step the dispatch brief defines is no longer reported as
   missing from the spec. Same limits as `validate_plan`'s attachments.
