@@ -2485,3 +2485,14 @@ func TestOverBuildingSectionsIncludeTheOneRuleset(t *testing.T) {
 		assert.Contains(t, mid.User, tag)
 	}
 }
+
+func TestPrompts_PlanReuseCarriesItsContextLine(t *testing.T) {
+	const want = "Task 2 Context: `FormatDigest` is shared; Task 3 reuses it."
+	plan, err := RenderPlan(PlanInput{PlanText: "# Plan\n\n### Task 1: t1\n\n**Goal:** g1\n"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, strings.Count(plan.User, want), "per-task rules and the cross-task rule")
+
+	findingsOnly, err := RenderPlanFindingsOnly(PlanInput{PlanText: "# Plan\n"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(findingsOnly.User, want), "cross-task rule")
+}

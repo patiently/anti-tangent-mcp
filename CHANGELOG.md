@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `validate_completion` prefixes `next_action` with "Do not report DONE" while a critical or major finding
   about the code is open, so a `warn` verdict no longer reads as permission to stop, and
   `validate_task_spec` ends its `next_action` by pointing at the `implementation_guidance` it returns.
+- A plan-level `reuse:` asking a later task to reuse what an earlier task introduces gives, in its suggestion,
+  the `Context:` line to add to the introducing task, so that task's completion review reads the shared helper
+  as deliberate.
 
 ### Fixed
 
