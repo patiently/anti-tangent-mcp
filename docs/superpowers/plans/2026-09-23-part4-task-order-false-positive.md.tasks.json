@@ -10,12 +10,12 @@
     {
       "id": 1,
       "subject": "Task 2: A controller ruling waives the task-order finding",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** a `validate_plan` `controller_rulings` entry naming the `task_order_contradiction` finding's id moves it into `waived_findings`, with its evidence, and the verdict is computed without it.\n\n**Files:**\n- Modify: `internal/mcpsrv/review_error.go`\n- Modify: `internal/mcpsrv/plan_normalize.go`\n- Modify: `internal/verdict/plan.go`\n- Modify: `internal/mcpsrv/handlers_plan_rulings_test.go`\n- Modify: `CHANGELOG.md`\n\n**Acceptance Criteria:**\n- [ ] In `applyPreLadder`, the `c.FileConsistency` append precedes `waivePlanFindings`, and `prependPlanClamp` still follows it; the comment above them says why each sits where it does.\n- [ ] `TestValidatePlan_RulingWaivesTheFileConsistencyFinding` passes: round 1 reports the finding with id `verdict.Fingerprint(verdict.CategoryOther, planScopeKey, \"task_order_contradiction\")`; round 2, on a plan whose violation names a different file, with a ruling on that id, has no such finding in `plan_findings`, one `waived_findings` entry with that id, the ruling text and the new evidence, `plan_verdict` `pass`, and a `waived: <id>` line in `summary_block`.\n- [ ] `TestValidatePlan_FileConsistencyFindingReachesTheEnvelope` and every existing ruling test still pass.\n- [ ] `waivePlanFindings`'s doc comment and the two `WaivedFindings` field comments in `internal/verdict/plan.go` no longer say \"reviewer findings\".\n- [ ] One bullet appended under `### Fixed` in `## [0.25.0]`.\n\n**Verify:** `go test -race -count=1 ./internal/mcpsrv/ -run 'Ruling|FileConsistency'` → `ok`\n\n```json:metadata\n{\"files\": [\"internal/mcpsrv/review_error.go\", \"internal/mcpsrv/plan_normalize.go\", \"internal/verdict/plan.go\", \"internal/mcpsrv/handlers_plan_rulings_test.go\", \"CHANGELOG.md\"], \"verifyCommand\": \"go test -race -count=1 ./internal/mcpsrv/ -run 'Ruling|FileConsistency'\", \"acceptanceCriteria\": [\"FileConsistency appended before waivePlanFindings; clamp after; comment explains both\", \"RulingWaivesTheFileConsistencyFinding passes: stable id, waived entry with ruling and new evidence, verdict pass, waived: line\", \"existing ruling and file-consistency tests pass\", \"comments no longer say reviewer findings\", \"one CHANGELOG Fixed bullet\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         0
       ]
     }
   ],
-  "lastUpdated": "2026-09-23T09:34:32.066811+00:00"
+  "lastUpdated": "2026-09-23T09:42:03.003427+00:00"
 }
