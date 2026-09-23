@@ -224,6 +224,11 @@ type PostInput struct {
 	PriorFindings                  []PriorFinding
 	ControllerRulings              []session.Ruling
 	StaleComments                  *StaleCommentHint
+	// ContextFiles are related files the caller attached that the change does
+	// not touch. ContextFilesNonce pairs their BEGIN/END delimiters; left
+	// empty, RenderPost derives it from the files.
+	ContextFiles      []ContextFile
+	ContextFilesNonce string
 }
 
 type PlanInput struct {
@@ -326,6 +331,13 @@ func RenderMid(in MidInput) (Output, error) {
 }
 
 func RenderPost(in PostInput) (Output, error) {
+	if in.ContextFilesNonce == "" {
+		nonce, err := DeriveContextFilesNonce(in.ContextFiles)
+		if err != nil {
+			return Output{}, err
+		}
+		in.ContextFilesNonce = nonce
+	}
 	body, err := render("post.tmpl", in)
 	if err != nil {
 		return Output{}, err

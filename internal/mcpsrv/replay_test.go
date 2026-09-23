@@ -277,7 +277,7 @@ func TestRunReplayFixture_AbsentIsNotMetByACallThatDidNotComplete(t *testing.T) 
 func TestLoadReplayFixtures_ResolvesRelativePathsAgainstTheFixtureDirectory(t *testing.T) {
 	dir := t.TempDir()
 	writeReplayFixture(t, dir, "x.json", `{"validate_task_spec":{"task_title":"T","goal":"G","context_paths":["brief.md","/abs/kept.md"]},
-		"validate_completion":{"summary":"s","final_diff_path":"sub/final.diff"}}`)
+		"validate_completion":{"summary":"s","final_diff_path":"sub/final.diff","context_paths":["rel.go"]}}`)
 
 	fixtures, err := loadReplayFixtures(dir)
 	require.NoError(t, err)
@@ -286,6 +286,7 @@ func TestLoadReplayFixtures_ResolvesRelativePathsAgainstTheFixtureDirectory(t *t
 	require.NoError(t, err)
 	assert.Equal(t, []string{filepath.Join(resolved, "brief.md"), "/abs/kept.md"}, fixtures[0].ValidateTaskSpec.ContextPaths)
 	assert.Equal(t, filepath.Join(resolved, "sub", "final.diff"), fixtures[0].ValidateCompletion.FinalDiffPath)
+	assert.Equal(t, []string{filepath.Join(resolved, "rel.go")}, fixtures[0].ValidateCompletion.ContextPaths)
 }
 
 func TestReplayConfigCovering(t *testing.T) {

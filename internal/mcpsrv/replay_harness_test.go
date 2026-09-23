@@ -149,10 +149,11 @@ func (fx *replayFixture) resolveRelativePaths(base string) {
 		ts.ContextPaths = joinRelative(base, ts.ContextPaths)
 	}
 	vc := fx.ValidateCompletion
-	if vc == nil || vc.FinalDiffPath == "" {
+	if vc == nil {
 		return
 	}
-	if !filepath.IsAbs(vc.FinalDiffPath) {
+	vc.ContextPaths = joinRelative(base, vc.ContextPaths)
+	if vc.FinalDiffPath != "" && !filepath.IsAbs(vc.FinalDiffPath) {
 		vc.FinalDiffPath = filepath.Join(base, vc.FinalDiffPath)
 	}
 }

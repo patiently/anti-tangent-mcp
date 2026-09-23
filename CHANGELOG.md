@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Synthetic replay fixtures for the lean check's coherence: a shared helper, an AC-mandated structure, a
   declared testability extraction, a finding asking for direct pinning, and a helper re-implemented from
   sibling code. The replay harness can require a finding's absence.
+- `validate_completion` accepts `context_paths`, with or without a session: related files the change does not
+  touch, such as a sibling helper. The reviewer reads them to report a helper the diff re-implements as
+  `reuse:`, and never counts them as evidence for an acceptance criterion. Same limits as `validate_task_spec`'s.
 
 ### Changed
 
