@@ -501,7 +501,7 @@ func tallyExpectations(report *replayReport, run int, results map[string]replayC
 
 // describeMatch quotes a finding for a tally line: category, criterion and
 // evidence, and the suggestion when there is one, since a finding addressed to
-// the plan author, or one offering a test-side route, says so only there.
+// the plan author says so only there.
 func describeMatch(f verdict.Finding) string {
 	s := fmt.Sprintf("%s %s: %s", f.Category, f.Criterion, truncate(f.Evidence, 200))
 	if f.Suggestion != "" {
@@ -523,8 +523,13 @@ type replayCallOutcome struct {
 }
 
 // record tallies out onto r for call, appends out.run's rendered reviewer
-// findings, and reports whether the call completed with a whole response:
-// no handler error and not a partial (truncated) envelope.
+// findings, and reports whether the call completed with a whole response: no
+// handler error, not a partial (truncated) envelope, AND a reviewer actually
+// ran. A server-side rejection (an oversized attachment, malformed evidence,
+// an unknown session) also returns err == nil and Partial == false, but no
+// reviewer answered, so promptBytes stays 0 and such a call must not count as
+// complete — an absent expectation would otherwise be met by a run where
+// nothing was checked.
 func (r *replayReport) record(call string, out replayCallOutcome) bool {
 	st := r.Calls[call]
 	if st == nil {
@@ -538,7 +543,7 @@ func (r *replayReport) record(call string, out replayCallOutcome) bool {
 	} else {
 		st.Verdicts[out.env.Verdict]++
 		tallyServerFindings(st, out.env.Findings)
-		complete = !out.env.Partial
+		complete = !out.env.Partial && out.promptBytes > 0
 	}
 	recordCallFindings(st, out, complete)
 	return complete

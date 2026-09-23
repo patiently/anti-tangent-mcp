@@ -305,6 +305,33 @@ func TestRunReplayFixture_AbsentIsNotMetByACallThatDidNotComplete(t *testing.T) 
 	assert.Equal(t, 0, report.Expectations[1].Matched, "an errored call proves nothing absent")
 }
 
+// TestRunReplayFixture_AbsentIsNotMetByAServerSideRejection pins the fix for
+// a call the server rejects before any reviewer runs — an oversized
+// attachment, an unknown session, or malformed evidence, as exercised here:
+// a completion-only fixture whose final_diff declares a hunk of 1 old/1 new
+// line but carries a second added line, which diffHunkOrderReason rejects as
+// under-declared. Such a rejection returns err == nil and Partial == false,
+// the same shape as a real completed review, so without the promptBytes > 0
+// guard in record() an absent expectation would be met even though no
+// reviewer ever checked anything.
+func TestRunReplayFixture_AbsentIsNotMetByAServerSideRejection(t *testing.T) {
+	sr := &scriptedReviewer{}
+	cfg := newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg
+	malformedDiff := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,1 @@\n-old\n+new\n+extra\n"
+	fx := replayFixture{
+		Name:               "malformed-diff",
+		ValidateCompletion: &ValidateCompletionArgs{Summary: "done", FinalDiff: malformedDiff},
+		Expectations: []replayExpectation{
+			{Call: replayCallCompletion, AnyOfKeywords: []string{"anything"}, Absent: true},
+		},
+	}
+
+	report := runReplayFixture(context.Background(), newReplayEnv(cfg, providers.Registry{"anthropic": sr}), fx, 1)
+
+	assert.Equal(t, 0, sr.calls, "the malformed-evidence guard rejects before any reviewer call")
+	assert.Equal(t, 0, report.Expectations[0].Matched, "a server-side rejection ran no reviewer, so it proves nothing absent")
+}
+
 func TestLoadReplayFixtures_ResolvesRelativePathsAgainstTheFixtureDirectory(t *testing.T) {
 	dir := t.TempDir()
 	writeReplayFixture(t, dir, "x.json", `{"validate_task_spec":{"task_title":"T","goal":"G","context_paths":["brief.md","/abs/kept.md"]},
