@@ -108,6 +108,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a configured `ANTI_TANGENT_PER_TASK_MAX_TOKENS` default already there. That advice reproduced
   the same attempt; the message now says to raise `ANTI_TANGENT_MAX_TOKENS_CEILING` or shrink the
   input instead.
+- `examples/lightweight-dispatch.md`'s `final_diff` recipe compared committed revisions only
+  (`git diff <base>..HEAD`), which can leave out or empty out a lightweight task's uncommitted
+  changes — the common case for a trivial task. It now stages the task's own paths first and diffs
+  the working tree against `<base>`, scoped to those paths.
 
 ## [0.24.0] - 2026-09-20
 
