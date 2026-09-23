@@ -2837,14 +2837,21 @@ func TestCheckEvidenceShape_GoPackageRecursionAccepted(t *testing.T) {
 func TestCheckEvidenceShape_EllipsisPlaceholderLine(t *testing.T) {
 	goHunk := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,3 +1,3 @@\n"
 	pyHunk := "diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n@@ -1,1 +1,2 @@\n def f():\n"
+	// These two cases' bodies are shorter than goHunk's declared @@ -1,3 +1,3 @@
+	// count, so each carries its own header declaring exactly what its two-line
+	// body spends (diffHunkOrderReason now rejects a hunk the body never
+	// finishes, so a mismatched declaration here would fail for the wrong
+	// reason: hunk completeness, not the ellipsis-exemption this test covers).
+	goHunkUnchanged := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,2 @@\n"
+	goHunkRemoved := "diff --git a/x.go b/x.go\n--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,1 @@\n"
 	cases := []struct {
 		name   string
 		diff   string
 		files  []FileArg
 		reject bool
 	}{
-		{name: "unchanged line in a diff", diff: goHunk + " ...\n+ok := true\n"},
-		{name: "removed line in a diff", diff: goHunk + "-...\n+ok := true\n"},
+		{name: "unchanged line in a diff", diff: goHunkUnchanged + " ...\n+ok := true\n"},
+		{name: "removed line in a diff", diff: goHunkRemoved + "-...\n+ok := true\n"},
 		{name: "added line in a diff", diff: goHunk + "+...\n", reject: true},
 		{name: "added indented line in a diff", diff: goHunk + "+    ...\n", reject: true},
 		{name: "added stub line in a python diff", diff: pyHunk + "+    ...\n"},
@@ -2996,6 +3003,35 @@ func TestDiffHunkOrderReason_RejectsAnOverDeclaredHunk(t *testing.T) {
 	reason := diffHunkOrderReason(diff)
 	require.NotEmpty(t, reason)
 	assert.Contains(t, reason, "@@ -1,5 +1,5 @@")
+}
+
+// TestDiffHunkOrderReason_RejectsADiffThatEndsMidHunk pins the fix for the
+// declared count never being checked against end of input: the header
+// declares 5 old/5 new lines, the body supplies one, and the diff simply
+// stops. Before the fix, exhausting the loop with lines still owed against
+// the declared count returned "" unconditionally, so truncated evidence —
+// the main failure mode the malformed-evidence guard exists to catch — was
+// accepted as if it were a complete, if oddly-counted, git diff.
+func TestDiffHunkOrderReason_RejectsADiffThatEndsMidHunk(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,5 +1,5 @@\n a\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "@@ -1,5 +1,5 @@")
+	assert.Contains(t, reason, "truncated")
+}
+
+// TestDiffHunkOrderReason_RejectsAHugeDeclaredCountThatOutlivesTheDiff is the
+// attacker-controlled-declaration case the doc comment on
+// diffHunkOrderReason warns about: a header's declared count is not a fact,
+// so a huge one (99999/99999) makes every remaining line spendable payload
+// — none of it ever looks like an over- or under-declared body mid-loop —
+// and only checking the leftover count at end of input catches that the
+// header never came close to being satisfied.
+func TestDiffHunkOrderReason_RejectsAHugeDeclaredCountThatOutlivesTheDiff(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,99999 +1,99999 @@\n a\n-old\n+new\n"
+	reason := diffHunkOrderReason(diff)
+	require.NotEmpty(t, reason)
+	assert.Contains(t, reason, "@@ -1,99999 +1,99999 @@")
 }
 
 // TestDiffHunkOrderReason_AcceptsAnEmptyContextLine is the false-positive

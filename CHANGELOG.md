@@ -97,6 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finding, which then appears under `waived_findings` with its evidence, as the argument's
   description says. The finding could not be waived, so a false positive held the verdict down every
   round. A ruling covers every violation the finding lists, including one a later round adds.
+- `validate_completion`'s malformed-diff guard now also rejects a `final_diff` that ends before an
+  open hunk's declared line count is reached — a truncated diff, or a header whose declared count is
+  large enough to swallow the rest of the diff as payload without ever looking over- or
+  under-declared mid-scan. The check previously judged only the lines it saw; reaching end of input
+  with a hunk still owed lines returned no rejection at all.
 
 ## [0.24.0] - 2026-09-20
 
