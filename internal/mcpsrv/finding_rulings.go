@@ -95,7 +95,9 @@ func sameAsID(f verdict.Finding, shown map[string]bool) string {
 // waiveRuled splits fs into the findings no ruling covers and waived entries
 // for the rest. A finding is covered when its fingerprint carries a ruling, or
 // when its same_as names a shown finding whose fingerprint does. Pass only
-// reviewer findings: a server finding reports something a resubmission fixes,
+// findings a ruling can settle: the reviewer's, and a deterministic finding a
+// controller can prove wrong, such as validate_plan's task-order check. An
+// advisory about this call's own input reports something a resubmission fixes,
 // which no ruling settles.
 func waiveRuled(fs []verdict.Finding, taskKey string, rulings map[string]session.Ruling, shown map[string]bool) ([]verdict.Finding, []verdict.WaivedFinding) {
 	if len(rulings) == 0 {
