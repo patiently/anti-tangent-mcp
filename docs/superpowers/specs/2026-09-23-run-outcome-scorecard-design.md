@@ -27,9 +27,11 @@ Two parts, one release:
 - **Part 1 — server.** A content-free per-task run snapshot (`runs.jsonl`), a new advisory tool
   `record_review_outcome` (`outcomes.jsonl`), a deterministic `scorecard.json`, and a new
   protocol part telling the controller when to call it.
-- **Part 2 — gnome-topbar daemon.** A `/ui/runs` page (runs, per-task drill-down, cohort
-  scorecard) and opt-in publishing of run records to Basic Memory, gated by
-  `ANTI_TANGENT_SHARE_STATS` (default `0`), so several users on one BM can pool their runs.
+- **Part 2 — gnome-topbar daemon.** A `/ui/runs` page and opt-in publishing of run records to
+  Basic Memory. The page leads with an overview grouped by anti-tangent tool × validator model,
+  showing performance, followed by the runs and a per-task drill-down with the models used.
+  Publishing is gated by `ANTI_TANGENT_SHARE_STATS` (default `0`). Every developer's daemon can
+  read the pooled team view, with a per-user breakdown.
 
 ### 1.1 Goals
 
@@ -93,19 +95,49 @@ Go module and must compute the *same* scorecard over shared records. The daemon'
 
 ## 3. Part 1 — server
 
-### 3.1 Stamp the models and version on the task row
+### 3.1 Record the models anti-tangent used, per run and per call
 
-`planrun.TaskRow` gains:
+Two things are recorded. Together they answer "which models was anti-tangent itself using in
+this session?"
+
+**Configured models, once per run.** When `validate_plan` mints a run, the run header records
+the server's configured model per role, straight from `Config`:
 
 ```go
-ReviewModel   string `json:"review_model,omitempty"`   // provider:model of the latest validate_completion
-PreModel      string `json:"pre_model,omitempty"`      // provider:model of validate_task_spec
-ServerVersion string `json:"server_version,omitempty"` // mcpsrv.Version at the time of the row write
+ConfiguredModels map[string]string // "plan","pre","mid","post","worker" -> provider:model ("" when unset)
+ServerVersion    string            // mcpsrv.Version
 ```
 
-`Run` gains `PlanModel string` (the model `validate_plan` used). These come from the envelope's
-`ModelUsed`, which each handler already has. Today the model is only on `events.jsonl` and can be
-joined to a row only through the session hash.
+**Actual calls, per task.** Callers can override the model on each call, so the configured
+model is not always the one that answered. Every lifecycle call attached to a task appends one
+entry to the row's call log:
+
+```go
+// planrun.TaskRow gains:
+Calls []ToolCall `json:"calls,omitempty"`
+
+type ToolCall struct {
+    Tool     string `json:"tool"`     // validate_task_spec | check_progress | validate_completion
+    Model    string `json:"model"`    // envelope ModelUsed
+    Verdict  string `json:"verdict,omitempty"`
+    Findings int    `json:"findings"`
+    MS       int64  `json:"ms"`
+    Partial  bool   `json:"partial,omitempty"`
+    Cached   bool   `json:"cached,omitempty"`
+}
+```
+
+The `validate_plan` call itself is recorded the same way on the run header (`PlanCall
+ToolCall`). The row's *scoring* model per tool is the model of that tool's latest call.
+`review_model` in this spec means the latest `validate_completion` model. The call log is bounded
+at 32 entries per row: a long run of checkpoints keeps the latest 32, and the dropped count is
+recorded in `calls_dropped`.
+
+The worker tools (`bulk_read`, `code_write`) carry no session, so they cannot be attached to a
+task. The worker model appears only through `ConfiguredModels["worker"]`, and its usage stays
+in the local `rollup.json` as today.
+
+Today a model is only on `events.jsonl`, and the only way to tie it to a row is the session hash.
 
 ### 3.2 `runs.jsonl` — content-free run snapshot
 
@@ -116,15 +148,18 @@ because it carries no content: no task titles, no plan headings, no finding text
 One line per row write; a reader keeps the latest line per `(run_hash, task_index)`:
 
 ```json
-{"ts":"…","run_hash":"r_9c1e…","plan_verdict":"pass","plan_quality":"rigorous",
- "plan_model":"openai:gpt-5.6-terra","task_count":11,"server_version":"0.26.0",
+{"ts":"…","run_hash":"r_9c1e…","server_version":"0.26.0",
  "task":{"index":7,"pre_verdict":"warn","post_verdict":"pass","checkpoints":1,"attempts":1,
          "severity":{"major":1},"waived":0,"escalated":false,"lite":false,"unmatched":false,
-         "pre_model":"…","review_model":"…","codescene_state":"ran"}}
+         "codescene_state":"ran",
+         "calls":[{"tool":"validate_task_spec","model":"anthropic:claude-sonnet-4-6","verdict":"warn","findings":2,"ms":9100},
+                  {"tool":"check_progress","model":"anthropic:claude-haiku-4-5-20251001","verdict":"pass","findings":0,"ms":3100},
+                  {"tool":"validate_completion","model":"openai:gpt-5.6-terra","verdict":"pass","findings":0,"ms":13928}]}}
 ```
 
 A header line (`"header":true`, no `task`) is written when `validate_plan` mints the run, so a
-run whose tasks never report still appears.
+run whose tasks never report still appears. It carries `plan_verdict`, `plan_quality`,
+`task_count`, `configured_models` and `plan_call`.
 
 `run_hash` is the salted digest of `plan_run_id` using the existing salt in `state.json`, so the
 file is safe to share and still joins with `outcomes.jsonl` on the same machine. The raw
@@ -213,8 +248,8 @@ matters when a new reviewer model lands.
 | `waive_rate` | waived AT findings ÷ AT findings on final completions (from `TaskRow.Waived` and `Severity`) |
 | `caught_and_fixed` | scored tasks whose latest snapshot has `post_verdict: pass` while an earlier snapshot line for the same task had `warn`/`fail`; count only |
 | `unattributed_findings` | outcome findings with `task_index: 0`, by severity |
-| `calls_per_task` | mean of `attempts + checkpoints + 1` over scored tasks (from the snapshot) |
-| `review_ms_p50` / `p95` | from `events.jsonl` events whose `model` equals the cohort's `review_model`, restricted to `validate_completion`, over the cohort's time span. Events cannot be joined per task, so this is per model, not per task. |
+| `calls_per_task` | mean length of the row's call log (plus `calls_dropped`) over scored tasks |
+| `review_ms_p50` / `p95` | over the `validate_completion` entries of the cohort's call logs |
 | `runs`, `tasks` | sample sizes; always shown next to every rate |
 
 Why `unconfirmed_flag_rate` uses the *final* verdict: a task that warned and was then fixed ends
@@ -242,6 +277,34 @@ bill.
              "regression":"insufficient_data"}],
  "by_review_model":[…same shape, implementer_model and server_version collapsed…]}
 ```
+
+**The overview view: `by_tool_model`.** This is the grouping the UI leads with. There is one row
+per `(tool, model)` pair seen in any call log or plan call, where `tool` is `validate_plan`,
+`validate_task_spec`, `check_progress` or `validate_completion`. Each row carries two kinds of
+column:
+
+- *Operational columns, from the calls themselves:* `calls`, `runs`, `tasks`, verdict mix,
+  `findings_per_call`, `ms_p50`/`ms_p95`, `partial_rate`, `cache_hit_rate`. These need no outcome
+  and are available for every call.
+- *Outcome-linked columns, per source, over scored tasks:* `escape_rate` and
+  `unconfirmed_flag_rate`, with interval and n, computed over the scored tasks this
+  `(tool, model)` reviewed:
+  - `validate_task_spec` and `validate_completion`: tasks whose latest call of that tool used
+    that model.
+  - `check_progress`: tasks with at least one checkpoint by that model.
+  - `validate_plan`: every scored task in the runs that model gated.
+
+  `unconfirmed_flag_rate` uses that tool's own latest verdict on the task, so a noisy pre-review
+  model shows up as noisy even when completion later passed.
+
+Slicing escapes by the model of *each* tool is what makes a model change on any single tool
+visible. It is a slice, not a causal attribution. A task has one outcome and up to four
+reviewing models, and the UI says so in the column header's tooltip.
+
+**Publisher dimension.** Every record the scorecard reads carries `publisher`. Local records use
+the daemon's own BM username; the server leaves it empty and the daemon fills it in. `Compute`
+takes an optional `publisher` filter, and every view has a `by_publisher` variant that adds
+`publisher` to the group key. In a local-only run the variant has one publisher and adds nothing.
 
 The Compactor's LLM summary prompt receives the `by_review_model` view, so `summary.md` can
 narrate the trend. The prompt's existing instruction against claiming correctness is relaxed for
@@ -289,16 +352,30 @@ error, the same as `atstats`.
 
 ### 4.2 `/ui/runs` page
 
-Behind the existing `uiAuth`. Three views:
+Behind the existing `uiAuth`. A scope selector sits at the top of every view: **Mine** (local
+files), **Team** (every publisher's shared notes, including your own if you publish), or one
+specific publisher. Team is available whenever the daemon has BM access (§4.3), whether or not
+you publish.
 
-1. **Scorecard**: `by_review_model` table (escape rate with interval and n, unconfirmed-flag
-   rate, waive rate, regression badge) per source; a toggle for *mine* / *shared* (shared only
-   when sharing is on).
-2. **Runs list**: newest first; plan verdict, task count, reviewer/implementer models, whether
-   each outcome source has reported, escape count.
-3. **Run detail**: one row per task, with AT pre/post verdict, severity counts, waived, attempts
-   and models, next to outcome findings per source; escapes highlighted. Task titles are shown only
-   when the local ledger supplies them.
+1. **Overview (landing view)**: the `by_tool_model` table, grouped by anti-tangent tool, with one
+   row per validator model under each tool. Columns:
+   - calls, runs, verdict mix, findings/call, p50/p95 latency, partial rate;
+   - escape rate and unconfirmed-flag rate, each with interval and n, per outcome source;
+   - the regression badge.
+
+   Under Team, a *by user* toggle expands each row into one line per publisher. Below the table:
+   the `by_review_model` regression table, and a strip listing the configured model sets seen in
+   scope (plan/pre/mid/post/worker) with a run count for each.
+2. **Runs list**: newest first; publisher (Team scope), plan verdict, task count, the run's
+   configured models (plan/pre/mid/post/worker) as compact chips, implementer models, which
+   outcome sources have reported, escape count.
+3. **Run detail**: a header with the configured models and the `validate_plan` call; then one
+   row per task:
+   - the task's call log (tool, model, verdict, findings, ms);
+   - pre/post verdict, severity counts, waived, attempts, implementer model;
+   - outcome findings per source, with escapes highlighted.
+
+   Task titles appear only for your own runs, and only when the local ledger supplies them.
 
 The existing `/ui/stats` page links to it. No tray menu change beyond that link.
 
@@ -318,6 +395,11 @@ as a BM note:
 - **never** task titles, plan headings, `plan-runs.jsonl` content, or the raw `plan_run_id`;
 - idempotent: overwritten in place when the run's content hash changes, skipped otherwise; the
   daemon keeps a small `published.json` of `run_hash → content hash` in its state dir.
+
+**Reading is separate from publishing.** `ANTI_TANGENT_SHARE_STATS` controls only whether
+*this* daemon publishes. Every daemon with BM access reads the team's notes for the Team scope,
+because reading other people's content-free records leaks nothing of your own. That is what lets
+every developer see the whole-team view, including developers who don't publish.
 
 The shared scorecard: the daemon lists `at_run` notes in `share_project`, parses the JSON blocks
 (skipping any that fail to parse or carry an unknown `schema`, counted and shown as "n skipped"),
@@ -341,7 +423,9 @@ a tight loop. The daemon's existing stale-session self-heal applies.
 ## 6. Testing
 
 - `scorecard/`: table-driven tests for every metric, including the fix-then-pass case (catch, not
-  noise), `task_index: 0`, superseded outcomes, unknown runs, the Wilson bounds against known
+  noise), `by_tool_model` slicing (a task counted under each tool's latest model, `check_progress`
+  under every checkpoint model), the publisher filter and `by_publisher` variants, the
+  32-entry call-log cap, `task_index: 0`, superseded outcomes, unknown runs, the Wilson bounds against known
   values, and the regression flag at `min_runs − 1`, `min_runs`, overlapping and disjoint intervals.
 - `internal/stats`: snapshot lines carry no title/text (assert on the marshalled bytes), hash
   stability across restarts via `state.json`, retention pruning of the two new files.
