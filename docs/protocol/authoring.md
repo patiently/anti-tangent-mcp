@@ -105,10 +105,10 @@ Rules the parser actually applies:
   `-` or `*` followed by one space; without it, collection stops at that line.
 - The verb is `Create`, `Modify`, or `Delete`, case-insensitive. Two verbs may be joined with
   `/` (`Create/Modify:`) for a file one task creates and another edits; both are recorded.
-- A bullet may list several paths, not just one. Backtick-quoted spans are separated only by a
-  comma, semicolon, `&`, `+`, or `and`, and the list reads up to the first span followed by
-  anything else — so a code span used in prose (`` `Foo`, `## Configure` ``) is not read as
-  another path. Unquoted, the list is comma-separated single words after the first word.
+- A bullet may list several paths, not just one. Backtick-quoted spans are separated only by
+  whitespace, a comma, semicolon, `&`, `+`, or `and`, and the list reads up to the first span
+  followed by anything else — so a code span used in prose (`` `Foo`, `## Configure` ``) is not
+  read as another path. Unquoted, the list is comma-separated single words after the first word.
 - A trailing parenthetical (`(the roots parsing)`) is dropped, and so is a trailing line anchor
   — `:57`, `:57-70`, `:57,70`, a comma-separated list of either (`:60,166,174,419`,
   `:57-70,90-95`), and repeated forms like `:57:12` — so anchoring a `Modify:` to the lines you

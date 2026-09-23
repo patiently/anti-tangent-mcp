@@ -3,7 +3,6 @@ package planparser
 import (
 	"path"
 	"regexp"
-	"slices"
 	"strings"
 )
 
@@ -159,14 +158,23 @@ func backtickPaths(rest string) []string {
 // barePaths reads an unquoted list. The first piece contributes its first
 // word, and ends the list if prose follows that word; a later piece counts
 // only as a single word, so "a.go — edit it, then b.go" is not read as a
-// path named "then".
+// path named "then". An unquoted brace pattern such as "{pre,post}.tmpl" gets
+// cut apart by the same commas that separate list items, so a piece that
+// opens a "{" without closing it starts a brace group that runs through the
+// piece that closes it; the whole group is dropped as one pattern rather than
+// read as two path-shaped fragments.
 func barePaths(tail string) []string {
 	var l refPathList
-	for i, piece := range strings.Split(tail, ",") {
-		fields := strings.Fields(piece)
+	pieces := strings.Split(tail, ",")
+	for i := 0; i < len(pieces); i++ {
+		fields := strings.Fields(pieces[i])
 		if i == 0 {
 			if len(fields) == 0 {
 				return nil
+			}
+			if next, ok := l.tryBraceGroup(pieces, i, fields); ok {
+				i = next
+				continue
 			}
 			l.add(fields[0])
 			if len(fields) > 1 {
@@ -174,15 +182,49 @@ func barePaths(tail string) []string {
 			}
 			continue
 		}
-		if len(fields) != 1 {
+		next, stop := l.addLaterBarePiece(pieces, i, fields)
+		if stop {
 			return l.paths
 		}
-		if anchorContinuationRe.MatchString(fields[0]) {
-			continue
-		}
-		l.add(fields[0])
+		i = next
 	}
 	return l.paths
+}
+
+// addLaterBarePiece handles one comma piece after the bullet's first: it
+// must be a single word — an anchor continuation, the start of a brace
+// group, or a path — or the rest of the bullet is prose and the list ends.
+// It reports the index of the last piece it consumed (beyond i itself for a
+// brace group) and whether the caller must stop scanning.
+func (l *refPathList) addLaterBarePiece(pieces []string, i int, fields []string) (int, bool) {
+	if len(fields) != 1 {
+		return i, true
+	}
+	if anchorContinuationRe.MatchString(fields[0]) {
+		return i, false
+	}
+	if next, ok := l.tryBraceGroup(pieces, i, fields); ok {
+		return next, false
+	}
+	l.add(fields[0])
+	return i, false
+}
+
+// tryBraceGroup reports whether fields is exactly the single word that opens
+// an unquoted brace group at piece i and, if so, drops the whole group and
+// returns the index of the last piece it consumed.
+func (l *refPathList) tryBraceGroup(pieces []string, i int, fields []string) (int, bool) {
+	if len(fields) != 1 || !hasUnclosedBrace(fields[0]) {
+		return i, false
+	}
+	return l.dropBraceGroup(pieces, i), true
+}
+
+// hasUnclosedBrace reports whether s opens a "{" that it does not also
+// close — the shape strings.Split(tail, ",") leaves a piece in once it has
+// cut an unquoted brace pattern apart at the pattern's own commas.
+func hasUnclosedBrace(s string) bool {
+	return strings.Contains(s, "{") && !strings.Contains(s, "}")
 }
 
 // refPathList collects one bullet's paths, cleaned by stripLineAnchor and
@@ -209,6 +251,11 @@ type refPathList struct {
 	paths   []string
 	hasDir  bool
 	started bool
+	// seen mirrors paths as a set so skip's duplicate check stays O(1) per
+	// candidate. A single bullet's comma-separated list can hold many paths
+	// within the plan's 1 MB cap, and scanning paths with slices.Contains for
+	// every candidate would make that bullet's cost quadratic.
+	seen map[string]bool
 }
 
 func (l *refPathList) add(raw string) {
@@ -221,6 +268,10 @@ func (l *refPathList) add(raw string) {
 	if l.skip(p, sibling, first) {
 		return
 	}
+	if l.seen == nil {
+		l.seen = make(map[string]bool)
+	}
+	l.seen[p] = true
 	l.paths = append(l.paths, p)
 }
 
@@ -237,7 +288,27 @@ func (l *refPathList) skip(p string, sibling, first bool) bool {
 	if !first && !strings.ContainsAny(p, "/.") {
 		return true
 	}
-	return strings.ContainsAny(p, "*?{") || slices.Contains(l.paths, p)
+	return strings.ContainsAny(p, "*?{") || l.seen[p]
+}
+
+// dropBraceGroup consumes pieces[start:] through the piece that closes the
+// brace pattern opened at pieces[start] — or through the end of pieces, if it
+// is never closed — and returns the index of the last piece consumed, so the
+// caller's loop resumes just after it.
+//
+// The group is marked as the list's current candidate (so a real path after
+// it is never mistaken for the bullet's first) without running it through
+// add()'s hasDir bookkeeping: a brace pattern names a set of files sharing a
+// directory, not one file at a specific path, so a later bare word on the
+// same bullet is not a sibling of it the way it would be of a real
+// directory-rooted path.
+func (l *refPathList) dropBraceGroup(pieces []string, start int) int {
+	end := start
+	for end < len(pieces)-1 && !strings.Contains(pieces[end], "}") {
+		end++
+	}
+	l.started = true
+	return end
 }
 
 // isProseWord reports whether p reads as prose rather than a file name: it

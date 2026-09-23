@@ -191,6 +191,8 @@ func TestFileRefs_EveryPathOnABullet(t *testing.T) {
 		{"repeated path counts once", "- Modify: `a.go:1-3`, `a.go:9`", []string{"a.go"}},
 		{"glob dropped", "- Modify: `testdata/pre_*.golden`, `testdata/b.golden`", []string{"testdata/b.golden"}},
 		{"brace pattern dropped", "- Modify: `tmpl/{pre,post}.tmpl`", nil},
+		{"unquoted brace pattern dropped whole", "- Modify: main.go, {pre,post}.tmpl", []string{"main.go"}},
+		{"unquoted brace pattern with directory prefix dropped whole", "- Modify: a.go, tmpl/{x,y,z}.tmpl, b.go", []string{"a.go", "b.go"}},
 		{"sibling shorthand dropped", "- Modify: `testdata/pre.golden`, `post.golden`", []string{"testdata/pre.golden"}},
 		{"sibling after a dropped pattern", "- Modify: `testdata/*.golden`, `post.golden`", nil},
 		{"slash-free list kept", "- Modify: `go.mod`, `go.sum`", []string{"go.mod", "go.sum"}},
