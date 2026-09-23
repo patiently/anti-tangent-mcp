@@ -210,12 +210,11 @@ func TestRunReplayFixture_ADryRunMeasuresPromptsWithoutFindings(t *testing.T) {
 	assert.Greater(t, report.Calls[replayCallTaskSpec].PromptBytes, 1000)
 }
 
-// TestRunReplayFixture_RecordsEveryReviewerFindingPerRun pins B0's report
-// gap: the tally kept only the finding that met an expectation, so a run's
-// other reviewer findings were unreadable. Findings must line up with run
-// numbers even when a run raised none, and a server advisory (the unusable
-// relative repo_root here) must never be among them — the length-2 result
-// alone proves that, since the advisory would make it 3.
+// TestRunReplayFixture_RecordsEveryReviewerFindingPerRun: every reviewer
+// finding of every run is kept, indexed by run, even a run that raises
+// none; a server advisory (the unusable relative repo_root here) is never
+// among them — the length-2 result alone proves that, since the advisory
+// would make it 3.
 func TestRunReplayFixture_RecordsEveryReviewerFindingPerRun(t *testing.T) {
 	first := `{"severity":"major","category":"scope_drift","criterion":"AC 1","evidence":"wires the dispatcher","suggestion":"revert the dispatcher wiring"}`
 	second := `{"severity":"minor","category":"quality","criterion":"over_building","evidence":"digest.go:9: yagni: FormatDigest has one caller","suggestion":"inline it"}`
