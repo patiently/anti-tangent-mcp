@@ -120,6 +120,46 @@ func TestRenderPre_WithoutControllerVerifiedReferencesOmitsSection(t *testing.T)
 	assert.NotContains(t, out.User, "Controller-verified references:")
 }
 
+func TestRenderPre_AttachedFilesAreShownWithTheirPaths(t *testing.T) {
+	out, err := RenderPre(PreInput{
+		Spec:         session.TaskSpec{Title: "T", Goal: "G", AcceptanceCriteria: []string{"AC"}},
+		ContextFiles: []ContextFile{ctxFile("/repo/docs/brief.md", "NET means internal/net")},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out.User, "/repo/docs/brief.md")
+	assert.Contains(t, out.User, "NET means internal/net")
+	assert.Contains(t, out.User, "an attached file defines")
+}
+
+func TestRenderPre_NonceIsDerivedWhenUnset(t *testing.T) {
+	in := PreInput{
+		Spec:         session.TaskSpec{Title: "T", Goal: "G"},
+		ContextFiles: []ContextFile{ctxFile("/repo/a.go", "package a")},
+	}
+	first, err := RenderPre(in)
+	require.NoError(t, err)
+	second, err := RenderPre(in)
+	require.NoError(t, err)
+	assert.Equal(t, first.User, second.User, "the same attachment set renders identically")
+	assert.NotContains(t, first.User, "BEGIN FILE :", "a derived nonce is never empty")
+}
+
+// TestRenderPre_WithContextFiles_Golden pins pre.tmpl's attached-files block:
+// the framing sentence, the shared context_files partial's rendering, and
+// where the block sits relative to "## What to evaluate" — none of which any
+// other pre test pinned exactly, since the {{- if .ContextFiles}} guard means
+// every other pre golden renders identically whether or not this block
+// exists.
+func TestRenderPre_WithContextFiles_Golden(t *testing.T) {
+	out, err := RenderPre(PreInput{
+		Spec:              sampleSpec(),
+		ContextFiles:      ctxFiles(),
+		ContextFilesNonce: testContextNonce,
+	})
+	require.NoError(t, err)
+	golden(t, "pre_with_context_files", out.System+"\n---USER---\n"+out.User)
+}
+
 func TestRenderMid(t *testing.T) {
 	out, err := RenderMid(MidInput{
 		Spec: sampleSpec(),

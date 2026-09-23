@@ -28,6 +28,45 @@ var submissionDefectCategories = map[verdict.Category]bool{
 const resubmitNextAction = "Re-submit with the missing evidence — every blocking finding is " +
 	"about the submission, not the code; no rework is implied. Then: "
 
+// openFindingNextAction is prefixed onto next_action while a finding about the
+// code itself is still open. The protocol forbids reporting DONE with one, and
+// a warn verdict reads like permission to stop.
+func openFindingNextAction(ids []string) string {
+	return fmt.Sprintf("Do not report DONE: %d critical/major finding(s) remain open (%s). "+
+		"Fix and re-validate, or ask the controller for a ruling. Then: ", len(ids), strings.Join(ids, ", "))
+}
+
+// reviewerResponseCriterion marks the server's own synthetic truncation
+// findings (truncatedResult, recoverPartialFindings): there is no code fix
+// for a reviewer call that ran out of output tokens, only a re-call with a
+// larger budget, so openFindingNextAction's "fix and re-validate" would
+// misdescribe it.
+const reviewerResponseCriterion = "reviewer_response"
+
+// blockingCodeFindingIDs lists the ids of findings that block DONE: critical
+// or major, and about the code rather than the submission. A submission defect
+// has its own prefix, which says no rework is implied. The server's own
+// truncation notice is excluded for the same reason even though it is
+// CategoryOther, not a submissionDefectCategories entry: its own Suggestion
+// already names the retry, and openFindingNextAction's "fix and re-validate"
+// would describe work that does not exist.
+func blockingCodeFindingIDs(fs []verdict.Finding) []string {
+	var ids []string
+	for _, f := range fs {
+		if f.Severity != verdict.SeverityCritical && f.Severity != verdict.SeverityMajor {
+			continue
+		}
+		if submissionDefectCategories[f.Category] {
+			continue
+		}
+		if f.Criterion == reviewerResponseCriterion {
+			continue
+		}
+		ids = append(ids, f.ID)
+	}
+	return ids
+}
+
 // isSubmissionDefectOnly reports whether the envelope is blocked solely by
 // submission defects. Minor findings are ignored: they never blocked DONE, so
 // an envelope carrying only minors has nothing to excuse and returns false.

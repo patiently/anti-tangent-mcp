@@ -12,19 +12,22 @@ import (
 )
 
 type Config struct {
-	AnthropicKey     string
-	OpenAIKey        string
-	GoogleKey        string
-	PreModel         ModelRef
-	MidModel         ModelRef
-	PostModel        ModelRef
-	PlanModel        ModelRef
-	PrimeModel       ModelRef
-	ExtractModel     ModelRef
-	SessionTTL       time.Duration
-	MaxPayloadBytes  int
-	RequestTimeout   time.Duration
-	LogLevel         slog.Level
+	AnthropicKey    string
+	OpenAIKey       string
+	GoogleKey       string
+	PreModel        ModelRef
+	MidModel        ModelRef
+	PostModel       ModelRef
+	PlanModel       ModelRef
+	PrimeModel      ModelRef
+	ExtractModel    ModelRef
+	SessionTTL      time.Duration
+	MaxPayloadBytes int
+	RequestTimeout  time.Duration
+	LogLevel        slog.Level
+	// PerTaskMaxTokens is the output-token budget for validate_task_spec,
+	// check_progress and validate_completion. A reasoning reviewer spends
+	// thinking tokens against this same budget, ahead of its visible answer.
 	PerTaskMaxTokens int
 	PlanMaxTokens    int
 	PrimeMaxTokens   int
@@ -122,7 +125,7 @@ func Load(env func(string) string) (Config, error) {
 		MaxPayloadBytes:        DefaultMaxPayloadBytes,
 		RequestTimeout:         180 * time.Second,
 		LogLevel:               slog.LevelInfo,
-		PerTaskMaxTokens:       4096,
+		PerTaskMaxTokens:       8192,
 		PlanMaxTokens:          4096,
 		PrimeMaxTokens:         4096,
 		ExtractMaxTokens:       8192,

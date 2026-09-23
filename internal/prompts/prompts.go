@@ -108,6 +108,12 @@ type ContextFile struct {
 type PreInput struct {
 	Spec             session.TaskSpec
 	ProjectKnowledge string
+	// ContextFiles are files the controller attached to the call, rendered
+	// whole. ContextFilesNonce pairs their BEGIN/END delimiters; left empty it
+	// is derived from the files, so the same attachment set always renders
+	// identically. See PlanInput's fields of the same names.
+	ContextFiles      []ContextFile
+	ContextFilesNonce string
 }
 
 type MidInput struct {
@@ -297,6 +303,13 @@ const systemPrompt = `You are an exacting reviewer. You return ONLY a JSON objec
 const workerSystemPrompt = `You return ONLY a JSON object matching the provided schema. You never invent facts about code that wasn't shown to you.`
 
 func RenderPre(in PreInput) (Output, error) {
+	if in.ContextFilesNonce == "" {
+		nonce, err := DeriveContextFilesNonce(in.ContextFiles)
+		if err != nil {
+			return Output{}, err
+		}
+		in.ContextFilesNonce = nonce
+	}
 	body, err := render("pre.tmpl", in)
 	if err != nil {
 		return Output{}, err

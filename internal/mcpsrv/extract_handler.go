@@ -278,7 +278,9 @@ func classifyEnvelopes(envs []CompletionEnvelopeArg) ([]verdict.Finding, bool) {
 		}
 		// (b) Diff/files shape check against the existing guard. checkEvidenceShape
 		// takes the diff/files pair directly (not TestEvidence — it doesn't inspect it).
-		reason := checkEvidenceShape(e.FinalDiff, e.FinalFiles)
+		// Its suggestion return is for validate_completion's rejection envelope;
+		// this handler always builds its own Suggestion text below, so it's unused here.
+		reason, _ := checkEvidenceShape(e.FinalDiff, e.FinalFiles)
 		if reason == "" {
 			continue
 		}

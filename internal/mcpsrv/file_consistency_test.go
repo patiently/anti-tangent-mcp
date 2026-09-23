@@ -148,6 +148,23 @@ func TestCheckFileConsistency_OrderTier_UsesTitleNumberNotPosition(t *testing.T)
 	assert.NotContains(t, f.Evidence, "Task 2 ")
 }
 
+func TestCheckFileConsistency_DiskTier_SkipsPlanAbbreviations(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "VERSION"), []byte("0.25.0\n"), 0o600))
+
+	f := checkFileConsistency(tasksFrom(
+		"**Files:**\n- Modify: `NET`\n- Modify: `MAIN/foo/Bar.kt`\n- Modify: `VERSION`\n"), root)
+	require.Nil(t, f, "an ALL-CAPS first segment with no such entry at the root is a plan abbreviation, not a path")
+}
+
+func TestCheckFileConsistency_DiskTier_StillFlagsARealMissingPath(t *testing.T) {
+	root := t.TempDir()
+
+	f := checkFileConsistency(tasksFrom("**Files:**\n- Modify: `internal/gone/missing.go`\n"), root)
+	require.NotNil(t, f)
+	assert.Contains(t, f.Evidence, "internal/gone/missing.go")
+}
+
 // TestCheckFileConsistency_OrderTier_FallsBackToPositionWhenTitleUnparseable
 // covers the fallback half of the same fix: when Title is empty or does not
 // match the "Task N:" shape, the finding must still name a task — via the

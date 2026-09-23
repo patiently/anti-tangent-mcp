@@ -87,9 +87,9 @@ type ValidateTaskSpecArgs struct {
 	AcceptanceCriteria           []string                          `json:"acceptance_criteria,omitempty" jsonschema:"The task's acceptance criteria, one entry per bullet, verbatim."`
 	NonGoals                     []string                          `json:"non_goals,omitempty" jsonschema:"The task's Non-goals bullets, verbatim, when the task has them."`
 	Context                      string                            `json:"context,omitempty" jsonschema:"The task's Context section, verbatim: constraints, repo carve-outs and prior decisions a fresh implementer needs. The reviewer treats it as authoritative."`
-	Verification                 []string                          `json:"verification,omitempty" jsonschema:"The task's steps and verify commands, one entry per step or command, such as a Verify line or a no-new-warnings gate. The pre-task review checks each gate against the Non-goals, and the final review uses them to tell a Non-goal violation a gate forced from ordinary scope drift. At most 50 entries of at most 500 characters each."`
+	Verification                 []string                          `json:"verification,omitempty" jsonschema:"The task's steps and verify commands, one entry per step or command, such as a Verify line or a no-new-warnings gate. The pre-task review checks each gate against the Non-goals, and the final review uses them to tell a Non-goal violation a gate forced from ordinary scope drift. At most 50 entries of at most 2000 characters each."`
 	PinnedBy                     []string                          `json:"pinned_by,omitempty" jsonschema:"Existing tests, docs, commands or static checks that pin behavior an acceptance criterion says stays unchanged. Caller-supplied anchors, not verified facts. At most 50 entries of at most 500 characters each."`
-	ControllerVerifiedReferences []string                          `json:"controller_verified_references,omitempty" jsonschema:"Paths, symbols, line anchors, commands or adjacent patterns the controller already verified before dispatch; a matching unverifiable_codebase_claim finding is suppressed by substring match. At most 50 entries of at most 500 characters each, so split a long reference list into several short entries."`
+	ControllerVerifiedReferences []string                          `json:"controller_verified_references,omitempty" jsonschema:"Paths, symbols, line anchors, commands or adjacent patterns the controller already verified before dispatch; a matching unverifiable_codebase_claim finding is suppressed by substring match. At most 200 entries of at most 500 characters each, so split a long reference into several short entries."`
 	TestStrategyNotes            []string                          `json:"test_strategy_notes,omitempty" jsonschema:"How tests divide coverage between this task and adjacent ones, so complementary tests read as joint coverage. At most 50 entries of at most 500 characters each."`
 	CodebaseConventions          []string                          `json:"codebase_conventions,omitempty" jsonschema:"Module conventions the task must follow; a spec that conflicts with one draws convention_deviation. At most 50 entries of at most 500 characters each."`
 	TestabilityExtractions       []string                          `json:"testability_extractions,omitempty" jsonschema:"Code the task deliberately extracts to make it testable, so the reviewer does not flag the extraction as scope_drift. At most 50 entries of at most 500 characters each."`
@@ -101,8 +101,9 @@ type ValidateTaskSpecArgs struct {
 	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
 	// PlanRunID ties this task to a plan run minted by validate_plan. Best
 	// effort: an unknown or expired id must not fail the review.
-	PlanRunID string `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call."`
-	TaskIndex int    `json:"task_index,omitempty" jsonschema:"The task's 1-based position in the plan, from the controller's dispatch. With plan_run_id it names the plan task this call belongs to; without it the task is found by matching task_title against the plan's headings. Validating the same task again updates its plan_run_report row instead of adding one."`
+	PlanRunID    string   `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call."`
+	ContextPaths []string `json:"context_paths,omitempty" jsonschema:"Absolute paths to files the implementer was told to work from, such as its dispatch brief: the server reads them and shows the reviewer their whole contents, so a term or step they define is not reported as missing from the spec. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the task-spec payload cap."`
+	TaskIndex    int      `json:"task_index,omitempty" jsonschema:"The task's 1-based position in the plan, from the controller's dispatch. With plan_run_id it names the plan task this call belongs to; without it the task is found by matching task_title against the plan's headings. Validating the same task again updates its plan_run_report row instead of adding one."`
 }
 
 type handlers struct {
@@ -139,6 +140,11 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, err
 	}
 
+	contextFiles, _, cerr := resolveContextPaths(args.ContextPaths, h.deps.Cfg)
+	if cerr != nil {
+		return h.rejectTaskSpecContextPaths(cerr)
+	}
+
 	spec := session.TaskSpec{
 		Title:                        args.TaskTitle,
 		Goal:                         args.Goal,
@@ -162,7 +168,11 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		args.ModelOverride,
 		h.deps.Cfg.PreModel,
 		func() (prompts.Output, error) {
-			return prompts.RenderPre(prompts.PreInput{Spec: spec, ProjectKnowledge: inputs.ProjectKnowledge})
+			return prompts.RenderPre(prompts.PreInput{
+				Spec:             spec,
+				ProjectKnowledge: inputs.ProjectKnowledge,
+				ContextFiles:     toPromptContextFiles(contextFiles),
+			})
 		},
 		"render pre prompt",
 	)
@@ -170,7 +180,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, err
 	}
 
-	out, err := h.runReview(ctx, cc.Model, cc.Rendered, cc.MaxTokens)
+	out, err := h.runReview(ctx, h.perTaskReviewCall(cc.Model, cc.Rendered, cc.MaxTokens, args.MaxTokensOverride))
 	if err != nil {
 		return nil, Envelope{}, err
 	}
@@ -196,6 +206,7 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		return nil, Envelope{}, fmt.Errorf("render lean guidance: %w", err)
 	}
 	env.ImplementationGuidance = guidance
+	env.NextAction = strings.TrimRight(env.NextAction, " \t\r\n") + " Read `implementation_guidance` before writing code."
 
 	if f, ok := h.taskSpecPlanRunAdvisory(args.PlanRunID, args.TaskIndex); ok {
 		env.Findings = append(env.Findings, f)
@@ -504,7 +515,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		return nil, Envelope{}, err
 	}
 
-	out, err := h.runReview(ctx, model, rendered, maxTokens)
+	out, err := h.runReview(ctx, h.perTaskReviewCall(model, rendered, maxTokens, args.MaxTokensOverride))
 	if err != nil {
 		return nil, Envelope{}, err
 	}
@@ -680,7 +691,7 @@ func notFoundEnvelope(tool, id string, model config.ModelRef) Envelope {
 // Findings, run FinalizeVerdict, and assemble the envelope. The synthetic
 // finding is SeverityMajor so the ladder derives warn, matching the Verdict
 // set here.
-func truncatedResult() verdict.Result {
+func truncatedResult(ceiling int) verdict.Result {
 	return verdict.Result{
 		Verdict: verdict.VerdictWarn,
 		Findings: []verdict.Finding{{
@@ -688,9 +699,9 @@ func truncatedResult() verdict.Result {
 			Category:   verdict.CategoryOther,
 			Criterion:  "reviewer_response",
 			Evidence:   providers.ErrResponseTruncated.Error(),
-			Suggestion: "Raise " + perTaskMaxTokensEnvVar + " or pass max_tokens_override and retry.",
+			Suggestion: fmt.Sprintf("Retry with max_tokens_override: %d, or raise %s.", ceiling, perTaskMaxTokensEnvVar),
 		}},
-		NextAction: "Retry with a higher max_tokens_override (or raise the configured max-tokens cap).",
+		NextAction: fmt.Sprintf("Retry with max_tokens_override: %d.", ceiling),
 	}
 }
 
@@ -724,6 +735,16 @@ func effectiveMaxTokens(override, defaultMaxTokens, ceiling int) (int, verdict.F
 		Suggestion: "Raise ANTI_TANGENT_MAX_TOKENS_CEILING if you need a larger budget.",
 	}
 	return ceiling, finding, nil
+}
+
+// perTaskRetryBudget is the budget one automatic retry of a truncated per-task
+// review uses: the ceiling, unless the caller chose the budget itself or the
+// budget already is the ceiling, in which case there is nothing to raise.
+func perTaskRetryBudget(override, maxTokens, ceiling int) int {
+	if override != 0 || maxTokens >= ceiling {
+		return 0
+	}
+	return ceiling
 }
 
 // prependClamp inserts the clamp finding at the head of the envelope's
@@ -1028,6 +1049,46 @@ func tooLargeEnvelope(tool, id string, model config.ModelRef, size, limit int, s
 	}
 }
 
+// contextTooLargeTaskSpecEnvelope refuses a validate_task_spec call whose
+// context_paths do not fit, before any reviewer call. The error carries the
+// shape that failed and the cap in force; its message is the evidence.
+func contextTooLargeTaskSpecEnvelope(err *contextTooLargeError, model config.ModelRef) Envelope {
+	return Envelope{
+		Tool:      "validate_task_spec",
+		Verdict:   string(verdict.VerdictFail),
+		ModelUsed: model.String(),
+		Findings: []verdict.Finding{{
+			Severity:   verdict.SeverityCritical,
+			Category:   verdict.CategoryTooLarge,
+			Criterion:  "context_paths",
+			Evidence:   err.Error(),
+			Suggestion: "Attach fewer or smaller files, or raise ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES (staying at or below ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES).",
+		}},
+		NextAction: "Reduce the attached set and retry.",
+	}
+}
+
+// rejectTaskSpecContextPaths turns a resolveContextPaths failure for
+// validate_task_spec into its response: a cap breach (contextTooLargeError)
+// becomes a rejection envelope with no reviewer call, and any other
+// resolution failure (bad path, outside ANTI_TANGENT_PLAN_ROOTS) stays a
+// transport error. Kept out of ValidateTaskSpec, whose own branch count is
+// what this rejection would otherwise add to.
+func (h *handlers) rejectTaskSpecContextPaths(cerr error) (*mcp.CallToolResult, Envelope, error) {
+	var tle *contextTooLargeError
+	if !errors.As(cerr, &tle) {
+		return nil, Envelope{}, cerr
+	}
+	env := contextTooLargeTaskSpecEnvelope(tle, h.deps.Cfg.PreModel)
+	h.recordStat(statParams{
+		tool:      "validate_task_spec",
+		verdict:   env.Verdict,
+		findings:  env.Findings,
+		modelUsed: env.ModelUsed,
+	})
+	return rejectionEnvelopeResult(env)
+}
+
 func validateCompletionTool() *mcp.Tool {
 	return &mcp.Tool{
 		Name:        "validate_completion",
@@ -1072,7 +1133,7 @@ type ValidatePlanArgs struct {
 	ContextPaths                 []string              `json:"context_paths,omitempty" jsonschema:"Absolute paths to source files the plan makes claims about, at most 50. Each file is sent in full to the reviewer vendor on every reviewer call of the round, so attach only files the plan touches and never secrets. With ANTI_TANGENT_PLAN_ROOTS set they must be under those roots."`
 	RepoRoot                     string                `json:"repo_root,omitempty" jsonschema:"Absolute path to the repository root; enables the disk tier of the Create/Modify consistency check. With ANTI_TANGENT_PLAN_ROOTS set it must be under those roots."`
 	ControllerRulings            []ControllerRulingArg `json:"controller_rulings,omitempty" jsonschema:"Rulings you made on findings from earlier rounds, resent every round. Each waives every finding with the same id, ignoring any -n suffix; only an id's shape is checked. At most 50 entries of at most 2000 characters each."`
-	ControllerVerifiedReferences []string              `json:"controller_verified_references,omitempty" jsonschema:"Paths, symbols, line anchors or commands you already verified; a matching unverifiable_codebase_claim finding is suppressed by substring match before the rolled-up checklist is built. At most 50 entries of at most 500 characters each."`
+	ControllerVerifiedReferences []string              `json:"controller_verified_references,omitempty" jsonschema:"Paths, symbols, line anchors or commands you already verified; a matching unverifiable_codebase_claim finding is suppressed by substring match before the rolled-up checklist is built. At most 200 entries of at most 500 characters each."`
 }
 
 func validatePlanTool() *mcp.Tool {
@@ -1198,10 +1259,17 @@ func ellipsisExemptPath(path string) bool {
 	return false
 }
 
+// finalDiffRegenerateSuggestion is the remedy for a rejection whose reason
+// names something wrong with final_diff itself: unlike a final_files defect,
+// the fix is to regenerate the diff, not to resend file contents.
+const finalDiffRegenerateSuggestion = "Regenerate the diff with `git diff`, and pass it as `final_diff_path`."
+
 // checkEvidenceShape inspects finalDiff/files for malformed evidence shapes.
-// Returns a non-empty human-readable reason string when a rule fires; empty
-// string when the evidence looks structurally sound. The reason is what
-// populates the rejection finding's Evidence field.
+// Returns a non-empty human-readable reason string when a rule fires (empty
+// string when the evidence looks structurally sound), plus a suggestion that
+// is either "" (the caller's generic remedy applies) or
+// finalDiffRegenerateSuggestion when the reason is final_diff-scoped. The
+// reason populates the rejection finding's Evidence field.
 //
 // Decoupled from ValidateCompletionArgs (rather than taking the whole args
 // struct) so it works identically for validate_completion's resolved
@@ -1211,40 +1279,52 @@ func ellipsisExemptPath(path string) bool {
 //
 // Order of checks (fail-fast on the first hit so the reason points at the
 // most-likely cause):
-//  1. final_diff substring + ellipsis-line scan
+//  1. final_diff checks (finalDiffMalformedReason): substring scan,
+//     ellipsis-line scan, hunk-order scan
 //  2. final_files empty Path
 //  3. final_files content substring + ellipsis-line scan
-func checkEvidenceShape(finalDiff string, files []FileArg) string {
+func checkEvidenceShape(finalDiff string, files []FileArg) (reason, suggestion string) {
 	if finalDiff != "" {
-		lower := strings.ToLower(finalDiff)
-		for _, p := range evidenceTruncationPatterns {
-			if idx := strings.Index(lower, p); idx >= 0 {
-				return fmt.Sprintf("final_diff contains truncation marker %q at offset %d", p, idx)
-			}
-		}
-		if off := diffEllipsisPlaceholderOffset(finalDiff); off >= 0 {
-			return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", off)
+		if r := finalDiffMalformedReason(finalDiff); r != "" {
+			return r, finalDiffRegenerateSuggestion
 		}
 	}
 	for i, f := range files {
 		if strings.TrimSpace(f.Path) == "" {
-			return fmt.Sprintf("final_files[%d].path is empty", i)
+			return fmt.Sprintf("final_files[%d].path is empty", i), ""
 		}
 	}
 	for i, f := range files {
 		lower := strings.ToLower(f.Content)
 		for _, p := range evidenceTruncationPatterns {
 			if idx := strings.Index(lower, p); idx >= 0 {
-				return fmt.Sprintf("final_files[%d].content (path %q) contains truncation marker %q at offset %d", i, f.Path, p, idx)
+				return fmt.Sprintf("final_files[%d].content (path %q) contains truncation marker %q at offset %d", i, f.Path, p, idx), ""
 			}
 		}
 		if !ellipsisExemptPath(f.Path) {
 			if loc := evidenceEllipsisLine.FindStringIndex(f.Content); loc != nil {
-				return fmt.Sprintf("final_files[%d].content (path %q) contains a placeholder line `...` at offset %d", i, f.Path, loc[0])
+				return fmt.Sprintf("final_files[%d].content (path %q) contains a placeholder line `...` at offset %d", i, f.Path, loc[0]), ""
 			}
 		}
 	}
-	return ""
+	return "", ""
+}
+
+// finalDiffMalformedReason inspects finalDiff alone: truncation markers, an
+// elided "..." placeholder line, and a hunk order git could not have
+// produced. It stays separate from checkEvidenceShape's final_files loop so
+// each function's own decision points stay easy to follow.
+func finalDiffMalformedReason(finalDiff string) string {
+	lower := strings.ToLower(finalDiff)
+	for _, p := range evidenceTruncationPatterns {
+		if idx := strings.Index(lower, p); idx >= 0 {
+			return fmt.Sprintf("final_diff contains truncation marker %q at offset %d", p, idx)
+		}
+	}
+	if off := diffEllipsisPlaceholderOffset(finalDiff); off >= 0 {
+		return fmt.Sprintf("final_diff contains a placeholder line `...` at offset %d", off)
+	}
+	return diffHunkOrderReason(finalDiff)
 }
 
 // completionInputTooLargeError distinguishes an oversized final_diff_path or
@@ -1444,8 +1524,16 @@ func storeRejection(key [32]byte, env Envelope) {
 }
 
 // malformedEvidenceEnvelope builds the rejection envelope for a guard hit.
+// extraSuggestion, when non-empty, is appended to the generic remedy — used
+// for a reason specific enough to name its own fix (e.g. a final_diff shape
+// problem, whose fix is to regenerate the diff, not to resend file
+// contents); pass "" to get the generic remedy alone.
 // Critical so the ladder derives fail from one critical, matching the explicit Verdict: fail.
-func malformedEvidenceEnvelope(tool, sessionID, reason, modelUsed string) Envelope {
+func malformedEvidenceEnvelope(tool, sessionID, reason, extraSuggestion, modelUsed string) Envelope {
+	suggestion := "Submit full file contents in final_files, or a complete unified diff (no truncation markers) in final_diff."
+	if extraSuggestion != "" {
+		suggestion += " " + extraSuggestion
+	}
 	return Envelope{
 		Tool:      tool,
 		SessionID: sessionID,
@@ -1455,7 +1543,7 @@ func malformedEvidenceEnvelope(tool, sessionID, reason, modelUsed string) Envelo
 			Category:   verdict.CategoryMalformedEvidence,
 			Criterion:  "evidence_shape",
 			Evidence:   reason,
-			Suggestion: "Submit full file contents in final_files, or a complete unified diff (no truncation markers) in final_diff.",
+			Suggestion: suggestion,
 		}},
 		NextAction: "Re-submit with complete evidence; current submission appears truncated.",
 		ModelUsed:  modelUsed,
@@ -1668,7 +1756,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			// The empty-resolved path is the ONLY evidence on the call:
 			// hard reject, with no paid reviewer call when there is nothing
 			// to review.
-			env := malformedEvidenceEnvelope("validate_completion", args.SessionID, emptyPathReasons[0], h.deps.Cfg.PostModel.String())
+			env := malformedEvidenceEnvelope("validate_completion", args.SessionID, emptyPathReasons[0], "", h.deps.Cfg.PostModel.String())
 			env.Lightweight = lightweight
 			clamped := prependClamp(env, clamp)
 			h.recordStat(statParams{
@@ -1762,8 +1850,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		})
 		return rejectionEnvelopeResult(c)
 	}
-	if reason := checkEvidenceShape(args.FinalDiff, resolvedFiles); reason != "" {
-		env := malformedEvidenceEnvelope("validate_completion", args.SessionID, reason, h.deps.Cfg.PostModel.String())
+	if reason, suggestion := checkEvidenceShape(args.FinalDiff, resolvedFiles); reason != "" {
+		env := malformedEvidenceEnvelope("validate_completion", args.SessionID, reason, suggestion, h.deps.Cfg.PostModel.String())
 		env.Lightweight = lightweight
 		storeRejection(cacheKey, env)
 		clamped := prependClamp(env, clamp)
@@ -1782,12 +1870,17 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	var sess *session.Session
 	var spec session.TaskSpec
 	var review completionReview
+	var lightweightMalformedRulingIDs []string
 	if lightweight {
 		// Synthesize a minimal spec for the reviewer. No session is created.
 		spec = session.TaskSpec{
 			Title: "(lightweight task)",
 			Goal:  args.Summary,
 		}
+		// A lightweight task has no session to remember a ruling, so the call
+		// carries them: shape-checked like validate_plan's, rendered as
+		// authoritative, and applied to this review's findings.
+		review.rulings, review.shown, lightweightMalformedRulingIDs = lightweightRulings(rulingArgs)
 	} else {
 		var ok bool
 		sess, ok = h.deps.Sessions.Get(args.SessionID)
@@ -1839,7 +1932,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		return nil, Envelope{}, err
 	}
 
-	out, err := h.runReview(ctx, model, rendered, maxTokens)
+	out, err := h.runReview(ctx, h.perTaskReviewCall(model, rendered, maxTokens, args.MaxTokensOverride))
 	if err != nil {
 		return nil, Envelope{}, err
 	}
@@ -1900,8 +1993,19 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			env.Findings = append(env.Findings, f)
 		}
 	}
-	if lightweight && (len(responses) > 0 || len(rulingArgs) > 0) {
-		env.Findings = append(env.Findings, noSessionRulingsAdvisory())
+	if len(lightweightMalformedRulingIDs) > 0 {
+		env.Findings = append(env.Findings, malformedPlanRulingsAdvisory(lightweightMalformedRulingIDs))
+	}
+	if lightweight && len(responses) > 0 {
+		env.Findings = append(env.Findings, noSessionResponsesAdvisory())
+	}
+	assignEnvelopeIDs(&env)
+	// Restored after assignEnvelopeIDs, which clears same_as unconditionally:
+	// this is the one case where the reviewer's same_as is the actual answer,
+	// not a reviewer claim the server ignores.
+	for i, id := range preTaskLinks {
+		idCopy := id
+		env.Findings[len(head)+i].SameAs = &idCopy
 	}
 	// An escalated response does not say resubmit: resubmitting without a code
 	// change is the loop escalation stops, and a repeated insufficient_evidence
@@ -1912,14 +2016,10 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	case isSubmissionDefectOnly(env.Findings):
 		env.SubmissionDefectOnly = true
 		env.NextAction = resubmitNextAction + env.NextAction
-	}
-	assignEnvelopeIDs(&env)
-	// Restored after assignEnvelopeIDs, which clears same_as unconditionally:
-	// this is the one case where the reviewer's same_as is the actual answer,
-	// not a reviewer claim the server ignores.
-	for i, id := range preTaskLinks {
-		idCopy := id
-		env.Findings[len(head)+i].SameAs = &idCopy
+	default:
+		if ids := blockingCodeFindingIDs(env.Findings); len(ids) > 0 {
+			env.NextAction = openFindingNextAction(ids) + env.NextAction
+		}
 	}
 
 	if !lightweight {
@@ -2049,7 +2149,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		logOutcome = "validation_error"
 		return nil, verdict.PlanResult{}, err
 	}
-	verifiedRefs, err := normalizeBoundedStringList("controller_verified_references", args.ControllerVerifiedReferences, maxPinnedByEntries, maxPinnedByChars)
+	verifiedRefs, err := normalizeBoundedStringList("controller_verified_references", args.ControllerVerifiedReferences, maxVerifiedReferenceEntries, maxPinnedByChars)
 	if err != nil {
 		logOutcome = "validation_error"
 		return nil, verdict.PlanResult{}, err

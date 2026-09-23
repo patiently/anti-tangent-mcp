@@ -15,12 +15,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A lightweight `validate_completion` (empty `session_id`) accepts `plan_run_id` with `task_index`
   or `task_title`, and the task then appears in `plan_run_report`, marked `(lite)`. Lightweight
   tasks were previously invisible to the report.
+- A lightweight `validate_completion` (empty `session_id`) applies `controller_rulings`, shape-checked and
+  rendered the way `validate_plan` handles them. Without a session the rulings were dropped and the next
+  review raised the settled findings again; `finding_responses` still need a session, and their advisory
+  now says a ruling does not.
+- `validate_completion` rejects a diff git could not have produced, as `malformed_evidence` before the
+  reviewer call: within a section a `diff --git`/`diff --cc` header opened, a hunk that runs backwards
+  or whose declared line count doesn't match its body. A diff carrying no git header is not judged.
+- `validate_task_spec` accepts `context_paths`: the server reads those files and shows the spec reviewer
+  their whole contents, so a term, path or step the dispatch brief defines is no longer reported as
+  missing from the spec. Same limits as `validate_plan`'s attachments.
 
 ### Changed
 
 - The controller protocol passes `task_index` with `plan_run_id` in every dispatch, and a
   lightweight task passes both to `validate_completion`, so every dispatched task appears in
   `plan_run_report`.
+- The controller protocol asks for the task's brief in `context_paths` on the dispatch's
+  `validate_task_spec` call, so the spec reviewer reads what the implementer was told to read.
+- `verification` accepts 2000 characters per entry, its own cap rather than `pinned_by`'s 500: it carries
+  a task's step text, and compressing steps to fit made the reviewer report them as undefined.
+- `controller_verified_references` accepts 200 entries on `validate_task_spec` and `validate_plan`. It is the
+  only way to clear the rolled-up codebase-reference checklist, and a plan can cite more than 50 code facts.
+- The per-task reviewer budget defaults to 8192 output tokens, and a truncated per-task review is retried
+  once at `ANTI_TANGENT_MAX_TOKENS_CEILING` when the caller passed no `max_tokens_override` AND the
+  configured budget is below the ceiling — at the ceiling already, there is nothing left to raise, so no
+  retry happens. A truncated `validate_task_spec` opened no session, so each truncation used to cost a
+  manual retry; the suggestion now names the budget to pass.
+- `validate_completion` prefixes `next_action` with "Do not report DONE" while a critical or major finding
+  about the code is open, so a `warn` verdict no longer reads as permission to stop, and
+  `validate_task_spec` ends its `next_action` by pointing at the `implementation_guidance` it returns.
 
 ### Fixed
 
@@ -41,6 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still in progress survives a restart; the ledger header records the plan's task headings.
 - A truncated review reports the time the reviewer actually spent in `review_ms`, and in stats,
   instead of 0.
+- The deterministic Create/Modify check no longer reports a plan's own path abbreviations as files that do
+  not exist. A reference whose first segment is an ALL-CAPS identifier with no entry of that name at
+  `repo_root` is a name the plan defines, and the check cannot resolve it; the finding it drew was major
+  and no controller ruling could clear it.
+- A plan whose only finding is the rolled-up codebase-reference checklist is told to dispatch, and to
+  pre-flight or list the references it has not verified, rather than being pointed back at the checklist.
 - Plan-level findings are fingerprinted apart from session findings. Every `over_building` finding
   outside a plan task shared one ID, `f_b720ec2d`, so a ruling on the plan-level finding could waive
   a `validate_completion` finding. Plan-level IDs change once with this release: a ruling carried

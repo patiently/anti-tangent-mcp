@@ -117,7 +117,7 @@ func TestLoad_TokenBudgetsAndChunkSize_Defaults(t *testing.T) {
 		"ANTHROPIC_API_KEY": "sk-ant-test",
 	}))
 	require.NoError(t, err)
-	assert.Equal(t, 4096, cfg.PerTaskMaxTokens)
+	assert.Equal(t, 8192, cfg.PerTaskMaxTokens)
 	assert.Equal(t, 4096, cfg.PlanMaxTokens)
 	assert.Equal(t, 8, cfg.PlanTasksPerChunk)
 }

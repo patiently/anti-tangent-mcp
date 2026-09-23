@@ -470,18 +470,65 @@ func TestValidateCompletion_AFailedProviderCallWritesNothing(t *testing.T) {
 	assert.Equal(t, before, after)
 }
 
-func TestValidateCompletion_WithoutASessionIgnoresAnswersAndRulings(t *testing.T) {
+// TestValidateCompletion_WithoutASessionIgnoresAnswersButAppliesRulings covers
+// the lightweight split: finding_responses need a session to answer (there is
+// no earlier review without one), but controller_rulings do not — a ruling is
+// applied and listed even though nothing here is left to waive.
+func TestValidateCompletion_WithoutASessionIgnoresAnswersButAppliesRulings(t *testing.T) {
 	h, rv := newRulingsHandlers(t)
 	args := completionCallArgs("")
 	args.FindingResponses = []FindingResponseArg{{FindingID: "f_0123abcd", Response: "a"}}
 	args.ControllerRulings = []ControllerRulingArg{{FindingID: "f_0123abcd", Ruling: "r"}}
 	env := completeWith(t, h, rv, args, passResp("claude-opus-4-7"))
 
-	require.NotEmpty(t, env.Findings)
-	assert.Equal(t, "session_id", env.Findings[len(env.Findings)-1].Criterion)
+	got := findingsWithCriterion(env.Findings, "session_id")
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Evidence, "finding_responses")
 	assert.Equal(t, "pass", env.Verdict)
-	assert.Empty(t, env.ControllerRulings)
-	assert.NotContains(t, env.SummaryBlock, "ruling:")
+	assert.Equal(t, []AppliedRuling{{FindingID: "f_0123abcd", Ruling: "r"}}, env.ControllerRulings)
+	assert.Contains(t, env.SummaryBlock, "ruling:")
+}
+
+func TestValidateCompletion_LightweightAppliesAControllerRuling(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	first := completeWith(t, h, rv, completionCallArgs(""), reviewerFindingsResp(driftFinding))
+	require.Len(t, first.Findings, 1)
+	id := first.Findings[0].ID
+
+	ruled := completionCallArgs("")
+	ruled.ControllerRulings = []ControllerRulingArg{{FindingID: id, Ruling: "Task 7 owns the dispatcher wiring"}}
+	env := completeWith(t, h, rv, ruled, reviewerFindingsResp(driftFinding))
+
+	require.Len(t, env.WaivedFindings, 1, "a ruling settles the finding without a session")
+	assert.Equal(t, id, env.WaivedFindings[0].ID)
+	assert.Empty(t, env.Findings, "the ruled finding does not also stand")
+	assert.Contains(t, rv.LastRequest.User, "## Controller rulings (authoritative)")
+	assert.Contains(t, env.SummaryBlock, "ruling:")
+}
+
+func TestValidateCompletion_LightweightMalformedRulingIsAdvised(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	args := completionCallArgs("")
+	args.ControllerRulings = []ControllerRulingArg{{FindingID: "not-an-id", Ruling: "fine"}}
+	env := completeWith(t, h, rv, args, reviewerFindingsResp(driftFinding))
+
+	assert.Empty(t, env.WaivedFindings)
+	require.NotEmpty(t, findingsWithCriterion(env.Findings, "controller_rulings"))
+	assert.Contains(t, findingsWithCriterion(env.Findings, "controller_rulings")[0].Evidence, "not-an-id")
+}
+
+func TestValidateCompletion_LightweightResponsesPointAtRulings(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	args := completionCallArgs("")
+	args.FindingResponses = []FindingResponseArg{{FindingID: "f_12345678", Response: "disputed"}}
+	env := completeWith(t, h, rv, args, reviewerFindingsResp(driftFinding))
+
+	got := findingsWithCriterion(env.Findings, "session_id")
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Suggestion, "controller_rulings")
+	assert.Contains(t, got[0].Evidence, "finding_responses")
+	assert.NotContains(t, got[0].Evidence, "controller_rulings were sent",
+		"rulings work without a session; only responses are ignored")
 }
 
 func TestValidateCompletion_ListsEveryRulingInForceEvenWhenItWaivesNothing(t *testing.T) {
@@ -645,4 +692,31 @@ func TestValidateCompletionAndCheckProgress_ConcurrentCallsDoNotRace(t *testing.
 		}
 	}()
 	wg.Wait()
+}
+
+// Next-action prefix tests.
+
+func TestValidateCompletion_AnOpenMajorSaysDoNotReportDone(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	openCodeFinding := findingObj("major", "quality", "drift", "code changed task", "")
+	env := completeWith(t, h, rv, completionCallArgs(sid), reviewerFindingsResp(openCodeFinding))
+	assert.True(t, strings.HasPrefix(env.NextAction, "Do not report DONE:"), "got %q", env.NextAction)
+	assert.Contains(t, env.NextAction, env.Findings[0].ID)
+}
+
+func TestValidateCompletion_APassGetsNoDoneWarning(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	env := completeWith(t, h, rv, completionCallArgs(sid), passResp("claude-opus-4-7"))
+	assert.NotContains(t, env.NextAction, "Do not report DONE")
+}
+
+func TestValidateCompletion_ASubmissionDefectKeepsItsOwnPrefix(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	sid := startTask(t, h, rv)
+	insufficientEvidence := findingObj("major", "insufficient_evidence", "evidence", "no diff", "")
+	env := completeWith(t, h, rv, completionCallArgs(sid), reviewerFindingsResp(insufficientEvidence))
+	assert.True(t, env.SubmissionDefectOnly)
+	assert.NotContains(t, env.NextAction, "Do not report DONE")
 }
