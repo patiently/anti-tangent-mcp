@@ -90,8 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`a.go:6-22, 29`) or ending in `, …`, and reads every path a Files bullet lists rather than the
   first. It reported such a file as missing when it existed, and never looked at the other paths on
   the line, so a Modify: of a file only a later task creates went unreported. Patterns
-  (`testdata/*.golden`) and a bare file name after a nested path, which plans write as shorthand for
-  a sibling, are not checked.
+  (`testdata/*.golden`), a bare file name after a nested path, which plans write as shorthand for
+  a sibling, and a later item on the line that is not a file name (a symbol, a bare word) are not
+  read.
 - A `validate_plan` `controller_rulings` entry waives the deterministic `task_order_contradiction`
   finding, which then appears under `waived_findings` with its evidence, as the argument's
   description says. The finding could not be waived, so a false positive held the verdict down every

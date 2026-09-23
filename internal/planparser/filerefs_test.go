@@ -194,6 +194,11 @@ func TestFileRefs_EveryPathOnABullet(t *testing.T) {
 		{"sibling shorthand dropped", "- Modify: `testdata/pre.golden`, `post.golden`", []string{"testdata/pre.golden"}},
 		{"sibling after a dropped pattern", "- Modify: `testdata/*.golden`, `post.golden`", nil},
 		{"slash-free list kept", "- Modify: `go.mod`, `go.sum`", []string{"go.mod", "go.sum"}},
+		{"stray word after the first path dropped", "- Modify: `main.go` and `Run`", []string{"main.go"}},
+		{"symbol after the first path dropped", "- Modify: `main.go`, `run()`", []string{"main.go"}},
+		{"etc. dropped", "- Modify: a.go, b.go, etc.", []string{"a.go", "b.go"}},
+		{"bare stray word dropped", "- Modify: README.md, twice", []string{"README.md"}},
+		{"later dotted path kept", "- Modify: `Makefile`, `go.mod`", []string{"Makefile", "go.mod"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

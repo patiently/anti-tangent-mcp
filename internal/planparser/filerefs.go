@@ -41,13 +41,12 @@ var (
 	// and a URL scheme (`https://…`) is followed by slashes, not digits.
 	//
 	// The group REPEATS (`(?:…)+$`) because editors emit line:column as well
-	// as line ranges. A single-group pattern stripped only the trailing
-	// `:12` from `x.go:57:12`, leaving the phantom path `x.go:57` — which
-	// stats as missing and never string-matches its unanchored `Create:`
-	// twin, i.e. the exact bug this regex exists to prevent, just one colon
-	// deeper. Repeating cannot widen the match past the shapes above: every
-	// repetition must still be `:digits`, so `C:\x` and `https://…` are
-	// untouched.
+	// as line ranges. Stripping only the last group would leave `x.go:57` of
+	// `x.go:57:12` — a phantom path that stats as missing and never
+	// string-matches its unanchored `Create:` twin, the same failure one
+	// colon deeper. Repeating cannot widen the match past the shapes above:
+	// every repetition must still be `:digits`, so `C:\x` and `https://…`
+	// are untouched.
 	//
 	// An anchor is a comma-separated LIST of lines-or-ranges, not a single
 	// line or a single pair: "a.md:60,166,174,419" and "a.md:27-30,40-50"
@@ -187,47 +186,73 @@ func barePaths(tail string) []string {
 }
 
 // refPathList collects one bullet's paths, cleaned by stripLineAnchor and
-// canonRefPath. It drops three shapes that would otherwise be statted as
-// files that do not exist:
+// canonRefPath. It drops these shapes rather than let them through as a file
+// that does not exist or was never a file name at all:
 //
 //   - a pattern (`*`, `?`, `{`), which names a set of files, not one;
 //   - a slash-free path after a path with a directory, which plans write as
 //     shorthand for a sibling of that path (`testdata/a.golden`,
 //     `b.golden`); a bare name could as well be a root file, and the text
 //     cannot tell which, so it is not checked at all;
+//   - a candidate with whitespace or a `(`/`)` inside it, or the word `etc`
+//     or `etc.` — prose, not a path;
+//   - a candidate after the bullet's first path that has neither `/` nor
+//     `.` — a bare word such as `Run` or `twice` is not a file name, while
+//     `go.sum` after `go.mod` keeps working because it has a `.`;
 //   - a repeat, which would report the same file twice.
 //
 // hasDir counts dropped paths too: a shorthand after a directory pattern is
-// still a sibling of it.
+// still a sibling of it. "First path" is tracked the same way — a candidate
+// add() dropped still counts as the bullet's first, so a dropped symbol
+// before the real path does not let the next bare word through.
 type refPathList struct {
-	paths  []string
-	hasDir bool
+	paths   []string
+	hasDir  bool
+	started bool
 }
 
 func (l *refPathList) add(raw string) {
+	first := !l.started
+	l.started = true
 	p := canonRefPath(stripLineAnchor(strings.TrimSpace(raw)))
 	hasDir := strings.Contains(p, "/")
 	sibling := l.hasDir && !hasDir
 	l.hasDir = l.hasDir || hasDir
-	if l.skip(p, sibling) {
+	if l.skip(p, sibling, first) {
 		return
 	}
 	l.paths = append(l.paths, p)
 }
 
 // skip reports whether p must be dropped rather than added: empty, a sibling
-// shorthand, a pattern, or already present.
-func (l *refPathList) skip(p string, sibling bool) bool {
+// shorthand, a pattern, a symbol or stray word rather than a file name, or
+// already present.
+func (l *refPathList) skip(p string, sibling, first bool) bool {
 	if p == "" || sibling {
+		return true
+	}
+	if isProseWord(p) {
+		return true
+	}
+	if !first && !strings.ContainsAny(p, "/.") {
 		return true
 	}
 	return strings.ContainsAny(p, "*?{") || slices.Contains(l.paths, p)
 }
 
+// isProseWord reports whether p reads as prose rather than a file name: it
+// has whitespace or a `(`/`)` inside it, or is the word `etc`/`etc.`.
+func isProseWord(p string) bool {
+	if len(strings.Fields(p)) != 1 || strings.ContainsAny(p, "()") {
+		return true
+	}
+	return p == "etc" || p == "etc."
+}
+
 // stripLineAnchor removes a trailing ":N", ":N-M", ":N,M", ":N, M", or
 // repeated (":N:C", ":N-M:C") line anchor (see lineAnchorRe). A reference
 // that is NOTHING but an anchor collapses to the empty string, which
-// FileRefs already skips — an anchor with no path in front of it names no
+// refPathList drops — an anchor with no path in front of it names no
 // file.
 func stripLineAnchor(p string) string {
 	return lineAnchorRe.ReplaceAllString(p, "")

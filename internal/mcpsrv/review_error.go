@@ -115,7 +115,10 @@ func (h *handlers) resolveModelAndRender(
 //   - it never runs checkFileConsistency, so FileConsistency is nil there
 //     (design §3.9). store() caches only a `pass` result (plan_cache.go),
 //     and repo_root — the argument that gates the disk tier — is part of the
-//     cache key, so a hit reproduces a run in which the check found nothing.
+//     cache key, so a hit reproduces a run in which the check found nothing
+//     a ruling did not waive: rulings are part of the cache key too, so a
+//     cached pass can still carry a task_order_contradiction a controller
+//     ruling waived.
 //   - it never calls store(), because the entry it is reading is the entry
 //     it would write.
 type planCallContext struct {
