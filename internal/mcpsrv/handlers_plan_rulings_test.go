@@ -2,6 +2,7 @@ package mcpsrv
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -307,4 +308,45 @@ func TestPlanPassCache_LookupReturnsIndependentWaivedSlices(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "plan ruling", second.WaivedFindings[0].Ruling)
 	assert.Equal(t, "task ruling", second.Tasks[0].WaivedFindings[0].Ruling)
+}
+
+// The deterministic Create/Modify finding is a plan-level finding like any
+// other: a ruling on its id waives it. The id is a fingerprint of category,
+// scope and criterion, not evidence, so the id one round reports still
+// matches after the plan is edited and the evidence changes.
+func TestValidatePlan_RulingWaivesTheFileConsistencyFinding(t *testing.T) {
+	plan := func(file string) string {
+		return "# Plan\n\n" +
+			"### Task 1: t1\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n\n**Files:**\n- Modify: `" + file + "`\n\n" +
+			"### Task 2: t2\n\n**Goal:** g\n\n**Acceptance criteria:**\n- ac\n\n**Files:**\n- Create: `" + file + "`\n\n"
+	}
+	id := verdict.Fingerprint(verdict.CategoryOther, planScopeKey, "task_order_contradiction")
+
+	sr := &scriptedReviewer{responses: []providers.Response{singlePlanResp(t, 2), singlePlanResp(t, 2)}}
+	h := &handlers{deps: newDepsWithScripted(t, sr, 8)}
+
+	_, first, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan("a.go")})
+	require.NoError(t, err)
+	var reported bool
+	for _, f := range first.PlanFindings {
+		if f.Criterion == "task_order_contradiction" {
+			reported = true
+			assert.Equal(t, id, f.ID)
+		}
+	}
+	require.True(t, reported, "round 1 must report the ordering violation")
+
+	_, second, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{
+		PlanText:          plan("b.go"),
+		ControllerRulings: []ControllerRulingArg{{FindingID: id, Ruling: "Ordered on purpose"}},
+	})
+	require.NoError(t, err)
+	assert.False(t, hasCriterion(second.PlanFindings, "task_order_contradiction"))
+	require.Len(t, second.WaivedFindings, 1)
+	w := second.WaivedFindings[0]
+	assert.Equal(t, id, w.ID)
+	assert.Equal(t, "Ordered on purpose", w.Ruling)
+	assert.Contains(t, w.Evidence, "`b.go`")
+	assert.Equal(t, verdict.VerdictPass, second.PlanVerdict)
+	assert.Contains(t, second.SummaryBlock, fmt.Sprintf("waived: %s", id))
 }

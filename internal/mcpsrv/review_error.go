@@ -216,12 +216,15 @@ func (c planCallContext) applyPreLadder(pr *verdict.PlanResult) {
 	// claim a verified reference suppresses; before the ladder's rollup
 	// collects what remains into the checklist.
 	suppressPlanVerifiedReferences(pr, c.VerifiedReferences)
-	// Before the file-consistency finding and the clamp join the list, so only
-	// reviewer findings are waived.
-	waivePlanFindings(pr, c.Rulings, c.Tasks)
+	// The file-consistency finding joins before the waiver, so a ruling reaches
+	// it: it is the plan-level finding a controller can most often prove wrong
+	// by listing a directory, and an unwaivable major would hold the verdict
+	// down every round. The clamp joins after: it reports this call's token
+	// budget, not the plan, so there is nothing to rule on.
 	if c.FileConsistency != nil {
 		pr.PlanFindings = append(pr.PlanFindings, *c.FileConsistency)
 	}
+	waivePlanFindings(pr, c.Rulings, c.Tasks)
 	*pr = prependPlanClamp(*pr, c.Clamp)
 }
 

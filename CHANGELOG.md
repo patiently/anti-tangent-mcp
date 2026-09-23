@@ -92,6 +92,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the line, so a Modify: of a file only a later task creates went unreported. Patterns
   (`testdata/*.golden`) and a bare file name after a nested path, which plans write as shorthand for
   a sibling, are not checked.
+- A `validate_plan` `controller_rulings` entry waives the deterministic `task_order_contradiction`
+  finding, which then appears under `waived_findings` with its evidence, as the argument's
+  description says. The finding could not be waived, so a false positive held the verdict down every
+  round. A ruling covers every violation the finding lists, including one a later round adds.
 
 ## [0.24.0] - 2026-09-20
 
