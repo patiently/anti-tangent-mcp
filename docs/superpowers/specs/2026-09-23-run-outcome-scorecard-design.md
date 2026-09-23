@@ -258,11 +258,11 @@ could not clear, and that the independent review then did not confirm, counts as
 
 **Uncertainty and the regression flag.** Every rate carries a Wilson 90% interval. The baseline
 for a cohort is the cohort (same source and collapse level) whose most recent scored task
-precedes the current cohort's first scored task. `regression: true` is set only when **both**
-cohorts have `runs ≥ min_runs` (default **10**, `ANTI_TANGENT_SCORECARD_MIN_RUNS`) **and** the
-current cohort's escape-rate lower bound exceeds the baseline's upper bound. Below the threshold
-the field is `"insufficient_data"`, never `false`, so a quiet flag cannot be mistaken for a clean
-bill.
+precedes the current cohort's first scored task. `regression` is a string enum:
+`"no_baseline"` when there is no earlier cohort, `"insufficient_data"` unless **both** cohorts have
+`runs ≥ min_runs` (default **10**, `ANTI_TANGENT_SCORECARD_MIN_RUNS`), `"regressed"` when the
+current cohort's escape-rate lower bound exceeds the baseline's upper bound, and `"ok"` otherwise.
+There is no boolean `false`, so a quiet flag cannot be mistaken for a clean bill.
 
 `scorecard.json` shape (keys are a cross-component contract with the daemon, snake_case, tagged):
 
@@ -284,7 +284,7 @@ per `(tool, model)` pair seen in any call log or plan call, where `tool` is `val
 column:
 
 - *Operational columns, from the calls themselves:* `calls`, `runs`, `tasks`, verdict mix,
-  `findings_per_call`, `ms_p50`/`ms_p95`, `partial_rate`, `cache_hit_rate`. These need no outcome
+  `findings_per_call`, `ms_p50`/`ms_p95`, `partial_rate`. These need no outcome
   and are available for every call.
 - *Outcome-linked columns, per source, over scored tasks:* `escape_rate` and
   `unconfirmed_flag_rate`, with interval and n, computed over the scored tasks this
