@@ -76,13 +76,14 @@ func untargetedLitePlanRunAdvisory() verdict.Finding {
 	}
 }
 
-// appendPlanLedger writes a changed plan-run row to the plan ledger. Best
-// effort: a failure is logged and never changes a result.
+// appendPlanLedger writes a changed plan-run row to the plan ledger and the
+// run snapshot. Best effort: a failure is logged and never changes a result.
 func (h *handlers) appendPlanLedger(runID string, row planrun.TaskRow) {
 	run, ok := h.deps.PlanRuns.Get(runID)
 	if !ok {
 		return
 	}
+	h.snapshotRow(runID, row)
 	if err := h.deps.PlanLedger.Append(run, row); err != nil {
 		slog.Warn("plan ledger append failed", "plan_run_id", runID, "err", err)
 	}
@@ -101,6 +102,7 @@ func completionRowUpdate(env Envelope, cs *codescene.Digest) func(*planrun.TaskR
 		}
 	}
 	completedAt := time.Now().UTC()
+	call := callFromEnvelope("validate_completion", env)
 	return func(row *planrun.TaskRow) {
 		row.PostVerdict = env.Verdict
 		row.Severity = sev
@@ -110,6 +112,7 @@ func completionRowUpdate(env Envelope, cs *codescene.Digest) func(*planrun.TaskR
 		row.CompletedAt = completedAt
 		row.Waived = len(env.WaivedFindings)
 		row.Escalated = row.Escalated || env.Escalate
+		row.AppendCall(call)
 	}
 }
 
@@ -117,12 +120,13 @@ func completionRowUpdate(env Envelope, cs *codescene.Digest) func(*planrun.TaskR
 // session-backed check_progress call and writes the updated row to the plan
 // ledger. Best effort: an unknown run or row logs a warning and never
 // changes the result. A no-op when sess carries no plan run.
-func (h *handlers) recordCheckpointRow(sess *session.Session) {
+func (h *handlers) recordCheckpointRow(sess *session.Session, env Envelope) {
 	if sess.PlanRunID == "" {
 		return
 	}
 	row, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
 		row.Checkpoints++
+		row.AppendCall(callFromEnvelope("check_progress", env))
 	})
 	if !ok {
 		slog.Warn("plan run row update failed; run or row unknown",

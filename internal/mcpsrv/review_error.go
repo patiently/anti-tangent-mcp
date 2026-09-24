@@ -129,6 +129,10 @@ type planCallContext struct {
 	// PlanLedger receives a header line for every freshly minted run. Nil-safe:
 	// nil unless ANTI_TANGENT_STATS_DIR and ANTI_TANGENT_PLAN_LEDGER are set.
 	PlanLedger *planrun.Ledger
+	// OnMint, when set, is told about every freshly minted run together with
+	// the validate_plan call that produced it. Nil in tests that build a
+	// context by hand.
+	OnMint func(runID string, call planrun.ToolCall)
 	// Source is the caller's pre-rendered provenance string (planSrc.String()),
 	// empty when plan_text was used. Threaded through so every envelope —
 	// recovery and cache hit included — carries the same source line a
@@ -246,6 +250,15 @@ func (c planCallContext) mintPlanRunID(pr *verdict.PlanResult) {
 	pr.PlanRunID = run.ID
 	if err := c.PlanLedger.AppendHeader(run); err != nil {
 		slog.Warn("plan ledger header append failed", "plan_run_id", run.ID, "err", err)
+	}
+	if c.OnMint != nil {
+		c.OnMint(run.ID, planrun.ToolCall{
+			Tool:     "validate_plan",
+			Model:    c.ModelUsed,
+			Verdict:  string(pr.PlanVerdict),
+			Findings: len(planFindings(*pr)),
+			MS:       c.ReviewMS,
+		})
 	}
 }
 

@@ -235,6 +235,10 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		// Best-effort: an unknown or expired run must not fail the review.
 		ref := planrun.TaskRef{Index: args.TaskIndex, Title: args.TaskTitle}
 		if row, ok := h.deps.PlanRuns.Attach(args.PlanRunID, env.SessionID, ref, env.Verdict); ok {
+			call := callFromEnvelope("validate_task_spec", env)
+			if logged, ok := h.deps.PlanRuns.UpdateRow(args.PlanRunID, env.SessionID, func(r *planrun.TaskRow) { r.AppendCall(call) }); ok {
+				row = logged
+			}
 			h.appendPlanLedger(args.PlanRunID, row)
 		} else {
 			slog.Warn("plan run attach failed; run unknown or expired",
@@ -547,7 +551,7 @@ func (h *handlers) CheckProgress(ctx context.Context, _ *mcp.CallToolRequest, ar
 		})
 		h.deps.Sessions.RecordIssuedIDs(sess.ID, envelopeIDs(env))
 
-		h.recordCheckpointRow(sess)
+		h.recordCheckpointRow(sess, env)
 	}
 
 	// Re-fetch so LastAccessed reflects the final access.
@@ -2402,6 +2406,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 		cachedCall := planCallContext{
 			PlanRuns:           h.deps.PlanRuns,
 			PlanLedger:         h.deps.PlanLedger,
+			OnMint:             h.onPlanRunMinted,
 			Source:             planSrc.String(),
 			ModelUsed:          cachedModelUsed,
 			ReviewMS:           0,
@@ -2467,6 +2472,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	call := planCallContext{
 		PlanRuns:           h.deps.PlanRuns,
 		PlanLedger:         h.deps.PlanLedger,
+		OnMint:             h.onPlanRunMinted,
 		Source:             planSrc.String(),
 		ModelUsed:          modelUsed,
 		ReviewMS:           ms,
