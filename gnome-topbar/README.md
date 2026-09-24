@@ -15,6 +15,29 @@ contract's consumer side; the schema and producer behaviour live in the
 is absent, and degrades gracefully when a limit fetch failed
 (`limits.error` → "limits unavailable", cost fields still render).
 
+## anti-tangent runs (`/ui/runs`)
+
+When `$ANTI_TANGENT_STATS_DIR/runs.jsonl` is present, the tray's 🧪 Runs link opens
+`/ui/runs`: an anti-tangent tool × validator model overview, a regression-by-review-model
+table, and a list of runs you can drill into. Three scopes, switched via `?scope=`:
+
+- **Mine** (default) — this machine's own `runs.jsonl` / `outcomes.jsonl` only. Task titles
+  are shown here (from local plan-run state), nowhere else.
+- **Team** — every publisher's shared records, pooled from Basic Memory, plus a per-user
+  breakdown under "By user".
+- **`user:<name>`** — one publisher's shared records alone (the scope nav links to one per
+  publisher seen in Team).
+
+Publishing (writing your own runs to Basic Memory) is gated by `ANTI_TANGENT_SHARE_STATS=1`
+(default `0`) and requires `bm_username` in the config; reading the Team scope needs only
+ordinary Basic Memory access (`bm_url` / `bm_bearer_token`) and pools whatever `share_project`
+holds (defaults to `bm_project`). A shared record is content-free: no task titles, no plan
+headings, no finding text, no raw `plan_run_id` or session id — only a salted, hashed run id
+(`r_...`), tool/model/verdict/finding-count/latency per call, and per-task outcome severities
+and normalised categories. See `internal/atruns/share.go` (`NoteBody`) for what actually goes
+into a note, and the anti-tangent-mcp root `docs/protocol/outcome.md` for the wire contract
+these records are read from.
+
 ## Prerequisites
 - GNOME Shell 45/46/47 (Wayland or X11)
 - `gh` CLI logged in (`gh auth status`)
