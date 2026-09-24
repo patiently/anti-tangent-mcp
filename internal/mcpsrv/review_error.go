@@ -258,6 +258,7 @@ func (c planCallContext) mintPlanRunID(pr *verdict.PlanResult) {
 			Verdict:  string(pr.PlanVerdict),
 			Findings: len(planFindings(*pr)),
 			MS:       c.ReviewMS,
+			Partial:  pr.Partial,
 		})
 	}
 }
