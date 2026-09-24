@@ -6,6 +6,11 @@
 bm_username = "<your-basic-memory-username>"
 bm_project  = "main"
 
+# Basic Memory project that holds shared anti-tangent run records (at_run notes).
+# Defaults to bm_project. Publishing also needs ANTI_TANGENT_SHARE_STATS=1 in the
+# daemon's environment; reading the team's records needs only BM access.
+# share_project = "main"
+
 # Optional overrides (defaults shown):
 # listen_port        = 47615
 # github_interval_sec = 120

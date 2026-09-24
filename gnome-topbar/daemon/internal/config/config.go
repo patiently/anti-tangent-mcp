@@ -18,8 +18,12 @@ type Config struct {
 	BMToken    string `toml:"bm_bearer_token"`
 	BMUsername string `toml:"bm_username"`
 	BMProject  string `toml:"bm_project"`
-	ListenPort int    `toml:"listen_port"`
-	APIToken   string `toml:"api_token"`
+	// ShareProject is the Basic Memory project that holds shared at_run
+	// records. It defaults to BMProject so a daemon that hasn't set it up
+	// separately still reads/writes the same project it already uses.
+	ShareProject string `toml:"share_project"`
+	ListenPort   int    `toml:"listen_port"`
+	APIToken     string `toml:"api_token"`
 
 	GitHubIntervalSec int `toml:"github_interval_sec"`
 	BMIntervalSec     int `toml:"bm_interval_sec"`
@@ -50,6 +54,9 @@ func Load(cfgPath, stateDir string) (Config, error) {
 	}
 	if c.BMProject == "" {
 		c.BMProject = "main"
+	}
+	if c.ShareProject == "" {
+		c.ShareProject = c.BMProject
 	}
 	if c.ListenPort == 0 {
 		c.ListenPort = 47615

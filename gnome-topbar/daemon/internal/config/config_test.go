@@ -51,6 +51,36 @@ func TestLoadAppliesDefaultsAndEnv(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsShareProjectToBMProject(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("bm_project = \"team-main\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(cfgPath, dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ShareProject != "team-main" {
+		t.Fatalf("ShareProject = %q, want default of BMProject %q", c.ShareProject, "team-main")
+	}
+}
+
+func TestLoadHonoursExplicitShareProject(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("bm_project = \"team-main\"\nshare_project = \"shared\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(cfgPath, dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ShareProject != "shared" {
+		t.Fatalf("ShareProject = %q, want %q", c.ShareProject, "shared")
+	}
+}
+
 func TestLoadReusesExistingToken(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
