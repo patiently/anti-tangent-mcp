@@ -42,6 +42,26 @@ func TestRunHashStableAndDistinct(t *testing.T) {
 	}
 }
 
+// waitForScoring blocks until RecordOutcome's async single-flight scorecard
+// refresh (r.scoring) has finished. A caller's t.TempDir() cleanup runs
+// RemoveAll on the recorder's directory, and that refresh's writeFileAtomic
+// call creates a temp file in the same directory out-of-band from the test's
+// own synchronous calls; without this wait, RemoveAll can list the
+// directory's entries before the goroutine's temp file lands, then fail with
+// "directory not empty" once it does. Polling the single-flight flag, not the
+// scorecard file's existence, because the file can already exist from the
+// test's own synchronous WriteScorecard call.
+func waitForScoring(t *testing.T, r *Recorder) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for r.scoring.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("RecordOutcome's async scorecard refresh did not finish before the wait deadline")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestRecordAndScore(t *testing.T) {
 	dir := t.TempDir()
 	r := newRunsTestRecorder(t, dir, 3)
@@ -54,6 +74,7 @@ func TestRecordAndScore(t *testing.T) {
 		Findings: []scorecard.OutcomeFinding{{TaskIndex: 1, Severity: "major", Category: "x"}}}); err != nil {
 		t.Fatal(err)
 	}
+	waitForScoring(t, r)
 	f, _ := os.OpenFile(filepath.Join(dir, runsFile), os.O_APPEND|os.O_WRONLY, 0o644)
 	_, _ = f.WriteString("{not json\n")
 	_ = f.Close()
