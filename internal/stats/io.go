@@ -94,12 +94,12 @@ func writeJSON(dir, name string, v any) error {
 // writeFileAtomic writes b to a unique sibling temp file then renames it over
 // path (atomic on the same filesystem), so readers never see a partial write.
 // The temp name is unique per call (os.CreateTemp) rather than a fixed
-// "<path>.tmp": ANTI_TANGENT_STATS_DIR is designed to be shared across stdio
-// server processes, and a fixed temp name lets two concurrent writers to the
-// same target clobber each other's temp file — publishing the wrong payload or
-// failing Rename with the temp already moved. In-process callers are already
-// serialized (Recorder.mu / single-flight compaction); this hardens the
-// cross-process case where neither applies.
+// "<path>.tmp": both ANTI_TANGENT_STATS_DIR shared across stdio server
+// processes and, in-process, compaction's scorecard write racing an async
+// RecordOutcome refresh can call this concurrently for the same target, and a
+// fixed temp name would let one writer's Write land in the other's temp file
+// or Rename fail with the temp already moved. Each writer instead gets its
+// own temp file, and whichever Rename lands last wins.
 func writeFileAtomic(path string, b []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {
