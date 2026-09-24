@@ -17,7 +17,7 @@
 - **Stats stay best-effort.** No stats write may change a hook's result or fail a call; errors are logged via `slog` and swallowed. `record_review_outcome` reports problems in its result (`recorded:false` + `reason`), never as an MCP-level error.
 - **The server stays advisory.** `record_review_outcome` makes no reviewer call and blocks nothing.
 - **Import rules.** `scorecard/` imports only the standard library. `internal/stats` may import `scorecard` but never `internal/planrun` or `internal/mcpsrv`. `internal/planrun` may import `scorecard`.
-- **JSON keys are a cross-module contract.** Every exported field of every `scorecard` type carries an explicit snake_case `json` tag exactly as written in this plan; the daemon decodes by those keys.
+- **JSON keys are a cross-module contract.** Every exported field of every `scorecard` type that is serialized (written to `runs.jsonl`, `outcomes.jsonl`, `scorecard.json` or a BM note) carries an explicit snake_case `json` tag exactly as written in this plan; the daemon decodes by those keys. Two deliberate exceptions: `scorecard.Options` is an in-process argument and is never serialized, and `Group` embeds `Metrics` without a tag so its fields flatten into the group object.
 - **Wire enums (exact strings):** sources `final_review`, `review_now`; outcome severities `critical`, `major`, `minor`; regression values `no_baseline`, `insufficient_data`, `regressed`, `ok`; tools `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`; configured-model roles `plan`, `pre`, `mid`, `post`, `worker`.
 - **Defaults:** `ANTI_TANGENT_SCORECARD_MIN_RUNS=10`; call log capped at 32 entries per task; Wilson interval at 90% (z = 1.6448536269514722); `ANTI_TANGENT_SHARE_STATS` is on only when exactly `1`.
 - **Comment policy (root `CLAUDE.md` → Comments):** comments explain non-obvious behaviour or invariants only; no task, issue, PR or version references, no "previously"/"no longer".
@@ -54,7 +54,9 @@
 - [ ] `task_index: 0` outcome findings are counted once per run in `unattributed_findings` by severity and never attributed to a task.
 - [ ] For the same `(run_hash, source)` the outcome with the latest `ts` wins; for the same `(run_hash, task index)` the snapshot with the latest `ts` wins.
 - [ ] `wilson(3, 10)` returns `lo` ≈ 0.1269 and `hi` ≈ 0.5583 (±0.001); `wilson(0, 0)` returns `{0, 0, 1, 0, 0}`.
-- [ ] `regression` is `no_baseline` with no earlier cohort, `insufficient_data` when either cohort has fewer than `MinRuns` runs, `regressed` when the current escape-rate `lo` exceeds the baseline's `hi`, otherwise `ok`.
+- [ ] Baseline eligibility: a group's baseline is another group **in the same view** (`cohorts` or `by_review_model`) with the same `source` and `publisher` whose last scored task is strictly before this group's first scored task; any cohort-key dimension may differ (a new review model, server version or implementer model is exactly the change being measured). Among eligible groups the one with the latest last-scored task wins; a tie goes to the group that sorts first in the view's order (source, publisher, review model, server version, implementer model).
+- [ ] `regression` is `no_baseline` with no eligible baseline, `insufficient_data` when either cohort has fewer than `MinRuns` runs, `regressed` when the current escape-rate `lo` exceeds the baseline's `hi`, otherwise `ok`.
+- [ ] `scorecard.HashRunID("s", "pr_abc")` returns `r_6ffe28feb9d3bc37b1441388`; it is the only implementation of the run-hash construction in the repository.
 - [ ] `go list -deps ./scorecard` lists only standard-library packages besides `scorecard` itself.
 
 **Verify:** `go test -race ./scorecard/...` → `ok`
@@ -72,6 +74,8 @@
 package scorecard
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -155,6 +159,15 @@ type OutcomeLine struct {
 	ReviewerModel     string             `json:"reviewer_model,omitempty"`
 	ImplementerModels []ImplementerModel `json:"implementer_models,omitempty"`
 	Findings          []OutcomeFinding   `json:"findings"`
+}
+
+// HashRunID is the salted digest that stands in for a plan_run_id in every
+// record. It lives here, not in either module, because the server writes it
+// and the daemon recomputes it to join local task titles: two copies of the
+// construction would drift silently and the join would just find nothing.
+func HashRunID(salt, planRunID string) string {
+	sum := sha256.Sum256([]byte(salt + ":run:" + planRunID))
+	return "r_" + hex.EncodeToString(sum[:12])
 }
 
 // NormalizeCategory is the only transformation free text gets before it is
@@ -592,8 +605,10 @@ func groupTasks(runs map[runKey]*run, keyOf func(*run, *task) CohortKey, byPubli
 
 // assignRegression compares each group with its baseline: the group of the
 // same source and publisher whose last scored task came most recently before
-// this group's first. Only a disjoint interval counts as a regression, and
-// only once both sides have minRuns runs.
+// this group's first. Any key dimension may differ, since a changed model or
+// version is what is being measured. groups arrives sorted, and the strict
+// After below keeps the first-sorted group on a tie. Only a disjoint interval
+// counts as a regression, and only once both sides have minRuns runs.
 func assignRegression(groups []Group, minRuns int) {
 	for i := range groups {
 		g := &groups[i]
@@ -799,6 +814,15 @@ func TestRegressionFlag(t *testing.T) {
 	}
 }
 
+// The literal is sha256("s:run:pr_abc")[:12] in hex. The server's stats
+// recorder and the daemon's title join both call HashRunID, so this one test
+// pins the join key for both.
+func TestHashRunIDPinned(t *testing.T) {
+	if got := HashRunID("s", "pr_abc"); got != "r_6ffe28feb9d3bc37b1441388" {
+		t.Fatalf("HashRunID = %q", got)
+	}
+}
+
 func TestNormalizeCategory(t *testing.T) {
 	if got := NormalizeCategory("  Correctness "); got != "correctness" {
 		t.Fatalf("got %q", got)
@@ -840,7 +864,7 @@ git commit -m "feat(scorecard): score verdicts against an independent review per
 ```
 
 ```json:metadata
-{"files": ["scorecard/records.go", "scorecard/assemble.go", "scorecard/metrics.go", "scorecard/compute.go", "scorecard/compute_test.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./scorecard/...", "acceptanceCriteria": ["escape_rate counts pass tasks with a critical/major outcome finding over pass tasks, per source", "warn then pass with a clean outcome is caught_and_fixed, not unconfirmed", "task_index 0 findings counted once per run in unattributed_findings", "latest outcome per (run, source) and latest snapshot per (run, task) win", "wilson(3,10) ~ [0.1269, 0.5583]; wilson(0,0) = {0,0,1,0,0}", "regression enum no_baseline/insufficient_data/regressed/ok as specified", "scorecard depends only on the standard library"], "modelTier": "standard"}
+{"files": ["scorecard/records.go", "scorecard/assemble.go", "scorecard/metrics.go", "scorecard/compute.go", "scorecard/compute_test.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./scorecard/...", "acceptanceCriteria": ["escape_rate counts pass tasks with a critical/major outcome finding over pass tasks, per source", "warn then pass with a clean outcome is caught_and_fixed, not unconfirmed", "task_index 0 findings counted once per run in unattributed_findings", "latest outcome per (run, source) and latest snapshot per (run, task) win", "wilson(3,10) ~ [0.1269, 0.5583]; wilson(0,0) = {0,0,1,0,0}", "baseline = latest-ending earlier group in the same view, same source and publisher, any key may differ, ties to first-sorted; regression enum no_baseline/insufficient_data/regressed/ok", "HashRunID(\"s\",\"pr_abc\") = r_6ffe28feb9d3bc37b1441388, the single run-hash implementation", "scorecard depends only on the standard library"], "modelTier": "standard"}
 ```
 
 ---
@@ -856,7 +880,7 @@ git commit -m "feat(scorecard): score verdicts against an independent review per
 - Test: `scorecard/toolmodel_test.go`
 
 **Acceptance Criteria:**
-- [ ] `Scorecard.ByToolModel` has one row per `(tool, model)` seen in any task call log or run-header `plan_call`, ordered `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`, then by model; each row's `calls`, `verdict_counts`, `findings_per_call`, `ms_p50`, `ms_p95`, `partial_rate` count every call, including calls in runs that have no outcome.
+- [ ] `Scorecard.ByToolModel` has one row per `(tool, model)` seen in any task call log or run-header `plan_call`, ordered `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`, then by model; each row's `calls`, `verdict_counts`, `findings_per_call`, `ms_p50`, `ms_p95`, `partial_rate` count every call retained in the call logs (the latest 32 per task, per Task 3's cap) and every run-header `plan_call`, including calls in runs that have no outcome. Calls evicted by the cap are not attributable to a tool or model and are reported only as the task's `calls_dropped`.
 - [ ] A row's per-source `outcomes[].escape_rate` scores tasks by the model of that tool's **latest** call on the task (`validate_task_spec`, `validate_completion`), by every model that made a checkpoint (`check_progress`), and by the run's `plan_call` model (`validate_plan`); its `unconfirmed_flag_rate` uses that tool's own verdict (for `check_progress`, any warn/fail checkpoint by that model; for `validate_plan`, the run's `plan_verdict`).
 - [ ] `Scorecard.Publishers` lists distinct non-empty publishers, sorted. `Scorecard.ByPublisher` is non-nil only when there are ≥ 2 publishers and `Options.Publisher` is empty, and then carries `by_review_model` and `by_tool_model` with `publisher` set on every group and row.
 - [ ] `Scorecard.ModelSets` counts runs per distinct `configured_models` map, sorted by runs descending, then by the map's `role=model` string.
@@ -883,6 +907,9 @@ type ToolModelOutcome struct {
 }
 
 // ToolModelRow reports one validator model's work in one anti-tangent tool.
+// Its operational columns cover the calls still in each task's capped call
+// log; a call evicted by the cap is known only as a count, with no tool or
+// model, so it cannot be placed in any row.
 // The outcome columns slice escapes by the model that reviewed the task in
 // this tool; a task has one outcome and up to four reviewing models, so this
 // is a slice, not a causal attribution.
@@ -1335,7 +1362,7 @@ git commit -m "feat(scorecard): tool x model overview, per-publisher views, run 
 ```
 
 ```json:metadata
-{"files": ["scorecard/toolmodel.go", "scorecard/runescapes.go", "scorecard/compute.go", "scorecard/toolmodel_test.go"], "verifyCommand": "go test -race ./scorecard/...", "acceptanceCriteria": ["by_tool_model has one row per (tool, model) in tool order then model, with operational columns over every call", "outcome columns slice by each tool's latest-call model, checkpoint models, and plan_call model", "publishers sorted; by_publisher only with >=2 publishers and no filter", "model_sets counts runs per configured_models map", "RunEscapes returns passed tasks with critical/major findings, tasks scored, and known"], "modelTier": "standard"}
+{"files": ["scorecard/toolmodel.go", "scorecard/runescapes.go", "scorecard/compute.go", "scorecard/toolmodel_test.go"], "verifyCommand": "go test -race ./scorecard/...", "acceptanceCriteria": ["by_tool_model has one row per (tool, model) in tool order then model, with operational columns over every retained call and plan_call", "outcome columns slice by each tool's latest-call model, checkpoint models, and plan_call model", "publishers sorted; by_publisher only with >=2 publishers and no filter", "model_sets counts runs per configured_models map", "RunEscapes returns passed tasks with critical/major findings, tasks scored, and known"], "modelTier": "standard"}
 ```
 
 ---
@@ -1540,8 +1567,8 @@ git commit -m "feat(planrun): per-task call log and run model metadata"
 - Modify: `CHANGELOG.md`
 
 **Acceptance Criteria:**
-- [ ] `Recorder.RunHash(id)` is `"r_"` + 24 lowercase hex characters, stable across two `stats.New` calls on the same dir, different from `HashSession(id)`, and `""` for a nil recorder or empty id.
-- [ ] `Recorder.RecordRunLine` appends to `runs.jsonl`; `Recorder.RecordOutcome` appends to `outcomes.jsonl` and returns the write error; both are no-ops (nil error) on a nil recorder.
+- [ ] `Recorder.RunHash(id)` delegates to `scorecard.HashRunID(salt, id)`; it is `"r_"` + 24 lowercase hex characters, stable across two `stats.New` calls on the same dir, different from `HashSession(id)`, and `""` for a nil recorder or empty id.
+- [ ] `Recorder.RecordRunLine` appends to `runs.jsonl`; `Recorder.RecordOutcome` appends to `outcomes.jsonl`, logs one `slog` warning on a write failure and also returns that error (the tool reports it as `recorded:false`); both are no-ops (nil error) on a nil recorder.
 - [ ] `Recorder.RunLines(hash)` returns only that hash's lines.
 - [ ] `Recorder.WriteScorecard()` writes `scorecard.json` with `min_runs` equal to `Options.MinRuns` (default 10) and `skipped_lines` counting corrupt lines in both files; `RecordOutcome` triggers it asynchronously (single-flight).
 - [ ] Compaction writes `scorecard.json` before the summary call, and the summary prompt includes the `by_review_model` JSON when it is non-empty.
@@ -1732,14 +1759,12 @@ Expected: FAIL (undefined methods and fields).
 package stats
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"time"
 
 	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
-// RunHash returns a salted digest of a plan_run_id. It is keyed differently
+// RunHash returns the salted digest of a plan_run_id. It is keyed differently
 // from HashSession so a run id and a session id that happen to share a value
 // never share a digest. The raw plan_run_id is never written to runs.jsonl or
 // outcomes.jsonl; this digest is the only join key between them.
@@ -1747,8 +1772,7 @@ func (r *Recorder) RunHash(planRunID string) string {
 	if r == nil || planRunID == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(r.state.Salt + ":run:" + planRunID))
-	return "r_" + hex.EncodeToString(sum[:12])
+	return scorecard.HashRunID(r.state.Salt, planRunID)
 }
 
 // RecordRunLine appends one content-free run snapshot. Best-effort.
@@ -1774,6 +1798,7 @@ func (r *Recorder) RecordOutcome(o scorecard.OutcomeLine) error {
 	err := appendJSONL(r.dir, outcomesFile, o)
 	r.mu.Unlock()
 	if err != nil {
+		r.logger.Warn("stats outcome append failed", "err", err)
 		return err
 	}
 	if r.scoring.CompareAndSwap(false, true) {
@@ -2249,9 +2274,9 @@ git commit -m "feat(mcpsrv): log every lifecycle call per task and write run sna
 **Acceptance Criteria:**
 - [ ] `tools/list` includes `record_review_outcome`; its input schema requires exactly `findings`, `plan_run_id`, `source`; `findings[]` requires `category`, `severity`, `task_index`; `implementer_models[]` requires `model`, `task_index`; every property has a description.
 - [ ] With `Stats` nil the call returns `recorded:false` and a `reason` naming `ANTI_TANGENT_STATS_DIR`, and no error.
-- [ ] An empty `plan_run_id`, a `source` other than `final_review`/`review_now`, a severity outside `critical`/`major`/`minor`, a negative `task_index`, more than 500 findings, an `implementer_models` entry with `task_index < 1` or an empty model, or (for a known run) a `task_index` above the run's task count each return `recorded:false` with a `reason` naming the offending field, write nothing, and return no MCP error.
+- [ ] An empty `plan_run_id`, a `source` other than `final_review`/`review_now`, a severity outside `critical`/`major`/`minor`, a negative `task_index`, more than 500 findings, an `implementer_models` entry with `task_index < 1` or an empty model, or (for a run known from the live store or a snapshot header, including one with zero tasks) a `task_index` above the run's task count each return `recorded:false` with a `reason` naming the offending field, write nothing, and return no MCP error.
 - [ ] A valid call for a known run appends one `outcomes.jsonl` line (categories normalised, `run_hash` not the raw id) and returns `recorded:true`, `run_known:true`, `tasks_scored`, and `escapes` listing each passed task with a critical/major finding.
-- [ ] A valid call for an unknown run is recorded with `run_known:false` and `escapes: []`.
+- [ ] A valid call for an unknown run is recorded with `run_known:false` and `escapes: []`. A run the live plan-run store knows but that has no snapshot lines (stats enabled after the run was minted) reports `run_known:true`, `tasks_scored: 0`, `escapes: []`.
 - [ ] `summary_block` starts with `record_review_outcome` and names the source, the run id, the tasks scored and the escape count; one `slog` line with msg `record_review_outcome` is emitted per call carrying `duration_ms`, `source`, `recorded`, `run_known`, `escapes`.
 
 **Verify:** `go test -race ./internal/mcpsrv/...` → `ok`
@@ -2345,7 +2370,7 @@ func (h *handlers) recordReviewOutcome(args RecordReviewOutcomeArgs) RecordRevie
 	if err != nil {
 		slog.Warn("record_review_outcome: reading run snapshots failed", "err", err)
 	}
-	if n := h.outcomeTaskCount(runID, lines); n > 0 {
+	if n, known := h.outcomeTaskCount(runID, lines); known {
 		for i, f := range args.Findings {
 			if f.TaskIndex > n {
 				res.Reason = fmt.Sprintf("findings[%d].task_index %d exceeds the run's %d tasks", i, f.TaskIndex, n)
@@ -2371,7 +2396,12 @@ func (h *handlers) recordReviewOutcome(args RecordReviewOutcomeArgs) RecordRevie
 		return res
 	}
 	res.Recorded = true
-	res.Escapes, res.TasksScored, res.RunKnown = scorecard.RunEscapes(lines, o)
+	var snapshotted bool
+	res.Escapes, res.TasksScored, snapshotted = scorecard.RunEscapes(lines, o)
+	// A run minted before stats were enabled is live but has no snapshot
+	// lines; it is still a run this server knows.
+	_, live := h.deps.PlanRuns.PlanTaskCount(runID)
+	res.RunKnown = snapshotted || live
 	return res
 }
 
@@ -2401,17 +2431,19 @@ func validateOutcomeArgs(runID string, args RecordReviewOutcomeArgs) string {
 }
 
 // outcomeTaskCount is the run's task count from the live store, else from
-// its snapshot header, else 0 (unknown: task indexes are not range-checked).
-func (h *handlers) outcomeTaskCount(runID string, lines []scorecard.RunLine) int {
+// its snapshot header. known is false only when neither has the run; then
+// task indexes cannot be range-checked. A known run with zero tasks is still
+// known, so every positive task_index is rejected for it.
+func (h *handlers) outcomeTaskCount(runID string, lines []scorecard.RunLine) (n int, known bool) {
 	if n, ok := h.deps.PlanRuns.PlanTaskCount(runID); ok {
-		return n
+		return n, true
 	}
 	for _, l := range lines {
 		if l.Header {
-			return l.TaskCount
+			return l.TaskCount, true
 		}
 	}
-	return 0
+	return 0, false
 }
 
 func formatOutcomeSummary(args RecordReviewOutcomeArgs, res RecordReviewOutcomeResult) string {
@@ -2559,6 +2591,28 @@ func TestRecordReviewOutcome_UnknownRunStillRecorded(t *testing.T) {
 }
 ```
 
+Add a live-run-without-snapshots case:
+
+```go
+func TestRecordReviewOutcome_ZeroTaskKnownRunRejectsTaskIndex(t *testing.T) {
+	h, _, _ := outcomeHandlers(t)
+	run := h.deps.PlanRuns.Create("pass", "rigorous", 0)
+	res := recordOutcome(t, h, RecordReviewOutcomeArgs{PlanRunID: run.ID, Source: "final_review",
+		Findings: []OutcomeFindingArg{{TaskIndex: 1, Severity: "major", Category: "x"}}})
+	assert.False(t, res.Recorded)
+	assert.Contains(t, res.Reason, "exceeds")
+}
+
+func TestRecordReviewOutcome_LiveRunWithoutSnapshotsIsKnown(t *testing.T) {
+	h, _, _ := outcomeHandlers(t)
+	run := h.deps.PlanRuns.Create("pass", "rigorous", 1)
+	res := recordOutcome(t, h, RecordReviewOutcomeArgs{PlanRunID: run.ID, Source: "final_review", Findings: []OutcomeFindingArg{}})
+	assert.True(t, res.Recorded)
+	assert.True(t, res.RunKnown)
+	assert.Equal(t, 0, res.TasksScored)
+}
+```
+
 Also add `assert.True(t, catalogHas(t, "record_review_outcome"))` as `TestRecordReviewOutcomeRegisteredInCatalog`, using the `catalogHas` helper in `worker_handlers_test.go`.
 
 - [ ] **Step 5: Run the tests**
@@ -2580,7 +2634,7 @@ git commit -m "feat(mcpsrv): record_review_outcome tool"
 ```
 
 ```json:metadata
-{"files": ["internal/mcpsrv/outcome_handler.go", "internal/mcpsrv/outcome_handler_test.go", "internal/mcpsrv/server.go", "internal/mcpsrv/tool_schema_contract_test.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/mcpsrv/...", "acceptanceCriteria": ["tool listed; required sets findings/plan_run_id/source, findings[] category/severity/task_index, implementer_models[] model/task_index; all described", "Stats nil -> recorded false, reason names ANTI_TANGENT_STATS_DIR, no error", "each invalid input -> recorded false, reason names the field, nothing written, no MCP error", "valid known run -> one outcomes line, normalised categories, hashed run id, run_known, tasks_scored, escapes", "unknown run -> recorded with run_known false and escapes []", "summary_block format and one slog exit line with duration_ms, source, recorded, run_known, escapes"], "modelTier": "standard"}
+{"files": ["internal/mcpsrv/outcome_handler.go", "internal/mcpsrv/outcome_handler_test.go", "internal/mcpsrv/server.go", "internal/mcpsrv/tool_schema_contract_test.go", "CHANGELOG.md"], "verifyCommand": "go test -race ./internal/mcpsrv/...", "acceptanceCriteria": ["tool listed; required sets findings/plan_run_id/source, findings[] category/severity/task_index, implementer_models[] model/task_index; all described", "Stats nil -> recorded false, reason names ANTI_TANGENT_STATS_DIR, no error", "each invalid input -> recorded false, reason names the field, nothing written, no MCP error", "valid known run -> one outcomes line, normalised categories, hashed run id, run_known, tasks_scored, escapes", "unknown run -> recorded with run_known false and escapes []; live run without snapshots -> run_known true, tasks_scored 0", "summary_block format and one slog exit line with duration_ms, source, recorded, run_known, escapes"], "modelTier": "standard"}
 ```
 
 ---
@@ -2730,7 +2784,8 @@ git commit -m "docs(protocol): outcome.md — record the review outcome after a 
 - Modify: `docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`
 
 **Acceptance Criteria:**
-- [ ] `grep -n "nine" README.md CLAUDE.md docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md` finds no remaining reference to the tool count.
+- [ ] `grep -n "nine" README.md CLAUDE.md docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md` finds no remaining reference to the tool count (hits using "nine" for anything else are listed in the task report).
+- [ ] README describes the call log as the latest 32 calls per task plus `calls_dropped`, not as every call.
 - [ ] README's tool list has a `record_review_outcome` entry beside `plan_run_report`; its tool-catalog check lists ten tools; its stats section documents `runs.jsonl`, `outcomes.jsonl`, `scorecard.json` and `ANTI_TANGENT_SCORECARD_MIN_RUNS`.
 - [ ] Root `CLAUDE.md`'s overview names the tenth tool, its architecture block lists `scorecard/` and `outcome_handler.go`, and its logging paragraph lists `record_review_outcome` among the tools that emit one exit line per call.
 - [ ] The design spec's tool list includes `record_review_outcome`.
@@ -2752,7 +2807,7 @@ In the stats section, add a subsection:
 
 With `ANTI_TANGENT_STATS_DIR` set, the server also writes three content-free files:
 
-- `runs.jsonl`: one line per plan-run task change, carrying the task's verdicts, severity counts and a log of every anti-tangent call with the model that answered it; plus a header per run with the configured model per role.
+- `runs.jsonl`: one line per plan-run task change, carrying the task's verdicts, severity counts and its call log: the latest 32 anti-tangent calls made for the task, each with the model that answered it, plus `calls_dropped` counting any older calls the cap evicted; and a header per run with the configured model per role.
 - `outcomes.jsonl`: one line per `record_review_outcome` call.
 - `scorecard.json`: escape rate (tasks anti-tangent passed that the independent review found a critical or major problem in), unconfirmed-flag rate, waive rate and cost, by review-model cohort and by anti-tangent tool × model, each rate with its n and 90% interval. `regression` stays `insufficient_data` until a cohort and its baseline each have `ANTI_TANGENT_SCORECARD_MIN_RUNS` runs (default 10).
 
@@ -2767,8 +2822,8 @@ Add `ANTI_TANGENT_SCORECARD_MIN_RUNS` to the environment-variable table with def
 
 - [ ] **Step 4: Verify.**
 
-Run: `grep -c record_review_outcome README.md CLAUDE.md docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md; grep -n "nine tools\|nine registered" README.md CLAUDE.md docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`
-Expected: each count ≥ 1; the second grep prints nothing.
+Run: `grep -c record_review_outcome README.md CLAUDE.md docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md; grep -n "nine" README.md CLAUDE.md docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`
+Expected: each count ≥ 1. Read every line the second grep prints: none may state a tool count. A hit that uses "nine" for something else is fine; name it in the task report.
 
 - [ ] **Step 5: Commit**
 
@@ -2785,19 +2840,18 @@ git commit -m "docs: ten tools, scorecard files and ANTI_TANGENT_SCORECARD_MIN_R
 
 ### Task 9: Daemon — import `scorecard` and read the run files
 
-**Goal:** Give the gnome-topbar daemon a reader for `runs.jsonl`, `outcomes.jsonl` and `scorecard.json`, plus local task titles joined from the plan ledger through the stats salt, using the root module's `scorecard` package.
+**Goal:** Give the gnome-topbar daemon a reader for `runs.jsonl` and `outcomes.jsonl` (it recomputes the scorecard itself, so local and pooled views use identical code) plus the server's configured `min_runs` from `scorecard.json`, and local task titles joined from the plan ledger through the stats salt, using the root module's `scorecard` package.
 
 **Files:**
 - Modify: `gnome-topbar/daemon/go.mod`
 - Modify: `gnome-topbar/daemon/go.sum`
 - Create: `gnome-topbar/daemon/internal/atruns/atruns.go`
 - Test: `gnome-topbar/daemon/internal/atruns/atruns_test.go`
-- Test: `internal/stats/runs_test.go` (mirrored hash literal)
 
 **Acceptance Criteria:**
 - [ ] `gnome-topbar/daemon/go.mod` requires `github.com/patiently/anti-tangent-mcp` with `replace github.com/patiently/anti-tangent-mcp => ../..`, and `go build ./...` in the daemon succeeds.
-- [ ] `atruns.Read(dir)` returns `Present=false` and no error when `runs.jsonl` is absent; otherwise the parsed run lines, outcome lines, the count of corrupt lines skipped, and titles keyed by run hash then task index.
-- [ ] Titles come from `plan-runs.jsonl` rows only, joined by `"r_" + hex(sha256(salt + ":run:" + plan_run_id)[:12])` with the salt from `state.json`; the result matches `stats.Recorder.RunHash` for the same salt and id (asserted with a fixed salt and a precomputed hash).
+- [ ] `atruns.Read(dir)` returns `Present=false` and no error when `runs.jsonl` is absent; otherwise the parsed run lines, outcome lines, the count of corrupt lines skipped, titles keyed by run hash then task index, and `MinRuns` read from `scorecard.json`'s `min_runs` (0 when the file is absent or unparseable, which `scorecard.Compute` treats as its default). No other `scorecard.json` field is read: the daemon recomputes every view.
+- [ ] Titles come from `plan-runs.jsonl` rows only, joined by `scorecard.HashRunID(salt, plan_run_id)` with the salt from `state.json`, the same function the server's `Recorder.RunHash` calls; the daemon contains no hash construction of its own.
 - [ ] `atruns.Runs(lines, outcomes)` returns one `RunSummary` per `(publisher, run_hash)`, newest first by latest line time, with plan verdict, task count, configured models, implementer models, the sources that have reported, and the escape count per source.
 
 **Verify:** `cd gnome-topbar/daemon && go build ./... && go test -race ./internal/atruns/...` → `ok`
@@ -2826,8 +2880,6 @@ package atruns
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -2845,6 +2897,9 @@ type Data struct {
 	Skipped  int
 	// Titles maps run hash -> task index -> task title, local runs only.
 	Titles map[string]map[int]string
+	// MinRuns is the server's configured regression gate, taken from
+	// scorecard.json so the daemon's recomputed views gate the same way.
+	MinRuns int
 }
 
 func Read(dir string) (Data, error) {
@@ -2862,14 +2917,22 @@ func Read(dir string) (Data, error) {
 	}
 	d.Present, d.Lines, d.Outcomes, d.Skipped = true, lines, outs, skipR+skipO
 	d.Titles = readTitles(dir)
+	d.MinRuns = readMinRuns(dir)
 	return d, nil
 }
 
-// RunHash mirrors internal/stats.Recorder.RunHash; the two must agree or the
-// title join silently finds nothing.
-func RunHash(salt, planRunID string) string {
-	sum := sha256.Sum256([]byte(salt + ":run:" + planRunID))
-	return "r_" + hex.EncodeToString(sum[:12])
+func readMinRuns(dir string) int {
+	b, err := os.ReadFile(filepath.Join(dir, "scorecard.json"))
+	if err != nil {
+		return 0
+	}
+	var sc struct {
+		MinRuns int `json:"min_runs"`
+	}
+	if json.Unmarshal(b, &sc) != nil {
+		return 0
+	}
+	return sc.MinRuns
 }
 
 func readTitles(dir string) map[string]map[int]string {
@@ -2899,7 +2962,7 @@ func readTitles(dir string) map[string]map[int]string {
 		if r.PlanRunID == "" || r.Row.Index == 0 || r.Row.TaskTitle == "" {
 			continue
 		}
-		h := RunHash(st.Salt, r.PlanRunID)
+		h := scorecard.HashRunID(st.Salt, r.PlanRunID)
 		if out[h] == nil {
 			out[h] = map[int]string{}
 		}
@@ -3040,23 +3103,16 @@ func TestReadAbsent(t *testing.T) {
 	}
 }
 
-// The same literal is pinned in internal/stats/runs_test.go; if either side
-// changes its hash construction, one of the two tests fails.
-func TestRunHashMatchesServer(t *testing.T) {
-	if got := RunHash("s", "pr_abc"); got != "r_6ffe28feb9d3bc37b1441388" {
-		t.Fatalf("RunHash = %q", got)
-	}
-}
-
 func TestReadJoinsTitlesAndCountsCorruptLines(t *testing.T) {
 	dir := t.TempDir()
-	h := RunHash("salt1", "pr_abc")
+	h := scorecard.HashRunID("salt1", "pr_abc")
 	write(t, dir, "state.json", `{"salt":"salt1"}`)
 	write(t, dir, "runs.jsonl", `{"ts":"2026-09-01T00:00:00Z","run_hash":"`+h+`","task":{"index":1,"post_verdict":"pass","checkpoints":0}}`+"\n{broken\n")
 	write(t, dir, "outcomes.jsonl", `{"ts":"2026-09-01T01:00:00Z","run_hash":"`+h+`","source":"final_review","findings":[]}`+"\n")
 	write(t, dir, "plan-runs.jsonl", `{"plan_run_id":"pr_abc","row":{"index":1,"task_title":"Task 1: Alpha"}}`+"\n")
+	write(t, dir, "scorecard.json", `{"min_runs":7}`)
 	d, err := Read(dir)
-	if err != nil || !d.Present || d.Skipped != 1 || len(d.Lines) != 1 || len(d.Outcomes) != 1 {
+	if err != nil || !d.Present || d.Skipped != 1 || len(d.Lines) != 1 || len(d.Outcomes) != 1 || d.MinRuns != 7 {
 		t.Fatalf("read: %+v %v", d, err)
 	}
 	if d.Titles[h][1] != "Task 1: Alpha" {
@@ -3083,34 +3139,22 @@ func TestRunsSummaries(t *testing.T) {
 }
 ```
 
-Add the mirrored assertion to `internal/stats/runs_test.go`:
-
-```go
-// The same literal is pinned in gnome-topbar/daemon/internal/atruns; the
-// daemon joins local task titles through this hash.
-func TestRunHashPinnedLiteral(t *testing.T) {
-	r := newTestRecorder(t, t.TempDir(), 0)
-	r.state.Salt = "s"
-	if got := r.RunHash("pr_abc"); got != "r_6ffe28feb9d3bc37b1441388" {
-		t.Fatalf("RunHash = %q", got)
-	}
-}
-```
+The join key comes from `scorecard.HashRunID`, which Task 1 pins with a literal test; the daemon has no hash code of its own.
 
 - [ ] **Step 4: Tidy, build, test**
 
 Run: `cd gnome-topbar/daemon && go mod tidy && go build ./... && go test -race ./internal/atruns/...`
-Expected: `ok`. Also run `go test -race ./internal/stats/...` from the repo root for the mirrored hash assertion.
+Expected: `ok`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add gnome-topbar/daemon/go.mod gnome-topbar/daemon/go.sum gnome-topbar/daemon/internal/atruns/ internal/stats/runs_test.go
+git add gnome-topbar/daemon/go.mod gnome-topbar/daemon/go.sum gnome-topbar/daemon/internal/atruns/
 git commit -m "feat(gnome-topbar): read run snapshots, outcomes and local task titles"
 ```
 
 ```json:metadata
-{"files": ["gnome-topbar/daemon/go.mod", "gnome-topbar/daemon/go.sum", "gnome-topbar/daemon/internal/atruns/atruns.go", "gnome-topbar/daemon/internal/atruns/atruns_test.go", "internal/stats/runs_test.go"], "verifyCommand": "cd gnome-topbar/daemon && go build ./... && go test -race ./internal/atruns/...", "acceptanceCriteria": ["daemon go.mod requires the root module with replace ../..; build succeeds", "Read: Present false when runs.jsonl absent; otherwise lines, outcomes, skipped count, titles", "title join hash equals the server's RunHash, pinned by the same literal in both modules' tests", "Runs returns one summary per (publisher, run_hash), newest first, with verdict, task count, configured and implementer models, sources, escapes per source"], "modelTier": "standard"}
+{"files": ["gnome-topbar/daemon/go.mod", "gnome-topbar/daemon/go.sum", "gnome-topbar/daemon/internal/atruns/atruns.go", "gnome-topbar/daemon/internal/atruns/atruns_test.go"], "verifyCommand": "cd gnome-topbar/daemon && go build ./... && go test -race ./internal/atruns/...", "acceptanceCriteria": ["daemon go.mod requires the root module with replace ../..; build succeeds", "Read: Present false when runs.jsonl absent; otherwise lines, outcomes, skipped count, titles, and MinRuns from scorecard.json (0 when absent)", "title join uses scorecard.HashRunID, the function the server uses; no daemon-side hash code", "Runs returns one summary per (publisher, run_hash), newest first, with verdict, task count, configured and implementer models, sources, escapes per source"], "modelTier": "standard"}
 ```
 
 ---
@@ -3129,7 +3173,7 @@ git commit -m "feat(gnome-topbar): read run snapshots, outcomes and local task t
 
 **Acceptance Criteria:**
 - [ ] `atruns.ShareEnabled(getenv)` is true only for the exact value `1`.
-- [ ] `atruns.NoteBody(publisher, lines, outcomes)` returns a markdown body with a single fenced `json` block holding `{"schema":1,"publisher":…,"lines":[…],"outcomes":[…]}`, and the body contains no `task_title`, no `plan_run_id` key, and no title passed to it by any other path.
+- [ ] `atruns.NoteBody(publisher, lines, outcomes)` returns a markdown body with a single fenced `json` block holding `{"schema":1,"publisher":…,"lines":[…],"outcomes":[…]}`, and the body contains no `task_title`, no `plan_run_id` key, and no title passed to it by any other path. Every outcome category in the body is passed through `scorecard.NormalizeCategory` (on copies; the input is not mutated), so an un-normalised category in `outcomes.jsonl` is never published verbatim.
 - [ ] `Publisher.Publish(ctx, data)` writes one BM note per run hash that has at least one outcome, with directory `anti-tangent/runs`, title equal to the run hash, `note_type` `at_run`, and project `share_project` (default: the daemon's `bm_project`); it skips a run whose body hash equals the one in `published.json` and records the new hash after a successful write.
 - [ ] `bm.Client.ListRunNotes(ctx)` pages through every `at_run` note in the project; `atruns.ParseNote(body)` returns the lines and outcomes with `Publisher` set from the note's `publisher` on every record, and an error for a note without a `schema: 1` JSON block.
 - [ ] `atruns.Pool(ctx, client)` returns every parsed note's records plus the count of notes skipped as unparseable; one bad note never aborts the rest.
@@ -3218,7 +3262,18 @@ type notePayload struct {
 // records go in; they are content-free by construction, and titles from
 // Data.Titles are never passed here.
 func NoteBody(publisher string, lines []scorecard.RunLine, outcomes []scorecard.OutcomeLine) (string, error) {
-	b, err := json.MarshalIndent(notePayload{Schema: noteSchema, Publisher: publisher, Lines: lines, Outcomes: outcomes}, "", "  ")
+	// Categories are normalised again here, on copies, because this is the
+	// last point before the text leaves the machine: a hand-edited or older
+	// outcomes.jsonl line must not publish a finding description.
+	clean := make([]scorecard.OutcomeLine, len(outcomes))
+	for i, o := range outcomes {
+		o.Findings = append([]scorecard.OutcomeFinding(nil), o.Findings...)
+		for k := range o.Findings {
+			o.Findings[k].Category = scorecard.NormalizeCategory(o.Findings[k].Category)
+		}
+		clean[i] = o
+	}
+	b, err := json.MarshalIndent(notePayload{Schema: noteSchema, Publisher: publisher, Lines: lines, Outcomes: clean}, "", "  ")
 	if err != nil {
 		return "", err
 	}
@@ -3376,6 +3431,22 @@ func TestNoteRoundTripStampsPublisher(t *testing.T) {
 		t.Fatal("a note without a json block must not parse")
 	}
 }
+
+func TestNoteBodyNormalisesCategories(t *testing.T) {
+	long := "  The Handler Swallows The Error And Returns 200 To The Caller Anyway  "
+	in := []scorecard.OutcomeLine{{RunHash: "r_1", Source: "final_review", Findings: []scorecard.OutcomeFinding{{TaskIndex: 1, Severity: "major", Category: long}}}}
+	body, err := NoteBody("alice", nil, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := scorecard.NormalizeCategory(long)
+	if !strings.Contains(body, `"category": "`+want+`"`) || strings.Contains(body, "Anyway") {
+		t.Fatalf("category not normalised: %s", body)
+	}
+	if in[0].Findings[0].Category != long {
+		t.Fatal("NoteBody must not mutate its input")
+	}
+}
 ```
 
 plus `TestPublishSkipsUnchangedAndRunsWithoutOutcomes`: two runs, one with an outcome; the first `Publish` writes 1 note with directory `anti-tangent/runs` and title `r_1`; a second `Publish` with the same data writes 0; changing the outcome writes 1 again. And `TestPoolSkipsBadNotes`: the fake serves two `at_run` notes, one valid and one garbage; `Pool` returns the valid note's records and `skipped == 1`.
@@ -3406,7 +3477,7 @@ git commit -m "feat(gnome-topbar): publish and pool content-free run records via
 ```
 
 ```json:metadata
-{"files": ["gnome-topbar/daemon/internal/bm/runs.go", "gnome-topbar/daemon/internal/bm/runs_test.go", "gnome-topbar/daemon/internal/atruns/share.go", "gnome-topbar/daemon/internal/atruns/share_test.go", "gnome-topbar/daemon/internal/config/config.go", "gnome-topbar/config.example.toml"], "verifyCommand": "cd gnome-topbar/daemon && go test -race ./internal/bm/... ./internal/atruns/... ./internal/config/...", "acceptanceCriteria": ["ShareEnabled true only for exactly 1", "NoteBody: one json block with schema 1, publisher, lines, outcomes; no task_title or plan_run_id", "Publish writes one at_run note per run with an outcome in anti-tangent/runs, skips unchanged bodies via published.json", "ListRunNotes pages at_run notes; ParseNote stamps publisher on every record and rejects notes without a schema-1 block", "Pool returns all parsed records and counts unparseable notes without aborting"], "modelTier": "standard"}
+{"files": ["gnome-topbar/daemon/internal/bm/runs.go", "gnome-topbar/daemon/internal/bm/runs_test.go", "gnome-topbar/daemon/internal/atruns/share.go", "gnome-topbar/daemon/internal/atruns/share_test.go", "gnome-topbar/daemon/internal/config/config.go", "gnome-topbar/config.example.toml"], "verifyCommand": "cd gnome-topbar/daemon && go test -race ./internal/bm/... ./internal/atruns/... ./internal/config/...", "acceptanceCriteria": ["ShareEnabled true only for exactly 1", "NoteBody: one json block with schema 1, publisher, lines, outcomes; no task_title or plan_run_id; categories re-normalised on copies", "Publish writes one at_run note per run with an outcome in anti-tangent/runs, skips unchanged bodies via published.json", "ListRunNotes pages at_run notes; ParseNote stamps publisher on every record and rejects notes without a schema-1 block", "Pool returns all parsed records and counts unparseable notes without aborting"], "modelTier": "standard"}
 ```
 
 ---
@@ -3422,17 +3493,19 @@ git commit -m "feat(gnome-topbar): publish and pool content-free run records via
 - Modify: `gnome-topbar/daemon/internal/server/ui.go`
 - Modify: `gnome-topbar/daemon/internal/server/statspage.go`
 - Modify: `gnome-topbar/daemon/cmd/gnome-topbar-daemon/main.go`
+- Test: `gnome-topbar/daemon/cmd/gnome-topbar-daemon/main_test.go`
 - Modify: every test fake that implements `server.Provider` (find with `grep -rn "ListMyNotes(ctx context.Context)" gnome-topbar/daemon --include=*_test.go`)
 - Modify: `CHANGELOG.md`
 
 **Acceptance Criteria:**
 - [ ] `GET /ui/runs` (behind `uiAuth`) renders the overview for scope `mine` by default: a table per tool in `scorecard.ToolOrder` with one row per model showing calls, runs, verdict mix, findings/call, p50/p95 ms, partial rate, and per source the escape rate and unconfirmed-flag rate as `value (lo–hi, n=N)`; followed by the `by_review_model` table with each group's `regression` value, and the model-set strip.
 - [ ] `?scope=team` renders the same views over the pooled team records, with a "by user" section listing `by_publisher.by_tool_model` rows grouped by publisher; `?scope=user:<name>` filters to one publisher; when no team records exist, the page says so instead of rendering empty tables.
+- [ ] In `user:<name>` scope, `RunsView` returns `Data` already filtered to that publisher, so `?scope=user:alice&run=<hash>` never shows another publisher's records under the same hash.
 - [ ] `?run=<hash>` (optionally with `&publisher=<name>`) renders the run detail: configured models, the `validate_plan` call, and per task its call log (tool, model, verdict, findings, ms), pre/post verdict, severity counts, waived, attempts, and the outcome findings per source, with escapes marked. Task titles appear only in `mine` scope and only when `atruns.Data.Titles` has them.
 - [ ] The runs list shows, per run: publisher (team scope), plan verdict, task count, configured models, implementer models, sources reported, escape count; each row links to its detail view.
 - [ ] Every value interpolated into HTML goes through `esc`; a test renders a model name containing `<script>` and asserts it appears escaped.
 - [ ] `/ui/stats` links to `/ui/runs`; the `/ui/search` card list includes `🧪 Runs`.
-- [ ] The poller refreshes local run data on the anti-tangent interval, publishes when `ANTI_TANGENT_SHARE_STATS=1` and `bm_username` is set, refreshes team data on the BM interval, and a BM failure sets a `runs-team` source error without clearing the local view.
+- [ ] The poller refreshes local run data on the anti-tangent interval, publishes when `ANTI_TANGENT_SHARE_STATS=1` and `bm_username` is set, refreshes team data on the BM interval whenever `bm_url` is set (independent of `bm_username`), and a BM failure sets a `runs-team` source error without clearing the local view.
 
 **Verify:** `cd gnome-topbar/daemon && go build ./... && go test -race ./...` → `ok`
 
@@ -3530,12 +3603,13 @@ Cover each acceptance criterion with table-driven render tests on hand-built `Ru
 - `!Present` in `team` scope renders the ANTI_TANGENT_SHARE_STATS hint;
 - detail view shows the title in `mine` scope and not in `team` scope for the same data;
 - detail view marks an escape;
+- `Poller.RunsView("user:alice")` over team data where alice and bob both published run hash `r_x` returns `Data.Lines`/`Data.Outcomes` containing only alice's records (put this test in `cmd/gnome-topbar-daemon/main_test.go`, constructing a `Poller` with `runsTeam` set directly);
 - a model name `<script>x</script>` appears as `&lt;script&gt;` and never raw;
 - `GET /ui/runs?scope=team` through `server.New(fake, token)` with the token cookie returns 200 and calls `RunsView("team")` (fake records the scope).
 
 - [ ] **Step 5: Poller wiring — `cmd/gnome-topbar-daemon/main.go`**
 
-Add fields to `Poller`: `runsLocal atruns.Data`, `runsTeam atruns.Data`, `runsTeamErr string`, `runsTeamSkipped int`, `publisher *atruns.Publisher` (nil when sharing is off or `bm_username` is empty). In `main`, after `bmc` is built:
+Add fields to `Poller`: `runsLocal atruns.Data`, `runsTeam atruns.Data`, `runsTeamErr string`, `runsTeamSkipped int`, `publisher *atruns.Publisher` (nil when sharing is off or `bm_username` is empty). In `main`, immediately after the `p := &Poller{...}` literal (not after `bmc`: `p` does not exist yet there):
 
 ```go
 	if atruns.ShareEnabled(os.Getenv) && cfg.BMUsername != "" {
@@ -3545,7 +3619,7 @@ Add fields to `Poller`: `runsLocal atruns.Data`, `runsTeam atruns.Data`, `runsTe
 	}
 ```
 
-Add `refreshRuns(ctx)`: reads `atruns.Read(p.cfg.StatsDir)` into `runsLocal` under `p.mu`; if `p.publisher != nil`, calls `Publish` with the local data outside the lock and logs one warning line on error. Add `refreshRunsTeam(ctx)`: calls `atruns.Pool(ctx, p.bm, p.cfg.ShareProject)`; on error sets `runsTeamErr` and `p.snap.Sources["runs-team"] = state.SourceStatus{OK: false, Error: err.Error()}` and keeps the previous `runsTeam`; on success replaces `runsTeam`, clears the error and sets the source OK. Schedule `refreshRuns` alongside `refreshAntiTangent` (same interval) and `refreshRunsTeam` inside the `cfg.BMUsername != ""` branch alongside `refreshBM`.
+Add `refreshRuns(ctx)`: reads `atruns.Read(p.cfg.StatsDir)` into `runsLocal` under `p.mu`; if `p.publisher != nil`, calls `Publish` with the local data outside the lock and logs one warning line on error. Add `refreshRunsTeam(ctx)`: calls `atruns.Pool(ctx, p.bm, p.cfg.ShareProject)`; on error sets `runsTeamErr` and `p.snap.Sources["runs-team"] = state.SourceStatus{OK: false, Error: err.Error()}` and keeps the previous `runsTeam`; on success replaces `runsTeam`, clears the error and sets the source OK. Schedule `refreshRuns` alongside `refreshAntiTangent` (same interval). Schedule `refreshRunsTeam` on the BM interval whenever `cfg.BMURL != ""`, **outside** the `cfg.BMUsername != ""` branch: reading the team's records needs BM access only, not a username, so a developer who has not set `bm_username` still sees the Team scope. Publishing is the only part that needs `bm_username` (it is the publisher name).
 
 Implement `func (p *Poller) RunsView(scope string) server.RunsView`:
 
@@ -3555,7 +3629,7 @@ func (p *Poller) RunsView(scope string) server.RunsView {
 	local, team, teamErr, teamSkipped := p.runsLocal, p.runsTeam, p.runsTeamErr, p.runsTeamSkipped
 	p.mu.RUnlock()
 	v := server.RunsView{Scope: scope, TeamError: teamErr}
-	opts := scorecard.Options{Now: time.Now().UTC()}
+	opts := scorecard.Options{Now: time.Now().UTC(), MinRuns: local.MinRuns}
 	src := local
 	if scope != "mine" {
 		src = team
@@ -3570,11 +3644,12 @@ func (p *Poller) RunsView(scope string) server.RunsView {
 	v.Data = src
 	v.Scorecard = scorecard.Compute(src.Lines, src.Outcomes, opts)
 	v.Publishers = scorecard.Compute(team.Lines, team.Outcomes, scorecard.Options{}).Publishers
-	lines, outs := src.Lines, src.Outcomes
 	if opts.Publisher != "" {
-		lines, outs = filterPublisher(lines, outs, opts.Publisher)
+		// Filter Data itself, not only the runs list: the detail view reads
+		// v.Data, and two publishers can share a run hash.
+		v.Data.Lines, v.Data.Outcomes = filterPublisher(src.Lines, src.Outcomes, opts.Publisher)
 	}
-	v.Runs = atruns.Runs(lines, outs)
+	v.Runs = atruns.Runs(v.Data.Lines, v.Data.Outcomes)
 	if scope != "mine" {
 		v.Data.Titles = nil
 	}
@@ -3603,7 +3678,7 @@ git commit -m "feat(gnome-topbar): /ui/runs page with team view and run sharing"
 ```
 
 ```json:metadata
-{"files": ["gnome-topbar/daemon/internal/server/runspage.go", "gnome-topbar/daemon/internal/server/runspage_test.go", "gnome-topbar/daemon/internal/server/server.go", "gnome-topbar/daemon/internal/server/ui.go", "gnome-topbar/daemon/internal/server/statspage.go", "gnome-topbar/daemon/cmd/gnome-topbar-daemon/main.go", "CHANGELOG.md"], "verifyCommand": "cd gnome-topbar/daemon && go build ./... && go test -race ./...", "acceptanceCriteria": ["/ui/runs mine scope renders tool x model overview with rates as value (lo-hi, n=N), regression table, model sets", "team scope pools shared records with a by-user section; user:<name> filters; empty team shows the sharing hint", "?run=<hash> renders configured models, plan call, per-task call log, verdicts, outcomes with escapes; titles only in mine scope", "runs list columns and links as specified", "all interpolated values escaped; <script> model name rendered escaped", "/ui/stats links to /ui/runs; search cards include Runs", "poller refreshes local runs, publishes when ANTI_TANGENT_SHARE_STATS=1 and bm_username set, refreshes team on BM interval, BM failure sets runs-team source error and keeps local view"], "modelTier": "standard"}
+{"files": ["gnome-topbar/daemon/internal/server/runspage.go", "gnome-topbar/daemon/internal/server/runspage_test.go", "gnome-topbar/daemon/internal/server/server.go", "gnome-topbar/daemon/internal/server/ui.go", "gnome-topbar/daemon/internal/server/statspage.go", "gnome-topbar/daemon/cmd/gnome-topbar-daemon/main.go", "gnome-topbar/daemon/cmd/gnome-topbar-daemon/main_test.go", "CHANGELOG.md"], "verifyCommand": "cd gnome-topbar/daemon && go build ./... && go test -race ./...", "acceptanceCriteria": ["/ui/runs mine scope renders tool x model overview with rates as value (lo-hi, n=N), regression table, model sets", "team scope pools shared records with a by-user section; user:<name> filters; empty team shows the sharing hint", "user:<name> scope returns Data filtered to that publisher; ?run=<hash> renders configured models, plan call, per-task call log, verdicts, outcomes with escapes; titles only in mine scope", "runs list columns and links as specified", "all interpolated values escaped; <script> model name rendered escaped", "/ui/stats links to /ui/runs; search cards include Runs", "poller refreshes local runs, publishes when ANTI_TANGENT_SHARE_STATS=1 and bm_username set, refreshes team on BM interval whenever bm_url is set (not gated on bm_username), BM failure sets runs-team source error and keeps local view"], "modelTier": "standard"}
 ```
 
 ---
