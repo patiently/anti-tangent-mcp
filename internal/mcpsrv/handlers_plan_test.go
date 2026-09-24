@@ -636,6 +636,26 @@ func TestValidatePlan_TruncationRecoveryMintsPlanRunID(t *testing.T) {
 	assert.True(t, ok, "the minted id must name a real run, so plan_run_report can find it")
 }
 
+// TestValidatePlan_TruncationRecoveryPlanCallCarriesPartial pins mintPlanRunID's
+// OnMint ToolCall carrying the plan result's own Partial flag, exactly like
+// callFromEnvelope already does for the other three lifecycle tools' calls
+// (see run_snapshots.go), so a truncated-but-recovered validate_plan does not
+// read as an ordinary complete call in the run's snapshot header.
+func TestValidatePlan_TruncationRecoveryPlanCallCarriesPartial(t *testing.T) {
+	rv := truncatingPlanReviewer(t)
+	h := &handlers{deps: newDeps(t, rv)}
+
+	plan := "# Plan\n\n### Task 1: with bodies\n\nbody.\n\n### Task 2: Second\n\nbody.\n"
+	_, pr, err := h.ValidatePlan(context.Background(), nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	require.True(t, pr.Partial, "test setup must exercise the truncation-recovery branch")
+
+	snap, ok := h.deps.PlanRuns.Snapshot(pr.PlanRunID)
+	require.True(t, ok)
+	require.NotNil(t, snap.PlanCall)
+	assert.True(t, snap.PlanCall.Partial, "a truncated-but-recovered validate_plan must record Partial on its plan call")
+}
+
 // TestValidatePlan_TruncationRecoveryReportsUnusableRepoRoot pins the
 // repo_root advisory on the recovery path. Without it a truncated call with a
 // bad repo_root produced findings byte-identical to a truncated call that

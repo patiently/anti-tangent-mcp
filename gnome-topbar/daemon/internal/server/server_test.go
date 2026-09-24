@@ -43,6 +43,8 @@ func (f *fakeProvider) ListDecisions(context.Context) ([]bm.SearchResult, error)
 func (f *fakeProvider) ListMyNotes(context.Context) ([]bm.SearchResult, error) {
 	return []bm.SearchResult{{Title: "N", Type: "personal_note", Permalink: "u/notes/n/main"}}, nil
 }
+func (f *fakeProvider) RunsView(string) RunsView        { return RunsView{} }
+func (f *fakeProvider) RefreshTeamRuns(context.Context) {}
 
 func newTestServer() (*httptest.Server, *fakeProvider) {
 	fp := &fakeProvider{}

@@ -18,12 +18,20 @@ type Config struct {
 	BMToken    string `toml:"bm_bearer_token"`
 	BMUsername string `toml:"bm_username"`
 	BMProject  string `toml:"bm_project"`
-	ListenPort int    `toml:"listen_port"`
-	APIToken   string `toml:"api_token"`
+	// ShareProject is the Basic Memory project that holds shared at_run
+	// records. It defaults to BMProject so a daemon that hasn't set it up
+	// separately still reads/writes the same project it already uses.
+	ShareProject string `toml:"share_project"`
+	ListenPort   int    `toml:"listen_port"`
+	APIToken     string `toml:"api_token"`
 
 	GitHubIntervalSec int `toml:"github_interval_sec"`
 	BMIntervalSec     int `toml:"bm_interval_sec"`
-	MorningSweepHour  int `toml:"morning_sweep_hour"`
+	// TeamRefreshMinutes is how often the team's shared run notes are pulled
+	// from Basic Memory. Each pull lists every note, so it is kept well above
+	// BMIntervalSec; the /ui/runs page can still force a pull.
+	TeamRefreshMinutes int `toml:"team_refresh_minutes"`
+	MorningSweepHour   int `toml:"morning_sweep_hour"`
 
 	StatsDir string `toml:"stats_dir"`
 }
@@ -51,6 +59,9 @@ func Load(cfgPath, stateDir string) (Config, error) {
 	if c.BMProject == "" {
 		c.BMProject = "main"
 	}
+	if c.ShareProject == "" {
+		c.ShareProject = c.BMProject
+	}
 	if c.ListenPort == 0 {
 		c.ListenPort = 47615
 	}
@@ -59,6 +70,9 @@ func Load(cfgPath, stateDir string) (Config, error) {
 	}
 	if c.BMIntervalSec == 0 {
 		c.BMIntervalSec = 300
+	}
+	if c.TeamRefreshMinutes <= 0 {
+		c.TeamRefreshMinutes = 60
 	}
 	if c.MorningSweepHour < 0 || c.MorningSweepHour > 23 {
 		c.MorningSweepHour = 8 // unset (sentinel) or out of range → default

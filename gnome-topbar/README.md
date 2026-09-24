@@ -15,6 +15,36 @@ contract's consumer side; the schema and producer behaviour live in the
 is absent, and degrades gracefully when a limit fetch failed
 (`limits.error` → "limits unavailable", cost fields still render).
 
+## anti-tangent runs (`/ui/runs`)
+
+When `$ANTI_TANGENT_STATS_DIR/runs.jsonl` is present, the tray's 🧪 Runs link opens
+`/ui/runs`: an anti-tangent tool × validator model overview, a regression-by-review-model
+table, and a list of runs you can drill into. Three scopes, switched via `?scope=`:
+
+- **Mine** (default) — this machine's own `runs.jsonl` / `outcomes.jsonl` only. Task titles
+  are shown here (from local plan-run state), nowhere else.
+- **Team** — every publisher's shared records, pooled from Basic Memory, plus a per-user
+  breakdown under "By user".
+- **`user:<name>`** — one publisher's shared records alone (the scope nav links to one per
+  publisher seen in Team).
+
+Publishing (writing your own runs to Basic Memory) is gated by `ANTI_TANGENT_SHARE_STATS=1`
+(default `0`) and requires `bm_username` in the config; reading the Team scope needs only
+ordinary Basic Memory access (`bm_url` / `bm_bearer_token`) and pools whatever `share_project`
+holds (defaults to `bm_project`). A shared record is content-free: no task titles, no plan
+headings, no finding text, no raw `plan_run_id` or session id — only a salted, hashed run id
+(`r_...`), tool/model/verdict/finding-count/latency per call, and per-task outcome severities
+and normalised categories. See `internal/atruns/share.go` (`NoteBody`) for what actually goes
+into a note, and the anti-tangent-mcp root `docs/protocol/outcome.md` for the wire contract
+these records are read from.
+
+The Team records are cached in `~/.local/state/gnome-topbar/team-runs.json` and pulled from
+Basic Memory once an hour (`team_refresh_minutes`, default `60`), so the Team scope shows
+immediately after a restart and a pull reads only notes it has not seen. Basic Memory's listing
+says nothing about which notes changed, so a run republished with a later outcome is picked up
+by the daily full pull, or at once with the **Refresh now** button on the Team and user scopes,
+which re-reads every note. The page shows when the team data was last pulled.
+
 ## Prerequisites
 - GNOME Shell 45/46/47 (Wayland or X11)
 - `gh` CLI logged in (`gh auth status`)

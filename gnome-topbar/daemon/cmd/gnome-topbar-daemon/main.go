@@ -10,12 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atruns"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atstats"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/claudestats"
@@ -25,6 +27,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/server"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/state"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/tray"
+	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
 // version is set at release build time via -ldflags "-X main.version=...".
@@ -74,6 +77,8 @@ func main() {
 		snap: state.Snapshot{Sources: map[string]state.SourceStatus{}},
 	}
 
+	wireRunsSharing(p, bmc, stateDir)
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -95,6 +100,9 @@ func main() {
 
 	p.refreshAntiTangent(ctx)
 	go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshAntiTangent)
+
+	wireTeamCache(p, bmc, stateDir)
+	startRunsPolling(ctx, p)
 
 	p.refreshClaudeStats(ctx)
 	go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshClaudeStats)
@@ -141,15 +149,68 @@ func main() {
 	_ = srv.Shutdown(shutdownCtx)
 }
 
+// wireRunsSharing sets p.publisher when sharing is on and a publisher
+// username is configured; a daemon with no bm_username can still read the
+// Team scope, but has no name to publish under.
+func wireRunsSharing(p *Poller, bmc *bm.Client, stateDir string) {
+	if !atruns.ShareEnabled(os.Getenv) || p.cfg.BMUsername == "" {
+		return
+	}
+	p.publisher = &atruns.Publisher{Client: bmc, Project: p.cfg.ShareProject, Username: p.cfg.BMUsername,
+		StatePath: filepath.Join(stateDir, "published.json")}
+	p.log.Info("anti-tangent run sharing enabled", "project", p.cfg.ShareProject)
+}
+
+// wireTeamCache sets p.teamCache whenever bm_url is set: reading the team's
+// records needs only BM access, not bm_username, which names the publisher
+// rather than a reader.
+func wireTeamCache(p *Poller, bmc *bm.Client, stateDir string) {
+	if p.cfg.BMURL == "" {
+		return
+	}
+	p.teamCache = &atruns.TeamCache{
+		Client:    bmc,
+		Project:   p.cfg.ShareProject,
+		Path:      filepath.Join(stateDir, "team-runs.json"),
+		Interval:  time.Duration(p.cfg.TeamRefreshMinutes) * time.Minute,
+		FullEvery: 24 * time.Hour,
+		Now:       time.Now,
+	}
+}
+
+// startRunsPolling schedules the local run refresh and, with a team cache,
+// serves the cached team records at once and checks on every BM tick whether
+// an hourly pull is due. The first pull runs in the background so a large
+// team never delays startup.
+func startRunsPolling(ctx context.Context, p *Poller) {
+	p.refreshRuns(ctx)
+	go p.loop(ctx, time.Duration(p.cfg.BMIntervalSec)*time.Second, p.refreshRuns)
+	if p.teamCache == nil {
+		return
+	}
+	p.loadTeamCache()
+	go p.refreshRunsTeamIfDue(ctx)
+	go p.loop(ctx, time.Duration(p.cfg.BMIntervalSec)*time.Second, p.refreshRunsTeamIfDue)
+}
+
 type Poller struct {
 	log   *slog.Logger
 	cfg   config.Config
 	store *state.Store
 	gh    *github.Source
 	bm    *bm.Client
+	// publisher is nil when sharing is off or bm_username is empty.
+	publisher *atruns.Publisher
+	// teamCache is nil when bm_url is unset; the Team scope is then empty.
+	teamCache *atruns.TeamCache
 
-	mu   sync.RWMutex
-	snap state.Snapshot
+	mu              sync.RWMutex
+	snap            state.Snapshot
+	runsLocal       atruns.Data
+	runsTeam        atruns.Data
+	runsTeamErr     string
+	runsTeamSkipped int
+	runsTeamAsOf    time.Time
 }
 
 func (p *Poller) loop(ctx context.Context, every time.Duration, fn func(context.Context)) {
@@ -260,6 +321,69 @@ func (p *Poller) refreshClaudeStats(ctx context.Context) {
 	p.mu.Unlock()
 }
 
+// refreshRuns reads the local anti-tangent run/outcome records and, when
+// sharing is on, publishes them. The publish runs outside p.mu since it makes
+// a network call; a failure there is logged and never affects runsLocal.
+func (p *Poller) refreshRuns(ctx context.Context) {
+	d, err := atruns.Read(p.cfg.StatsDir)
+	if err != nil {
+		p.log.Warn("anti-tangent runs read failed", "err", err)
+		return
+	}
+	p.mu.Lock()
+	p.runsLocal = d
+	p.mu.Unlock()
+	if p.publisher != nil {
+		if _, err := p.publisher.Publish(ctx, d); err != nil {
+			p.log.Warn("anti-tangent run publish failed", "err", err)
+		}
+	}
+}
+
+// loadTeamCache serves the on-disk team records without calling Basic Memory.
+func (p *Poller) loadTeamCache() {
+	d, asOf, skipped := p.teamCache.Load()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.runsTeam, p.runsTeamAsOf, p.runsTeamSkipped = d, asOf, skipped
+}
+
+// refreshRunsTeamIfDue pulls the team records when the last pull is at least
+// TeamRefreshMinutes old. It runs on every BM tick; between pulls it touches
+// only the cache's in-memory pull time.
+func (p *Poller) refreshRunsTeamIfDue(ctx context.Context) {
+	if p.teamCache.Due() {
+		p.pullTeam(ctx, false)
+	}
+}
+
+// RefreshTeamRuns is the page's "Refresh now": a full pull that re-reads
+// every note, so a republished run shows its newer outcome immediately.
+func (p *Poller) RefreshTeamRuns(ctx context.Context) {
+	if p.teamCache == nil {
+		return
+	}
+	p.pullTeam(ctx, true)
+}
+
+// pullTeam refreshes the team cache from Basic Memory. A failure marks the
+// runs-team source without touching the previously pooled data, so the Team
+// scope keeps showing the last good pull.
+func (p *Poller) pullTeam(ctx context.Context, full bool) {
+	d, skipped, err := p.teamCache.Refresh(ctx, full)
+	_, asOf, _ := p.teamCache.Snapshot()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err != nil {
+		p.runsTeamErr = err.Error()
+		p.snap.Sources["runs-team"] = state.SourceStatus{OK: false, Error: err.Error()}
+		p.log.Warn("anti-tangent team runs pull failed", "err", err)
+		return
+	}
+	p.runsTeam, p.runsTeamSkipped, p.runsTeamErr, p.runsTeamAsOf = d, skipped, "", asOf
+	p.snap.Sources["runs-team"] = state.SourceStatus{OK: true}
+}
+
 // recompute refreshes events + timestamp; caller holds p.mu.
 func (p *Poller) recompute() {
 	p.snap.GeneratedAt = time.Now()
@@ -335,6 +459,71 @@ func (p *Poller) ListMyNotes(ctx context.Context) ([]bm.SearchResult, error) {
 		return nil, fmt.Errorf("bm_username not set")
 	}
 	return p.bm.ListMyNotes(ctx, p.cfg.BMUsername)
+}
+
+// RunsView returns the scored view for a scope: "mine", "team", or
+// "user:<publisher>".
+func (p *Poller) RunsView(scope string) server.RunsView {
+	p.mu.RLock()
+	local, team, teamErr, teamSkipped, teamAsOf := p.runsLocal, p.runsTeam, p.runsTeamErr, p.runsTeamSkipped, p.runsTeamAsOf
+	p.mu.RUnlock()
+	v := server.RunsView{Scope: scope, TeamError: teamErr}
+	if p.teamCache != nil {
+		v.TeamRefreshMinutes = int(p.teamCache.Interval / time.Minute)
+	}
+	if !teamAsOf.IsZero() {
+		v.TeamAsOf = teamAsOf.Local()
+	}
+	opts := scorecard.Options{Now: time.Now().UTC(), MinRuns: local.MinRuns}
+	src := local
+	if scope != "mine" {
+		src = team
+		v.Skipped = teamSkipped
+		if pub, ok := strings.CutPrefix(scope, "user:"); ok {
+			opts.Publisher = pub
+		}
+	} else {
+		v.Skipped = local.Skipped
+	}
+	v.Present = src.Present
+	v.Data = src
+	v.Scorecard = scorecard.Compute(src.Lines, src.Outcomes, opts)
+	v.Publishers = scorecard.Compute(team.Lines, team.Outcomes, scorecard.Options{}).Publishers
+	if opts.Publisher != "" {
+		// Filter Data itself, not only the runs list: the detail view reads
+		// v.Data, and two publishers can share a run hash.
+		v.Data.Lines, v.Data.Outcomes = filterPublisher(src.Lines, src.Outcomes, opts.Publisher)
+	}
+	v.Runs = atruns.Runs(v.Data.Lines, v.Data.Outcomes)
+	if scope != "mine" {
+		v.Data.Titles = nil
+	}
+	return v
+}
+
+// filterPublisher keeps only the records whose Publisher matches.
+func filterPublisher(lines []scorecard.RunLine, outcomes []scorecard.OutcomeLine, publisher string) ([]scorecard.RunLine, []scorecard.OutcomeLine) {
+	return filterLinesByPublisher(lines, publisher), filterOutcomesByPublisher(outcomes, publisher)
+}
+
+func filterLinesByPublisher(lines []scorecard.RunLine, publisher string) []scorecard.RunLine {
+	var out []scorecard.RunLine
+	for _, l := range lines {
+		if l.Publisher == publisher {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func filterOutcomesByPublisher(outcomes []scorecard.OutcomeLine, publisher string) []scorecard.OutcomeLine {
+	var out []scorecard.OutcomeLine
+	for _, o := range outcomes {
+		if o.Publisher == publisher {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // ReadNote returns the raw markdown of a Basic Memory note (used by the note

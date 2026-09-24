@@ -232,7 +232,7 @@ ANTI_TANGENT_EXTRACT_MAX_TOKENS=8192     # output cap for extract_project_knowle
 
 # --- I/O delegation (bulk_read / code_write) ---
 # bulk_read sends every path's full contents, and code_write sends reference_path's full
-# contents, to whichever provider ANTI_TANGENT_WORKER_MODEL names below — see "The 9 tools".
+# contents, to whichever provider ANTI_TANGENT_WORKER_MODEL names below — see "The 10 tools".
 ANTI_TANGENT_WORKER_MODEL=               # optional override; defaults to ANTI_TANGENT_MID_MODEL. Used by bulk_read (q→a translation) and code_write (spec→code generation)
 ANTI_TANGENT_WORKER_MAX_TOKENS=4096      # output cap for worker calls; clamped by ANTI_TANGENT_MAX_TOKENS_CEILING
 
@@ -272,7 +272,20 @@ ANTI_TANGENT_CODESCENE=
 # Persist plan-run rows to plan-runs.jsonl (needs ANTI_TANGENT_STATS_DIR).
 # NOTE: unlike other stats files, this one contains task titles.
 ANTI_TANGENT_PLAN_LEDGER=0
+# Minimum runs a cohort and its baseline each need before scorecard.json's
+# regression field can report anything but insufficient_data.
+ANTI_TANGENT_SCORECARD_MIN_RUNS=10
 ```
+
+#### Scorecard
+
+With `ANTI_TANGENT_STATS_DIR` set, the server also writes three content-free files:
+
+- `runs.jsonl`: one line per plan-run task change, carrying the task's verdicts, severity counts and its call log: the latest 32 anti-tangent calls made for the task, each with the model that answered it, plus `calls_dropped` counting any older calls the cap evicted; and a header per run with the configured model per role.
+- `outcomes.jsonl`: one line per `record_review_outcome` call.
+- `scorecard.json`: escape rate (tasks anti-tangent passed that the independent review found a critical or major problem in), unconfirmed-flag rate, waive rate and cost, by review-model cohort and by anti-tangent tool × model, each rate with its n and 90% interval. `regression` stays `insufficient_data` until a cohort and its baseline each have `ANTI_TANGENT_SCORECARD_MIN_RUNS` runs (default 10).
+
+The gnome-topbar daemon renders these at `/ui/runs`.
 
 ### Picking a reviewer model
 
@@ -288,7 +301,7 @@ The mid-hook (`check_progress`) is called more often — a fast/cheap tier there
 
 ### Smoke test
 
-Launch your MCP host with debug logging on and confirm all nine tools — `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`, `prime_project_knowledge`, `extract_project_knowledge`, `plan_run_report`, `bulk_read`, `code_write` — appear in the discovered tool catalog. Server-side configuration errors print to stderr at startup.
+Launch your MCP host with debug logging on and confirm all ten tools — `validate_plan`, `validate_task_spec`, `check_progress`, `validate_completion`, `prime_project_knowledge`, `extract_project_knowledge`, `plan_run_report`, `record_review_outcome`, `bulk_read`, `code_write` — appear in the discovered tool catalog. Server-side configuration errors print to stderr at startup.
 
 ### Large plans (chunking)
 
@@ -492,7 +505,7 @@ The GPT-5.6 family (`gpt-5.6-sol` heavy, `gpt-5.6-terra` balanced, `gpt-5.6-luna
 
 Adding a new model is a one-line change in [`internal/providers/reviewer.go`](internal/providers/reviewer.go) — open a PR.
 
-## The 9 tools
+## The 10 tools
 
 - `validate_plan` — call once at plan-handoff time. Reviews an entire implementation plan and proposes ready-to-paste structured headers (Goal / AC / Non-goals / Context) for tasks that lack them. Returns per-task findings and mints a `plan_run_id`. Accepts `plan_path` (v0.16.0+, preferred) with an absolute path, or `plan_text` (deprecated, removed in 1.0.0) — see "File-path inputs and the trust model" above. Also accepts `context_paths` (v0.17.0+, absolute paths to source files the plan makes claims about; opt-in and materially more expensive — see above) and `repo_root` (v0.17.0+, absolute) to enable the disk tier of a deterministic Create/Modify consistency check.
 - `validate_task_spec` — call once before coding. Returns findings on missing goals, weak acceptance criteria, unstated assumptions. Returns a `session_id` you thread through the next two calls. Accepts the controller's `plan_run_id` (optional, best-effort) to tie the task to its plan run. Pass `task_index`, the task's 1-based position in the plan, with it; without one the task is found by matching its title against the plan's headings, and validating the same task again updates its report row.
@@ -501,6 +514,7 @@ Adding a new model is a one-line change in [`internal/providers/reviewer.go`](in
 - `prime_project_knowledge` (v0.6.0+, optional) — stateless. Given a task spec and a Basic-Memory-style `kb_index`, returns prioritized note picks for the implementer to read before starting. Emits paste-ready `bm_commands` when `ANTI_TANGENT_KB_STORE=basic-memory`.
 - `extract_project_knowledge` (v0.6.0+, optional) — stateless. Given one or more `validate_completion` envelopes, returns structured create/update/supersede proposals for the project knowledge base. Same env gate for `bm_commands`.
 - `plan_run_report` (v0.15.0+) — deterministic, no reviewer call, no cost. Call once after the last task in a plan run reports DONE, passing the `plan_run_id` from `validate_plan`. Returns one row per plan task (a re-validated task keeps one row and counts its attempts; lightweight tasks are marked `(lite)`; tasks never dispatched are listed by heading), plus a paste-ready `summary_block`. The CodeScene total is the branch's net problem points: the latest result per base ref, not a sum over tasks. Its own `PlanRunReportResult` shape, not the shared envelope below.
+- `record_review_outcome` — deterministic, no reviewer call. Call after the final whole-plan review (`source: "final_review"`) and optionally after a human PR review (`source: "review_now"`) with each finding's `task_index`, `severity` and `category`. Returns the tasks anti-tangent passed that the review found a critical or major problem in, and feeds `scorecard.json`. Requires `ANTI_TANGENT_STATS_DIR`.
 - `bulk_read` (v0.18.0+) — answer a question about one or more source files without pulling them into your context. Passes absolute `paths` (up to 50) and a specific `question`. **The server reads the files server-side and sends their full contents to the configured worker provider (`ANTI_TANGENT_WORKER_MODEL`) to answer the question — that transmission is the tool's entire mechanism, not an incidental leak, but it does mean whatever is in those files leaves the machine.** Returns only the answer plus metadata (files read, bytes read, tokens used). Optional `model` (overrides `ANTI_TANGENT_WORKER_MODEL`) and `max_tokens_override` fields. If your intent is to then EDIT the code, follow the answer with a targeted Read of the region it names.
 - `code_write` (v0.18.0+) — generate pattern-following boilerplate with a cheap worker model. Requires `spec` (the generation request) and `reference_path` (an absolute path; the server uses this file's conventions to constrain the generated code, and **its full contents are sent to the same worker provider** as `bulk_read`'s files). Optional `target_path` (absolute) to have the server write the file and return only a line count, so the generated code never enters your context. Optional `overwrite` bool (default false; existing files are refused unless true — see "Writes" below for what an `overwrite: true` write actually does and its Windows availability). Optional `model` and `max_tokens_override` fields. The parent directory of `target_path` must already exist — `code_write` never creates directories. Only for boilerplate that follows an existing pattern; do NOT use for logic requiring judgement.
 

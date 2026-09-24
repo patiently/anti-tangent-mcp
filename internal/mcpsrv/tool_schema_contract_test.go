@@ -111,7 +111,7 @@ func TestToolInputSchemas_ToolSetAndShape(t *testing.T) {
 	sort.Strings(names)
 	assert.Equal(t, []string{
 		"bulk_read", "check_progress", "code_write", "extract_project_knowledge", "plan_run_report",
-		"prime_project_knowledge", "validate_completion", "validate_plan", "validate_task_spec",
+		"prime_project_knowledge", "record_review_outcome", "validate_completion", "validate_plan", "validate_task_spec",
 	}, names)
 	sort.Strings(indirections)
 	assert.Empty(t, indirections, "the contract walkers do not follow these nodes; extend them before trusting the other schema tests")
@@ -169,6 +169,9 @@ func TestToolInputSchemas_RequiredSetsUnchanged(t *testing.T) {
 		"plan_run_report":                                                {"plan_run_id"},
 		"prime_project_knowledge":                                        {"acceptance_criteria", "goal", "task_title"},
 		"prime_project_knowledge.kb_index[]":                             {"permalink", "summary", "title", "type"},
+		"record_review_outcome":                                          {"findings", "plan_run_id", "source"},
+		"record_review_outcome.findings[]":                               {"category", "severity", "task_index"},
+		"record_review_outcome.implementer_models[]":                     {"model", "task_index"},
 		"validate_completion":                                            {"session_id", "summary"},
 		"validate_completion.codescene.verdicts":                         {"degraded", "improved", "stable"},
 		"validate_completion.controller_rulings[]":                       {"finding_id", "ruling"},

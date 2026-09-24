@@ -13,6 +13,9 @@ const (
 	rollupFile    = "rollup.json"
 	summaryMDFile = "summary.md"
 	summariesFile = "summaries.jsonl"
+	runsFile      = "runs.jsonl"
+	outcomesFile  = "outcomes.jsonl"
+	scorecardFile = "scorecard.json"
 )
 
 // appendJSONL appends one JSON-marshaled value as a line to dir/name.
@@ -35,25 +38,34 @@ func appendJSONL(dir, name string, v any) error {
 // readJSONL reads a JSONL file into a slice, skipping blank and corrupt lines
 // (best-effort). A missing file is not an error (returns nil).
 func readJSONL[T any](dir, name string) ([]T, error) {
+	out, _, err := readJSONLCounted[T](dir, name)
+	return out, err
+}
+
+// readJSONLCounted is readJSONL that also reports how many non-blank lines
+// failed to parse.
+func readJSONLCounted[T any](dir, name string) ([]T, int, error) {
 	b, err := os.ReadFile(filepath.Join(dir, name))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var out []T
+	skipped := 0
 	for _, line := range bytes.Split(b, []byte("\n")) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var v T
 		if err := json.Unmarshal(line, &v); err != nil {
+			skipped++
 			continue
 		}
 		out = append(out, v)
 	}
-	return out, nil
+	return out, skipped, nil
 }
 
 // rewriteJSONL atomically replaces dir/name with the given items, so readers
@@ -82,12 +94,12 @@ func writeJSON(dir, name string, v any) error {
 // writeFileAtomic writes b to a unique sibling temp file then renames it over
 // path (atomic on the same filesystem), so readers never see a partial write.
 // The temp name is unique per call (os.CreateTemp) rather than a fixed
-// "<path>.tmp": ANTI_TANGENT_STATS_DIR is designed to be shared across stdio
-// server processes, and a fixed temp name lets two concurrent writers to the
-// same target clobber each other's temp file — publishing the wrong payload or
-// failing Rename with the temp already moved. In-process callers are already
-// serialized (Recorder.mu / single-flight compaction); this hardens the
-// cross-process case where neither applies.
+// "<path>.tmp": both ANTI_TANGENT_STATS_DIR shared across stdio server
+// processes and, in-process, compaction's scorecard write racing an async
+// RecordOutcome refresh can call this concurrently for the same target, and a
+// fixed temp name would let one writer's Write land in the other's temp file
+// or Rename fail with the temp already moved. Each writer instead gets its
+// own temp file, and whichever Rename lands last wins.
 func writeFileAtomic(path string, b []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
 	if err != nil {

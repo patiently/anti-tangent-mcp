@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -119,4 +120,27 @@ func TestLoad_PlanLedgerRequiresStatsDir(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, cfg.PlanLedger)
 	assert.Equal(t, "", cfg.StatsDir, "the ledger is inert without a stats dir")
+}
+
+func TestScorecardMinRuns(t *testing.T) {
+	base := map[string]string{"ANTHROPIC_API_KEY": "x"}
+	load := func(v string) (config.Config, error) {
+		env := map[string]string{"ANTI_TANGENT_SCORECARD_MIN_RUNS": v}
+		for k, val := range base {
+			env[k] = val
+		}
+		return config.Load(func(k string) string { return env[k] })
+	}
+	cfg, err := load("")
+	if err != nil || cfg.ScorecardMinRuns != 10 {
+		t.Fatalf("default: %d, %v", cfg.ScorecardMinRuns, err)
+	}
+	if cfg, err := load("25"); err != nil || cfg.ScorecardMinRuns != 25 {
+		t.Fatalf("25: %d, %v", cfg.ScorecardMinRuns, err)
+	}
+	for _, bad := range []string{"0", "-1", "abc"} {
+		if _, err := load(bad); err == nil || !strings.Contains(err.Error(), "ANTI_TANGENT_SCORECARD_MIN_RUNS") {
+			t.Fatalf("%q: %v", bad, err)
+		}
+	}
 }

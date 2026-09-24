@@ -25,7 +25,10 @@ type Options struct {
 	SummaryInterval  time.Duration
 	SummaryThreshold int
 	RetentionDays    int
-	Logger           *slog.Logger
+	// MinRuns is the scorecard's regression gate; zero means the scorecard
+	// default.
+	MinRuns int
+	Logger  *slog.Logger
 	// LedgerPruner, when set, is retention-pruned in the same compact() pass
 	// as events.jsonl and codescene-events.jsonl, keyed on the same cutoff.
 	// Optional so packages that don't use the plan-run ledger (or tests) can
@@ -53,7 +56,9 @@ type Recorder struct {
 	retentionDays int
 	compactor     *Compactor
 	ledgerPruner  LedgerPruner
+	minRuns       int
 	running       atomic.Bool
+	scoring       atomic.Bool
 	clock         func() time.Time
 	logger        *slog.Logger
 	// runCompaction is launched (async, single-flight) when due. Defaults to
@@ -94,6 +99,7 @@ func New(opts Options) (*Recorder, error) {
 		threshold:     opts.SummaryThreshold,
 		retentionDays: opts.RetentionDays,
 		ledgerPruner:  opts.LedgerPruner,
+		minRuns:       opts.MinRuns,
 		compactor: &Compactor{
 			dir:       opts.Dir,
 			reviewer:  opts.Reviewer,
@@ -171,20 +177,17 @@ func (r *Recorder) compact(now time.Time) {
 	}
 
 	completedAt := r.clock()
-	r.compactor.Compact(completedAt, events, csEvents)
+	sc := r.WriteScorecard()
+	r.compactor.Compact(completedAt, events, csEvents, &sc)
 
 	cutoff := completedAt.AddDate(0, 0, -r.retentionDays)
 	r.mu.Lock()
-	if err := pruneEvents(r.dir, cutoff); err != nil {
-		r.logger.Warn("stats prune failed", "err", err)
-	}
-	if err := pruneCodescene(r.dir, cutoff); err != nil {
-		r.logger.Warn("stats codescene prune failed", "err", err)
-	}
+	r.warnOnPruneErr("stats prune failed", pruneEvents(r.dir, cutoff))
+	r.warnOnPruneErr("stats codescene prune failed", pruneCodescene(r.dir, cutoff))
+	r.warnOnPruneErr("stats runs prune failed", pruneRuns(r.dir, cutoff))
+	r.warnOnPruneErr("stats outcomes prune failed", pruneOutcomes(r.dir, cutoff))
 	if r.ledgerPruner != nil {
-		if err := r.ledgerPruner.Prune(cutoff); err != nil {
-			r.logger.Warn("stats ledger prune failed", "err", err)
-		}
+		r.warnOnPruneErr("stats ledger prune failed", r.ledgerPruner.Prune(cutoff))
 	}
 	r.state.LastSummaryAt = completedAt
 	r.state.EventsSinceSummary -= processed
@@ -193,6 +196,15 @@ func (r *Recorder) compact(now time.Time) {
 	}
 	_ = saveState(r.dir, r.state)
 	r.mu.Unlock()
+}
+
+// warnOnPruneErr logs one prune failure. Factored out of compact so each
+// retention target it prunes adds one call there instead of one branch to
+// compact's own cyclomatic complexity.
+func (r *Recorder) warnOnPruneErr(msg string, err error) {
+	if err != nil {
+		r.logger.Warn(msg, "err", err)
+	}
 }
 
 func readEvents(dir string) ([]Event, error) {

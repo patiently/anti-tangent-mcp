@@ -51,6 +51,36 @@ func TestLoadAppliesDefaultsAndEnv(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsShareProjectToBMProject(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("bm_project = \"team-main\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(cfgPath, dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ShareProject != "team-main" {
+		t.Fatalf("ShareProject = %q, want default of BMProject %q", c.ShareProject, "team-main")
+	}
+}
+
+func TestLoadHonoursExplicitShareProject(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("bm_project = \"team-main\"\nshare_project = \"shared\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(cfgPath, dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ShareProject != "shared" {
+		t.Fatalf("ShareProject = %q, want %q", c.ShareProject, "shared")
+	}
+}
+
 func TestLoadReusesExistingToken(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.toml")
@@ -65,5 +95,23 @@ func TestLoadReusesExistingToken(t *testing.T) {
 	}
 	if c1.APIToken != c2.APIToken {
 		t.Fatalf("token not stable across loads: %s vs %s", c1.APIToken, c2.APIToken)
+	}
+}
+
+func TestLoadTeamRefreshMinutes(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	c, err := Load(cfgPath, dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.TeamRefreshMinutes != 60 {
+		t.Fatalf("TeamRefreshMinutes default = %d, want 60", c.TeamRefreshMinutes)
+	}
+	if err := os.WriteFile(cfgPath, []byte("team_refresh_minutes = 15\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err = Load(cfgPath, dir); err != nil || c.TeamRefreshMinutes != 15 {
+		t.Fatalf("explicit TeamRefreshMinutes = %d, err %v; want 15", c.TeamRefreshMinutes, err)
 	}
 }

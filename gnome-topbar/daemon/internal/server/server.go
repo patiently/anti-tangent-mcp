@@ -7,9 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atruns"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/state"
+	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
 type Provider interface {
@@ -24,6 +27,33 @@ type Provider interface {
 	ListFeatures(ctx context.Context) ([]bm.SearchResult, error)
 	ListDecisions(ctx context.Context) ([]bm.SearchResult, error)
 	ListMyNotes(ctx context.Context) ([]bm.SearchResult, error)
+	// RunsView returns the scored view for a scope: "mine", "team", or
+	// "user:<publisher>".
+	RunsView(scope string) RunsView
+	// RefreshTeamRuns pulls every shared run note from Basic Memory now,
+	// re-reading cached ones, instead of waiting for the hourly pull. A
+	// failure is reported through the next RunsView's TeamError.
+	RefreshTeamRuns(ctx context.Context)
+}
+
+// RunsView is the data behind /ui/runs: a scorecard recomputed over the
+// scope's records, the run summaries derived from the same records, and
+// enough of the underlying atruns.Data for the run-detail drill-down.
+type RunsView struct {
+	Scope      string
+	Present    bool
+	Scorecard  scorecard.Scorecard
+	Runs       []atruns.RunSummary
+	Data       atruns.Data
+	Publishers []string
+	TeamError  string
+	// TeamAsOf is when the team records were last pulled from Basic Memory;
+	// zero when they have never been pulled.
+	TeamAsOf time.Time
+	// TeamRefreshMinutes is the configured pull interval; zero when no team
+	// cache is configured, so nothing pulls automatically.
+	TeamRefreshMinutes int
+	Skipped            int
 }
 
 func New(p Provider, token string) http.Handler {

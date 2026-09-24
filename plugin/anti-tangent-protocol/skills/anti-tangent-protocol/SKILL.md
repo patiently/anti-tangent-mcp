@@ -36,6 +36,8 @@ Then read the part matching what you are about to do:
 - **Implementer** (you will write the code for this task): `../../protocol/implementer.md`
 - **Controller** (you dispatch subagents, or you are running a plan end to end):
   `../../protocol/controller.md`
+- **Controller finishing a plan run** (the last task is done and the final review has
+  returned): also `../../protocol/outcome.md`
 - **Plan author** (you are drafting or revising task blocks): `../../protocol/authoring.md`
 - Additionally, **only if a project knowledge base is in play**:
   `../../protocol/project-knowledge.md`

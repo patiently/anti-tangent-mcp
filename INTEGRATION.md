@@ -12,12 +12,13 @@ role so an agent loads only what applies to it.
 | [`authoring.md`](docs/protocol/authoring.md) | plan authors | §3 task-block format, normative test bodies, attestations, write-time comment guard |
 | [`implementer.md`](docs/protocol/implementer.md) | implementing subagents | §4 lifecycle, the paste-in dispatch clause, lightweight mode, CodeScene companion, §4.4 comment policy |
 | [`controller.md`](docs/protocol/controller.md) | controllers | §5 plan-handoff gate, dispatch addendum, §5.3 guard hooks, end-of-run reporting |
+| [`outcome.md`](docs/protocol/outcome.md) | controllers, at the end of a run | §5.10 recording the independent review's outcome |
 | [`project-knowledge.md`](docs/protocol/project-knowledge.md) | controllers, only with a KB | prime/extract loop, note types, Basic Memory translation |
 
-The five parts live in `docs/protocol/`; the installer rewrites these paths to your local copy.
+The six parts live in `docs/protocol/`; the installer rewrites these paths to your local copy.
 
 Section numbers are stable across the split: §1 and §6 are in `core.md`, §3 in `authoring.md`,
-§4 in `implementer.md`, §5 in `controller.md`.
+§4 in `implementer.md`, §5 in `controller.md` (§5.10 in `outcome.md`).
 
 The authoritative design is
 [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md).

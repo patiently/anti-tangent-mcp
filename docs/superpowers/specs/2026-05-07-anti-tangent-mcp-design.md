@@ -178,6 +178,10 @@ The mid-hook prompt explicitly instructs the reviewer **not** to critique code s
 - File content can be passed as full files **or** unified diffs (`*** Begin Patch` style). The prompt template handles both.
 - No `delete_session` tool: sessions auto-expire.
 - `model_override` syntax: `<provider>:<model_id>`. Validated at startup against an internal allowlist; same validator runs on per-call overrides.
+- As of 0.26.0, a tenth tool, `record_review_outcome`, records an independent review's findings
+  against a plan run so anti-tangent's own verdicts can be scored for accuracy over time;
+  deterministic, no reviewer LLM call — see
+  `docs/superpowers/specs/2026-09-23-run-outcome-scorecard-design.md`.
 
 ## Session lifecycle & state
 
