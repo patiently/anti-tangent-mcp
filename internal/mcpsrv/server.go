@@ -32,11 +32,10 @@ type Deps struct {
 // main wires this from its own ldflags-injected version at startup.
 var Version = "dev"
 
-// New creates and returns a configured MCP server with all registered tools:
+// New creates and returns a configured MCP server with its ten tools:
 // validate_task_spec, check_progress, validate_completion, validate_plan,
-// (v0.6.0) prime_project_knowledge, extract_project_knowledge, (v0.15.0)
-// plan_run_report, and (v0.18.0) bulk_read and code_write — nine registered
-// tools.
+// prime_project_knowledge, extract_project_knowledge, plan_run_report,
+// record_review_outcome, bulk_read and code_write.
 func New(d Deps) *mcp.Server {
 	if d.planCache == nil {
 		d.planCache = newPlanPassCache()
@@ -57,6 +56,7 @@ func New(d Deps) *mcp.Server {
 	mcp.AddTool(srv, primeProjectKnowledgeTool(), h.PrimeProjectKnowledge)
 	mcp.AddTool(srv, extractProjectKnowledgeTool(), h.ExtractProjectKnowledge)
 	mcp.AddTool(srv, planRunReportTool(), h.PlanRunReport)
+	mcp.AddTool(srv, recordReviewOutcomeTool(), h.RecordReviewOutcome)
 	mcp.AddTool(srv, bulkReadTool(), h.BulkRead)
 	mcp.AddTool(srv, codeWriteTool(), h.CodeWrite)
 

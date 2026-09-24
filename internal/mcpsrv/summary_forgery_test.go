@@ -22,6 +22,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
+	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
 // This file pins one property of the paste-ready summary_block: free text a
@@ -172,6 +173,13 @@ type extractSummaryInput struct {
 
 type unknownPlanRunInput struct {
 	PlanRunID string
+}
+
+// outcomeSummaryInput bundles formatOutcomeSummary's two arguments so the
+// reflective walk has a single root to traverse.
+type outcomeSummaryInput struct {
+	Args RecordReviewOutcomeArgs
+	Res  RecordReviewOutcomeResult
 }
 
 // clearedSummaryInput is clearPlanServerSetFields's "input" for registry
@@ -400,6 +408,36 @@ func summaryFormatterCases() []summaryFormatterCase {
 			newIn:       func() any { return &unknownPlanRunInput{PlanRunID: "pr_missing"} },
 			render: func(in any) string {
 				return formatUnknownPlanRunSummary(in.(*unknownPlanRunInput).PlanRunID)
+			},
+		},
+		{
+			// record_review_outcome's recorded path: its own header line, the
+			// "recorded: yes" line and one escape row, which together carry
+			// every free-text field the recorded branch can render. Reason is
+			// only rendered on the not-recorded branch, so it is seeded but
+			// never appears in this baseline — the same shape as
+			// formatUnknownPlanRunSummary's single-branch registration above.
+			name:        "mcpsrv.formatOutcomeSummary",
+			wantHeaders: 0,
+			wantMarkers: 0,
+			newIn: func() any {
+				return &outcomeSummaryInput{
+					Args: RecordReviewOutcomeArgs{
+						PlanRunID: "run-1",
+						Source:    "final_review",
+					},
+					Res: RecordReviewOutcomeResult{
+						Recorded:    true,
+						Reason:      "unused on the recorded branch",
+						RunKnown:    true,
+						TasksScored: 2,
+						Escapes:     []scorecard.Escape{{TaskIndex: 1, AntiTangentVerdict: "pass", OutcomeSeverity: "major"}},
+					},
+				}
+			},
+			render: func(in any) string {
+				v := in.(*outcomeSummaryInput)
+				return formatOutcomeSummary(v.Args, v.Res)
 			},
 		},
 		{
