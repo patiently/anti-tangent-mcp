@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atruns"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/state"
+	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
 type Provider interface {
@@ -24,6 +26,23 @@ type Provider interface {
 	ListFeatures(ctx context.Context) ([]bm.SearchResult, error)
 	ListDecisions(ctx context.Context) ([]bm.SearchResult, error)
 	ListMyNotes(ctx context.Context) ([]bm.SearchResult, error)
+	// RunsView returns the scored view for a scope: "mine", "team", or
+	// "user:<publisher>".
+	RunsView(scope string) RunsView
+}
+
+// RunsView is the data behind /ui/runs: a scorecard recomputed over the
+// scope's records, the run summaries derived from the same records, and
+// enough of the underlying atruns.Data for the run-detail drill-down.
+type RunsView struct {
+	Scope      string
+	Present    bool
+	Scorecard  scorecard.Scorecard
+	Runs       []atruns.RunSummary
+	Data       atruns.Data
+	Publishers []string
+	TeamError  string
+	Skipped    int
 }
 
 func New(p Provider, token string) http.Handler {

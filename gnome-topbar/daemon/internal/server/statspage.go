@@ -72,6 +72,7 @@ func renderStatsPage(at atstats.Stats) string {
 	}
 	var b strings.Builder
 	b.WriteString(`<h1>anti-tangent stats</h1>`)
+	b.WriteString(`<p><a href="/ui/runs">Runs and scorecard →</a></p>`)
 	// The window timestamps come from a Go time layout (no HTML-special chars), so
 	// they don't need escaping.
 	fmt.Fprintf(&b, `<p class="muted">%d calls · window %s → %s</p>`,

@@ -37,6 +37,7 @@ func (f *fakeProv) ListGotchas(context.Context) ([]bm.SearchResult, error)   { r
 func (f *fakeProv) ListModules(context.Context) ([]bm.SearchResult, error)   { return f.modules, nil }
 func (f *fakeProv) ListFeatures(context.Context) ([]bm.SearchResult, error)  { return f.features, nil }
 func (f *fakeProv) ListDecisions(context.Context) ([]bm.SearchResult, error) { return f.decisions, nil }
+func (f *fakeProv) RunsView(string) RunsView                                 { return RunsView{} }
 
 const tok = "secret-token"
 

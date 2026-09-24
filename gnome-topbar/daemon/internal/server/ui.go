@@ -21,23 +21,7 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 		_, _ = w.Write(mermaidJS)
 	})
 
-	mux.HandleFunc("/ui/search", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
-		writeHTML(w, pageShell("gnome-topbar", `<h1>gnome-topbar</h1>`+
-			`<form method="GET" action="/ui/search/results">`+
-			`<input type="text" name="q" autofocus placeholder="Search the knowledge base…"> <button>Search</button></form>`+
-			`<p class="muted">Or browse:</p>`+
-			`<ul class="cards">`+
-			`<li><a href="/ui/howtos">📓 Howtos</a></li>`+
-			`<li><a href="/ui/gotchas">⚠️ Gotchas</a></li>`+
-			`<li><a href="/ui/modules">🧩 Modules</a></li>`+
-			`<li><a href="/ui/features">✨ Features</a></li>`+
-			`<li><a href="/ui/decisions">📐 Decisions</a></li>`+
-			`<li><a href="/ui/notes">🗒 My notes</a></li>`+
-			`<li><a href="/ui/new-todo">➕ New todo</a></li>`+
-			`<li><a href="/ui/stats">📊 Stats</a></li>`+
-			`<li><a href="/ui/claude">🤖 Claude usage</a></li>`+
-			`</ul>`))
-	}))
+	mux.HandleFunc("/ui/search", uiAuth(token, searchPageHandler))
 
 	mux.HandleFunc("/ui/stats", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
 		writeHTML(w, renderStatsPage(p.Snapshot().AntiTangent))
@@ -45,6 +29,7 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 	mux.HandleFunc("/ui/claude", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
 		writeHTML(w, renderClaudePage(p.Snapshot().ClaudeStats, time.Now()))
 	}))
+	mux.HandleFunc("/ui/runs", uiAuth(token, runsHandler(p)))
 
 	mux.HandleFunc("/ui/search/results", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
@@ -153,6 +138,27 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 			`<input type="text" name="text" autofocus placeholder="what needs doing"> `+
 			`<button>Add</button></form>`))
 	}))
+}
+
+// searchPageHandler serves /ui/search: the search box and the browse-by-type
+// card list. Static content — it needs no Provider.
+func searchPageHandler(w http.ResponseWriter, r *http.Request) {
+	writeHTML(w, pageShell("gnome-topbar", `<h1>gnome-topbar</h1>`+
+		`<form method="GET" action="/ui/search/results">`+
+		`<input type="text" name="q" autofocus placeholder="Search the knowledge base…"> <button>Search</button></form>`+
+		`<p class="muted">Or browse:</p>`+
+		`<ul class="cards">`+
+		`<li><a href="/ui/howtos">📓 Howtos</a></li>`+
+		`<li><a href="/ui/gotchas">⚠️ Gotchas</a></li>`+
+		`<li><a href="/ui/modules">🧩 Modules</a></li>`+
+		`<li><a href="/ui/features">✨ Features</a></li>`+
+		`<li><a href="/ui/decisions">📐 Decisions</a></li>`+
+		`<li><a href="/ui/notes">🗒 My notes</a></li>`+
+		`<li><a href="/ui/new-todo">➕ New todo</a></li>`+
+		`<li><a href="/ui/stats">📊 Stats</a></li>`+
+		`<li><a href="/ui/runs">🧪 Runs</a></li>`+
+		`<li><a href="/ui/claude">🤖 Claude usage</a></li>`+
+		`</ul>`))
 }
 
 // listPage renders a titled list of Basic Memory notes as cards linking to the
