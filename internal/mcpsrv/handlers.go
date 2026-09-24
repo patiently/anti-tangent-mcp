@@ -3219,7 +3219,7 @@ func (h *handlers) PlanRunReport(_ context.Context, _ *mcp.CallToolRequest, args
 		PlanRunID:    run.ID,
 		PlanVerdict:  run.PlanVerdict,
 		PlanQuality:  run.PlanQuality,
-		Tasks:        run.Rows,
+		Tasks:        planrun.ReportRows(run.Rows),
 		Totals:       planrun.Totals(run),
 		SummaryBlock: planrun.Render(run),
 	}

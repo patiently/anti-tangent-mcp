@@ -54,6 +54,21 @@ type RunTotals struct {
 	Escalated        int     `json:"escalated"`
 }
 
+// ReportRows copies rows for plan_run_report's wire response with each row's
+// call log cleared: Calls holds every anti-tangent call for the task (up to
+// maxCallLog entries) and is meant for internal accounting, not for
+// plan_run_report's output. The copy also keeps this from mutating whatever
+// the caller passed in — Snapshot's rows or a Ledger.Load result.
+func ReportRows(rows []TaskRow) []TaskRow {
+	out := make([]TaskRow, len(rows))
+	copy(out, rows)
+	for i := range out {
+		out[i].Calls = nil
+		out[i].CallsDropped = 0
+	}
+	return out
+}
+
 // Totals aggregates a run's rows. The CodeScene counts cover completed rows
 // only: a task still open has not had its chance to run the analysis. NetPP
 // is the branch delta rather than a sum over tasks; see branchNetPP.

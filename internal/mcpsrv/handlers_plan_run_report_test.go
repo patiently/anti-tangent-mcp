@@ -150,6 +150,63 @@ func TestPlanRunReport_NoProviderCall(t *testing.T) {
 	})
 }
 
+// TestPlanRunReport_TasksCarryNoCallLog pins the fix for the finding that
+// plan_run_report's Tasks unexpectedly serialised each row's internal call
+// log (up to 32 entries per task). It drives a full validate_plan ->
+// validate_task_spec -> check_progress -> validate_completion sequence via
+// runSnapshotSequence, which populates the row's Calls with three entries,
+// then asserts the report's wire JSON carries no "calls" key at all and that
+// the live store's own row is untouched (the report must copy, not mutate).
+func TestPlanRunReport_TasksCarryNoCallLog(t *testing.T) {
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	require.NoError(t, err)
+
+	rv := &scriptedRunReviewer{name: "anthropic", resps: []providers.Response{
+		runSnapshotPlanResp(),
+		passResp("claude-sonnet-4-6"),
+		passResp("claude-haiku-4-5-20251001"),
+		passResp("claude-opus-4-7"),
+	}}
+	h := &handlers{deps: Deps{
+		Cfg:      cfg,
+		Sessions: session.NewStore(cfg.SessionTTL),
+		Reviews:  providers.Registry{"anthropic": rv},
+		PlanRuns: planrun.NewStore(cfg.SessionTTL),
+	}}
+
+	planRunID := runSnapshotSequence(t, h)
+
+	// The live store's row really does carry a call log; otherwise this test
+	// would pass trivially with nothing to clear.
+	live, ok := h.deps.PlanRuns.Snapshot(planRunID)
+	require.True(t, ok)
+	require.Len(t, live.Rows, 1)
+	require.NotEmpty(t, live.Rows[0].Calls, "precondition: the row must carry a call log")
+
+	out, res, err := h.PlanRunReport(context.Background(), nil, PlanRunReportArgs{PlanRunID: planRunID})
+	require.NoError(t, err)
+	require.Len(t, res.Tasks, 1)
+	assert.Empty(t, res.Tasks[0].Calls)
+	assert.Zero(t, res.Tasks[0].CallsDropped)
+
+	wire := planRunReportWireText(t, out)
+	assert.NotContains(t, wire, `"calls"`)
+	assert.NotContains(t, wire, `"calls_dropped"`)
+
+	// The report must not have mutated the store: a second Snapshot still
+	// shows the row's call log intact.
+	live2, ok := h.deps.PlanRuns.Snapshot(planRunID)
+	require.True(t, ok)
+	require.Len(t, live2.Rows, 1)
+	assert.NotEmpty(t, live2.Rows[0].Calls, "plan_run_report must not clear the store's own call log")
+	assert.Equal(t, live.Rows[0].Calls, live2.Rows[0].Calls)
+}
+
 func TestValidateCompletion_PlanRunRowCarriesWaivedAndEscalated(t *testing.T) {
 	h, rv := newRulingsHandlers(t)
 	run := h.deps.PlanRuns.Create("pass", "actionable", 1)
