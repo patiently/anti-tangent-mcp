@@ -40,11 +40,22 @@ type Options struct {
 }
 
 type Scorecard struct {
-	GeneratedAt   time.Time `json:"generated_at"`
-	MinRuns       int       `json:"min_runs"`
-	SkippedLines  int       `json:"skipped_lines"`
-	Cohorts       []Group   `json:"cohorts"`
-	ByReviewModel []Group   `json:"by_review_model"`
+	GeneratedAt   time.Time       `json:"generated_at"`
+	MinRuns       int             `json:"min_runs"`
+	SkippedLines  int             `json:"skipped_lines"`
+	Cohorts       []Group         `json:"cohorts"`
+	ByReviewModel []Group         `json:"by_review_model"`
+	ByToolModel   []ToolModelRow  `json:"by_tool_model"`
+	Publishers    []string        `json:"publishers,omitempty"`
+	ByPublisher   *PublisherViews `json:"by_publisher,omitempty"`
+	ModelSets     []ModelSet      `json:"model_sets"`
+}
+
+// PublisherViews repeats the review-model and tool-model views with the
+// publisher in every group's identity, for the per-user breakdown.
+type PublisherViews struct {
+	ByReviewModel []Group        `json:"by_review_model"`
+	ByToolModel   []ToolModelRow `json:"by_tool_model"`
 }
 
 func Compute(lines []RunLine, outcomes []OutcomeLine, opts Options) Scorecard {
@@ -52,16 +63,25 @@ func Compute(lines []RunLine, outcomes []OutcomeLine, opts Options) Scorecard {
 		opts.MinRuns = DefaultMinRuns
 	}
 	runs := assemble(lines, outcomes, opts.Publisher)
-	return Scorecard{
+	byReview := func(_ *run, t *task) CohortKey { return CohortKey{ReviewModel: t.reviewModel()} }
+	sc := Scorecard{
 		GeneratedAt: opts.Now,
 		MinRuns:     opts.MinRuns,
 		Cohorts: groupTasks(runs, func(r *run, t *task) CohortKey {
 			return CohortKey{t.reviewModel(), t.serverVersion(), r.implementerModel(t.snap.Index)}
 		}, false, opts.MinRuns),
-		ByReviewModel: groupTasks(runs, func(_ *run, t *task) CohortKey {
-			return CohortKey{ReviewModel: t.reviewModel()}
-		}, false, opts.MinRuns),
+		ByReviewModel: groupTasks(runs, byReview, false, opts.MinRuns),
+		ByToolModel:   toolModelRows(runs, false),
+		Publishers:    publishers(runs),
+		ModelSets:     modelSets(runs),
 	}
+	if opts.Publisher == "" && len(sc.Publishers) > 1 {
+		sc.ByPublisher = &PublisherViews{
+			ByReviewModel: groupTasks(runs, byReview, true, opts.MinRuns),
+			ByToolModel:   toolModelRows(runs, true),
+		}
+	}
+	return sc
 }
 
 // groupTasks scores every task that has a final verdict, in every run that
