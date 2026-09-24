@@ -177,34 +177,3 @@ func TestPublishSkipsUnchangedAndRunsWithoutOutcomes(t *testing.T) {
 		t.Fatalf("third publish (changed) wrote = %d, want 1", wrote)
 	}
 }
-
-func TestPoolSkipsBadNotes(t *testing.T) {
-	validBody, err := NoteBody("alice", []scorecard.RunLine{{RunHash: "r_1"}}, []scorecard.OutcomeLine{{RunHash: "r_1", Source: "final_review"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	fc := &fakeCaller{
-		search: `{"results":[
-		  {"title":"r_1","type":"entity","permalink":"anti-tangent/runs/r_1/main","metadata":{"note_type":"at_run"}},
-		  {"title":"r_2","type":"entity","permalink":"anti-tangent/runs/r_2/main","metadata":{"note_type":"at_run"}}
-		],"has_more":false}`,
-		notes: map[string]string{
-			"anti-tangent/runs/r_1/main": validBody,
-			"anti-tangent/runs/r_2/main": "garbage, no json block here",
-		},
-	}
-	c := bm.New(fc, "team")
-	d, skipped, err := Pool(context.Background(), c, "team")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if skipped != 1 {
-		t.Fatalf("skipped = %d, want 1", skipped)
-	}
-	if !d.Present || len(d.Lines) != 1 || d.Lines[0].RunHash != "r_1" || d.Lines[0].Publisher != "alice" {
-		t.Fatalf("d = %+v", d)
-	}
-	if len(d.Outcomes) != 1 || d.Outcomes[0].Publisher != "alice" {
-		t.Fatalf("outcomes = %+v", d.Outcomes)
-	}
-}

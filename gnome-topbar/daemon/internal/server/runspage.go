@@ -345,13 +345,56 @@ func runsList(v RunsView) string {
 	return b.String()
 }
 
+// teamFreshness says when the team records were last pulled and offers a
+// POST that pulls them now. It is a form, not a link, so that a crawler or a
+// prefetch following links can never trigger a Basic Memory pull.
+func teamFreshness(v RunsView) string {
+	asOf := "not pulled yet"
+	if !v.TeamAsOf.IsZero() {
+		asOf = "as of " + v.TeamAsOf.Format("2006-01-02 15:04")
+	}
+	return `<form method="POST" action="/ui/runs/refresh" class="muted">Team data ` + esc(asOf) +
+		` (pulled hourly) <input type="hidden" name="scope" value="` + esc(v.Scope) + `">` +
+		`<button type="submit">Refresh now</button></form>`
+}
+
+// teamStatus is the freshness line and refresh button for the team and user
+// scopes, plus the last pull's error if it failed.
+func teamStatus(v RunsView) string {
+	var b strings.Builder
+	if v.Scope != "mine" {
+		b.WriteString(teamFreshness(v))
+	}
+	if v.TeamError != "" {
+		b.WriteString(`<p class="muted">Team records unavailable: ` + esc(v.TeamError) + `</p>`)
+	}
+	return b.String()
+}
+
+// runsRefreshHandler pulls the team records now and sends the browser back to
+// the scope it came from. The scope is only echoed into the redirect when it
+// is a team or user scope, so the form cannot be used to redirect elsewhere.
+func runsRefreshHandler(p Provider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		p.RefreshTeamRuns(r.Context())
+		scope := r.FormValue("scope")
+		if scope != "team" && !strings.HasPrefix(scope, "user:") {
+			scope = "team"
+		}
+		http.Redirect(w, r, "/ui/runs?scope="+scopeHref(scope), http.StatusSeeOther)
+	}
+}
+
 func renderRunsPage(v RunsView) string {
 	var b strings.Builder
 	b.WriteString(`<h1>anti-tangent runs</h1>`)
 	b.WriteString(scopeNav(v))
-	if v.TeamError != "" {
-		b.WriteString(`<p class="muted">Team records unavailable: ` + esc(v.TeamError) + `</p>`)
-	}
+	b.WriteString(teamStatus(v))
 	if !v.Present {
 		if v.Scope == "mine" {
 			b.WriteString(`<p class="muted">No run records yet (runs.jsonl absent — set ANTI_TANGENT_STATS_DIR on the server).</p>`)

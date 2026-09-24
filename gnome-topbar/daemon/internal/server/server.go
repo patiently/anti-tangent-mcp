@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atruns"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
@@ -29,6 +30,10 @@ type Provider interface {
 	// RunsView returns the scored view for a scope: "mine", "team", or
 	// "user:<publisher>".
 	RunsView(scope string) RunsView
+	// RefreshTeamRuns pulls every shared run note from Basic Memory now,
+	// re-reading cached ones, instead of waiting for the hourly pull. A
+	// failure is reported through the next RunsView's TeamError.
+	RefreshTeamRuns(ctx context.Context)
 }
 
 // RunsView is the data behind /ui/runs: a scorecard recomputed over the
@@ -42,7 +47,10 @@ type RunsView struct {
 	Data       atruns.Data
 	Publishers []string
 	TeamError  string
-	Skipped    int
+	// TeamAsOf is when the team records were last pulled from Basic Memory;
+	// zero when they have never been pulled.
+	TeamAsOf time.Time
+	Skipped  int
 }
 
 func New(p Provider, token string) http.Handler {

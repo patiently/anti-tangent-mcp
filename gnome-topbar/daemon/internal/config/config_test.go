@@ -97,3 +97,21 @@ func TestLoadReusesExistingToken(t *testing.T) {
 		t.Fatalf("token not stable across loads: %s vs %s", c1.APIToken, c2.APIToken)
 	}
 }
+
+func TestLoadTeamRefreshMinutes(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	c, err := Load(cfgPath, dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.TeamRefreshMinutes != 60 {
+		t.Fatalf("TeamRefreshMinutes default = %d, want 60", c.TeamRefreshMinutes)
+	}
+	if err := os.WriteFile(cfgPath, []byte("team_refresh_minutes = 15\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err = Load(cfgPath, dir); err != nil || c.TeamRefreshMinutes != 15 {
+		t.Fatalf("explicit TeamRefreshMinutes = %d, err %v; want 15", c.TeamRefreshMinutes, err)
+	}
+}

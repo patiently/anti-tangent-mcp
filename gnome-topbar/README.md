@@ -38,6 +38,13 @@ and normalised categories. See `internal/atruns/share.go` (`NoteBody`) for what 
 into a note, and the anti-tangent-mcp root `docs/protocol/outcome.md` for the wire contract
 these records are read from.
 
+The Team records are cached in `~/.local/state/gnome-topbar/team-runs.json` and pulled from
+Basic Memory once an hour (`team_refresh_minutes`, default `60`), so the Team scope shows
+immediately after a restart and a pull reads only notes it has not seen. Basic Memory's listing
+says nothing about which notes changed, so a run republished with a later outcome is picked up
+by the daily full pull, or at once with the **Refresh now** button on the Team and user scopes,
+which re-reads every note. The page shows when the team data was last pulled.
+
 ## Prerequisites
 - GNOME Shell 45/46/47 (Wayland or X11)
 - `gh` CLI logged in (`gh auth status`)

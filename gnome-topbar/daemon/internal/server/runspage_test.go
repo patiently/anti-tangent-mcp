@@ -183,7 +183,10 @@ func TestModelNameEscaped(t *testing.T) {
 
 // runsFake implements server.Provider, recording the scope RunsView was
 // called with, for the handler-level test below.
-type runsFake struct{ gotScope string }
+type runsFake struct {
+	gotScope  string
+	refreshed bool
+}
 
 func (f *runsFake) Snapshot() state.Snapshot                                  { return state.Snapshot{} }
 func (f *runsFake) Search(context.Context, string) ([]bm.SearchResult, error) { return nil, nil }
@@ -196,6 +199,7 @@ func (f *runsFake) ListModules(context.Context) ([]bm.SearchResult, error)    { 
 func (f *runsFake) ListFeatures(context.Context) ([]bm.SearchResult, error)   { return nil, nil }
 func (f *runsFake) ListDecisions(context.Context) ([]bm.SearchResult, error)  { return nil, nil }
 func (f *runsFake) ListMyNotes(context.Context) ([]bm.SearchResult, error)    { return nil, nil }
+func (f *runsFake) RefreshTeamRuns(context.Context)                           { f.refreshed = true }
 func (f *runsFake) RunsView(scope string) RunsView {
 	f.gotScope = scope
 	return RunsView{Scope: scope}

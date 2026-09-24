@@ -133,33 +133,6 @@ func (p *Publisher) Publish(ctx context.Context, d Data) (int, error) {
 	return wrote, firstErr
 }
 
-// Pool reads every at_run note in the project. A note that fails to read or
-// parse is counted and skipped; it never hides the others.
-func Pool(ctx context.Context, c *bm.Client, project string) (Data, int, error) {
-	notes, err := c.ListRunNotes(ctx, project)
-	if err != nil {
-		return Data{}, 0, err
-	}
-	var d Data
-	skipped := 0
-	for _, n := range notes {
-		body, err := c.ReadRunNote(ctx, project, n.Permalink)
-		if err != nil {
-			skipped++
-			continue
-		}
-		ls, ocs, err := ParseNote(body)
-		if err != nil {
-			skipped++
-			continue
-		}
-		d.Lines = append(d.Lines, ls...)
-		d.Outcomes = append(d.Outcomes, ocs...)
-	}
-	d.Present = len(d.Lines) > 0 || len(d.Outcomes) > 0
-	return d, skipped, nil
-}
-
 func loadPublished(path string) map[string]string {
 	m := map[string]string{}
 	if b, err := os.ReadFile(path); err == nil {

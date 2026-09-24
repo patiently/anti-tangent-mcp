@@ -101,14 +101,35 @@ func assertRunSummariesPublisher(t *testing.T, runs []atruns.RunSummary, want st
 	}
 }
 
+// testTeamCache wires a TeamCache over caller into p, with a controllable clock.
+func testTeamCache(t *testing.T, p *Poller, caller bm.Caller, now *time.Time) {
+	t.Helper()
+	p.teamCache = &atruns.TeamCache{
+		Client: bm.New(caller, "team"), Project: "team",
+		Path:     filepath.Join(t.TempDir(), "team-runs.json"),
+		Interval: time.Hour, FullEvery: 24 * time.Hour,
+		Now: func() time.Time { return *now },
+	}
+}
+
+func countCalls(f *fakeCaller, name string) int {
+	n := 0
+	for _, c := range f.calls {
+		if c == name {
+			n++
+		}
+	}
+	return n
+}
+
 func TestRefreshRunsTeamKeepsPreviousDataOnError(t *testing.T) {
 	prior := atruns.Data{Present: true, Lines: []scorecard.RunLine{{RunHash: "r_prior", Header: true}}}
 	p := newTestPoller()
-	p.cfg = config.Config{ShareProject: "team"}
-	p.bm = bm.New(&fakeCaller{errOn: "search_notes"}, "team")
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	testTeamCache(t, p, &fakeCaller{errOn: "search_notes"}, &now)
 	p.runsTeam = prior
 
-	p.refreshRunsTeam(context.Background())
+	p.pullTeam(context.Background(), false)
 
 	if p.runsTeamErr == "" {
 		t.Error("runsTeamErr not set on pool failure")
@@ -123,16 +144,83 @@ func TestRefreshRunsTeamKeepsPreviousDataOnError(t *testing.T) {
 
 func TestRefreshRunsTeamSucceeds(t *testing.T) {
 	p := newTestPoller()
-	p.cfg = config.Config{ShareProject: "team"}
-	p.bm = bm.New(&fakeCaller{}, "team")
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	testTeamCache(t, p, &fakeCaller{}, &now)
 
-	p.refreshRunsTeam(context.Background())
+	p.pullTeam(context.Background(), false)
 
 	if p.runsTeamErr != "" {
 		t.Errorf("runsTeamErr = %q, want empty", p.runsTeamErr)
 	}
 	if st := p.snap.Sources["runs-team"]; !st.OK {
 		t.Errorf("runs-team source = %+v, want OK=true", st)
+	}
+	if !p.runsTeamAsOf.Equal(now) {
+		t.Errorf("runsTeamAsOf = %v, want %v", p.runsTeamAsOf, now)
+	}
+}
+
+func TestRefreshRunsTeamIfDuePullsOnlyWhenDue(t *testing.T) {
+	p := newTestPoller()
+	fc := &fakeCaller{}
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	testTeamCache(t, p, fc, &now)
+
+	p.refreshRunsTeamIfDue(context.Background())
+	if countCalls(fc, "search_notes") != 1 {
+		t.Fatalf("an empty cache is due: search_notes calls = %d", countCalls(fc, "search_notes"))
+	}
+	now = now.Add(30 * time.Minute)
+	p.refreshRunsTeamIfDue(context.Background())
+	if countCalls(fc, "search_notes") != 1 {
+		t.Fatal("a pull 30 minutes after the last one must not reach Basic Memory")
+	}
+	now = now.Add(30 * time.Minute)
+	p.refreshRunsTeamIfDue(context.Background())
+	if countCalls(fc, "search_notes") != 2 {
+		t.Fatal("a pull an hour after the last one must reach Basic Memory")
+	}
+}
+
+func TestRefreshTeamRunsForcesAPull(t *testing.T) {
+	p := newTestPoller()
+	fc := &fakeCaller{}
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	testTeamCache(t, p, fc, &now)
+	p.refreshRunsTeamIfDue(context.Background())
+
+	p.RefreshTeamRuns(context.Background())
+	if countCalls(fc, "search_notes") != 2 {
+		t.Fatalf("Refresh now must pull even when not due: search_notes calls = %d", countCalls(fc, "search_notes"))
+	}
+}
+
+func TestRefreshTeamRunsWithoutBMIsANoop(t *testing.T) {
+	p := newTestPoller()
+	p.RefreshTeamRuns(context.Background())
+	if p.runsTeamErr != "" {
+		t.Errorf("no team cache configured must not report an error: %q", p.runsTeamErr)
+	}
+}
+
+func TestLoadTeamCacheServesDiskWithoutBM(t *testing.T) {
+	p := newTestPoller()
+	fc := &fakeCaller{}
+	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
+	testTeamCache(t, p, fc, &now)
+	p.pullTeam(context.Background(), false)
+	path := p.teamCache.Path
+
+	q := newTestPoller()
+	fresh := &fakeCaller{}
+	testTeamCache(t, q, fresh, &now)
+	q.teamCache.Path = path
+	q.loadTeamCache()
+	if len(fresh.calls) != 0 {
+		t.Fatalf("loading the cache called Basic Memory: %v", fresh.calls)
+	}
+	if !q.runsTeamAsOf.Equal(now) {
+		t.Errorf("runsTeamAsOf = %v, want the cached pull time %v", q.runsTeamAsOf, now)
 	}
 }
 

@@ -30,6 +30,7 @@ func registerUI(mux *http.ServeMux, p Provider, token string) {
 		writeHTML(w, renderClaudePage(p.Snapshot().ClaudeStats, time.Now()))
 	}))
 	mux.HandleFunc("/ui/runs", uiAuth(token, runsHandler(p)))
+	mux.HandleFunc("/ui/runs/refresh", uiAuth(token, runsRefreshHandler(p)))
 
 	mux.HandleFunc("/ui/search/results", uiAuth(token, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")

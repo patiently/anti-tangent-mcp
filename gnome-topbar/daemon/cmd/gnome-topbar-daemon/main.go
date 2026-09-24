@@ -101,6 +101,7 @@ func main() {
 	p.refreshAntiTangent(ctx)
 	go p.loop(ctx, time.Duration(cfg.BMIntervalSec)*time.Second, p.refreshAntiTangent)
 
+	wireTeamCache(p, bmc, stateDir)
 	startRunsPolling(ctx, p)
 
 	p.refreshClaudeStats(ctx)
@@ -160,17 +161,36 @@ func wireRunsSharing(p *Poller, bmc *bm.Client, stateDir string) {
 	p.log.Info("anti-tangent run sharing enabled", "project", p.cfg.ShareProject)
 }
 
-// startRunsPolling schedules the local run refresh (always) and the team pool
-// refresh (whenever bm_url is set — pooling needs only BM access, not
-// bm_username, which names the publisher rather than a reader).
-func startRunsPolling(ctx context.Context, p *Poller) {
-	p.refreshRuns(ctx)
-	go p.loop(ctx, time.Duration(p.cfg.BMIntervalSec)*time.Second, p.refreshRuns)
+// wireTeamCache sets p.teamCache whenever bm_url is set: reading the team's
+// records needs only BM access, not bm_username, which names the publisher
+// rather than a reader.
+func wireTeamCache(p *Poller, bmc *bm.Client, stateDir string) {
 	if p.cfg.BMURL == "" {
 		return
 	}
-	p.refreshRunsTeam(ctx)
-	go p.loop(ctx, time.Duration(p.cfg.BMIntervalSec)*time.Second, p.refreshRunsTeam)
+	p.teamCache = &atruns.TeamCache{
+		Client:    bmc,
+		Project:   p.cfg.ShareProject,
+		Path:      filepath.Join(stateDir, "team-runs.json"),
+		Interval:  time.Duration(p.cfg.TeamRefreshMinutes) * time.Minute,
+		FullEvery: 24 * time.Hour,
+		Now:       time.Now,
+	}
+}
+
+// startRunsPolling schedules the local run refresh and, with a team cache,
+// serves the cached team records at once and checks on every BM tick whether
+// an hourly pull is due. The first pull runs in the background so a large
+// team never delays startup.
+func startRunsPolling(ctx context.Context, p *Poller) {
+	p.refreshRuns(ctx)
+	go p.loop(ctx, time.Duration(p.cfg.BMIntervalSec)*time.Second, p.refreshRuns)
+	if p.teamCache == nil {
+		return
+	}
+	p.loadTeamCache()
+	go p.refreshRunsTeamIfDue(ctx)
+	go p.loop(ctx, time.Duration(p.cfg.BMIntervalSec)*time.Second, p.refreshRunsTeamIfDue)
 }
 
 type Poller struct {
@@ -181,6 +201,8 @@ type Poller struct {
 	bm    *bm.Client
 	// publisher is nil when sharing is off or bm_username is empty.
 	publisher *atruns.Publisher
+	// teamCache is nil when bm_url is unset; the Team scope is then empty.
+	teamCache *atruns.TeamCache
 
 	mu              sync.RWMutex
 	snap            state.Snapshot
@@ -188,6 +210,7 @@ type Poller struct {
 	runsTeam        atruns.Data
 	runsTeamErr     string
 	runsTeamSkipped int
+	runsTeamAsOf    time.Time
 }
 
 func (p *Poller) loop(ctx context.Context, every time.Duration, fn func(context.Context)) {
@@ -317,20 +340,47 @@ func (p *Poller) refreshRuns(ctx context.Context) {
 	}
 }
 
-// refreshRunsTeam pools every publisher's shared run records from Basic
-// Memory. A failure marks the runs-team source without touching the
-// previously pooled data, so the Team scope keeps showing the last good read.
-func (p *Poller) refreshRunsTeam(ctx context.Context) {
-	d, skipped, err := atruns.Pool(ctx, p.bm, p.cfg.ShareProject)
+// loadTeamCache serves the on-disk team records without calling Basic Memory.
+func (p *Poller) loadTeamCache() {
+	d, asOf, skipped := p.teamCache.Load()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.runsTeam, p.runsTeamAsOf, p.runsTeamSkipped = d, asOf, skipped
+}
+
+// refreshRunsTeamIfDue pulls the team records when the last pull is at least
+// TeamRefreshMinutes old. It runs on every BM tick; between pulls it touches
+// only the cache's in-memory pull time.
+func (p *Poller) refreshRunsTeamIfDue(ctx context.Context) {
+	if p.teamCache.Due() {
+		p.pullTeam(ctx, false)
+	}
+}
+
+// RefreshTeamRuns is the page's "Refresh now": a full pull that re-reads
+// every note, so a republished run shows its newer outcome immediately.
+func (p *Poller) RefreshTeamRuns(ctx context.Context) {
+	if p.teamCache == nil {
+		return
+	}
+	p.pullTeam(ctx, true)
+}
+
+// pullTeam refreshes the team cache from Basic Memory. A failure marks the
+// runs-team source without touching the previously pooled data, so the Team
+// scope keeps showing the last good pull.
+func (p *Poller) pullTeam(ctx context.Context, full bool) {
+	d, skipped, err := p.teamCache.Refresh(ctx, full)
+	_, asOf, _ := p.teamCache.Snapshot()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err != nil {
 		p.runsTeamErr = err.Error()
 		p.snap.Sources["runs-team"] = state.SourceStatus{OK: false, Error: err.Error()}
-		p.log.Warn("anti-tangent team runs pool failed", "err", err)
+		p.log.Warn("anti-tangent team runs pull failed", "err", err)
 		return
 	}
-	p.runsTeam, p.runsTeamSkipped, p.runsTeamErr = d, skipped, ""
+	p.runsTeam, p.runsTeamSkipped, p.runsTeamErr, p.runsTeamAsOf = d, skipped, "", asOf
 	p.snap.Sources["runs-team"] = state.SourceStatus{OK: true}
 }
 
@@ -415,9 +465,12 @@ func (p *Poller) ListMyNotes(ctx context.Context) ([]bm.SearchResult, error) {
 // "user:<publisher>".
 func (p *Poller) RunsView(scope string) server.RunsView {
 	p.mu.RLock()
-	local, team, teamErr, teamSkipped := p.runsLocal, p.runsTeam, p.runsTeamErr, p.runsTeamSkipped
+	local, team, teamErr, teamSkipped, teamAsOf := p.runsLocal, p.runsTeam, p.runsTeamErr, p.runsTeamSkipped, p.runsTeamAsOf
 	p.mu.RUnlock()
 	v := server.RunsView{Scope: scope, TeamError: teamErr}
+	if !teamAsOf.IsZero() {
+		v.TeamAsOf = teamAsOf.Local()
+	}
 	opts := scorecard.Options{Now: time.Now().UTC(), MinRuns: local.MinRuns}
 	src := local
 	if scope != "mine" {
