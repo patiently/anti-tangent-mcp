@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (and other agents) when working with 
 
 ## Project Overview
 
-`anti-tangent-mcp` is an advisory MCP server (Go binary) that helps prevent implementing subagents from drifting away from their assigned tasks. It exposes nine tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec`, `check_progress`, `validate_completion`), two optional project-knowledge tools (`prime_project_knowledge`, `extract_project_knowledge`), a deterministic per-task report (`plan_run_report`), and an I/O-delegation pair (`bulk_read`, `code_write`). Six of these send context under review to a reviewer LLM and return structured findings; the two I/O tools (`bulk_read`, `code_write`) answer questions or generate code without reviewer involvement, routing work to a cheap worker model instead.
+`anti-tangent-mcp` is an advisory MCP server (Go binary) that helps prevent implementing subagents from drifting away from their assigned tasks. It exposes ten tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec`, `check_progress`, `validate_completion`), two optional project-knowledge tools (`prime_project_knowledge`, `extract_project_knowledge`), a deterministic per-task report (`plan_run_report`) and outcome record (`record_review_outcome`), and an I/O-delegation pair (`bulk_read`, `code_write`). Six of these send context under review to a reviewer LLM and return structured findings; two deterministic tools (`plan_run_report`, `record_review_outcome`) return computed results with no reviewer call; the two I/O tools (`bulk_read`, `code_write`) answer questions or generate code without reviewer involvement, routing work to a cheap worker model instead.
 
 The reviewer LLM is intentionally a *different* model from the implementer, so reviews are not blind to the implementer's blind spots.
 
@@ -42,6 +42,7 @@ goreleaser release --snapshot --clean --skip=publish
 
 ```text
 cmd/anti-tangent-mcp/main.go    # entry: load config, build deps, run MCP server
+scorecard/   public, stdlib-only: scores verdicts against review outcomes (shared with the daemon)
 internal/
   config/      env-driven Config + ModelRef parsing/validation
   verdict/     canonical Result + Finding types, JSON Schema, parser
@@ -50,6 +51,7 @@ internal/
   providers/   Reviewer interface; allowlist; HTTP clients (anthropic/openai/google)
   mcpsrv/      MCP server: tool registration + handlers + integration test
     handlers.go               # 6 review tools (validate_plan, validate_task_spec, …)
+    outcome_handler.go           # record_review_outcome
     worker_handlers.go        # 2 I/O tools (bulk_read, code_write)
     worker_call.go            # worker model invocation
     file_target.go            # write-target path resolution + O_NOFOLLOW
@@ -127,7 +129,7 @@ Two failure modes to avoid: (1) leaking consumer code or naming into a public is
 
 ## Logging Conventions
 
-Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). `validate_plan`, `prime_project_knowledge` and `extract_project_knowledge` each emit one summary line per call, on exit so it can carry the verdict and the duration — plus, where a call degraded rather than failed, at most one warning per degraded surface. A warning must be aggregated to one line per call, never emitted from inside a per-item loop. The other four tools (`validate_task_spec`, `check_progress`, `validate_completion`, `plan_run_report`) emit no per-call line today; that is a gap, not a design choice — if you add logging to one of them, follow the same exit-line shape. Set `ANTI_TANGENT_LOG_LEVEL=debug` to also log prompts and provider responses.
+Structured JSON to **stderr only** (stdout is reserved for MCP stdio traffic). `validate_plan`, `prime_project_knowledge` and `extract_project_knowledge` each emit one summary line per call, on exit so it can carry the verdict and the duration — plus, where a call degraded rather than failed, at most one warning per degraded surface. A warning must be aggregated to one line per call, never emitted from inside a per-item loop. `record_review_outcome` also emits one summary line per call, on exit. The other four tools (`validate_task_spec`, `check_progress`, `validate_completion`, `plan_run_report`) emit no per-call line today; that is a gap, not a design choice — if you add logging to one of them, follow the same exit-line shape. Set `ANTI_TANGENT_LOG_LEVEL=debug` to also log prompts and provider responses.
 
 ## Comments
 
