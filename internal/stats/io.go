@@ -13,6 +13,9 @@ const (
 	rollupFile    = "rollup.json"
 	summaryMDFile = "summary.md"
 	summariesFile = "summaries.jsonl"
+	runsFile      = "runs.jsonl"
+	outcomesFile  = "outcomes.jsonl"
+	scorecardFile = "scorecard.json"
 )
 
 // appendJSONL appends one JSON-marshaled value as a line to dir/name.
@@ -35,25 +38,34 @@ func appendJSONL(dir, name string, v any) error {
 // readJSONL reads a JSONL file into a slice, skipping blank and corrupt lines
 // (best-effort). A missing file is not an error (returns nil).
 func readJSONL[T any](dir, name string) ([]T, error) {
+	out, _, err := readJSONLCounted[T](dir, name)
+	return out, err
+}
+
+// readJSONLCounted is readJSONL that also reports how many non-blank lines
+// failed to parse.
+func readJSONLCounted[T any](dir, name string) ([]T, int, error) {
 	b, err := os.ReadFile(filepath.Join(dir, name))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var out []T
+	skipped := 0
 	for _, line := range bytes.Split(b, []byte("\n")) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		var v T
 		if err := json.Unmarshal(line, &v); err != nil {
+			skipped++
 			continue
 		}
 		out = append(out, v)
 	}
-	return out, nil
+	return out, skipped, nil
 }
 
 // rewriteJSONL atomically replaces dir/name with the given items, so readers

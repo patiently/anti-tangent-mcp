@@ -71,6 +71,9 @@ type Config struct {
 	StatsSummaryThreshold int
 	StatsRetentionDays    int
 	StatsMaxTokens        int
+	// ScorecardMinRuns gates the scorecard's regression flag: a cohort and its
+	// baseline each need this many runs before it may read regressed or ok.
+	ScorecardMinRuns int
 	// PlanLedger enables the durable plan-run ledger. Requires StatsDir; on
 	// its own it does nothing. Separate from the stats opt-in because
 	// plan-runs.jsonl carries task titles, unlike every other stats artifact.
@@ -139,6 +142,7 @@ func Load(env func(string) string) (Config, error) {
 		StatsSummaryThreshold:  50,
 		StatsRetentionDays:     30,
 		StatsMaxTokens:         2048,
+		ScorecardMinRuns:       10,
 	}
 
 	if cfg.AnthropicKey == "" && cfg.OpenAIKey == "" && cfg.GoogleKey == "" {
@@ -458,6 +462,16 @@ func Load(env func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("ANTI_TANGENT_STATS_RETENTION_DAYS: must be positive, got %d", n)
 		}
 		cfg.StatsRetentionDays = n
+	}
+	if v := env("ANTI_TANGENT_SCORECARD_MIN_RUNS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_SCORECARD_MIN_RUNS: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_SCORECARD_MIN_RUNS: must be positive, got %d", n)
+		}
+		cfg.ScorecardMinRuns = n
 	}
 	if v := env("ANTI_TANGENT_STATS_MAX_TOKENS"); v != "" {
 		n, err := strconv.Atoi(v)

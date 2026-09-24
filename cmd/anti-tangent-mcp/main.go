@@ -122,6 +122,7 @@ func main() {
 			SummaryInterval:  cfg.StatsSummaryInterval,
 			SummaryThreshold: cfg.StatsSummaryThreshold,
 			RetentionDays:    cfg.StatsRetentionDays,
+			MinRuns:          cfg.ScorecardMinRuns,
 			Logger:           logger,
 		}
 		// Guarded explicitly rather than assigning `ledger` unconditionally:

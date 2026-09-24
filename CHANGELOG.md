@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `scorecard` package: scores anti-tangent's per-task verdicts against an independent review of the finished work (escape rate, unconfirmed-flag rate, waive rate, caught-and-fixed), per model cohort, with 90% Wilson intervals and a regression flag that stays `insufficient_data` until both cohorts have enough runs.
+- `runs.jsonl`, `outcomes.jsonl` and `scorecard.json` in `ANTI_TANGENT_STATS_DIR`: content-free per-task run snapshots (verdicts, severity counts and a log of every anti-tangent call with the model that answered it), independent-review outcomes, and the scorecard computed from them; `summary.md` now narrates escape rates per review model. `ANTI_TANGENT_SCORECARD_MIN_RUNS` (default 10) sets how many runs a cohort needs before its regression flag can fire.
 
 ## [0.25.0] - 2026-09-23
 
