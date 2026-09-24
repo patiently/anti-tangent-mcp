@@ -187,3 +187,15 @@ func TestNormalizeCategory(t *testing.T) {
 		t.Fatalf("got %d runes", len([]rune(got)))
 	}
 }
+
+func TestFixedWarnThatStillEscapedIsNotCaughtAndFixed(t *testing.T) {
+	lines := []RunLine{
+		taskLine("r1", t0, 1, "warn", completion("m", "warn")),
+		taskLine("r1", t0.Add(time.Minute), 1, "pass", completion("m", "warn"), completion("m", "pass")),
+	}
+	outs := []OutcomeLine{outcome("r1", SourceFinalReview, t0.Add(time.Hour), OutcomeFinding{TaskIndex: 1, Severity: "major", Category: "x"})}
+	g := only(t, Compute(lines, outs, Options{}).ByReviewModel, SourceFinalReview)
+	if g.CaughtAndFixed != 0 || g.EscapeRate.Num != 1 {
+		t.Fatalf("a flagged task the review still found a major problem in is an escape, not a fix: %+v", g)
+	}
+}

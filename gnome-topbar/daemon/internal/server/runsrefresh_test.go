@@ -78,3 +78,14 @@ func TestRunsPageShowsTeamFreshnessAndRefreshButton(t *testing.T) {
 		t.Error("the mine scope reads local files and needs no refresh button")
 	}
 }
+
+func TestRunsPageShowsConfiguredPullInterval(t *testing.T) {
+	if out := renderRunsPage(RunsView{Scope: "team"}); !strings.Contains(out, "not refreshing automatically") {
+		t.Errorf("with no interval configured the page must not claim a pull cadence")
+	}
+	for minutes, want := range map[int]string{60: "pulled every 60 minutes", 15: "pulled every 15 minutes"} {
+		if out := renderRunsPage(RunsView{Scope: "team", TeamRefreshMinutes: minutes}); !strings.Contains(out, want) {
+			t.Errorf("interval %d: page lacks %q", minutes, want)
+		}
+	}
+}

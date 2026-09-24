@@ -94,7 +94,9 @@ func (c *TeamCache) Refresh(ctx context.Context, full bool) (Data, int, error) {
 	full = full || c.fullDue(now)
 	next := make(map[string]cachedNote, len(notes))
 	for _, n := range notes {
-		next[n.Permalink] = c.noteEntry(ctx, n.Permalink, full)
+		if entry, keep := c.noteEntry(ctx, n.Permalink, full); keep {
+			next[n.Permalink] = entry
+		}
 	}
 	c.file.Notes = next
 	c.file.PulledAt = now
@@ -112,17 +114,19 @@ func (c *TeamCache) fullDue(now time.Time) bool {
 
 // noteEntry returns a listed note's cache entry: the cached copy when the pull
 // is incremental, otherwise a fresh read, falling back to the cached copy if
-// that read fails.
-func (c *TeamCache) noteEntry(ctx context.Context, permalink string, full bool) cachedNote {
+// that read fails. keep is false for a note whose first read failed: it stays
+// out of the cache so the next pull retries it, rather than being remembered
+// as unparseable until the next full pull.
+func (c *TeamCache) noteEntry(ctx context.Context, permalink string, full bool) (entry cachedNote, keep bool) {
 	prev, cached := c.file.Notes[permalink]
 	if cached && !full {
-		return prev
+		return prev, true
 	}
 	entry, ok := c.readNote(ctx, permalink)
-	if !ok && cached {
-		return prev
+	if !ok {
+		return prev, cached
 	}
-	return entry
+	return entry, true
 }
 
 // readNote reads and parses one note. ok is false when the read itself
@@ -130,7 +134,7 @@ func (c *TeamCache) noteEntry(ctx context.Context, permalink string, full bool) 
 func (c *TeamCache) readNote(ctx context.Context, permalink string) (cachedNote, bool) {
 	body, err := c.Client.ReadRunNote(ctx, c.Project, permalink)
 	if err != nil {
-		return cachedNote{Bad: true}, false
+		return cachedNote{}, false
 	}
 	ls, ocs, err := ParseNote(body)
 	if err != nil {

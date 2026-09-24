@@ -177,3 +177,30 @@ func TestPublishSkipsUnchangedAndRunsWithoutOutcomes(t *testing.T) {
 		t.Fatalf("third publish (changed) wrote = %d, want 1", wrote)
 	}
 }
+
+func TestNoteBodyClampsModelStringsInRunLines(t *testing.T) {
+	long := strings.Repeat("m", 150) + "\nsecret finding text"
+	lines := []scorecard.RunLine{
+		{RunHash: "r_1", Header: true, ConfiguredModels: map[string]string{"post": long}, PlanCall: &scorecard.ToolCall{Tool: "validate_plan", Model: long}},
+		{RunHash: "r_1", Task: &scorecard.TaskSnapshot{Index: 1, Calls: []scorecard.ToolCall{{Tool: "validate_completion", Model: long}}}},
+	}
+	body, err := NoteBody("alice", lines, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, "secret finding text") {
+		t.Fatalf("a newline-smuggled model string was published:\n%s", body)
+	}
+	if strings.Contains(body, strings.Repeat("m", 101)) {
+		t.Fatalf("a run-line model string was published past the length bound:\n%s", body)
+	}
+	for field, got := range map[string]string{
+		"configured_models": lines[0].ConfiguredModels["post"],
+		"plan_call":         lines[0].PlanCall.Model,
+		"task call":         lines[1].Task.Calls[0].Model,
+	} {
+		if got != long {
+			t.Errorf("NoteBody mutated its input's %s model", field)
+		}
+	}
+}

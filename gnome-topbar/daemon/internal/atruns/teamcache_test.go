@@ -234,3 +234,40 @@ func TestTeamCacheCountsUnparseableNotes(t *testing.T) {
 		t.Fatalf("d=%+v skipped=%d", d, skipped)
 	}
 }
+
+// flakyReadCaller fails every read_note while failReads is set.
+type flakyReadCaller struct {
+	*fakeCaller
+	failReads bool
+}
+
+func (f *flakyReadCaller) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
+	if name == "read_note" && f.failReads {
+		f.fakeCaller.calls = append(f.fakeCaller.calls, fakeCall{name, args})
+		return "", errors.New("transient")
+	}
+	return f.fakeCaller.CallTool(ctx, name, args)
+}
+
+func TestTeamCacheRetriesANewNoteWhoseReadFailed(t *testing.T) {
+	fc := &flakyReadCaller{fakeCaller: &fakeCaller{
+		search: listing("r_1"),
+		notes:  map[string]string{"anti-tangent/runs/r_1/main": runNote(t, "alice", "r_1", "final_review")},
+	}, failReads: true}
+	clk := &clock{now: t0}
+	c := &TeamCache{Client: bm.New(fc, "team"), Project: "team", Path: filepath.Join(t.TempDir(), "team-runs.json"),
+		Interval: time.Hour, FullEvery: 24 * time.Hour, Now: clk.Now}
+
+	d, skipped, err := c.Refresh(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Present || skipped != 0 {
+		t.Fatalf("a failed read is not an unparseable note: d=%+v skipped=%d", d, skipped)
+	}
+	fc.failReads = false
+	clk.now = t0.Add(time.Hour)
+	if d = mustRefresh(t, c, false); runHashes(d) != "r_1" {
+		t.Fatalf("the next incremental pull must retry the note: %+v", d)
+	}
+}

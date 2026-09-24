@@ -77,15 +77,7 @@ func (a *acc) addTask(r *run, t *task, o OutcomeLine) {
 	a.tasks++
 	high, minor := outcomeCounts(o, t.snap.Index)
 	if t.snap.PostVerdict == "pass" {
-		a.passN++
-		if high > 0 {
-			a.escNum++
-		} else if minor > 0 {
-			a.minNum++
-		}
-		if t.everFlagged {
-			a.caught++
-		}
+		a.addPass(t, high, minor)
 	}
 	if isFlag(t.snap.PostVerdict) {
 		a.flagN++
@@ -110,6 +102,22 @@ func (a *acc) addTask(r *run, t *task, o OutcomeLine) {
 	}
 	if t.ts.After(a.last) {
 		a.last = t.ts
+	}
+}
+
+// addPass scores a task anti-tangent finally passed. A task that was flagged
+// earlier counts as caught and fixed only when the review found no critical
+// or major problem in it; otherwise it is an escape.
+func (a *acc) addPass(t *task, high, minor int) {
+	a.passN++
+	switch {
+	case high > 0:
+		a.escNum++
+	case minor > 0:
+		a.minNum++
+	}
+	if t.everFlagged && high == 0 {
+		a.caught++
 	}
 }
 

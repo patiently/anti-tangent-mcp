@@ -353,8 +353,12 @@ func teamFreshness(v RunsView) string {
 	if !v.TeamAsOf.IsZero() {
 		asOf = "as of " + v.TeamAsOf.Format("2006-01-02 15:04")
 	}
+	cadence := "not refreshing automatically"
+	if v.TeamRefreshMinutes > 0 {
+		cadence = fmt.Sprintf("pulled every %d minutes", v.TeamRefreshMinutes)
+	}
 	return `<form method="POST" action="/ui/runs/refresh" class="muted">Team data ` + esc(asOf) +
-		` (pulled hourly) <input type="hidden" name="scope" value="` + esc(v.Scope) + `">` +
+		` (` + esc(cadence) + `) <input type="hidden" name="scope" value="` + esc(v.Scope) + `">` +
 		`<button type="submit">Refresh now</button></form>`
 }
 

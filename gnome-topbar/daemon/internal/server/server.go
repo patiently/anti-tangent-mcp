@@ -50,7 +50,10 @@ type RunsView struct {
 	// TeamAsOf is when the team records were last pulled from Basic Memory;
 	// zero when they have never been pulled.
 	TeamAsOf time.Time
-	Skipped  int
+	// TeamRefreshMinutes is the configured pull interval; zero when no team
+	// cache is configured, so nothing pulls automatically.
+	TeamRefreshMinutes int
+	Skipped            int
 }
 
 func New(p Provider, token string) http.Handler {

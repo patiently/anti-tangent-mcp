@@ -468,6 +468,9 @@ func (p *Poller) RunsView(scope string) server.RunsView {
 	local, team, teamErr, teamSkipped, teamAsOf := p.runsLocal, p.runsTeam, p.runsTeamErr, p.runsTeamSkipped, p.runsTeamAsOf
 	p.mu.RUnlock()
 	v := server.RunsView{Scope: scope, TeamError: teamErr}
+	if p.teamCache != nil {
+		v.TeamRefreshMinutes = int(p.teamCache.Interval / time.Minute)
+	}
 	if !teamAsOf.IsZero() {
 		v.TeamAsOf = teamAsOf.Local()
 	}

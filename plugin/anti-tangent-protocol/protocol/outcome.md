@@ -50,8 +50,11 @@ A later human PR review (`review-now`) reads that line to file its own outcome w
 
 **What comes back.** `escapes` lists the tasks anti-tangent passed that the review found a
 critical or major problem in. Surface them with the final review; they are the cases the
-reviewer model missed. `recorded: false` with a `reason` means nothing was stored: fix the named
-field and call again. `run_known: false` means the server has no snapshot of this run yet (for
+reviewer model missed. `recorded: false` with a `reason` means nothing was stored. When the
+reason names an argument, fix that field and call again. When it says stats are disabled, the
+server has no `ANTI_TANGENT_STATS_DIR`, and when it reports a write failure, the stats directory
+is not writable: an unchanged retry records nothing, so report it to the operator instead.
+`run_known: false` means the server has no snapshot of this run yet (for
 example, the server restarted before this run had a snapshot); the outcome is still kept.
 
 The call is deterministic and free: no reviewer model runs. It is advisory like every other
