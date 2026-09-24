@@ -49,120 +49,227 @@ type tmAcc struct {
 	out                      map[string]*[4]int // source -> passN, escNum, flagN, unconfNum
 }
 
+// toolModelRows builds one ToolModelRow per (tool, model[, publisher]) seen
+// across runs: an operational pass over every call, then an outcome pass
+// scoring each finished task against every source that reviewed its run.
 func toolModelRows(runs map[runKey]*run, byPublisher bool) []ToolModelRow {
 	accs := map[tmKey]*tmAcc{}
-	get := func(tool, model string, r *run) *tmAcc {
-		k := tmKey{tool: tool, model: model}
-		if byPublisher {
-			k.publisher = r.key.publisher
-		}
-		a, ok := accs[k]
-		if !ok {
-			a = &tmAcc{verdicts: map[string]int{}, runs: map[runKey]bool{}, tasks: map[[2]any]bool{}, out: map[string]*[4]int{}}
-			accs[k] = a
-		}
-		return a
-	}
-	addCall := func(a *tmAcc, r *run, c ToolCall) {
-		a.calls++
-		a.findings += c.Findings
-		if c.Partial {
-			a.partial++
-		}
-		if c.Verdict != "" {
-			a.verdicts[c.Verdict]++
-		}
-		a.ms = append(a.ms, c.MS)
-		a.runs[r.key] = true
-	}
-	score := func(a *tmAcc, src string, t *task, high int, flagged bool) {
-		o, ok := a.out[src]
-		if !ok {
-			o = &[4]int{}
-			a.out[src] = o
-		}
-		if t.snap.PostVerdict == "pass" {
-			o[0]++
-			if high > 0 {
-				o[1]++
-			}
-		}
-		if flagged {
-			o[2]++
-			if high == 0 {
-				o[3]++
-			}
-		}
-	}
 	for _, r := range runs {
-		if r.header != nil && r.header.PlanCall != nil {
-			a := get("validate_plan", r.header.PlanCall.Model, r)
-			addCall(a, r, *r.header.PlanCall)
-		}
-		for idx, t := range r.tasks {
-			for _, c := range t.snap.Calls {
-				a := get(c.Tool, c.Model, r)
-				addCall(a, r, c)
-				a.tasks[[2]any{r.key, idx}] = true
-			}
-		}
-		for _, src := range Sources {
-			o, ok := r.outcomes[src]
-			if !ok {
-				continue
-			}
-			for _, t := range r.tasks {
-				if t.snap.PostVerdict == "" {
-					continue
-				}
-				high, _ := outcomeCounts(o, t.snap.Index)
-				for _, tool := range []string{"validate_task_spec", "validate_completion"} {
-					if c, ok := t.latestCall(tool); ok {
-						score(get(tool, c.Model, r), src, t, high, isFlag(c.Verdict))
-					}
-				}
-				checkpointFlag := map[string]bool{}
-				for _, c := range t.snap.Calls {
-					if c.Tool == "check_progress" {
-						checkpointFlag[c.Model] = checkpointFlag[c.Model] || isFlag(c.Verdict)
-					}
-				}
-				for model, flagged := range checkpointFlag {
-					score(get("check_progress", model, r), src, t, high, flagged)
-				}
-				if r.header != nil && r.header.PlanCall != nil {
-					score(get("validate_plan", r.header.PlanCall.Model, r), src, t, high, isFlag(r.header.PlanVerdict))
-				}
-			}
+		c := &tmCtx{accs: accs, byPublisher: byPublisher, r: r}
+		c.collectRunCalls()
+		c.scoreRunOutcomes()
+	}
+	rows := buildToolModelRows(accs, runs)
+	sortToolModelRows(rows)
+	return rows
+}
+
+// tmCtx threads what every scoring step needs to find or create an
+// accumulator — the map being built, whether it is split by publisher, and
+// the run currently being folded in — so the per-call and per-task helpers
+// below take only the arguments specific to their own job.
+type tmCtx struct {
+	accs        map[tmKey]*tmAcc
+	byPublisher bool
+	r           *run
+}
+
+// acc returns c.r's accumulator for (tool, model), creating it on first use.
+// The publisher is folded into the key only in per-publisher views, so the
+// pooled view's accumulators merge every publisher's calls for the same tool
+// and model.
+func (c *tmCtx) acc(tool, model string) *tmAcc {
+	k := tmKey{tool: tool, model: model}
+	if c.byPublisher {
+		k.publisher = c.r.key.publisher
+	}
+	a, ok := c.accs[k]
+	if !ok {
+		a = &tmAcc{verdicts: map[string]int{}, runs: map[runKey]bool{}, tasks: map[[2]any]bool{}, out: map[string]*[4]int{}}
+		c.accs[k] = a
+	}
+	return a
+}
+
+// addCall folds one call into its accumulator's operational counters.
+func addCall(a *tmAcc, r *run, call ToolCall) {
+	a.calls++
+	a.findings += call.Findings
+	if call.Partial {
+		a.partial++
+	}
+	if call.Verdict != "" {
+		a.verdicts[call.Verdict]++
+	}
+	a.ms = append(a.ms, call.MS)
+	a.runs[r.key] = true
+}
+
+// collectRunCalls folds c.r's validate_plan call and every task's call log
+// into their accumulators' operational counters (calls, verdicts, latency,
+// the run and task sets a row's Calls/Runs/Tasks columns are sized from).
+func (c *tmCtx) collectRunCalls() {
+	r := c.r
+	if r.header != nil && r.header.PlanCall != nil {
+		addCall(c.acc("validate_plan", r.header.PlanCall.Model), r, *r.header.PlanCall)
+	}
+	for idx, t := range r.tasks {
+		for _, call := range t.snap.Calls {
+			a := c.acc(call.Tool, call.Model)
+			addCall(a, r, call)
+			a.tasks[[2]any{r.key, idx}] = true
 		}
 	}
+}
+
+// taskScore is what scoreOutcome needs about one task's outcome for one
+// source: bundled so the function takes an accumulator and a task rather
+// than a run of scalar parameters.
+type taskScore struct {
+	src     string
+	high    int
+	flagged bool
+}
+
+// scoreOutcome folds one task's outcome into an accumulator's per-source
+// pass/escape/flag/unconfirmed-flag counts.
+func scoreOutcome(a *tmAcc, t *task, s taskScore) {
+	o, ok := a.out[s.src]
+	if !ok {
+		o = &[4]int{}
+		a.out[s.src] = o
+	}
+	pass := t.snap.PostVerdict == "pass"
+	if pass {
+		o[0]++
+	}
+	if pass && s.high > 0 {
+		o[1]++
+	}
+	if s.flagged {
+		o[2]++
+	}
+	if s.flagged && s.high == 0 {
+		o[3]++
+	}
+}
+
+// scoreRunOutcomes scores c.r's finished tasks against every source that
+// reviewed it. A run with no outcome for a source contributes nothing to
+// that source's counts.
+func (c *tmCtx) scoreRunOutcomes() {
+	for _, src := range Sources {
+		o, ok := c.r.outcomes[src]
+		if !ok {
+			continue
+		}
+		for _, t := range c.r.tasks {
+			c.scoreTaskOutcome(src, o, t)
+		}
+	}
+}
+
+// scoreTaskOutcome scores one task, for one source, against every tool that
+// touched it: the tool's own reviewing model for validate_task_spec and
+// validate_completion, every model that ever checkpointed it for
+// check_progress, and the run's plan model for validate_plan.
+func (c *tmCtx) scoreTaskOutcome(src string, o OutcomeLine, t *task) {
+	if t.snap.PostVerdict == "" {
+		return
+	}
+	high, _ := outcomeCounts(o, t.snap.Index)
+	c.scoreDirectCalls(src, t, high)
+	c.scoreCheckpoints(src, t, high)
+	c.scorePlanCall(src, t, high)
+}
+
+// scoreDirectCalls scores t's own validate_task_spec and validate_completion
+// calls, each against the model that last called it.
+func (c *tmCtx) scoreDirectCalls(src string, t *task, high int) {
+	for _, tool := range []string{"validate_task_spec", "validate_completion"} {
+		if call, ok := t.latestCall(tool); ok {
+			scoreOutcome(c.acc(tool, call.Model), t, taskScore{src: src, high: high, flagged: isFlag(call.Verdict)})
+		}
+	}
+}
+
+// scoreCheckpoints scores every model that ever ran check_progress on t: a
+// model is flagged for the task if any of its checkpoints flagged it, even
+// when a later checkpoint from the same model did not.
+func (c *tmCtx) scoreCheckpoints(src string, t *task, high int) {
+	checkpointFlag := map[string]bool{}
+	for _, call := range t.snap.Calls {
+		if call.Tool == "check_progress" {
+			checkpointFlag[call.Model] = checkpointFlag[call.Model] || isFlag(call.Verdict)
+		}
+	}
+	for model, flagged := range checkpointFlag {
+		scoreOutcome(c.acc("check_progress", model), t, taskScore{src: src, high: high, flagged: flagged})
+	}
+}
+
+// scorePlanCall scores the run's validate_plan call against t: the whole run
+// shares one plan verdict, so every task in it scores the same plan call.
+func (c *tmCtx) scorePlanCall(src string, t *task, high int) {
+	if c.r.header != nil && c.r.header.PlanCall != nil {
+		scoreOutcome(c.acc("validate_plan", c.r.header.PlanCall.Model), t, taskScore{src: src, high: high, flagged: isFlag(c.r.header.PlanVerdict)})
+	}
+}
+
+// buildToolModelRows renders every accumulator into its row.
+func buildToolModelRows(accs map[tmKey]*tmAcc, runs map[runKey]*run) []ToolModelRow {
 	rows := make([]ToolModelRow, 0, len(accs))
 	for k, a := range accs {
-		row := ToolModelRow{
-			Tool: k.tool, Model: k.model, Publisher: k.publisher,
-			Calls: a.calls, Runs: len(a.runs), Tasks: len(a.tasks),
-			VerdictCounts: a.verdicts,
-			MSP50:         percentile(a.ms, 50), MSP95: percentile(a.ms, 95),
-		}
-		if k.tool == "validate_plan" {
-			row.Tasks = 0
-			for rk := range a.runs {
-				if h := runs[rk].header; h != nil {
-					row.Tasks += h.TaskCount
-				}
-			}
-		}
-		if a.calls > 0 {
-			row.FindingsPerCall = float64(a.findings) / float64(a.calls)
-			row.PartialRate = float64(a.partial) / float64(a.calls)
-		}
-		for _, src := range Sources {
-			if o, ok := a.out[src]; ok {
-				row.Outcomes = append(row.Outcomes, ToolModelOutcome{Source: src, EscapeRate: wilson(o[1], o[0]), UnconfirmedFlagRate: wilson(o[3], o[2])})
-			}
-		}
-		rows = append(rows, row)
+		rows = append(rows, buildToolModelRow(k, a, runs))
 	}
+	return rows
+}
+
+// planTaskCount sums the plan task count of every run a's calls came from.
+// validate_plan's Tasks column uses this instead of len(a.tasks): a plan call
+// is scored once per run, not once per task like every other tool.
+func planTaskCount(a *tmAcc, runs map[runKey]*run) int {
+	n := 0
+	for rk := range a.runs {
+		if h := runs[rk].header; h != nil {
+			n += h.TaskCount
+		}
+	}
+	return n
+}
+
+// toolModelOutcomes renders a's per-source counts into a row's Outcomes.
+func toolModelOutcomes(a *tmAcc) []ToolModelOutcome {
+	var out []ToolModelOutcome
+	for _, src := range Sources {
+		if o, ok := a.out[src]; ok {
+			out = append(out, ToolModelOutcome{Source: src, EscapeRate: wilson(o[1], o[0]), UnconfirmedFlagRate: wilson(o[3], o[2])})
+		}
+	}
+	return out
+}
+
+// buildToolModelRow renders one accumulator into its row.
+func buildToolModelRow(k tmKey, a *tmAcc, runs map[runKey]*run) ToolModelRow {
+	row := ToolModelRow{
+		Tool: k.tool, Model: k.model, Publisher: k.publisher,
+		Calls: a.calls, Runs: len(a.runs), Tasks: len(a.tasks),
+		VerdictCounts: a.verdicts,
+		MSP50:         percentile(a.ms, 50), MSP95: percentile(a.ms, 95),
+	}
+	if k.tool == "validate_plan" {
+		row.Tasks = planTaskCount(a, runs)
+	}
+	if a.calls > 0 {
+		row.FindingsPerCall = float64(a.findings) / float64(a.calls)
+		row.PartialRate = float64(a.partial) / float64(a.calls)
+	}
+	row.Outcomes = toolModelOutcomes(a)
+	return row
+}
+
+// sortToolModelRows orders rows by ToolOrder, then model, then publisher.
+func sortToolModelRows(rows []ToolModelRow) {
 	rank := map[string]int{}
 	for i, t := range ToolOrder {
 		rank[t] = i
@@ -177,7 +284,6 @@ func toolModelRows(runs map[runKey]*run, byPublisher bool) []ToolModelRow {
 		}
 		return a.Publisher < b.Publisher
 	})
-	return rows
 }
 
 func modelSets(runs map[runKey]*run) []ModelSet {
