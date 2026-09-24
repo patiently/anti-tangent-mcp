@@ -265,9 +265,15 @@ func TestTeamCacheRetriesANewNoteWhoseReadFailed(t *testing.T) {
 	if d.Present || skipped != 0 {
 		t.Fatalf("a failed read is not an unparseable note: d=%+v skipped=%d", d, skipped)
 	}
+	if fc.reads() != 1 {
+		t.Fatalf("the first pull must attempt the new note once: reads=%d", fc.reads())
+	}
 	fc.failReads = false
 	clk.now = t0.Add(time.Hour)
 	if d = mustRefresh(t, c, false); runHashes(d) != "r_1" {
 		t.Fatalf("the next incremental pull must retry the note: %+v", d)
+	}
+	if fc.reads() != 2 {
+		t.Fatalf("the retry must read the note exactly once more: reads=%d", fc.reads())
 	}
 }
