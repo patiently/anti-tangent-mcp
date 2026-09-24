@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
+	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
 // CodeScene adoption states recorded per task row.
@@ -25,6 +26,14 @@ const (
 	StateSkipped = "skipped"
 	StateMissing = "missing"
 )
+
+// ToolCall is shared with the scorecard so a row's call log is written to
+// runs.jsonl without conversion.
+type ToolCall = scorecard.ToolCall
+
+// maxCallLog bounds a row's call log; a task that checkpoints without limit
+// must not grow its row, and every ledger line that carries it, without limit.
+const maxCallLog = 32
 
 // TaskRow is one task's outcome within a plan run.
 type TaskRow struct {
@@ -53,6 +62,10 @@ type TaskRow struct {
 	// Unmatched marks a row that named no plan task, by index or by title. It
 	// is numbered after the plan's tasks.
 	Unmatched bool `json:"unmatched,omitempty"`
+	// Calls logs every anti-tangent call made for this task, oldest first,
+	// capped by AppendCall.
+	Calls        []ToolCall `json:"calls,omitempty"`
+	CallsDropped int        `json:"calls_dropped,omitempty"`
 }
 
 // PlanTask is one task of the validated plan: its 1-based position and its
@@ -98,6 +111,9 @@ type Run struct {
 	Tasks []PlanTask `json:"tasks,omitempty"`
 	// Rows holds one row per task, in Index order.
 	Rows []TaskRow `json:"rows"`
+	ConfiguredModels map[string]string `json:"configured_models,omitempty"`
+	ServerVersion    string            `json:"server_version,omitempty"`
+	PlanCall         *ToolCall         `json:"plan_call,omitempty"`
 	// sessions maps every session ever attached to a row to that row's Index,
 	// so an implementer that re-validated and carried on with its first
 	// session still updates its task.
@@ -111,11 +127,51 @@ type Store struct {
 	ttl  time.Duration
 }
 
+// RunMeta is what validate_plan knows about the models behind a run.
+type RunMeta struct {
+	ConfiguredModels map[string]string
+	ServerVersion    string
+	PlanCall         *ToolCall
+}
+
 func NewStore(ttl time.Duration) *Store {
 	return &Store{runs: map[string]*Run{}, ttl: ttl}
 }
 
 func (s *Store) TTL() time.Duration { return s.ttl }
+
+// SetMeta stores meta on run runID. Returns false when the run is unknown.
+func (s *Store) SetMeta(runID string, meta RunMeta) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[runID]
+	if !ok {
+		return false
+	}
+	r.ConfiguredModels = cloneStringMap(meta.ConfiguredModels)
+	r.ServerVersion = meta.ServerVersion
+	r.PlanCall = cloneCall(meta.PlanCall)
+	return true
+}
+
+func cloneStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	cp := make(map[string]string, len(m))
+	for k, v := range m {
+		cp[k] = v
+	}
+	return cp
+}
+
+func cloneCall(c *ToolCall) *ToolCall {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	return &cp
+}
 
 // newID returns "pr_" plus 12 lowercase hex characters.
 func newID() string {
@@ -201,6 +257,8 @@ func (s *Store) Snapshot(id string) (*Run, bool) {
 	for i, row := range r.Rows {
 		cp.Rows[i] = cloneRow(row)
 	}
+	cp.ConfiguredModels = cloneStringMap(r.ConfiguredModels)
+	cp.PlanCall = cloneCall(r.PlanCall)
 	return &cp, true
 }
 
@@ -209,7 +267,17 @@ func (s *Store) Snapshot(id string) (*Run, bool) {
 func cloneRow(row TaskRow) TaskRow {
 	row.Severity = cloneIntMap(row.Severity)
 	row.Codescene = cloneDigest(row.Codescene)
+	row.Calls = append([]ToolCall(nil), row.Calls...)
 	return row
+}
+
+// AppendCall records one anti-tangent call made for this task.
+func (row *TaskRow) AppendCall(c ToolCall) {
+	row.Calls = append(row.Calls, c)
+	if over := len(row.Calls) - maxCallLog; over > 0 {
+		row.Calls = append([]ToolCall(nil), row.Calls[over:]...)
+		row.CallsDropped += over
+	}
 }
 
 // cloneIntMap returns a copy of m, or nil when m is nil.
