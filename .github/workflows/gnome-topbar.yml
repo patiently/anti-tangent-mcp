@@ -3,10 +3,10 @@ name: gnome-topbar
 on:
   push:
     branches: ['**']
-    paths: ['gnome-topbar/**', '.github/workflows/gnome-topbar.yml']
+    paths: ['gnome-topbar/**', 'scorecard/**', 'go.mod', 'go.sum', '.github/workflows/gnome-topbar.yml']
   pull_request:
     branches: ['**']
-    paths: ['gnome-topbar/**', '.github/workflows/gnome-topbar.yml']
+    paths: ['gnome-topbar/**', 'scorecard/**', 'go.mod', 'go.sum', '.github/workflows/gnome-topbar.yml']
 
 permissions:
   contents: read
