@@ -5,7 +5,7 @@ call, `record_review_outcome`, which lets anti-tangent's verdicts be scored agai
 independent review of the same work. Without it, the stats show what anti-tangent said, never
 whether it was right.
 
-## 5. For controllers (continued)
+## For controllers: recording the outcome (§5 continued)
 
 ### 5.10 Recording the review outcome
 
@@ -52,7 +52,7 @@ A later human PR review (`review-now`) reads that line to file its own outcome w
 critical or major problem in. Surface them with the final review; they are the cases the
 reviewer model missed. `recorded: false` with a `reason` means nothing was stored: fix the named
 field and call again. `run_known: false` means the server has no snapshot of this run yet (for
-example, stats were enabled mid-run); the outcome is still kept.
+example, the server restarted before this run had a snapshot); the outcome is still kept.
 
 The call is deterministic and free: no reviewer model runs. It is advisory like every other
 anti-tangent tool, and it blocks nothing.
