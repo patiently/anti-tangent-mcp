@@ -110,7 +110,7 @@ type Run struct {
 	// untitled tasks, and then takes new rows in dispatch order.
 	Tasks []PlanTask `json:"tasks,omitempty"`
 	// Rows holds one row per task, in Index order.
-	Rows []TaskRow `json:"rows"`
+	Rows             []TaskRow         `json:"rows"`
 	ConfiguredModels map[string]string `json:"configured_models,omitempty"`
 	ServerVersion    string            `json:"server_version,omitempty"`
 	PlanCall         *ToolCall         `json:"plan_call,omitempty"`
