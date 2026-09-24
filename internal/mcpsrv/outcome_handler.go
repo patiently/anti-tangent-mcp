@@ -22,13 +22,13 @@ type OutcomeFindingArg struct {
 
 type OutcomeImplementerModelArg struct {
 	TaskIndex int    `json:"task_index" jsonschema:"1-based plan task."`
-	Model     string `json:"model" jsonschema:"provider:model the task was dispatched on, e.g. anthropic:claude-sonnet-5."`
+	Model     string `json:"model" jsonschema:"provider:model the task was dispatched on, e.g. anthropic:claude-sonnet-5. At most 100 characters, no control character."`
 }
 
 type RecordReviewOutcomeArgs struct {
 	PlanRunID         string                       `json:"plan_run_id" jsonschema:"The plan_run_id returned by validate_plan for the run the review covered."`
 	Source            string                       `json:"source" jsonschema:"final_review for the controller's whole-plan review, review_now for a human-adjudicated PR review."`
-	ReviewerModel     string                       `json:"reviewer_model,omitempty" jsonschema:"provider:model that performed the review, when known."`
+	ReviewerModel     string                       `json:"reviewer_model,omitempty" jsonschema:"provider:model that performed the review, when known. At most 100 characters, no control character."`
 	ImplementerModels []OutcomeImplementerModelArg `json:"implementer_models,omitempty" jsonschema:"The model each task was dispatched on. The controller knows this; the server cannot see it."`
 	Findings          []OutcomeFindingArg          `json:"findings" jsonschema:"Every finding the review kept, attributed to a task. An empty array means the review found nothing, which is itself recorded."`
 }
@@ -129,6 +129,8 @@ func validateOutcomeArgs(runID string, args RecordReviewOutcomeArgs) string {
 		return `source must be "final_review" or "review_now"`
 	case len(args.Findings) > maxOutcomeFindings:
 		return fmt.Sprintf("findings has %d entries; at most %d are accepted", len(args.Findings), maxOutcomeFindings)
+	case !scorecard.ValidModelString(strings.TrimSpace(args.ReviewerModel)):
+		return fmt.Sprintf("reviewer_model must be at most %d characters and contain no control character", scorecard.MaxModelRunes)
 	}
 	if reason := validateOutcomeFindings(args.Findings); reason != "" {
 		return reason
@@ -150,8 +152,12 @@ func validateOutcomeFindings(findings []OutcomeFindingArg) string {
 
 func validateOutcomeImplementerModels(models []OutcomeImplementerModelArg) string {
 	for i, m := range models {
-		if m.TaskIndex < 1 || strings.TrimSpace(m.Model) == "" {
+		model := strings.TrimSpace(m.Model)
+		if m.TaskIndex < 1 || model == "" {
 			return fmt.Sprintf("implementer_models[%d] needs a 1-based task_index and a model", i)
+		}
+		if !scorecard.ValidModelString(model) {
+			return fmt.Sprintf("implementer_models[%d].model must be at most %d characters and contain no control character", i, scorecard.MaxModelRunes)
 		}
 	}
 	return ""

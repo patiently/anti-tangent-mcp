@@ -90,6 +90,62 @@ func TestRecordReviewOutcome_Validation(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "a rejected outcome must write nothing")
 }
 
+// TestRecordReviewOutcome_ModelStringValidation pins the bound on
+// reviewer_model and implementer_models[].model: the global constraints say
+// these are the only free text on the wire beyond category, so both a
+// too-long value and one carrying a control character must be rejected
+// (recorded:false) rather than written to outcomes.jsonl.
+func TestRecordReviewOutcome_ModelStringValidation(t *testing.T) {
+	h, _, dir := outcomeHandlers(t)
+	run := h.deps.PlanRuns.Create("pass", "rigorous", 2)
+
+	tests := []struct {
+		name       string
+		args       RecordReviewOutcomeArgs
+		wantSubstr string
+	}{
+		{
+			name:       "reviewer_model too long",
+			args:       RecordReviewOutcomeArgs{PlanRunID: run.ID, Source: "final_review", ReviewerModel: strings.Repeat("a", scorecard.MaxModelRunes+1)},
+			wantSubstr: "reviewer_model must be at most 100 characters",
+		},
+		{
+			name:       "reviewer_model control character",
+			args:       RecordReviewOutcomeArgs{PlanRunID: run.ID, Source: "final_review", ReviewerModel: "anthropic:claude\nsonnet-5"},
+			wantSubstr: "reviewer_model must be at most 100 characters",
+		},
+		{
+			name: "implementer_models[].model too long",
+			args: RecordReviewOutcomeArgs{PlanRunID: run.ID, Source: "final_review",
+				ImplementerModels: []OutcomeImplementerModelArg{{TaskIndex: 1, Model: strings.Repeat("b", scorecard.MaxModelRunes+1)}}},
+			wantSubstr: "implementer_models[0].model must be at most 100 characters",
+		},
+		{
+			name: "implementer_models[].model control character",
+			args: RecordReviewOutcomeArgs{PlanRunID: run.ID, Source: "final_review",
+				ImplementerModels: []OutcomeImplementerModelArg{{TaskIndex: 1, Model: "anthropic:claude\tsonnet-5"}}},
+			wantSubstr: "implementer_models[0].model must be at most 100 characters",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := recordOutcome(t, h, tc.args)
+			assert.False(t, res.Recorded)
+			assert.Contains(t, res.Reason, tc.wantSubstr)
+		})
+	}
+
+	t.Run("exactly 100 runes is accepted", func(t *testing.T) {
+		res := recordOutcome(t, h, RecordReviewOutcomeArgs{
+			PlanRunID: run.ID, Source: "final_review",
+			ReviewerModel:     strings.Repeat("a", scorecard.MaxModelRunes),
+			ImplementerModels: []OutcomeImplementerModelArg{{TaskIndex: 1, Model: strings.Repeat("b", scorecard.MaxModelRunes)}},
+		})
+		assert.True(t, res.Recorded, res.Reason)
+		waitForScorecard(t, dir)
+	})
+}
+
 func TestRecordReviewOutcome_KnownRunReportsEscapes(t *testing.T) {
 	h, rec, dir := outcomeHandlers(t)
 	run := h.deps.PlanRuns.Create("pass", "rigorous", 2)

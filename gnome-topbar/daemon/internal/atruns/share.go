@@ -35,14 +35,20 @@ type notePayload struct {
 // records go in; they are content-free by construction, and titles from
 // Data.Titles are never passed here.
 func NoteBody(publisher string, lines []scorecard.RunLine, outcomes []scorecard.OutcomeLine) (string, error) {
-	// Categories are normalised again here, on copies, because this is the
-	// last point before the text leaves the machine: a hand-edited or older
-	// outcomes.jsonl line must not publish a finding description.
+	// Categories and model strings are bounded again here, on copies, because
+	// this is the last point before the text leaves the machine: a
+	// hand-edited or older outcomes.jsonl line must not publish a finding
+	// description or an unbounded model string.
 	clean := make([]scorecard.OutcomeLine, len(outcomes))
 	for i, o := range outcomes {
 		o.Findings = append([]scorecard.OutcomeFinding(nil), o.Findings...)
 		for k := range o.Findings {
 			o.Findings[k].Category = scorecard.NormalizeCategory(o.Findings[k].Category)
+		}
+		o.ReviewerModel = scorecard.ClampModelString(o.ReviewerModel)
+		o.ImplementerModels = append([]scorecard.ImplementerModel(nil), o.ImplementerModels...)
+		for k := range o.ImplementerModels {
+			o.ImplementerModels[k].Model = scorecard.ClampModelString(o.ImplementerModels[k].Model)
 		}
 		clean[i] = o
 	}

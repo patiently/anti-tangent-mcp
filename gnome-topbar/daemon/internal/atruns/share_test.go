@@ -88,6 +88,42 @@ func TestNoteBodyNormalisesCategories(t *testing.T) {
 	}
 }
 
+func TestNoteBodyClampsModelStrings(t *testing.T) {
+	longModel := strings.Repeat("m", 150)
+	controlModel := "anthropic:claude\tsonnet-5\nextra"
+	in := []scorecard.OutcomeLine{{
+		RunHash:       "r_1",
+		Source:        "final_review",
+		ReviewerModel: longModel,
+		ImplementerModels: []scorecard.ImplementerModel{
+			{TaskIndex: 1, Model: controlModel},
+		},
+	}}
+	body, err := NoteBody("alice", nil, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantReviewer := scorecard.ClampModelString(longModel)
+	wantImpl := scorecard.ClampModelString(controlModel)
+	if len(wantReviewer) >= len(longModel) {
+		t.Fatalf("test setup: clamp did not shorten reviewer model, got %q", wantReviewer)
+	}
+	if !strings.Contains(body, `"reviewer_model": "`+wantReviewer+`"`) {
+		t.Fatalf("reviewer_model not clamped: %s", body)
+	}
+	if !strings.Contains(body, `"model": "`+wantImpl+`"`) {
+		t.Fatalf("implementer_models[].model not clamped: %s", body)
+	}
+
+	// NoteBody must not mutate its input.
+	if in[0].ReviewerModel != longModel {
+		t.Fatal("NoteBody must not mutate ReviewerModel on its input")
+	}
+	if in[0].ImplementerModels[0].Model != controlModel {
+		t.Fatal("NoteBody must not mutate ImplementerModels on its input")
+	}
+}
+
 func TestPublishSkipsUnchangedAndRunsWithoutOutcomes(t *testing.T) {
 	fc := &fakeCaller{}
 	statePath := filepath.Join(t.TempDir(), "published.json")

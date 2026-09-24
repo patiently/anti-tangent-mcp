@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -111,4 +112,44 @@ func NormalizeCategory(s string) string {
 		return s
 	}
 	return string([]rune(s)[:40])
+}
+
+// MaxModelRunes bounds ReviewerModel and ImplementerModel.Model: both are
+// free-form "provider:model" strings a caller supplies, and nothing else in
+// the wire contract constrains their length.
+const MaxModelRunes = 100
+
+// ValidModelString reports whether s fits within MaxModelRunes runes and
+// contains no control character. The server's record_review_outcome
+// validation and the daemon's defensive clamp on the same fields both key
+// off this bound so the wire contract has one definition, not two.
+func ValidModelString(s string) bool {
+	if utf8.RuneCountInString(s) > MaxModelRunes {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// ClampModelString truncates s to MaxModelRunes runes and drops every
+// control character, for a caller that must always produce a bounded value
+// rather than reject an out-of-bound one.
+func ClampModelString(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			continue
+		}
+		if n >= MaxModelRunes {
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
 }
