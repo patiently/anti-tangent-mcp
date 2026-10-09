@@ -7,13 +7,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
-const maxOutcomeFindings = 500
+const (
+	maxOutcomeFindings     = 500
+	maxOutcomeMeasurements = 200
+)
 
 type OutcomeFindingArg struct {
 	TaskIndex int    `json:"task_index" jsonschema:"1-based plan task the finding belongs to; 0 when it cannot be attributed to one task."`
@@ -26,12 +30,21 @@ type OutcomeImplementerModelArg struct {
 	Model     string `json:"model" jsonschema:"provider:model the task was dispatched on, e.g. anthropic:claude-sonnet-5. At most 100 characters, no control character."`
 }
 
+type OutcomeMeasurementArg struct {
+	TaskIndex int     `json:"task_index" jsonschema:"1-based plan task the measurement belongs to; 0 when it covers the whole run."`
+	Metric    string  `json:"metric" jsonschema:"A short metric name, such as zip_missing_rate. Only the first 40 characters, lower-cased, are stored."`
+	Before    float64 `json:"before" jsonschema:"The value before the change."`
+	After     float64 `json:"after" jsonschema:"The value after the change."`
+	N         int     `json:"n,omitempty" jsonschema:"The sample size, when the value is a rate."`
+}
+
 type RecordReviewOutcomeArgs struct {
 	PlanRunID         string                       `json:"plan_run_id" jsonschema:"The plan_run_id returned by validate_plan for the run the review covered."`
 	Source            string                       `json:"source" jsonschema:"final_review for the controller's whole-plan review, review_now for a human-adjudicated PR review."`
 	ReviewerModel     string                       `json:"reviewer_model,omitempty" jsonschema:"provider:model that performed the review, when known. At most 100 characters, no control character."`
 	ImplementerModels []OutcomeImplementerModelArg `json:"implementer_models,omitempty" jsonschema:"The model each task was dispatched on, one entry per dispatched task. The controller knows this; the server cannot see it. For final_review, tasks left out are listed in missing_implementer_models and scored in an unknown cohort."`
 	Findings          []OutcomeFindingArg          `json:"findings" jsonschema:"Every finding the review kept, attributed to a task. An empty array means the review found nothing, which is itself recorded."`
+	Measurements      []OutcomeMeasurementArg      `json:"measurements,omitempty" jsonschema:"Numbers measured for a task, such as an eval's rate before and after an experiment. Stored with the outcome so runs can be compared over time; the scorecard does not score them. At most 200 entries."`
 }
 
 type RecordReviewOutcomeResult struct {
@@ -91,6 +104,10 @@ func (h *handlers) recordReviewOutcome(args RecordReviewOutcomeArgs) RecordRevie
 		res.Reason = reason
 		return res
 	}
+	if reason := h.validateOutcomeMeasurementIndexes(runID, args.Measurements, lines); reason != "" {
+		res.Reason = reason
+		return res
+	}
 	o := outcomeLineFromArgs(runHash, args)
 	if err := h.deps.Stats.RecordOutcome(o); err != nil {
 		res.Reason = "writing outcomes.jsonl failed: " + err.Error()
@@ -126,6 +143,11 @@ func outcomeLineFromArgs(runHash string, args RecordReviewOutcomeArgs) scorecard
 	for _, m := range args.ImplementerModels {
 		o.ImplementerModels = append(o.ImplementerModels, scorecard.ImplementerModel{TaskIndex: m.TaskIndex, Model: strings.TrimSpace(m.Model)})
 	}
+	for _, m := range args.Measurements {
+		o.Measurements = append(o.Measurements, scorecard.Measurement{
+			TaskIndex: m.TaskIndex, Metric: scorecard.NormalizeCategory(m.Metric), Before: m.Before, After: m.After, N: m.N,
+		})
+	}
 	return o
 }
 
@@ -153,13 +175,36 @@ func validateOutcomeArgs(runID string, args RecordReviewOutcomeArgs) string {
 		return `source must be "final_review" or "review_now"`
 	case len(args.Findings) > maxOutcomeFindings:
 		return fmt.Sprintf("findings has %d entries; at most %d are accepted", len(args.Findings), maxOutcomeFindings)
+	case len(args.Measurements) > maxOutcomeMeasurements:
+		return fmt.Sprintf("measurements has %d entries; at most %d are accepted", len(args.Measurements), maxOutcomeMeasurements)
 	case !scorecard.ValidModelString(strings.TrimSpace(args.ReviewerModel)):
 		return fmt.Sprintf("reviewer_model must be at most %d characters and contain no control character", scorecard.MaxModelRunes)
 	}
 	if reason := validateOutcomeFindings(args.Findings); reason != "" {
 		return reason
 	}
+	if reason := validateOutcomeMeasurements(args.Measurements); reason != "" {
+		return reason
+	}
 	return validateOutcomeImplementerModels(args.ImplementerModels)
+}
+
+func validateOutcomeMeasurements(ms []OutcomeMeasurementArg) string {
+	for i, m := range ms {
+		if m.TaskIndex < 0 {
+			return fmt.Sprintf("measurements[%d].task_index must be 0 or a 1-based task number", i)
+		}
+		if scorecard.NormalizeCategory(m.Metric) == "" {
+			return fmt.Sprintf("measurements[%d].metric is required", i)
+		}
+		if strings.IndexFunc(m.Metric, unicode.IsControl) >= 0 {
+			return fmt.Sprintf("measurements[%d].metric must not contain control characters", i)
+		}
+		if m.N < 0 {
+			return fmt.Sprintf("measurements[%d].n must not be negative", i)
+		}
+	}
+	return ""
 }
 
 func validateOutcomeFindings(findings []OutcomeFindingArg) string {
@@ -204,6 +249,21 @@ func (h *handlers) validateOutcomeTaskIndexes(runID string, findings []OutcomeFi
 	return ""
 }
 
+// validateOutcomeMeasurementIndexes range-checks measurements as
+// validateOutcomeTaskIndexes checks findings.
+func (h *handlers) validateOutcomeMeasurementIndexes(runID string, ms []OutcomeMeasurementArg, lines []scorecard.RunLine) string {
+	n, known := h.outcomeTaskCount(runID, lines)
+	if !known {
+		return ""
+	}
+	for i, m := range ms {
+		if m.TaskIndex > n {
+			return fmt.Sprintf("measurements[%d].task_index %d exceeds the run's %d tasks", i, m.TaskIndex, n)
+		}
+	}
+	return ""
+}
+
 // outcomeTaskCount is the run's task count from the live store, else from
 // its snapshot header. known is false only when neither has the run; then
 // task indexes cannot be range-checked. A known run with zero tasks is still
@@ -238,6 +298,9 @@ func formatOutcomeSummary(args RecordReviewOutcomeArgs, res RecordReviewOutcomeR
 		known = "no (no snapshot for this run yet; it is scored once one exists)"
 	}
 	fmt.Fprintf(&b, "recorded: yes · run known: %s · tasks scored: %d · escapes: %d\n", known, res.TasksScored, len(res.Escapes))
+	if len(args.Measurements) > 0 {
+		fmt.Fprintf(&b, "measurements: %d stored, not scored\n", len(args.Measurements))
+	}
 	for _, e := range res.Escapes {
 		fmt.Fprintf(&b, "- task %d: anti-tangent %s, review found %s\n", e.TaskIndex, escapeBlockValue(e.AntiTangentVerdict), escapeBlockValue(e.OutcomeSeverity))
 	}

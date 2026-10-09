@@ -1,0 +1,25 @@
+{
+  "name": "code-written-text",
+  "validate_task_spec": {
+    "task_title": "Task 3: Ask for a missing ZIP",
+    "goal": "When a lead's ZIP code is missing, the conversation asks for it.",
+    "acceptance_criteria": [
+      "When the lead's ZIP field is empty, the first outbound message starts with the code-written question \"What is your ZIP code?\" before any model-written text.",
+      "The question is sent at most once per conversation."
+    ],
+    "context": "The bot is an LLM agent; the model writes replies from a prompt and a facts block.",
+    "plan_kind": "agent-network",
+    "boundary_rules": [
+      "Code checks structured data only. It never inspects reply or user words: no regex, phrase or keyword matching over them. Exception: STOP and HELP are matched in code, as carrier rules require.",
+      "The LLM writes every reply. The only code-written text is verbatim legal text."
+    ]
+  },
+  "expectations": [
+    {
+      "call": "validate_task_spec",
+      "any_of_keywords": [
+        "boundary_violation"
+      ]
+    }
+  ]
+}

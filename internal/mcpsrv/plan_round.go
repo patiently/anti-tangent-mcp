@@ -60,6 +60,10 @@ type planInputs struct {
 	Mode             string
 	Model            string
 	ContextFiles     []fileSource
+	// PlanKind and BoundaryRules render in every prompt of the review, so a
+	// change to either reviews every task again.
+	PlanKind      string
+	BoundaryRules []string
 }
 
 // hashFields hashes fields as the bytes they are, each behind its length, so
@@ -90,6 +94,12 @@ func (in planInputs) key() string {
 	fields := []string{"plan-round-v1", in.ProjectKnowledge, mode, in.Model}
 	for _, f := range files {
 		fields = append(fields, f.Path, strconv.Itoa(f.Bytes), f.SHA256)
+	}
+	// Appended only when set, so the key of a review that uses neither does
+	// not depend on them.
+	if in.PlanKind != "" || len(in.BoundaryRules) > 0 {
+		fields = append(fields, "agent-network", in.PlanKind, strconv.Itoa(len(in.BoundaryRules)))
+		fields = append(fields, in.BoundaryRules...)
 	}
 	return hashFields(fields...)
 }
@@ -256,6 +266,8 @@ func renderPlanRound(in renderPlanReviewInputs, round planRound) (renderedPlanRe
 			ControllerRulings:            in.ControllerRulings,
 			ControllerVerifiedReferences: in.ControllerVerifiedReferences,
 			PriorPlanFindings:            round.priorPlanFindings(),
+			PlanKind:                     in.PlanKind,
+			BoundaryRules:                in.BoundaryRules,
 		})
 		if err != nil {
 			return renderedPlanReview{}, fmt.Errorf("render plan_findings_only: %w", err)
@@ -273,6 +285,8 @@ func renderPlanRound(in renderPlanReviewInputs, round planRound) (renderedPlanRe
 			ContextFilesNonce:            contextFilesNonce,
 			ControllerRulings:            in.ControllerRulings,
 			ControllerVerifiedReferences: in.ControllerVerifiedReferences,
+			PlanKind:                     in.PlanKind,
+			BoundaryRules:                in.BoundaryRules,
 		})
 		if err != nil {
 			return renderedPlanReview{}, fmt.Errorf("render plan_tasks_chunk: %w", err)

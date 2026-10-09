@@ -12,7 +12,7 @@ Plans — and the single task specs drawn from them — over-build in six ways. 
 Never flag: validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, tests an acceptance criterion calls for, normative test bodies, or anything the plan's or the task's Goal explicitly asks for. A structure the task's `Context:` justifies — a second implementation named in a later task, a dependency chosen for edge cases the standard library mishandles, a decision quoted from Project knowledge — is deliberate and draws no finding.
 
 Emit at most ONE `over_building` finding per task, in that task's findings (for a single task spec, one finding in all). `evidence` lists every instance on its own line as `<tag>: <what>. <replacement>.`; `suggestion` is the rewritten acceptance criterion or step, or the `Context:` line to add when the structure is deliberate.
-
+{{if .RigidityOn}}{{template "rigidity_plan"}}{{end}}
 This finding is minor because that is the severity it is worth, not because it is discretionary: an instruction elsewhere in this prompt to surface only the most-severe findings or to omit minor ones does not reach it. Emit it in addition to any such cap.
 
 {{end}}{{define "plan_lean_cross_task"}}### Over-building across tasks

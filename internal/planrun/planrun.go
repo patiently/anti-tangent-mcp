@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
+	"github.com/patiently/anti-tangent-mcp/internal/ratedigest"
 	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
@@ -77,6 +78,9 @@ type TaskRow struct {
 	// over_building finding was settled by an answer or a controller ruling
 	// instead of by cutting the structure.
 	OverBuildingRuled int `json:"over_building_ruled,omitempty"`
+	// RateDigest is the counts of the most recent rate_digest a
+	// validate_completion call on the task sent, without its eval path.
+	RateDigest *ratedigest.Digest `json:"rate_digest,omitempty"`
 }
 
 // PlanTask is one task of the validated plan: its 1-based position and its
@@ -87,6 +91,10 @@ type PlanTask struct {
 	// Files are the paths the task's own Files: section lists. They are kept
 	// in memory only, so the ledger header never carries them.
 	Files []string `json:"-"`
+	// Kind and Rung are the task's **Kind:** and **Rung:** headers as the
+	// plan parser read them. In memory only, like Files.
+	Kind string `json:"-"`
+	Rung string `json:"-"`
 }
 
 // TaskRef is what a call says about the plan task it belongs to.
@@ -131,14 +139,28 @@ type Run struct {
 	// Revision counts the validate_plan rounds that reviewed this run's plan:
 	// 1 when the run is minted, one more for every later round that names it.
 	Revision int `json:"revision,omitempty"`
+	// PlanKind is the plan's **Plan kind:** header and BoundaryRules the
+	// boundary_rules the latest validate_plan round sent. In memory only:
+	// rules are caller text, and the ledger holds none.
+	PlanKind      string   `json:"-"`
+	BoundaryRules []string `json:"-"`
 	// review is the caller's record of the plan's latest complete review. The
 	// store never looks inside it and hands back the same value, so the caller
 	// must treat a stored value as immutable.
 	review any
-	// sessions maps every session ever attached to a row to that row's Index,
-	// so an implementer that re-validated and carried on with its first
-	// session still updates its task.
-	sessions map[string]int
+	// sessions maps every session ever attached to a row to that row, so an
+	// implementer that re-validated and carried on with its first session
+	// still updates its task.
+	sessions map[string]sessionRef
+}
+
+// sessionRef is the row a session attached to and the plan heading of the
+// task it resolved to then. The heading is kept per session, apart from the
+// row, because a caller's title may paraphrase it and because a revision can
+// leave an earlier task's row at the Index a later task resolves to.
+type sessionRef struct {
+	index   int
+	heading string
 }
 
 // Store holds plan runs in memory.
@@ -227,17 +249,26 @@ func (s *Store) Create(planVerdict, planQuality string, taskCount int) *Run {
 
 // CreateWithTasks mints a run for the plan's tasks.
 func (s *Store) CreateWithTasks(planVerdict, planQuality string, tasks []PlanTask) *Run {
+	return s.CreateForPlan(planVerdict, planQuality, tasks, "", nil)
+}
+
+// CreateForPlan mints a run for the plan's tasks with the plan kind and
+// boundary rules of the validate_plan round that reviewed it. The run is
+// stored whole, so no reader sees it without its declarations.
+func (s *Store) CreateForPlan(planVerdict, planQuality string, tasks []PlanTask, planKind string, rules []string) *Run {
 	now := time.Now()
 	r := &Run{
-		ID:           newID(),
-		CreatedAt:    now,
-		LastAccessed: now,
-		PlanVerdict:  planVerdict,
-		PlanQuality:  planQuality,
-		TaskCount:    len(tasks),
-		Tasks:        cloneTasks(tasks),
-		Revision:     1,
-		sessions:     map[string]int{},
+		ID:            newID(),
+		CreatedAt:     now,
+		LastAccessed:  now,
+		PlanVerdict:   planVerdict,
+		PlanQuality:   planQuality,
+		TaskCount:     len(tasks),
+		Tasks:         cloneTasks(tasks),
+		PlanKind:      planKind,
+		BoundaryRules: append([]string(nil), rules...),
+		Revision:      1,
+		sessions:      map[string]sessionRef{},
 	}
 	s.mu.Lock()
 	s.runs[r.ID] = r
@@ -273,12 +304,12 @@ func (s *Store) SetReview(runID string, review any) bool {
 }
 
 // Revise records a later validate_plan round on run runID under one lock: the
-// run takes the round's verdict, quality, task list and review record, and
-// its revision goes up by one. Rows already attached keep their Index, so a
+// run takes the round's verdict, quality, task list, plan kind, boundary rules
+// and review record, and its revision goes up by one. Rows already attached keep their Index, so a
 // round that renumbers tasks after dispatch leaves them where they were.
 // Returns a copy of the run as this round left it, taken under the same lock,
 // and false when the run is unknown or expired.
-func (s *Store) Revise(runID, planVerdict, planQuality string, tasks []PlanTask, review any) (*Run, bool) {
+func (s *Store) Revise(runID, planVerdict, planQuality string, tasks []PlanTask, planKind string, rules []string, review any) (*Run, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.runs[runID]
@@ -289,6 +320,8 @@ func (s *Store) Revise(runID, planVerdict, planQuality string, tasks []PlanTask,
 	r.PlanQuality = planQuality
 	r.TaskCount = len(tasks)
 	r.Tasks = cloneTasks(tasks)
+	r.PlanKind = planKind
+	r.BoundaryRules = append([]string(nil), rules...)
 	r.Revision++
 	r.review = review
 	r.LastAccessed = time.Now()
@@ -316,6 +349,90 @@ func (s *Store) TaskFiles(runID string, ref TaskRef) []string {
 		}
 	}
 	return nil
+}
+
+// AgentNetwork is what a plan run holds about one task's agent-network
+// declarations: the plan's kind and boundary rules, and the task's own kind
+// and rung, empty when the call names no task of the plan. TaskFound
+// reports whether it named one, so an empty kind can be told apart from no
+// task.
+type AgentNetwork struct {
+	PlanKind      string
+	BoundaryRules []string
+	TaskKind      string
+	Rung          string
+	TaskFound     bool
+}
+
+// TaskAgentNetwork returns run runID's agent-network declarations for the
+// task ref names, found as TaskFiles finds it. ok is false when the run is
+// unknown or expired, or the store is nil; a ref that names no plan task still
+// returns the run's plan kind and rules, with an empty TaskKind and Rung.
+func (s *Store) TaskAgentNetwork(runID string, ref TaskRef) (AgentNetwork, bool) {
+	if s == nil {
+		return AgentNetwork{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[runID]
+	if !ok {
+		return AgentNetwork{}, false
+	}
+	out := AgentNetwork{PlanKind: r.PlanKind, BoundaryRules: append([]string(nil), r.BoundaryRules...)}
+	if ref.empty() {
+		return out, true
+	}
+	index := ref.Index
+	if index < 1 || index > len(r.Tasks) {
+		index = r.taskByTitle(titleKey(ref.Title))
+	}
+	out.taskFrom(r, index)
+	return out, true
+}
+
+// taskFrom sets the kind and rung of r's task numbered index, and TaskFound,
+// when the plan has that task.
+func (a *AgentNetwork) taskFrom(r *Run, index int) {
+	for _, t := range r.Tasks {
+		if t.Index == index {
+			a.TaskKind, a.Rung, a.TaskFound = t.Kind, t.Rung, true
+			return
+		}
+	}
+}
+
+// SessionAgentNetwork returns run runID's agent-network declarations for the
+// task session sessionID is attached to. ok is false when the run is unknown
+// or expired, the session is attached to none of its rows, or the store is
+// nil.
+func (s *Store) SessionAgentNetwork(runID, sessionID string) (AgentNetwork, bool) {
+	if s == nil {
+		return AgentNetwork{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[runID]
+	if !ok {
+		return AgentNetwork{}, false
+	}
+	ref, ok := r.sessions[sessionID]
+	if !ok {
+		return AgentNetwork{}, false
+	}
+	// A revision can renumber tasks while attached rows keep their Index, so
+	// the session's plan heading, else its row's title, finds the task first
+	// and the row's position is the fallback.
+	index := ref.index
+	key := titleKey(ref.heading)
+	if pos := r.rowPos(index); key == "" && pos >= 0 {
+		key = titleKey(r.Rows[pos].TaskTitle)
+	}
+	if byTitle := r.taskByTitle(key); key != "" && byTitle != 0 {
+		index = byTitle
+	}
+	out := AgentNetwork{PlanKind: r.PlanKind, BoundaryRules: append([]string(nil), r.BoundaryRules...)}
+	out.taskFrom(r, index)
+	return out, true
 }
 
 // PlanTaskCount returns how many tasks run runID's plan has, and false when
@@ -371,6 +488,7 @@ func (r *Run) snapshot() *Run {
 	}
 	cp.ConfiguredModels = cloneStringMap(r.ConfiguredModels)
 	cp.PlanCall = cloneCall(r.PlanCall)
+	cp.BoundaryRules = append([]string(nil), r.BoundaryRules...)
 	return &cp
 }
 
@@ -380,6 +498,7 @@ func cloneRow(row TaskRow) TaskRow {
 	row.Severity = cloneIntMap(row.Severity)
 	row.Categories = cloneIntMap(row.Categories)
 	row.Codescene = cloneDigest(row.Codescene)
+	row.RateDigest = row.RateDigest.ForRecord()
 	row.Calls = append([]ToolCall(nil), row.Calls...)
 	return row
 }
@@ -485,16 +604,16 @@ func (s *Store) Attach(runID, sessionID string, ref TaskRef, preVerdict string) 
 	if !ok || ref.empty() {
 		return TaskRow{}, false
 	}
-	pos := r.rowFor(ref, false)
+	pos, task := r.rowFor(ref, false)
 	row := &r.Rows[pos]
 	row.SessionID = sessionID
 	row.PreVerdict = preVerdict
 	row.Attempts++
 	row.Lite = false
 	if r.sessions == nil {
-		r.sessions = map[string]int{}
+		r.sessions = map[string]sessionRef{}
 	}
-	r.sessions[sessionID] = row.Index
+	r.sessions[sessionID] = sessionRef{index: row.Index, heading: r.taskTitle(task)}
 	r.LastAccessed = time.Now()
 	return cloneRow(*row), true
 }
@@ -509,11 +628,11 @@ func (s *Store) UpdateRow(runID, sessionID string, mutate func(*TaskRow)) (TaskR
 	if !ok {
 		return TaskRow{}, false
 	}
-	index, ok := r.sessions[sessionID]
+	ref, ok := r.sessions[sessionID]
 	if !ok {
 		return TaskRow{}, false
 	}
-	pos := r.rowPos(index)
+	pos := r.rowPos(ref.index)
 	if pos < 0 {
 		return TaskRow{}, false
 	}
@@ -533,18 +652,22 @@ func (s *Store) UpsertLite(runID string, ref TaskRef, mutate func(*TaskRow)) (Ta
 	if !ok || ref.empty() {
 		return TaskRow{}, false
 	}
-	pos := r.rowFor(ref, true)
+	pos, _ := r.rowFor(ref, true)
 	mutate(&r.Rows[pos])
 	r.LastAccessed = time.Now()
 	return cloneRow(r.Rows[pos]), true
 }
 
 // rowFor returns the position of the row ref names, adding the row when the
-// task has none. A new row takes the plan's heading when ref carries no title.
-func (r *Run) rowFor(ref TaskRef, lite bool) int {
+// task has none, and the Index of the plan task ref resolved to, or 0 when it
+// named none. A new row takes the plan's heading when ref carries no title.
+func (r *Run) rowFor(ref TaskRef, lite bool) (pos, task int) {
 	pos, index, unmatched := r.resolve(ref)
+	if !unmatched {
+		task = index
+	}
 	if pos >= 0 {
-		return pos
+		return pos, task
 	}
 	title := ref.Title
 	if strings.TrimSpace(title) == "" {
@@ -553,7 +676,7 @@ func (r *Run) rowFor(ref TaskRef, lite bool) int {
 	return r.insertRow(TaskRow{
 		Index: index, TaskTitle: title, Unmatched: unmatched, Lite: lite,
 		CodesceneState: StateMissing,
-	})
+	}), task
 }
 
 // resolve finds the row ref names: by ref.Index when it is one of the plan's

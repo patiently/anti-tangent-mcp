@@ -9,7 +9,7 @@ role so an agent loads only what applies to it.
 | Part | Who reads it | Covers |
 |---|---|---|
 | [`core.md`](docs/protocol/core.md) | everyone | tool surface, scope and limits, §1 when the protocol applies, §6 FAQ and finding categories |
-| [`authoring.md`](docs/protocol/authoring.md) | plan authors | §3 task-block format, normative test bodies, attestations, write-time comment guard |
+| [`authoring.md`](docs/protocol/authoring.md) | plan authors | §3 task-block format, normative test bodies, attestations, write-time comment guard, agent-network plans |
 | [`implementer.md`](docs/protocol/implementer.md) | implementing subagents | §4 lifecycle, the paste-in dispatch clause, lightweight mode, CodeScene companion, §4.4 comment policy |
 | [`controller.md`](docs/protocol/controller.md) | controllers | §5 plan-handoff gate, dispatch addendum, §5.3 guard hooks, end-of-run reporting |
 | [`outcome.md`](docs/protocol/outcome.md) | controllers, at the end of a run | §5.10 recording the independent review's outcome |

@@ -1,0 +1,30 @@
+{
+  "name": "opt-out-keywords-untouched",
+  "validate_task_spec": {
+    "task_title": "Task 6: Log consent decisions",
+    "goal": "Every consent decision is logged with the lead id.",
+    "acceptance_criteria": [
+      "When OptOutKeywords marks a lead as opted out, one log line records the lead id and the decision."
+    ],
+    "context": "OptOutKeywords is the existing STOP/HELP keyword matcher; carrier rules require the keyword match in code.",
+    "plan_kind": "agent-network",
+    "boundary_rules": [
+      "Code checks structured data only. It never inspects reply or user words: no regex, phrase or keyword matching over them. Exception: STOP and HELP are matched in code, as carrier rules require.",
+      "The LLM writes every reply. The only code-written text is verbatim legal text."
+    ]
+  },
+  "validate_completion": {
+    "summary": "Added a log line for each consent decision; the keyword match is unchanged.",
+    "final_diff": "diff --git a/bot/src/main/kotlin/OptOutKeywords.kt b/bot/src/main/kotlin/OptOutKeywords.kt\n--- a/bot/src/main/kotlin/OptOutKeywords.kt\n+++ b/bot/src/main/kotlin/OptOutKeywords.kt\n@@ -1,6 +1,6 @@\n object OptOutKeywords {\n     private val stopWords = setOf(\"STOP\", \"UNSUBSCRIBE\", \"CANCEL\")\n     fun isStop(message: String) = message.trim().uppercase() in stopWords\n \n-    fun record(leadId: String, stopped: Boolean) = Unit\n+    fun record(leadId: String, stopped: Boolean) = log.info(\"consent lead=$leadId stopped=$stopped\")\n }\n",
+    "test_evidence": "OptOutKeywordsTest > logs the decision PASSED\n1 passed"
+  },
+  "expectations": [
+    {
+      "call": "validate_completion",
+      "any_of_keywords": [
+        "boundary_violation"
+      ],
+      "absent": true
+    }
+  ]
+}

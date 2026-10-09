@@ -58,6 +58,7 @@
             "attestation_contradiction",
             "correctness",
             "test_adequacy",
+            "boundary_violation",
             "contradicted_codebase_claim",
             "kb_gap",
             "ambiguous_pick",

@@ -9,6 +9,7 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
+	"github.com/patiently/anti-tangent-mcp/internal/ratedigest"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -38,11 +39,9 @@ func (h *handlers) taskIndexAdvisory(runID string, index int) (verdict.Finding, 
 
 // taskSpecPlanRun returns the plan run a validate_task_spec call belongs to:
 // the one it names, else the server's single live run when the task's title
-// matches one of that run's headings. byTitle reports the second case. A
-// truncated review creates no session and so attaches to nothing: it finds
-// no run by title.
-func (h *handlers) taskSpecPlanRun(args ValidateTaskSpecArgs, truncated bool) (runID string, byTitle bool) {
-	if args.PlanRunID != "" || truncated {
+// matches one of that run's headings. byTitle reports the second case.
+func (h *handlers) taskSpecPlanRun(args ValidateTaskSpecArgs) (runID string, byTitle bool) {
+	if args.PlanRunID != "" {
 		return args.PlanRunID, false
 	}
 	return h.deps.PlanRuns.SoleLiveByTitle(args.TaskTitle)
@@ -260,11 +259,11 @@ func (h *handlers) recordCheckpointRow(sess *session.Session, env Envelope) {
 // validate_completion call and writes the updated row to the plan ledger.
 // Best effort: an unknown run or row logs a warning and never changes the
 // result. A no-op when sess carries no plan run.
-func (h *handlers) recordCompletionRow(sess *session.Session, env Envelope, cs *codescene.Digest, finalDiff string, overBuildingRuled bool) {
+func (h *handlers) recordCompletionRow(sess *session.Session, env Envelope, cs *codescene.Digest, finalDiff string, overBuildingRuled bool, rd *ratedigest.Digest) {
 	if sess.PlanRunID == "" {
 		return
 	}
-	update := countOverBuildingRuled(completionRowUpdate(env, cs, finalDiff), overBuildingRuled)
+	update := withRateDigest(countOverBuildingRuled(completionRowUpdate(env, cs, finalDiff), overBuildingRuled), rd)
 	if row, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, update); ok {
 		h.appendPlanLedger(sess.PlanRunID, row)
 	} else {
@@ -278,16 +277,28 @@ func (h *handlers) recordCompletionRow(sess *session.Session, env Envelope, cs *
 // Best effort: an unknown or expired run, or a call naming no task, logs a
 // warning and never changes the result. A no-op when args carries no
 // plan_run_id.
-func (h *handlers) recordLightweightCompletionRow(args ValidateCompletionArgs, env Envelope, overBuildingRuled bool) {
+func (h *handlers) recordLightweightCompletionRow(args ValidateCompletionArgs, env Envelope, overBuildingRuled bool, rd *ratedigest.Digest) {
 	if args.PlanRunID == "" {
 		return
 	}
 	ref := planrun.TaskRef{Index: args.TaskIndex, Title: args.TaskTitle}
-	update := countOverBuildingRuled(completionRowUpdate(env, args.Codescene, args.FinalDiff), overBuildingRuled)
+	update := withRateDigest(countOverBuildingRuled(completionRowUpdate(env, args.Codescene, args.FinalDiff), overBuildingRuled), rd)
 	if row, ok := h.deps.PlanRuns.UpsertLite(args.PlanRunID, ref, update); ok {
 		h.appendPlanLedger(args.PlanRunID, row)
 	} else {
 		slog.Warn("plan run lightweight update skipped; run unknown or expired, or no task named",
 			"plan_run_id", args.PlanRunID)
+	}
+}
+
+// withRateDigest wraps a row update so it also keeps the call's rate digest,
+// without the eval's path. A call that sends none leaves the row's last one.
+func withRateDigest(update func(*planrun.TaskRow), rd *ratedigest.Digest) func(*planrun.TaskRow) {
+	if rd == nil {
+		return update
+	}
+	return func(row *planrun.TaskRow) {
+		update(row)
+		row.RateDigest = rd.ForRecord()
 	}
 }

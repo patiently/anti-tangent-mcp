@@ -66,6 +66,7 @@ func clearTaskServerSetFields(tasks []PlanTaskResult) {
 	for i := range tasks {
 		clearAllServerSetFields(tasks[i].Findings, false)
 		tasks[i].WaivedFindings = nil
+		tasks[i].TaskKind, tasks[i].Rung, tasks[i].PlanKind = "", "", ""
 	}
 }
 

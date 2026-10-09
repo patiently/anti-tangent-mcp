@@ -26,11 +26,11 @@ not on disk; it is deprecated and will be removed in 1.0.0.
 5. **Only proceed to dispatch when the plan-level gate passes.**
 6. **Capture `plan_run_id`** from the final passing `validate_plan` call and add it, with the
    task's 1-based `task_index`, to the dispatch clause: implementers pass both to
-   `validate_task_spec`, lightweight ones to `validate_completion`. When the dispatch tells the
+   `validate_task_spec`, lightweight ones to `validate_completion`. Agent-network plans
+   also pass `task_kind`, `rung`, `plan_kind` and `boundary_rules` (authoring.md §3.11). When the dispatch tells the
    implementer to work from a brief file, name that file in `context_paths` on the same call, so
    the reviewer reads what the implementer was told to read. After the last task reports DONE, call
-   `plan_run_report` with that id and surface the table to the user. The report is deterministic
-   and free (no reviewer call).
+   `plan_run_report` with that id and surface the table to the user. It is free (no reviewer call).
 
 A `pass` on round N is not an audit of rounds 1..N-1. The reviewer re-reads the whole plan each round, but a defect present since round 1 can first surface in round 4 — earlier rounds finding other things is not evidence they inspected everything. Treat each round's findings as additive, not as a regression you introduced.
 

@@ -32,6 +32,7 @@
               "attestation_contradiction",
               "correctness",
               "test_adequacy",
+              "boundary_violation",
               "kb_gap",
               "ambiguous_pick",
               "missing_index_entry",

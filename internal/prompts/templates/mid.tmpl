@@ -26,7 +26,8 @@ The task's controller has ruled on the findings below. Do not raise the concern 
 - {{if .ID}}{{.ID}} {{end}}[{{.Severity}}/{{.Category}}] criterion: {{oneLine .Criterion}}
   evidence:   {{oneLine .Evidence}}
   suggestion: {{oneLine .Suggestion}}
-{{end}}{{end}}
+{{end}}{{end}}{{if .Spec.BoundaryRules}}
+{{template "boundary_rules" .Spec.BoundaryRules}}{{end}}
 ## What to evaluate
 
 You are checking IN-PROGRESS work for drift. Focus on:
@@ -52,6 +53,12 @@ Report only what the submitted files show: quote the offending lines in `evidenc
 
 Emit each defect as its own finding with `category: correctness`. Set `criterion` to the verbatim AC text when the defect breaks that criterion, and to `correctness` otherwise. Severity: `critical` for data loss, a security hole, or a crash on the main path; `major` for a wrong result or an unhandled failure on a path the task's Goal or acceptance criteria cover; `minor` for a defect on a path the task does not exercise.
 
+{{if .Spec.BoundaryRules -}}
+### Boundary breaches
+
+Check the files below against the boundary rules above. The files are whole, so you cannot tell code this task added from code that was already there: report a breach at `severity: minor`, and say in `evidence` that the code may predate the task. Report only code the `Working on` summary or an acceptance criterion ties to this task.
+
+{{end -}}
 ### Over-building
 
 The implementer was handed this ruleset when the task started:
@@ -59,6 +66,8 @@ The implementer was handed this ruleset when the task started:
 {{template "lean.tmpl" .}}
 
 The files below are the ones the implementer reports changing. Flag structure in them that the acceptance criteria do not call for and `Context:` does not justify — `reuse:` (a helper a submitted file already has, or the task spec names), `stdlib:` (a hand-rolled utility or new dependency for what the standard library covers), `native:` (application code for what the platform provides), `yagni:` (an interface with one implementation, a factory for one product, a config value nothing varies, a layer with one caller), `delete:` (scaffolding for later). Flag only structure that the `Working on` summary or an acceptance criterion ties to this task; structure you cannot tie to it may predate the task, so leave it alone. Not `shrink:` — line-count polish is the style noise above; it is judged at completion. Never flag trust-boundary validation, data-loss handling, security, accessibility, tests the task calls for, or anything explicitly requested. Report every instance in ONE finding, `category: quality`, `criterion: over_building`, `severity: minor`, `evidence` listing each as `path: <tag>: <what>. <replacement>.` and ending with `net: -N lines`, `suggestion` giving the replacement or the removal. An unnecessary abstraction is cheapest to remove now, before tests and callers accrete on it.
+{{- if .Spec.RigidityOn}}
+{{template "rigidity_code"}}{{end}}
 
 ## Working on
 

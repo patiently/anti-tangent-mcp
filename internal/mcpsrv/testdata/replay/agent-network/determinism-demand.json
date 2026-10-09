@@ -1,0 +1,36 @@
+{
+  "name": "determinism-demand",
+  "validate_task_spec": {
+    "task_title": "Task 7: Ask for a missing ZIP",
+    "goal": "The bot asks for a missing ZIP code.",
+    "acceptance_criteria": [
+      "The bot asks for the ZIP code in 100% of runs when the ZIP field is empty.",
+      "The ZIP mapper never writes a ZIP that is not five digits."
+    ],
+    "context": "The model writes the question from the prompt; the mapper is deterministic Kotlin.",
+    "task_kind": "build",
+    "plan_kind": "agent-network",
+    "boundary_rules": [
+      "Code checks structured data only. It never inspects reply or user words: no regex, phrase or keyword matching over them. Exception: STOP and HELP are matched in code, as carrier rules require.",
+      "The LLM writes every reply. The only code-written text is verbatim legal text."
+    ]
+  },
+  "expectations": [
+    {
+      "call": "validate_task_spec",
+      "any_of_keywords": [
+        "100% of runs"
+      ],
+      "criterion": "determinism_demand"
+    },
+    {
+      "call": "validate_task_spec",
+      "any_of_keywords": [
+        "five digits",
+        "never writes"
+      ],
+      "criterion": "determinism_demand",
+      "absent": true
+    }
+  ]
+}

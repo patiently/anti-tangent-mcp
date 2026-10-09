@@ -483,7 +483,7 @@ func TestLedger_LoadTakesTheLatestRoundsHeader(t *testing.T) {
 	row, ok := s.Attach(run.ID, "sess-1", TaskRef{Index: 1}, "pass")
 	require.True(t, ok)
 	require.NoError(t, l.Append(run, row))
-	revised, ok := s.Revise(run.ID, "pass", "rigorous", []PlanTask{{Index: 1, Title: "Task 1: A"}, {Index: 2, Title: "Task 2: B"}}, nil)
+	revised, ok := s.Revise(run.ID, "pass", "rigorous", []PlanTask{{Index: 1, Title: "Task 1: A"}, {Index: 2, Title: "Task 2: B"}}, "", nil, nil)
 	require.True(t, ok)
 	require.NoError(t, l.AppendHeader(revised))
 

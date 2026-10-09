@@ -1,0 +1,29 @@
+{
+  "name": "contains-zip",
+  "validate_task_spec": {
+    "task_title": "Task 5: Notice ZIP questions",
+    "goal": "When the lead asks why we need their ZIP, the bot explains.",
+    "acceptance_criteria": [
+      "When the lead asks why the ZIP is needed, the next reply explains that it is used to find nearby jobs."
+    ],
+    "context": "The model writes every reply from the prompt; the prompt has a section on why each field is asked.",
+    "plan_kind": "agent-network",
+    "boundary_rules": [
+      "Code checks structured data only. It never inspects reply or user words: no regex, phrase or keyword matching over them. Exception: STOP and HELP are matched in code, as carrier rules require.",
+      "The LLM writes every reply. The only code-written text is verbatim legal text."
+    ]
+  },
+  "validate_completion": {
+    "summary": "Added a check: if the reply mentions zip, the router switches to the explain-zip route.",
+    "final_diff": "diff --git a/bot/src/main/kotlin/ZipRouter.kt b/bot/src/main/kotlin/ZipRouter.kt\n--- a/bot/src/main/kotlin/ZipRouter.kt\n+++ b/bot/src/main/kotlin/ZipRouter.kt\n@@ -1,5 +1,6 @@\n class ZipRouter(private val facts: LeadFacts) {\n     fun route(reply: String): Route {\n-        return Route.Continue\n+        if (reply.contains(\"zip\", ignoreCase = true)) return Route.ExplainZip\n+        return Route.Continue\n     }\n }\n",
+    "test_evidence": "ZipRouterTest > routes zip questions PASSED\n1 passed"
+  },
+  "expectations": [
+    {
+      "call": "validate_completion",
+      "any_of_keywords": [
+        "boundary_violation"
+      ]
+    }
+  ]
+}

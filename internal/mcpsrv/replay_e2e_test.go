@@ -70,8 +70,8 @@ func replayReviewers(cfg config.Config, dryRun bool) providers.Registry {
 // TestReplay_E2E replays recorded task fixtures against the configured
 // reviewers and reports, per expectation, how many runs raised the issue.
 // Fixtures recorded from a consumer project hold its code and live outside
-// this repository; the synthetic lean fixtures in testdata/replay/lean are
-// committed. replayFixture documents the shape, and relative context_paths
+// this repository; the synthetic fixtures in testdata/replay/lean and
+// testdata/replay/agent-network are committed. replayFixture documents the shape, and relative context_paths
 // and final_diff_path resolve against the fixture's directory.
 //
 //	ANTI_TANGENT_REPLAY_DIR       directory of *.json fixtures; the test skips when unset

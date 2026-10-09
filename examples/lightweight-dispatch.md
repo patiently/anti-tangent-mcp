@@ -16,7 +16,7 @@ What lightweight mode skips:
 > lightweight marker: without it, a close whose `validate_completion` ran with an empty
 > `session_id` is blocked as a skipped `validate_task_spec`.
 
-Before reporting DONE (REQUIRED). Call `validate_completion` with the fields below, and AT LEAST ONE of: `final_files` (full file contents), `final_diff` (a unified diff), or `test_evidence` (test command output). Copy the `summary_block` field from the response verbatim into your DONE report.
+Before reporting DONE (REQUIRED). Call `validate_completion` with the fields below, and AT LEAST ONE of: `final_files` (full file contents), `final_diff` (a unified diff), or `test_evidence` (test command output). On a plan run with boundary rules, send `final_diff`: `final_files` without it is refused as `diff_required`. Copy the `summary_block` field from the response verbatim into your DONE report.
 
 If the verdict is `fail` or contains `critical`/`major` findings, do not report DONE — fix the findings and re-validate.
 

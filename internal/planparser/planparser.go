@@ -20,6 +20,14 @@ type RawTask struct {
 	// as plan-header adoption telemetry by validate_plan; never sent to the
 	// reviewer.
 	HasStructuredHeader bool
+	// Kind is the task's **Kind:** header: TaskKindExperiment, or
+	// TaskKindBuild when the header is absent or unknown. Rung is its
+	// **Rung:** header, one of Rungs, or "". UnknownKind and UnknownRung hold
+	// a header value that is present and not recognised.
+	Kind        string
+	Rung        string
+	UnknownKind string
+	UnknownRung string
 }
 
 // taskHeadingRe matches task heading lines at heading levels h2–h4, e.g.
@@ -59,10 +67,15 @@ func SplitTasks(planText string) ([]RawTask, string) {
 		// Title: heading line minus the leading "#"s, trimmed (level-agnostic).
 		headingLine := planText[m[0]:m[1]]
 		title := strings.TrimSpace(strings.TrimLeft(headingLine, "#"))
+		kind, unknownKind, rung, unknownRung := taskKinds(body)
 		tasks = append(tasks, RawTask{
 			Title:               title,
 			Body:                body,
 			HasStructuredHeader: hasStructuredHeader(body),
+			Kind:                kind,
+			Rung:                rung,
+			UnknownKind:         unknownKind,
+			UnknownRung:         unknownRung,
 		})
 	}
 	return tasks, preamble

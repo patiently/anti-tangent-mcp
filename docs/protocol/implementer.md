@@ -54,10 +54,10 @@ is not configured, skip this step silently.
 
 **3. Before reporting DONE (REQUIRED).** Call `validate_completion` with
 the session_id, your summary, **a complete `final_diff` (or full
-`final_files`)**, and test evidence. A complete diff is a **precondition
-of the first call**, not something to add after a rejection —
-evidence-poor submissions usually fail and buy you a formatting review
-instead of a code review.
+`final_files`, but not under boundary rules or on an experiment)**, and
+test evidence. A complete diff is a **precondition of the first call**,
+not something to add after a rejection — evidence-poor submissions buy a
+formatting review, not a code review.
 **Copy the `summary_block` field from the response verbatim into your DONE report.**
 If the verdict is `fail` or contains `critical`/`major` findings, do
 not report DONE — fix the findings and re-validate. **Exception: when the
@@ -156,7 +156,7 @@ For trivial tasks — doc-only edits, single-file mechanical relocations, depend
 
 Use lightweight mode when ALL of: (a) ≤ 2 files or docs/config/data-only; (b) mechanical (no new logic, no test-design choices); (c) the spec gives literal text, an exact diff, command or insertion shape. `validate_plan`'s `lightweight_eligible` / `lightweight_reason` hints are advisory, not permission to skip judgment.
 
-Use the full protocol for new production logic, test-design choices, or ACs requiring observable invariants. Reference lightweight dispatch clause: `examples/lightweight-dispatch.md`.
+Use the full protocol for new production logic, test-design choices, or ACs requiring observable invariants. An experiment task is never lightweight: its completion grades a measured protocol. Reference lightweight dispatch clause: `examples/lightweight-dispatch.md`.
 
 **Lightweight mode and `ANTI_TANGENT_CODESCENE=required`.** Unset: lightweight tasks skip the companion calls (`pre_commit_code_health_safeguard` / `analyze_change_set`) — nothing meaningful on a trivial edit — and `codescene` is optional. `required` is an operator assertion CodeScene is present, so lightweight tasks must **run `analyze_change_set` and submit its result, exactly as any other task** — being lightweight is not a skip reason, and the failed-run shape in §4.2 step 3b covers an attempted run that failed, never one never attempted.
 

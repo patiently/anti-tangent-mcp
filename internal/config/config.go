@@ -63,6 +63,10 @@ type Config struct {
 	// source of false contradicted_codebase_claim findings. See design §3.2.
 	ContextMaxFileBytes    int
 	ContextMaxPayloadBytes int
+	// TestEvidenceMaxBytes caps a file named by test_evidence_path. It is a
+	// cost guard, separate from MaxPayloadBytes: the whole file goes to the
+	// reviewer vendor on every call that names it.
+	TestEvidenceMaxBytes int
 	// Stats subsystem (opt-in; see spec 2026-06-02). StatsDir == "" disables
 	// it entirely.
 	StatsDir              string
@@ -138,6 +142,7 @@ func Load(env func(string) string) (Config, error) {
 		PlanMaxPayloadBytes:    DefaultPlanMaxPayloadBytes,
 		ContextMaxFileBytes:    131072,
 		ContextMaxPayloadBytes: 524288,
+		TestEvidenceMaxBytes:   262144,
 		StatsSummaryInterval:   24 * time.Hour,
 		StatsSummaryThreshold:  50,
 		StatsRetentionDays:     30,
@@ -346,6 +351,16 @@ func Load(env func(string) string) (Config, error) {
 		}
 		cfg.ContextMaxFileBytes = n
 		fileCapExplicit = true
+	}
+	if v := env("ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES: %w", err)
+		}
+		if n <= 0 {
+			return Config{}, fmt.Errorf("ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES: must be positive, got %d", n)
+		}
+		cfg.TestEvidenceMaxBytes = n
 	}
 	if v := env("ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES"); v != "" {
 		n, err := strconv.Atoi(v)

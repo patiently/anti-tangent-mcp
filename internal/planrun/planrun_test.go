@@ -474,7 +474,7 @@ func TestRevise_KeepsTheIDAndRowsAndCountsTheRound(t *testing.T) {
 	require.True(t, s.SetReview(run.ID, "first"))
 
 	revised, ok := s.Revise(run.ID, "pass", "rigorous",
-		[]PlanTask{{Index: 1, Title: "Task 1: A"}, {Index: 2, Title: "Task 2: B"}, {Index: 3, Title: "Task 3: C"}}, "second")
+		[]PlanTask{{Index: 1, Title: "Task 1: A"}, {Index: 2, Title: "Task 2: B"}, {Index: 3, Title: "Task 3: C"}}, "", nil, "second")
 	require.True(t, ok)
 	assert.Equal(t, run.ID, revised.ID)
 	assert.Equal(t, 2, revised.Revision)
@@ -495,7 +495,7 @@ func TestRevise_KeepsTheIDAndRowsAndCountsTheRound(t *testing.T) {
 	assert.True(t, ok, "the session attached before the round still reaches its row")
 
 	passed := []PlanTask{{Index: 1, Title: "Task 1: A", Files: []string{"pkg/a.go"}}}
-	revised, ok = s.Revise(run.ID, "pass", "rigorous", passed, "third")
+	revised, ok = s.Revise(run.ID, "pass", "rigorous", passed, "", nil, "third")
 	require.True(t, ok)
 	passed[0].Files[0] = "caller/changed.go"
 	revised.Tasks[0].Files[0] = "copy/changed.go"
@@ -510,7 +510,7 @@ func TestRevise_KeepsTheIDAndRowsAndCountsTheRound(t *testing.T) {
 	created[0].Files[0] = "caller/changed.go"
 	assert.Equal(t, []string{"pkg/a.go"}, s.TaskFiles(minted.ID, TaskRef{Index: 1}))
 
-	_, ok = s.Revise("pr_unknown", "pass", "rigorous", nil, nil)
+	_, ok = s.Revise("pr_unknown", "pass", "rigorous", nil, "", nil, nil)
 	assert.False(t, ok)
 	_, _, ok = s.Review("pr_unknown")
 	assert.False(t, ok)

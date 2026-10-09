@@ -204,3 +204,18 @@ func TestNoteBodyClampsModelStringsInRunLines(t *testing.T) {
 		}
 	}
 }
+
+func TestNoteBodyLeavesOutMeasurements(t *testing.T) {
+	in := []scorecard.OutcomeLine{{RunHash: "r_1", Source: "final_review",
+		Measurements: []scorecard.Measurement{{TaskIndex: 1, Metric: "secret-eval-name", Before: 5, After: 8, N: 10}}}}
+	body, err := NoteBody("alice", nil, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, "secret-eval-name") || strings.Contains(body, "measurements") {
+		t.Fatalf("a shared note must not carry measurements: %s", body)
+	}
+	if len(in[0].Measurements) != 1 {
+		t.Fatal("NoteBody must not mutate its input")
+	}
+}

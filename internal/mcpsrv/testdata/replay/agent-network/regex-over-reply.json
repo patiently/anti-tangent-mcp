@@ -1,0 +1,29 @@
+{
+  "name": "regex-over-reply",
+  "validate_task_spec": {
+    "task_title": "Task 4: Route replies that contain a ZIP",
+    "goal": "A reply that carries a ZIP code updates the lead's ZIP field.",
+    "acceptance_criteria": [
+      "When the lead states a ZIP code, the lead's ZIP field holds it after the turn."
+    ],
+    "context": "The model already extracts structured fields into an ExtractedFields record each turn.",
+    "plan_kind": "agent-network",
+    "boundary_rules": [
+      "Code checks structured data only. It never inspects reply or user words: no regex, phrase or keyword matching over them. Exception: STOP and HELP are matched in code, as carrier rules require.",
+      "The LLM writes every reply. The only code-written text is verbatim legal text."
+    ]
+  },
+  "validate_completion": {
+    "summary": "ZipRouter now finds a five-digit ZIP in the reply with a regex and stores it.",
+    "final_diff": "diff --git a/bot/src/main/kotlin/ZipRouter.kt b/bot/src/main/kotlin/ZipRouter.kt\n--- a/bot/src/main/kotlin/ZipRouter.kt\n+++ b/bot/src/main/kotlin/ZipRouter.kt\n@@ -1,5 +1,7 @@\n class ZipRouter(private val facts: LeadFacts) {\n     fun route(reply: String): Route {\n-        return Route.Continue\n+        val zip = Regex(\"\\\\b\\\\d{5}\\\\b\").find(reply)?.value\n+        if (zip != null) facts.zip = zip\n+        return Route.Continue\n     }\n }\n",
+    "test_evidence": "ZipRouterTest > stores a five-digit zip PASSED\n1 passed"
+  },
+  "expectations": [
+    {
+      "call": "validate_completion",
+      "any_of_keywords": [
+        "boundary_violation"
+      ]
+    }
+  ]
+}

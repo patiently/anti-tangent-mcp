@@ -36,6 +36,10 @@ style preferences rather than sending them as `minor`.
 `performance`, `maintainability`). Only the first 40 characters are kept; finding descriptions
 must not be sent.
 
+**Measurements (optional, 0.28.0+).** `measurements: [{"task_index": 2, "metric": "zip-missing",
+"before": 5, "after": 8, "n": 10}]` stores numbers you measured per task, such as an eval's rate
+before and after. They are kept for comparing runs; no score or report reads them yet.
+
 **Implementer models.** Pass the model you dispatched each task on, one entry per task: with
 model routing it differs per task, and the server cannot see it. A `final_review` response lists the
 tasks you left out in `missing_implementer_models`; call again with the full list, because a task without a

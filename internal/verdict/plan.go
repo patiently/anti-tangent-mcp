@@ -106,6 +106,12 @@ type PlanTaskResult struct {
 	// WaivedFindings holds this task's findings a controller ruling
 	// covered. Server-set.
 	WaivedFindings []WaivedFinding `json:"waived_findings,omitempty"`
+	// TaskKind, Rung and PlanKind are server-set from the plan's
+	// **Kind:**, **Rung:** and **Plan kind:** headers, for the controller to
+	// pass to the task's per-task calls.
+	TaskKind string `json:"task_kind,omitempty"`
+	Rung     string `json:"rung,omitempty"`
+	PlanKind string `json:"plan_kind,omitempty"`
 }
 
 //go:embed tasks_only_schema.json

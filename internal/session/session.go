@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
+	"github.com/patiently/anti-tangent-mcp/internal/planparser"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -41,6 +42,33 @@ type TaskSpec struct {
 	NormativeTestBodies          []string                  `json:"normative_test_bodies,omitempty"`
 	HarnessShapeAttestations     []HarnessShapeAttestation `json:"harness_shape_attestations,omitempty"`
 	Phase                        string                    `json:"phase,omitempty"`
+	// TaskKind is "experiment" or "build", Rung the task's fix-ladder rung,
+	// PlanKind "agent-network" or "", and BoundaryRules the caller's boundary
+	// rules. Resolved once by validate_task_spec, so check_progress and
+	// validate_completion review the task in the same mode.
+	TaskKind      string   `json:"task_kind,omitempty"`
+	Rung          string   `json:"rung,omitempty"`
+	PlanKind      string   `json:"plan_kind,omitempty"`
+	BoundaryRules []string `json:"boundary_rules,omitempty"`
+	// KindFromRun reports that TaskKind and Rung came from the plan run, so a
+	// revision of the plan that clears them clears them here too.
+	KindFromRun bool `json:"kind_from_run,omitempty"`
+}
+
+// Experiment reports whether the task is an experiment: a model-behaviour
+// change that is measured, then kept or reverted.
+func (s TaskSpec) Experiment() bool { return s.TaskKind == planparser.TaskKindExperiment }
+
+// AgentMode reports whether the task is reviewed as agent-network work: an
+// experiment, or any task of an agent-network plan.
+func (s TaskSpec) AgentMode() bool {
+	return s.Experiment() || s.PlanKind == planparser.PlanKindAgentNetwork
+}
+
+// RigidityOn reports whether over-building findings count rigidity: the plan
+// is agent-network work, or the caller sent boundary rules.
+func (s TaskSpec) RigidityOn() bool {
+	return s.PlanKind == planparser.PlanKindAgentNetwork || len(s.BoundaryRules) > 0
 }
 
 type ModelDefaults struct {

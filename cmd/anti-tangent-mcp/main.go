@@ -55,7 +55,8 @@ func main() {
 		"plan_model", cfg.PlanModel.String(),
 		"session_ttl", cfg.SessionTTL.String(),
 		"context_max_file_bytes", cfg.ContextMaxFileBytes,
-		"context_max_payload_bytes", cfg.ContextMaxPayloadBytes)
+		"context_max_payload_bytes", cfg.ContextMaxPayloadBytes,
+		"test_evidence_max_bytes", cfg.TestEvidenceMaxBytes)
 
 	if err := providers.ValidateModel(cfg.PreModel); err != nil {
 		fail(logger, "pre model invalid", err)

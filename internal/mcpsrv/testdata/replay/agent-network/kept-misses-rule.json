@@ -1,0 +1,44 @@
+{
+  "name": "kept-misses-rule",
+  "validate_task_spec": {
+    "task_title": "Task 9: Prompt the bot to ask for a missing ZIP",
+    "goal": "The bot asks for a missing ZIP code more often.",
+    "acceptance_criteria": [
+      "`evals/core/zip-missing.yaml` measured at n=10 before and after the change; baseline 5/10 (interval 0.24-0.76).",
+      "Keep the change if the after-rate is at least 9/10 and the regression suite shows no eval outside its baseline interval; otherwise revert it.",
+      "The result, kept or reverted, is recorded in rate_digest."
+    ],
+    "context": "A revert that follows the rule meets this task. The ZIP field already reaches the model, so the facts and tool rungs are ruled out.",
+    "task_kind": "experiment",
+    "rung": "prompt",
+    "plan_kind": "agent-network",
+    "boundary_rules": [
+      "Code checks structured data only. It never inspects reply or user words: no regex, phrase or keyword matching over them. Exception: STOP and HELP are matched in code, as carrier rules require.",
+      "The LLM writes every reply. The only code-written text is verbatim legal text."
+    ]
+  },
+  "validate_completion": {
+    "summary": "Measured zip-missing at n=10: 5/10 before, 7/10 after. Kept the change because it improved the rate.",
+    "final_diff": "diff --git a/bot/src/main/resources/prompts/collect.md b/bot/src/main/resources/prompts/collect.md\n--- a/bot/src/main/resources/prompts/collect.md\n+++ b/bot/src/main/resources/prompts/collect.md\n@@ -10,3 +10,3 @@\n ## Missing fields\n \n-Ask for any missing field.\n+Ask for any missing field. If the ZIP code is missing, ask for it before anything else.\n",
+    "test_evidence": "| eval | before | after | n |\n|---|---|---|---|\n| zip-missing | 5/10 | 7/10 | 10 |\n\nsuite: 42 evals, 0 outside their baseline interval\n",
+    "rate_digest": {
+      "target_eval": "evals/core/zip-missing.yaml",
+      "n": 10,
+      "before_k": 5,
+      "after_k": 7,
+      "suite": {
+        "evals": 42,
+        "regressions": 0
+      },
+      "kept": true
+    }
+  },
+  "expectations": [
+    {
+      "call": "validate_completion",
+      "any_of_keywords": [
+        "9/10"
+      ]
+    }
+  ]
+}

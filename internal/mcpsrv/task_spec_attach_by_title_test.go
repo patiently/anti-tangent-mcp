@@ -174,3 +174,16 @@ func TestWithdrawAttachedByTitle_KeepsTheFindingsPlaceAndID(t *testing.T) {
 	assert.Equal(t, []verdict.Finding{reviewer}, untouched.Findings)
 	withdrawAttachedByTitle(&Envelope{}, "pr_0123456789ab")
 }
+
+func TestValidateTaskSpec_AttachedByTitleAdvisoryFollowsTheModeNotes(t *testing.T) {
+	h := &handlers{deps: newDeps(t, &fakeReviewer{name: "anthropic", resp: twoMinorsResp()})}
+	storeAndCacheRun(h)
+
+	_, env, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{TaskTitle: "Cache", Goal: "g", TaskKind: "spike"})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, env.Findings)
+	last := env.Findings[len(env.Findings)-1]
+	assert.Equal(t, "plan_run_id", last.Criterion, "withdrawAttachedByTitle rewrites the last finding")
+	assert.Contains(t, findingCategories(env.Findings), verdict.CategoryUnknownKind)
+}

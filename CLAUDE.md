@@ -49,6 +49,7 @@ internal/
   session/     TaskSpec, Session, Checkpoint; in-memory store with TTL
   prompts/     embedded pre/mid/post templates; render funcs; golden tests
   providers/   Reviewer interface; allowlist; HTTP clients (anthropic/openai/google)
+  ratedigest/  rate_digest validation and rendering (leaf; used by planrun and mcpsrv)
   mcpsrv/      MCP server: tool registration + handlers + integration test
     handlers.go               # 6 review tools (validate_plan, validate_task_spec, …)
     outcome_handler.go           # record_review_outcome

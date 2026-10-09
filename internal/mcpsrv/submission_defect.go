@@ -21,6 +21,7 @@ var submissionDefectCategories = map[verdict.Category]bool{
 	verdict.CategoryMalformedEvidence:    true,
 	verdict.CategoryCodesceneNotRun:      true,
 	verdict.CategoryCodesceneSkipped:     true,
+	verdict.CategoryDiffRequired:         true,
 }
 
 // resubmitNextAction is prefixed onto next_action when the only blocking

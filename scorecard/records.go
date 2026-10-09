@@ -108,6 +108,20 @@ type OutcomeLine struct {
 	ReviewerModel     string             `json:"reviewer_model,omitempty"`
 	ImplementerModels []ImplementerModel `json:"implementer_models,omitempty"`
 	Findings          []OutcomeFinding   `json:"findings"`
+	// Measurements are numbers the caller measured for a task, such as an
+	// eval's rate before and after the change. They are stored for comparing
+	// runs over time; the scorecard does not score them.
+	Measurements []Measurement `json:"measurements,omitempty"`
+}
+
+// Measurement is one caller-measured number for a task. Metric is a short
+// name, normalised like a category; N is the sample size, 0 when not given.
+type Measurement struct {
+	TaskIndex int     `json:"task_index"`
+	Metric    string  `json:"metric"`
+	Before    float64 `json:"before"`
+	After     float64 `json:"after"`
+	N         int     `json:"n,omitempty"`
 }
 
 // HashRunID is the salted digest that stands in for a plan_run_id in every

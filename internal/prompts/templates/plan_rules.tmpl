@@ -54,5 +54,8 @@ The controller has ruled on the findings below, by ID. A ruling is final for thi
 {{$rulingFence}}
 {{end}}
 {{end -}}
+{{if .BoundaryRules -}}
+{{template "boundary_rules" .BoundaryRules}}
+{{end -}}
 
 {{end}}

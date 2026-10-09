@@ -91,7 +91,7 @@ All three tools return a common envelope:
   "findings": [
     {
       "severity": "critical" | "major" | "minor",
-      "category": "missing_acceptance_criterion" | "scope_drift" | "ambiguous_spec" | "unaddressed_finding" | "quality" | "session_not_found" | "payload_too_large" | "correctness" | "test_adequacy" | "other",
+      "category": "missing_acceptance_criterion" | "scope_drift" | "ambiguous_spec" | "unaddressed_finding" | "quality" | "session_not_found" | "payload_too_large" | "correctness" | "test_adequacy" | "boundary_violation" | "other",
       "criterion": "string — which AC or non-goal this maps to (or 'spec' for pre-hook)",
       "evidence": "string — the specific code or spec text that triggered this finding",
       "suggestion": "string — the concrete next action"
@@ -329,6 +329,43 @@ Respond with the verdict JSON only.
 
 The MCP handler enforces a soft cap on the size of `changed_files` / `final_files` content per call. Default 200KB total (`ANTI_TANGENT_MAX_PAYLOAD_BYTES=204800`). On exceed, return `verdict: "fail"` with a `payload_too_large` finding — honest failure beats a silent truncated review.
 
+## Agent-network mode
+
+An opt-in mode for plans that build or tune LLM-agent behaviour, where the work is judged by eval
+rates rather than by code alone. Nothing changes for a plan or call that declares none of it,
+except one sentence in every `validate_task_spec` prompt: never propose a string or regex
+assertion over model-written text as an AC's testable form.
+
+**Declarations.** A plan's `**Plan kind:** agent-network` header, and per task `**Kind:**
+experiment | build` and `**Rung:**` (the fix-ladder rung: oracle, variance, facts, tool,
+commitment, prompt, owner). `validate_plan` stores them on the plan run with the caller's
+`boundary_rules` (text the caller supplies; anti-tangent ships none), and returns them per task.
+A per-task call attached to the run takes the run's plan kind and the task's kind and rung, and
+the run's rules unless it sends its own. A session finds its task by title after a revision.
+
+**Reviewer steering.** The reviewer reports work a boundary rule forbids as `boundary_violation`
+(major; minor at `check_progress`, which sees whole files), a criterion demanding model
+behaviour in every run (`determinism_demand`), and on an agent-network plan a `commitment` task
+that does not rule out the lower rungs (`criterion: fix_ladder`). An experiment's criteria state
+a protocol — eval, n, threshold, keep-or-revert rule — and a revert that follows the rule is a
+valid outcome. Experiments are never lightweight.
+
+**Server checks.** A boundary_violation from a call with no rules is dropped. With rules or on an
+experiment, `validate_completion` needs a diff when it sends `final_files` or records a kept
+change (`diff_required`, a submission defect). Minor notes, added after the verdict and never
+moving it: `boundary_rules_missing`, `plan_kind_missing`, `kind_conflict`, `unknown_kind`,
+`rung_missing`, and `boundary_unchecked` for a build task with rules whose completion sent
+neither a diff nor files.
+
+**Evidence and records.** `test_evidence_path` reads test evidence from a file under
+`ANTI_TANGENT_PLAN_ROOTS`, capped by `ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES`. `rate_digest` on
+`validate_completion` carries an eval run's counts, caller-supplied and unverified; the plan-run
+row keeps the counts and `plan_run_report` shows them in a Rate column. `measurements` on
+`record_review_outcome` stores per-task numbers for comparing runs; nothing scores them.
+
+**Calibration.** `internal/mcpsrv/testdata/replay/agent-network` holds synthetic fixtures for
+`TestReplay_E2E`; the dry run is part of the normal suite, the live run is paid and manual.
+
 ## Configuration
 
 Env vars only. No config file in v1.
@@ -347,6 +384,7 @@ ANTI_TANGENT_POST_MODEL=anthropic:claude-opus-4-7
 # Tunables (optional)
 ANTI_TANGENT_SESSION_TTL=4h
 ANTI_TANGENT_MAX_PAYLOAD_BYTES=204800
+ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES=262144
 ANTI_TANGENT_REQUEST_TIMEOUT=120s
 ANTI_TANGENT_LOG_LEVEL=info
 ```

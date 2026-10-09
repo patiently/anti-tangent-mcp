@@ -46,6 +46,9 @@ func NoteBody(publisher string, lines []scorecard.RunLine, outcomes []scorecard.
 			o.Findings[k].Category = scorecard.NormalizeCategory(o.Findings[k].Category)
 		}
 		o.ReviewerModel = scorecard.ClampModelString(o.ReviewerModel)
+		// Measurements name the caller's metrics and carry its numbers; a
+		// shared note holds severities and categories only.
+		o.Measurements = nil
 		o.ImplementerModels = append([]scorecard.ImplementerModel(nil), o.ImplementerModels...)
 		for k := range o.ImplementerModels {
 			o.ImplementerModels[k].Model = scorecard.ClampModelString(o.ImplementerModels[k].Model)

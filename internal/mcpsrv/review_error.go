@@ -194,6 +194,13 @@ type planCallContext struct {
 	// shape. Per call, like the deprecation notice, and never stored on a
 	// cache entry.
 	MalformedRulingIDs []string
+	// PlanKind is the plan's **Plan kind:** header, and UnknownPlanKind its
+	// value when it names no known kind. BoundaryRules are this call's
+	// boundary_rules. All three are stored on the run the call settles, so
+	// the per-task calls attached to it review in the same mode.
+	PlanKind        string
+	UnknownPlanKind string
+	BoundaryRules   []string
 }
 
 // meta projects the context down to the summary inputs. One place, so the
@@ -214,6 +221,7 @@ func (c planCallContext) meta() planSummaryMeta {
 // ladder itself is not folded in (see the type comment).
 func (c planCallContext) applyPreLadder(pr *verdict.PlanResult) {
 	populateNormativeTestBodies(pr, c.Tasks)
+	applyPlanAgentNetwork(pr, c.Tasks, c.PlanKind, c.BoundaryRules)
 	// Server-side suppression, independent of reviewer compliance: a
 	// contradicted_codebase_claim that no attached file backs has nothing to
 	// refute with, so the category (which deliberately carries no severity
@@ -248,7 +256,7 @@ func (c planCallContext) mintPlanRunID(pr *verdict.PlanResult) {
 	if pr.PlanRunID != "" {
 		return
 	}
-	run := c.PlanRuns.CreateWithTasks(string(pr.PlanVerdict), string(pr.PlanQuality), planRunTasks(*pr, c.Tasks))
+	run := c.PlanRuns.CreateForPlan(string(pr.PlanVerdict), string(pr.PlanQuality), planRunTasks(*pr, c.Tasks, c.PlanKind), c.PlanKind, c.BoundaryRules)
 	pr.PlanRunID = run.ID
 	c.writeRunHeader(run, *pr)
 }
@@ -290,7 +298,7 @@ func (c planCallContext) writeRunHeader(run *planrun.Run, pr verdict.PlanResult)
 // finish reports to the caller as an id that names no live run.
 func (c planCallContext) settlePlanRun(pr *verdict.PlanResult, review *planReview) {
 	if c.Round.RunID != "" {
-		run, ok := c.PlanRuns.Revise(c.Round.RunID, string(pr.PlanVerdict), string(pr.PlanQuality), planRunTasks(*pr, c.Tasks), review)
+		run, ok := c.PlanRuns.Revise(c.Round.RunID, string(pr.PlanVerdict), string(pr.PlanQuality), planRunTasks(*pr, c.Tasks, c.PlanKind), c.PlanKind, c.BoundaryRules, review)
 		if ok {
 			pr.PlanRunID = run.ID
 			if pr.ReviewScope != nil {
@@ -311,11 +319,11 @@ func (c planCallContext) settlePlanRun(pr *verdict.PlanResult, review *planRevie
 
 // planRunTasks lists the plan's tasks for a new run: the parsed headings, in
 // order, or the reviewer's task titles when the plan parsed no tasks.
-func planRunTasks(pr verdict.PlanResult, tasks []planparser.RawTask) []planrun.PlanTask {
+func planRunTasks(pr verdict.PlanResult, tasks []planparser.RawTask, planKind string) []planrun.PlanTask {
 	if len(tasks) > 0 {
 		out := make([]planrun.PlanTask, len(tasks))
 		for i, t := range tasks {
-			out[i] = planrun.PlanTask{Index: i + 1, Title: t.Title, Files: planparser.ListedPaths(t.Body)}
+			out[i] = planrun.PlanTask{Index: i + 1, Title: t.Title, Files: planparser.ListedPaths(t.Body), Kind: declaredKind(planKind, t), Rung: t.Rung}
 		}
 		return out
 	}
@@ -357,6 +365,7 @@ func (c planCallContext) finish(pr *verdict.PlanResult) {
 	if len(c.MalformedRulingIDs) > 0 {
 		pr.PlanFindings = append(pr.PlanFindings, malformedPlanRulingsAdvisory(c.MalformedRulingIDs))
 	}
+	addPlanAgentNetworkNotes(pr, c.Tasks, c.PlanKind, c.UnknownPlanKind, c.BoundaryRules)
 	*pr = prependRepoRootUnusable(*pr, c.RepoRootUnusable)
 	*pr = prependPlanDeprecation(*pr, c.UsedPlanText)
 	assignPlanIDs(pr, c.Tasks)

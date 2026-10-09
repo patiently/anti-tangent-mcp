@@ -67,6 +67,23 @@ still misimplement; minor = nit.
 - `actionable`: spec is dispatchable but has meaningful gaps an implementer would have to ask clarifying questions about, or quality issues that risk rework.
 - `rigorous`: spec is ready to hand to a fresh implementer with high confidence; remaining findings are stylistic or expected-of-the-process.
 
+{{if or .AgentNetwork .ExperimentTitles -}}
+**Determinism demands.** {{if .AgentNetwork}}This plan is agent-network work: apply this to every task of the plan.{{else}}Apply this to the experiment tasks named below.{{end}}
+
+{{template "determinism_demands"}}
+{{end -}}
+{{with .ExperimentTitles -}}
+**Experiment protocol.** These tasks of the plan are experiments:
+{{range .}}- {{.}}
+{{end}}
+{{template "experiment_protocol"}}
+{{end -}}
+{{if .AgentNetwork -}}
+{{template "fix_ladder" "in that task's findings"}}{{end -}}
+{{if .BoundaryRules -}}
+**Boundary breaches.** Check each task's acceptance criteria, steps and `Context:` against the boundary rules: report one that requires what a rule forbids at `severity: major`, in that task's findings. A breach that shows only across tasks — one task writes outbound text that a later task's code then matches on, say — is a plan-level finding at `severity: major`.
+
+{{end -}}
 {{ if eq .Mode "quick" -}}
 **Quick mode.** Surface only the most-severe findings — at most 3 per scope (3 plan-level findings, and at most 3 findings per task). Omit minor nits and stylistic suggestions. Prefer fewer high-quality findings over many low-value ones.
 

@@ -387,7 +387,12 @@ func Render(r *Run) string {
 		width = 40
 	}
 
-	fmt.Fprintf(&b, "  #  %-*s  %-16s %-5s %-20s %s\n", width, "Task", "AT", "Tries", "Rulings", "CodeScene")
+	rateWidth := rateColumnWidth(r.Rows)
+	rateHeader := ""
+	if rateWidth > 0 {
+		rateHeader = fmt.Sprintf("%-*s ", rateWidth, "Rate")
+	}
+	fmt.Fprintf(&b, "  #  %-*s  %-16s %-5s %-20s %s%s\n", width, "Task", "AT", "Tries", "Rulings", rateHeader, "CodeScene")
 	for _, row := range r.Rows {
 		title := row.TaskTitle
 		if n := utf8.RuneCountInString(title); n > width {
@@ -398,9 +403,13 @@ func Render(r *Run) string {
 		// rather than its inputs: one call then covers every free-text field
 		// that can reach the cell — SkipReason, QualityGate, and the
 		// CategoryCounts map's keys — including any added later.
-		fmt.Fprintf(&b, "  %-2d %-*s  %-16s %-5s %-20s %s\n", row.Index, width,
+		rate := ""
+		if rateWidth > 0 {
+			rate = fmt.Sprintf("%-*s ", rateWidth, row.RateDigest.Cell())
+		}
+		fmt.Fprintf(&b, "  %-2d %-*s  %-16s %-5s %-20s %s%s\n", row.Index, width,
 			escapeReportCell(title), escapeReportCell(verdictCell(row)), triesCell(row),
-			rulingsCell(row), escapeReportCell(codesceneCell(row)))
+			rulingsCell(row), rate, escapeReportCell(codesceneCell(row)))
 	}
 
 	fmt.Fprintf(&b, "\n  codescene: %d run, %d skipped, %d missing\n",
@@ -428,4 +437,18 @@ func renderNeverDispatched(b *strings.Builder, r *Run, missing []int) {
 		}
 		fmt.Fprintf(b, "    %-2d %s\n", idx, escapeReportCell(label))
 	}
+}
+
+// rateColumnWidth is the rune width of the widest rate cell, and of the
+// "Rate" heading, or 0 when no row carries a rate digest: the column is
+// rendered only then, so a run without one has no Rate column.
+func rateColumnWidth(rows []TaskRow) int {
+	width := 0
+	for _, row := range rows {
+		if row.RateDigest == nil {
+			continue
+		}
+		width = max(width, len("Rate"), utf8.RuneCountInString(row.RateDigest.Cell()))
+	}
+	return width
 }

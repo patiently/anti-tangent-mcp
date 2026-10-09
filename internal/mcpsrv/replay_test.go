@@ -397,3 +397,25 @@ func TestReplay_LeanFixturesDryRunCleanly(t *testing.T) {
 		}
 	}
 }
+
+func TestReplay_AgentNetworkFixturesDryRunCleanly(t *testing.T) {
+	const dir = "testdata/replay/agent-network"
+	fixtures, err := loadReplayFixtures(dir)
+	require.NoError(t, err)
+	names := make([]string, len(fixtures))
+	for i, fx := range fixtures {
+		names[i] = fx.Name
+	}
+	assert.Equal(t, []string{"code-written-text", "contains-zip", "determinism-demand", "kept-misses-rule",
+		"opt-out-keywords-untouched", "regex-over-reply", "reverted-experiment"}, names)
+
+	cfg := replayConfigCovering(newDeps(t, &fakeReviewer{name: "anthropic"}).Cfg, dir)
+	re := newReplayEnv(cfg, providers.Registry{"anthropic": replayDryRunReviewer{name: "anthropic"}})
+	for _, fx := range fixtures {
+		report := runReplayFixture(context.Background(), re, fx, 1)
+		for call, st := range report.Calls {
+			assert.Empty(t, st.Errors, "fixture %q %s", fx.Name, call)
+			assert.Empty(t, st.Blocking, "fixture %q %s: a server rejection would stop the reviewer seeing it", fx.Name, call)
+		}
+	}
+}

@@ -73,6 +73,15 @@ const (
 	// reviewer's chosen severity is preserved.
 	CategoryCorrectness  Category = "correctness"
 	CategoryTestAdequacy Category = "test_adequacy"
+	// CategoryBoundaryViolation is emitted by the reviewer for a spec, plan
+	// task or change that does what a caller-supplied boundary rule forbids,
+	// and for a fix-ladder breach in an agent-network plan. Not in
+	// applySeverityFloor's list: the reviewer's chosen severity is kept.
+	// validate_plan and the per-task tools drop it from a call that sent no
+	// boundary rules, since the
+	// reviewer had no rule to judge against; a fix_ladder finding on an
+	// agent-network plan needs no rule and is kept.
+	CategoryBoundaryViolation Category = "boundary_violation"
 	// CategoryMalformedEvidence is server-only. It is emitted exclusively
 	// by the validate_completion evidence-shape guard, which constructs
 	// the envelope directly without round-tripping through Parse(). It is
@@ -85,6 +94,20 @@ const (
 	// reviewer. Both are intentionally absent from validCategory.
 	CategoryCodesceneNotRun  Category = "codescene_not_run"
 	CategoryCodesceneSkipped Category = "codescene_skipped"
+	// The agent-network categories below are server-only, like
+	// CategoryMalformedEvidence, and absent from validCategory and every
+	// schema. CategoryDiffRequired is the validate_completion rejection of a
+	// boundary-checked or kept-experiment completion that carries no diff.
+	// CategoryBoundaryUnchecked is a minor note on a build task's completion
+	// that carried boundary rules but no diff or files, so no rule was checked;
+	// the others are minor notes about how a call or a plan declared its kind.
+	CategoryBoundaryRulesMissing Category = "boundary_rules_missing"
+	CategoryPlanKindMissing      Category = "plan_kind_missing"
+	CategoryKindConflict         Category = "kind_conflict"
+	CategoryUnknownKind          Category = "unknown_kind"
+	CategoryRungMissing          Category = "rung_missing"
+	CategoryDiffRequired         Category = "diff_required"
+	CategoryBoundaryUnchecked    Category = "boundary_unchecked"
 
 	// Categories emitted by prime_project_knowledge (v0.6.0).
 	CategoryKBGap             Category = "kb_gap"

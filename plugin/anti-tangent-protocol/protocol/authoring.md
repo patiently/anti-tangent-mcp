@@ -163,6 +163,68 @@ mishandles". A controller ruling waives the finding at plan level only.
 An acceptance criterion that names an interface is an implementation step in disguise (§3.5):
 state the outcome and let the implementer pick the leanest structure that delivers it.
 
+### 3.11 Agent-network plans and experiment tasks
+
+Needs anti-tangent-mcp 0.28.0 or later. An agent-network plan builds model behaviour: replies an LLM writes, judged by evals. Declare it,
+or the reviewer pushes that work into code — a regex where a prompt change belonged, a "100% of
+runs" criterion no model can meet.
+
+- `**Plan kind:** agent-network` above the first task heading. The reviewer then reports a
+  criterion demanding that model behaviour hold in every run (`determinism_demand`), accepts a
+  rate report as evidence, counts `rigidity:` under over-building, and checks the fix ladder.
+- `**Kind:** experiment` on a task that changes model behaviour and is measured, then kept or
+  reverted. The default is `build`. An experiment is never lightweight.
+- `**Rung:** oracle | variance | facts | tool | commitment | prompt | owner` — the fix-ladder
+  rung the task works at. An experiment without one draws `rung_missing`. A `commitment` task
+  (a code gate) whose `Context:` does not rule out the lower rungs is a `fix_ladder` finding.
+
+`validate_plan` returns `task_kind`, `rung` and `plan_kind` per task; pass them on
+`validate_task_spec` and a lightweight `validate_completion` (a session carries them on). The plan run's values win when the call attaches to it (`kind_conflict` notes a
+different one), and an unknown value draws `unknown_kind`. A plan with no `**Plan kind:**`
+header may use `Kind:` and `Rung:` labels of its own: their unknown values draw nothing.
+
+Pass your project's boundary rules — what code may do with reply and user text — as
+`boundary_rules` on `validate_plan`; a per-task call attached to the run inherits them, and
+rules it sends itself replace them for that task, noted as `kind_conflict`.
+anti-tangent ships none. A spec or change that does what a rule forbids is `boundary_violation`,
+major (minor at `check_progress`, which cannot see what the task added). Settle it by moving the
+work or with a controller ruling. With rules, or on an experiment, `validate_completion` needs a
+diff when it sends `final_files` or records the change as kept, or it returns `diff_required`.
+A build task with rules that sends no diff and no files draws `boundary_unchecked`: nothing was
+checked against the rules.
+`boundary_rules_missing` and `plan_kind_missing` say one of the two declarations is missing.
+These notes are minor and never move a verdict.
+
+```json
+"boundary_rules": [
+  "Code checks structured data only. It never inspects reply or user words: no regex or phrase matching.",
+  "The LLM writes every reply. The only code-written text is verbatim legal text."
+]
+```
+
+An experiment's criteria state the protocol, never a guaranteed outcome:
+
+```markdown
+### Task 6: Ask for a missing ZIP
+
+**Kind:** experiment
+**Rung:** prompt
+
+**Goal:** The bot asks for a missing ZIP code more often.
+
+**Acceptance criteria:**
+- `evals/core/zip-missing.yaml` measured at n=10 before and after; baseline 5/10 (interval 0.24–0.76).
+- Keep the change if the after-rate is at least 9/10 and the regression suite shows no eval
+  outside its baseline interval; otherwise revert.
+- The result, kept or reverted, is recorded in `rate_digest`.
+
+**Context:** A revert that follows the rule meets this task. The ZIP field already reaches the
+model, so the facts and tool rungs are ruled out. `pinned_by`: `evals/suite.yaml`.
+```
+
+At completion, send the scoreboard as `test_evidence_path` and the counts as `rate_digest`; a
+kept change also sends its diff.
+
 ### Write-time comment guard (if `anti-tangent-guard` is installed)
 
 The comment policy (`implementer.md` §4.4) can be enforced, not just stated. If the

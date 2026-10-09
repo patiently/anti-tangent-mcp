@@ -1,0 +1,123 @@
+You are an exacting reviewer. You return ONLY a JSON object matching the provided schema. You give specific, evidence-backed findings. You never invent facts about code that wasn't shown to you.
+---USER---
+## Reviewer ground rules
+
+You have access ONLY to the plan markdown rendered below. You have NOT been given the codebase. Any function name, file path, variable, struct field, environment variable, or other symbol that appears in the plan is an identifier reference — you do not know its definition, signature, return type, or behavior. Treat such identifiers as black-box references.
+
+For `unstated_assumption` findings, only flag assumption gaps that are visible in the plan text itself (e.g. an AC that says "fast" without a measurable target). Do NOT speculate about behavior of named code symbols you cannot see. If the plan says "update Foo.Bar to handle X", do NOT emit a finding about what Foo.Bar's current signature is or what error types it returns — you cannot know.
+
+Every finding's `evidence` field must quote or paraphrase text that literally appears in the plan above, OR describe an expected piece of plan text that is absent (e.g. "the task block has no `Acceptance criteria:` section"). If your evidence cannot be tied to plan text — present or missing — do not emit the finding.
+
+When you cite a code symbol's signature, an example sibling key, or an adjacent attribute value as an *illustration*, prefix it with `e.g. illustrative —`. The reader does not know whether your illustration matches the codebase, and false confidence is worse than no example.
+
+When the plan asserts something about the codebase that you cannot verify from the plan text alone — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim from the plan. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase. A path a task lists under its own `**Files:**` section says where that task works, not what the codebase holds: do not emit this finding for the path itself.
+
+## Plan under review
+
+# Plan
+
+**Plan kind:** agent-network
+
+### Task 1: Zip mapper
+
+**Goal:** map the ZIP field
+
+### Task 2: Zip prompt
+
+**Kind:** experiment
+**Rung:** prompt
+
+**Goal:** ask for a missing ZIP
+
+
+## What to evaluate (this call: per-task analysis, restricted to a subset)
+
+You are reviewing an implementation plan. You have the **full plan** above as
+context, so you can reason about cross-task dependencies — but in this call
+you must emit per-task results for **only the following tasks**, identified
+by their `### Task N: Title` heading:
+
+- Task 1: Zip mapper
+- Task 2: Zip prompt
+
+For each task in the list above, evaluate:
+
+1. **Structural completeness**: Goal / Acceptance criteria / (optional Non-goals
+   and Context) blocks present and well-formed.
+2. **Acceptance criteria quality**: each AC is testable, specific, and
+   unambiguous; ACs are observable outcomes, not implementation steps.
+3. **Unstated assumptions**: knowledge a fresh implementer would lack.
+4. **Gates against Non-goals**: a step or verification gate (for example
+   "no new warnings", "compiles", "lint clean") that can pass only once work
+   one of the task's Non-goals defers is done contradicts that Non-goal. Emit
+   it as `ambiguous_spec` at `severity: major`, quoting the gate and the
+   Non-goal. A gate the task scopes to exclude that work is not a
+   contradiction.
+
+For every task, also emit `lightweight_eligible` and `lightweight_reason`.
+Set `lightweight_eligible` to true only when ALL of these are true:
+
+- the task touches at most two files or is docs/config/data-only;
+- the task is mechanical with no production-design or test-design choices;
+- the plan includes literal text, exact diff, exact command, or exact insertion shape.
+
+Reason required when true, empty when false.
+
+For every task, also emit `exit_contracts` and `exit_contracts_inferred`.
+
+`exit_contracts` is a list of plain-English contract strings — symbols, types, constants, or fields the task introduces that later tasks in the plan explicitly reference. One contract per consumed surface. Emit at most 20 contracts per task, with each contract at most 240 Unicode code points; if more would apply, summarize. If the task's markdown contains an explicit `**Exit contracts:**` bullet section, respect it verbatim and set `exit_contracts_inferred` to false. Otherwise, infer the contracts by reading the plan as a whole and set `exit_contracts_inferred` to true. When no later task references anything the task introduces, emit an empty list and still set `exit_contracts_inferred` honestly.
+
+If a task is missing the structured header block entirely, synthesize one in
+`suggested_header_block` (Goal + ACs + optional Non-goals/Context) and explain
+your reasoning in `suggested_header_reason`. If the header is already adequate,
+leave both empty.
+
+Severity: critical = unimplementable as written; major = implementer would
+still misimplement; minor = nit.
+
+**Determinism demands.** This plan is agent-network work: apply this to every task in the list above.
+
+An acceptance criterion that demands that model behaviour holds in every run — "100%", "always", "never", "every run", or one passing run offered as proof — asks for what a model cannot give, and pushes the implementer toward rigid code. Report it as `category: ambiguous_spec`, `criterion: determinism_demand`, `severity: major`, quoting the criterion in `evidence`. In `suggestion`, either rewrite it as a rate — a named eval, n of at least 10, a threshold and a baseline — or, when it guards a commitment code can check from structured data (a consent stamp, a submission, eligibility, verbatim legal text), move it to a deterministic code check, where 100% is correct.
+
+Not a determinism demand: a safety invariant checked deterministically from structured state; verbatim legal text; any criterion of a build task about code output or structured state. An agent-network plan also has deterministic tasks — mappers, an opt-out keyword matcher, harness code — and "never" and "100%" are right there.
+
+**Experiment protocol.** These tasks in the list above are experiments:
+- Task 2: Zip prompt
+
+An experiment is a change to model behaviour that is measured, then kept or reverted. Its acceptance criteria must state the protocol, not a guaranteed outcome: the target eval, n, the baseline rate, the threshold, and the keep-or-revert rule. Report each of these as `category: missing_acceptance_criterion`, `criterion: experiment_protocol`, `severity: major`:
+
+- a piece of the protocol that is missing;
+- n below 10, or below a higher minimum the plan states;
+- a keep rule that does not depend on both the after-rate and the regression-suite result — "keep regardless" is not a rule;
+- a threshold at or inside the baseline's stated interval, so that noise alone could meet it.
+
+A revert that follows the stated rule is a valid outcome: do not ask the criteria to guarantee that the target is met. The server checks the task's rung; do not report a missing one.
+
+### Over-building
+
+Plans — and the single task specs drawn from them — over-build in six ways. Report each as `category: quality`, `criterion: over_building`, always `severity: minor`, tagging every instance with one of these words:
+
+- `reuse:` a task writes a helper that an attached file or the Project knowledge section already provides. Cite the attached path and the symbol. Never infer this from the black box: a helper you cannot see is silence, not approval.
+- `stdlib:` a task adds a dependency, or hand-writes a utility, for what the language's standard library covers. Read the language from the paths and fences; this is general knowledge, not a codebase claim. Say an installed dependency already covers it only when a manifest (`go.mod`, `package.json`, `pyproject.toml`, …) is attached.
+- `native:` a task builds in application code what the platform provides — uniqueness enforced in a service instead of a database constraint, a date-picker library over `<input type="date">`, JavaScript over CSS.
+- `yagni:` a task mandates an interface or abstract type with one implementation, a factory or registry for one product, a configuration value or flag no task varies, or a layer with one caller — judged across the whole plan (or, when a single task spec is all you have, across that spec). Cite the introducing task and the absence of a second consumer.
+- `delete:` a task scaffolds for a phase this plan (or this task) does not deliver: placeholder modules, "extension points", empty hooks, stubs for later. A whole task outside the plan's goal is scope drift, not this.
+- `shrink:` fenced code — transcribed into the repository verbatim — does in many lines what a shorter form does in few. Test fences are exempt from `shrink` only; arrange/act/assert is verbose by nature.
+
+Never flag: validation at trust boundaries, error handling that prevents data loss, security measures, accessibility basics, tests an acceptance criterion calls for, normative test bodies, or anything the plan's or the task's Goal explicitly asks for. A structure the task's `Context:` justifies — a second implementation named in a later task, a dependency chosen for edge cases the standard library mishandles, a decision quoted from Project knowledge — is deliberate and draws no finding.
+
+Emit at most ONE `over_building` finding per task, in that task's findings (for a single task spec, one finding in all). `evidence` lists every instance on its own line as `<tag>: <what>. <replacement>.`; `suggestion` is the rewritten acceptance criterion or step, or the `Context:` line to add when the structure is deliberate.
+
+This is agent-network work, so over-building has one more tag, `rigidity:`, for each instance a task mandates of: a veto key; a state or turn marker; an outbound string literal; a comparison, search, tokenisation, or length or shape test whose operand is reply or user text. Count only what no `boundary_violation` finding already reports. List each instance in that task's `over_building` finding, and end its `evidence` with `rigidity: +N`.
+
+This finding is minor because that is the severity it is worth, not because it is discretionary: an instruction elsewhere in this prompt to surface only the most-severe findings or to omit minor ones does not reach it. Emit it in addition to any such cap.
+
+## Output
+
+Respond with a JSON object matching the provided schema. The `tasks` array
+must contain exactly one entry per task in the list above, **in the same
+order**, with `task_title` matching the heading text verbatim, including the `Task N:` prefix. Do NOT emit
+results for any task outside the list. Do NOT emit `plan_findings` — those
+are handled in a separate call. Do not include prose outside the JSON.
+
+The `next_action` field must name the single highest-leverage finding the author should address next — not generic advice like "address the warnings." If no findings warrant immediate attention, say so explicitly: "no blocking findings; proceed to dispatch."

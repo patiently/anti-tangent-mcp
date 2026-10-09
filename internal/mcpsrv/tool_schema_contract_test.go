@@ -172,6 +172,7 @@ func TestToolInputSchemas_RequiredSetsUnchanged(t *testing.T) {
 		"record_review_outcome":                                          {"findings", "plan_run_id", "source"},
 		"record_review_outcome.findings[]":                               {"category", "severity", "task_index"},
 		"record_review_outcome.implementer_models[]":                     {"model", "task_index"},
+		"record_review_outcome.measurements[]":                           {"after", "before", "metric", "task_index"},
 		"validate_completion":                                            {"session_id", "summary"},
 		"validate_completion.codescene.verdicts":                         {"degraded", "improved", "stable"},
 		"validate_completion.controller_rulings[]":                       {"finding_id", "ruling"},
@@ -231,6 +232,11 @@ func TestToolInputSchemas_StatedLimitsMatchConstants(t *testing.T) {
 		"validate_plan.controller_rulings":                          {n(maxControllerRulingEntries), n(maxControllerRulingChars)},
 		"validate_plan.controller_rulings[].ruling":                 {n(maxControllerRulingChars)},
 		"validate_plan.controller_verified_references":              verifiedRefs,
+		"validate_plan.boundary_rules":                              {n(maxBoundaryRules), n(maxBoundaryRuleChars)},
+		"validate_task_spec.boundary_rules":                         {n(maxBoundaryRules), n(maxBoundaryRuleChars)},
+		"validate_completion.boundary_rules":                        {n(maxBoundaryRules), n(maxBoundaryRuleChars)},
+		"validate_completion.test_evidence_path":                    {"ANTI_TANGENT_PLAN_ROOTS", "ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES", "262144"},
+		"record_review_outcome.measurements":                        {n(maxOutcomeMeasurements)},
 	}
 	for path, wants := range cases {
 		desc, ok := descs[path]

@@ -632,3 +632,18 @@ func TestWorkerMaxTokensNonPositive(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_WORKER_MAX_TOKENS")
 }
+
+func TestLoad_TestEvidenceMaxBytes(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"ANTHROPIC_API_KEY": "k"}))
+	require.NoError(t, err)
+	assert.Equal(t, 262144, cfg.TestEvidenceMaxBytes)
+
+	cfg, err = Load(env(map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES": "1024"}))
+	require.NoError(t, err)
+	assert.Equal(t, 1024, cfg.TestEvidenceMaxBytes)
+
+	for _, bad := range []string{"0", "-1", "lots"} {
+		_, err = Load(env(map[string]string{"ANTHROPIC_API_KEY": "k", "ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES": bad}))
+		require.ErrorContains(t, err, "ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES", bad)
+	}
+}
