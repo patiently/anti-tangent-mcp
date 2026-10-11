@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] - 2026-10-11
+
+### Security
+
+- A secret gate refuses any file the server is about to send to a model whose name looks like a secrets file or whose contents carry a private key or a well-known token, on every path input (context_paths, final_files, final_diff_path, test_evidence_path, plan_path, bulk_read, code_write's reference_path). A refusal is a tool error naming the rule, and no reviewer call is made. ANTI_TANGENT_SECRET_GATE (on, names, off; default on) and ANTI_TANGENT_FILE_DENY_EXTRA configure it. (#105)
+
 ## [0.28.0] - 2026-10-08
 
 ### Added

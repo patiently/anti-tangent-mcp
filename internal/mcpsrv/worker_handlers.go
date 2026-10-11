@@ -92,7 +92,7 @@ func (h *handlers) BulkRead(ctx context.Context, _ *mcp.CallToolRequest, args Bu
 	files := make([]prompts.WorkerFile, 0, len(args.Paths))
 	total := len(args.Question)
 	for _, p := range args.Paths {
-		content, src, err := resolveFileInput(p, h.deps.Cfg.PlanRoots, h.deps.Cfg.MaxPayloadBytes)
+		content, src, err := resolveFileInput(p, h.deps.Cfg.PlanRoots, h.deps.Cfg.SecretGate, h.deps.Cfg.MaxPayloadBytes)
 		if errors.Is(err, errTooLarge) {
 			return nil, bulkReadTooLarge(src.Bytes, h.deps.Cfg.MaxPayloadBytes, model.String()), nil
 		}
@@ -214,7 +214,7 @@ func (h *handlers) CodeWrite(ctx context.Context, _ *mcp.CallToolRequest, args C
 		return nil, CodeWriteResult{}, err
 	}
 
-	refContent, refSrc, err := resolveFileInput(args.ReferencePath, h.deps.Cfg.PlanRoots, h.deps.Cfg.MaxPayloadBytes)
+	refContent, refSrc, err := resolveFileInput(args.ReferencePath, h.deps.Cfg.PlanRoots, h.deps.Cfg.SecretGate, h.deps.Cfg.MaxPayloadBytes)
 	// An over-cap reference gets the size, the cap and the remedy rather than
 	// the bare sentinel. CodeWriteResult carries no findings (it has no verdict
 	// to report), so unlike bulk_read this cannot be a structured envelope —

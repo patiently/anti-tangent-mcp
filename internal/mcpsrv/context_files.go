@@ -106,7 +106,7 @@ func resolveContextPaths(paths []string, cfg config.Config) ([]contextFile, int,
 	total := 0
 
 	for _, p := range paths {
-		content, src, err := resolveFileInput(p, cfg.PlanRoots, cfg.ContextMaxFileBytes)
+		content, src, err := resolveFileInput(p, cfg.PlanRoots, cfg.SecretGate, cfg.ContextMaxFileBytes)
 		if errors.Is(err, errTooLarge) {
 			return nil, 0, &contextTooLargeError{
 				Path:         src.Path,
