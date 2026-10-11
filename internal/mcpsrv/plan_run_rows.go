@@ -283,7 +283,7 @@ func (h *handlers) recordLightweightCompletionRow(args ValidateCompletionArgs, e
 	}
 	ref := planrun.TaskRef{Index: args.TaskIndex, Title: args.TaskTitle}
 	update := withRateDigest(countOverBuildingRuled(completionRowUpdate(env, args.Codescene, args.FinalDiff), overBuildingRuled), rd)
-	if row, ok := h.deps.PlanRuns.UpsertLite(args.PlanRunID, ref, update); ok {
+	if row, res := h.deps.PlanRuns.UpsertLite(args.PlanRunID, ref, update); res == planrun.UpsertApplied {
 		h.appendPlanLedger(args.PlanRunID, row)
 	} else {
 		slog.Warn("plan run lightweight update skipped; run unknown or expired, or no task named",

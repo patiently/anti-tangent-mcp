@@ -36,6 +36,10 @@ type ToolCall = scorecard.ToolCall
 // must not grow its row, and every ledger line that carries it, without limit.
 const maxCallLog = 32
 
+// maxIssuedIDs bounds a row's IssuedIDs, so a task resubmitted without limit
+// cannot grow its row without limit.
+const maxIssuedIDs = 200
+
 // TaskRow is one task's outcome within a plan run.
 type TaskRow struct {
 	SessionID      string            `json:"-"`
@@ -81,6 +85,10 @@ type TaskRow struct {
 	// RateDigest is the counts of the most recent rate_digest a
 	// validate_completion call on the task sent, without its eval path.
 	RateDigest *ratedigest.Digest `json:"rate_digest,omitempty"`
+	// IssuedIDs is the finding IDs lightweight validate_completion calls on
+	// this task returned, oldest first, capped at maxIssuedIDs. A lightweight
+	// call's controller_rulings may name only these. In memory only.
+	IssuedIDs []string `json:"-"`
 }
 
 // PlanTask is one task of the validated plan: its 1-based position and its
@@ -500,6 +508,7 @@ func cloneRow(row TaskRow) TaskRow {
 	row.Codescene = cloneDigest(row.Codescene)
 	row.RateDigest = row.RateDigest.ForRecord()
 	row.Calls = append([]ToolCall(nil), row.Calls...)
+	row.IssuedIDs = append([]string(nil), row.IssuedIDs...)
 	return row
 }
 
@@ -510,6 +519,44 @@ func (row *TaskRow) AppendCall(c ToolCall) {
 		row.Calls = append([]ToolCall(nil), row.Calls[over:]...)
 		row.CallsDropped += over
 	}
+}
+
+// AddIssuedIDs records finding IDs a lightweight call returned, skipping
+// empty and already-recorded ones and keeping the newest maxIssuedIDs.
+func (row *TaskRow) AddIssuedIDs(ids []string) {
+	seen := make(map[string]bool, len(row.IssuedIDs)+len(ids))
+	for _, id := range row.IssuedIDs {
+		seen[id] = true
+	}
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		row.IssuedIDs = append(row.IssuedIDs, id)
+	}
+	if over := len(row.IssuedIDs) - maxIssuedIDs; over > 0 {
+		row.IssuedIDs = append([]string(nil), row.IssuedIDs[over:]...)
+	}
+}
+
+// resetCompletion clears everything a validate_completion wrote to the row,
+// keeping the call log. A session taking over a lightweight row starts from
+// no result, so the row never shows a lightweight verdict unmarked.
+func (row *TaskRow) resetCompletion() {
+	row.PostVerdict = ""
+	row.Severity = nil
+	row.SubmissionOnly = false
+	row.Codescene = nil
+	row.CodesceneState = StateMissing
+	row.CompletedAt = time.Time{}
+	row.Waived = 0
+	row.Escalated = false
+	row.Categories = nil
+	row.LinesAdded, row.LinesRemoved = 0, 0
+	row.OverBuildingRuled = 0
+	row.RateDigest = nil
+	row.IssuedIDs = nil
 }
 
 // cloneIntMap returns a copy of m, or nil when m is nil.
@@ -609,7 +656,10 @@ func (s *Store) Attach(runID, sessionID string, ref TaskRef, preVerdict string) 
 	row.SessionID = sessionID
 	row.PreVerdict = preVerdict
 	row.Attempts++
-	row.Lite = false
+	if row.Lite {
+		row.resetCompletion()
+		row.Lite = false
+	}
 	if r.sessions == nil {
 		r.sessions = map[string]sessionRef{}
 	}
@@ -641,21 +691,69 @@ func (s *Store) UpdateRow(runID, sessionID string, mutate func(*TaskRow)) (TaskR
 	return cloneRow(r.Rows[pos]), true
 }
 
+// UpsertResult is what UpsertLite did.
+type UpsertResult int
+
+const (
+	// UpsertApplied: mutate ran on the task's lite row, added if new.
+	UpsertApplied UpsertResult = iota
+	// UpsertUnknown: the run is unknown or expired, or ref names nothing.
+	UpsertUnknown
+	// UpsertSessionOwned: a validate_task_spec session owns the row; mutate
+	// did not run.
+	UpsertSessionOwned
+)
+
 // UpsertLite applies mutate to the row ref names, first adding a Lite row
 // when the task has none: a lightweight validate_completion has no session to
-// attach. mutate must not change Index. Returns a copy of the row, and false
-// when the run is unknown or expired or ref names nothing.
-func (s *Store) UpsertLite(runID string, ref TaskRef, mutate func(*TaskRow)) (TaskRow, bool) {
+// attach. A row a session owns is left untouched, so the report never shows a
+// lightweight result as a session-backed one. mutate must not change Index.
+// Returns a copy of the row and what happened to it.
+func (s *Store) UpsertLite(runID string, ref TaskRef, mutate func(*TaskRow)) (TaskRow, UpsertResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.runs[runID]
 	if !ok || ref.empty() {
-		return TaskRow{}, false
+		return TaskRow{}, UpsertUnknown
 	}
 	pos, _ := r.rowFor(ref, true)
+	if r.Rows[pos].SessionID != "" {
+		return cloneRow(r.Rows[pos]), UpsertSessionOwned
+	}
 	mutate(&r.Rows[pos])
 	r.LastAccessed = time.Now()
-	return cloneRow(r.Rows[pos]), true
+	return cloneRow(r.Rows[pos]), UpsertApplied
+}
+
+// LiteState is what a lightweight validate_completion needs to know about the
+// row ref names before its review.
+type LiteState struct {
+	// Found: the run is live and ref names a task, whether or not it has a row.
+	Found bool
+	// SessionOwned: a validate_task_spec session is attached to the row.
+	SessionOwned bool
+	// IssuedIDs is a copy of the row's IssuedIDs.
+	IssuedIDs []string
+}
+
+// LiteState reads the row ref names without adding one.
+func (s *Store) LiteState(runID string, ref TaskRef) LiteState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.runs[runID]
+	if !ok || ref.empty() {
+		return LiteState{}
+	}
+	pos, _, _ := r.resolve(ref)
+	if pos < 0 {
+		return LiteState{Found: true}
+	}
+	row := r.Rows[pos]
+	st := LiteState{Found: true, SessionOwned: row.SessionID != ""}
+	if len(row.IssuedIDs) > 0 {
+		st.IssuedIDs = append([]string(nil), row.IssuedIDs...)
+	}
+	return st
 }
 
 // rowFor returns the position of the row ref names, adding the row when the
