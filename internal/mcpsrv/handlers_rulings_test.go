@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -470,40 +471,104 @@ func TestValidateCompletion_AFailedProviderCallWritesNothing(t *testing.T) {
 	assert.Equal(t, before, after)
 }
 
-// TestValidateCompletion_WithoutASessionIgnoresAnswersButAppliesRulings covers
-// the lightweight split: finding_responses need a session to answer (there is
-// no earlier review without one), but controller_rulings do not — a ruling is
-// applied and listed even though nothing here is left to waive.
-func TestValidateCompletion_WithoutASessionIgnoresAnswersButAppliesRulings(t *testing.T) {
+// TestValidateCompletion_WithoutAPlanRunRowIgnoresAnswersAndRulings: with no
+// session and no plan-run row, nothing issued an id a ruling could name.
+func TestValidateCompletion_WithoutAPlanRunRowIgnoresAnswersAndRulings(t *testing.T) {
 	h, rv := newRulingsHandlers(t)
 	args := completionCallArgs("")
 	args.FindingResponses = []FindingResponseArg{{FindingID: "f_0123abcd", Response: "a"}}
 	args.ControllerRulings = []ControllerRulingArg{{FindingID: "f_0123abcd", Ruling: "r"}}
 	env := completeWith(t, h, rv, args, passResp("claude-opus-4-7"))
 
-	got := findingsWithCriterion(env.Findings, "session_id")
-	require.Len(t, got, 1)
-	assert.Contains(t, got[0].Evidence, "finding_responses")
-	assert.Equal(t, "pass", env.Verdict)
-	assert.Equal(t, []AppliedRuling{{FindingID: "f_0123abcd", Ruling: "r"}}, env.ControllerRulings)
-	assert.Contains(t, env.SummaryBlock, "ruling:")
+	require.Len(t, findingsWithCriterion(env.Findings, "session_id"), 1)
+	adv := findingsWithCriterion(env.Findings, "controller_rulings")
+	require.Len(t, adv, 1)
+	assert.Contains(t, adv[0].Evidence, "names no such task")
+	assert.Empty(t, env.ControllerRulings)
+	assert.NotContains(t, env.SummaryBlock, "ruling:")
 }
 
-func TestValidateCompletion_LightweightAppliesAControllerRuling(t *testing.T) {
+func liteArgs(runID string) ValidateCompletionArgs {
+	a := completionCallArgs("")
+	a.PlanRunID, a.TaskIndex = runID, 1
+	return a
+}
+
+func TestValidateCompletion_LightweightRulingOnAnIssuedIDApplies(t *testing.T) {
 	h, rv := newRulingsHandlers(t)
-	first := completeWith(t, h, rv, completionCallArgs(""), reviewerFindingsResp(driftFinding))
+	run := titledRun(h, "Task 1: Alpha")
+	first := completeWith(t, h, rv, liteArgs(run.ID), reviewerFindingsResp(driftFinding))
 	require.Len(t, first.Findings, 1)
 	id := first.Findings[0].ID
 
-	ruled := completionCallArgs("")
+	ruled := liteArgs(run.ID)
 	ruled.ControllerRulings = []ControllerRulingArg{{FindingID: id, Ruling: "Task 7 owns the dispatcher wiring"}}
 	env := completeWith(t, h, rv, ruled, reviewerFindingsResp(driftFinding))
 
-	require.Len(t, env.WaivedFindings, 1, "a ruling settles the finding without a session")
+	require.Len(t, env.WaivedFindings, 1)
 	assert.Equal(t, id, env.WaivedFindings[0].ID)
-	assert.Empty(t, env.Findings, "the ruled finding does not also stand")
+	assert.Empty(t, findingsWithCriterion(env.Findings, "AC 1"))
 	assert.Contains(t, rv.LastRequest.User, "## Controller rulings (authoritative)")
 	assert.Contains(t, env.SummaryBlock, "ruling:")
+}
+
+func TestValidateCompletion_LightweightPreemptiveRulingIsIgnored(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	run := titledRun(h, "Task 1: Alpha")
+	guessed := verdict.Fingerprint("scope_drift", "", "AC 1")
+	args := liteArgs(run.ID)
+	args.ControllerRulings = []ControllerRulingArg{{FindingID: guessed, Ruling: "self-issued"}}
+	env := completeWith(t, h, rv, args, reviewerFindingsResp(driftFinding))
+
+	assert.Empty(t, env.WaivedFindings)
+	require.Len(t, findingsWithCriterion(env.Findings, "AC 1"), 1, "the finding stands")
+	adv := findingsWithCriterion(env.Findings, "controller_rulings")
+	require.Len(t, adv, 1)
+	assert.Contains(t, adv[0].Evidence, "not returned by an earlier validate_completion")
+	assert.Contains(t, adv[0].Evidence, guessed)
+}
+
+func TestValidateCompletion_LightweightSameAsReachesOnlyThroughIssuedIDs(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	run := titledRun(h, "Task 1: Alpha")
+	id := completeWith(t, h, rv, liteArgs(run.ID), reviewerFindingsResp(driftFinding)).Findings[0].ID
+
+	ruled := liteArgs(run.ID)
+	ruled.ControllerRulings = []ControllerRulingArg{{FindingID: id, Ruling: "settled"}}
+	other := findingObj("major", "quality", "AC 2", "same thing again", id)
+	env := completeWith(t, h, rv, ruled, reviewerFindingsResp(other))
+	require.Len(t, env.WaivedFindings, 1, "same_as through an issued, ruled id waives")
+
+	fresh := titledRun(h, "Task 1: Beta")
+	guessed := verdict.Fingerprint("scope_drift", "", "AC 1")
+	args := liteArgs(fresh.ID)
+	args.ControllerRulings = []ControllerRulingArg{{FindingID: guessed, Ruling: "self-issued"}}
+	env = completeWith(t, h, rv, args, reviewerFindingsResp(findingObj("major", "quality", "AC 2", "x", guessed)))
+	assert.Empty(t, env.WaivedFindings, "same_as through an unissued id waives nothing")
+}
+
+func TestValidateCompletion_LightweightRulingOnASessionRowIsIgnored(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	run := titledRun(h, "Task 1: Alpha")
+	specFor(t, h, run.ID, planrun.TaskRef{Index: 1, Title: "Alpha"})
+	args := liteArgs(run.ID)
+	args.ControllerRulings = []ControllerRulingArg{{FindingID: "f_0123abcd", Ruling: "r"}}
+	env := completeWith(t, h, rv, args, reviewerFindingsResp(driftFinding))
+
+	assert.Empty(t, env.WaivedFindings)
+	assert.Len(t, findingsWithCriterion(env.Findings, "plan_run_id"), 1)
+	assert.Empty(t, findingsWithCriterion(env.Findings, "controller_rulings"))
+}
+
+func TestValidateCompletion_LightweightRecordsIssuedIDs(t *testing.T) {
+	h, rv := newRulingsHandlers(t)
+	run := titledRun(h, "Task 1: Alpha")
+	env := completeWith(t, h, rv, liteArgs(run.ID), reviewerFindingsResp(driftFinding))
+	st := h.deps.PlanRuns.LiteState(run.ID, planrun.TaskRef{Index: 1})
+	require.NotEmpty(t, envelopeIDs(env))
+	for _, id := range envelopeIDs(env) {
+		assert.Contains(t, st.IssuedIDs, id)
+	}
 }
 
 func TestValidateCompletion_LightweightMalformedRulingIsAdvised(t *testing.T) {
@@ -528,7 +593,7 @@ func TestValidateCompletion_LightweightResponsesPointAtRulings(t *testing.T) {
 	assert.Contains(t, got[0].Suggestion, "controller_rulings")
 	assert.Contains(t, got[0].Evidence, "finding_responses")
 	assert.NotContains(t, got[0].Evidence, "controller_rulings were sent",
-		"rulings work without a session; only responses are ignored")
+		"only responses are reported under session_id")
 }
 
 func TestValidateCompletion_ListsEveryRulingInForceEvenWhenItWaivesNothing(t *testing.T) {

@@ -282,7 +282,7 @@ func (h *handlers) recordLightweightCompletionRow(args ValidateCompletionArgs, e
 		return
 	}
 	ref := planrun.TaskRef{Index: args.TaskIndex, Title: args.TaskTitle}
-	update := withRateDigest(countOverBuildingRuled(completionRowUpdate(env, args.Codescene, args.FinalDiff), overBuildingRuled), rd)
+	update := withIssuedIDs(withRateDigest(countOverBuildingRuled(completionRowUpdate(env, args.Codescene, args.FinalDiff), overBuildingRuled), rd), envelopeIDs(env))
 	row, res := h.deps.PlanRuns.UpsertLite(args.PlanRunID, ref, update)
 	switch res {
 	case planrun.UpsertApplied:
@@ -311,6 +311,15 @@ func sessionOwnedRowAdvisory() verdict.Finding {
 	return ignoredArgumentAdvisory("plan_run_id",
 		"This task has a validate_task_spec session in the plan run, so a lightweight validate_completion is not recorded against it.",
 		"Finish the task with validate_completion on its session_id.")
+}
+
+// withIssuedIDs wraps a lightweight row update so it also records the finding
+// IDs the call returned, which the task's later controller_rulings may name.
+func withIssuedIDs(update func(*planrun.TaskRow), ids []string) func(*planrun.TaskRow) {
+	return func(row *planrun.TaskRow) {
+		update(row)
+		row.AddIssuedIDs(ids)
+	}
 }
 
 // withRateDigest wraps a row update so it also keeps the call's rate digest,

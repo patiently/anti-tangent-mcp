@@ -507,12 +507,11 @@ func ignoredArgumentAdvisory(criterion, evidence, suggestion string) verdict.Fin
 // noSessionResponsesAdvisory reports finding_responses sent without a session.
 // A response answers a finding the reviewer raised in an earlier review of the
 // same session; without one there is no earlier review, and the server has no
-// finding to show. A controller ruling needs no session and is the way to
-// settle a finding here.
+// finding to show. A controller ruling settles a finding here when the task is in a plan run.
 func noSessionResponsesAdvisory() verdict.Finding {
 	return ignoredArgumentAdvisory("session_id",
 		"finding_responses were sent without a session_id; without a session there is no earlier review to answer, so they were ignored.",
-		"Fix the finding, or have the controller settle it with controller_rulings, which apply without a session.")
+		"Fix the finding, or, on a task in a plan run, have the controller rule on it and resubmit with plan_run_id, task_index and controller_rulings.")
 }
 
 // escalationNextAction is prefixed onto next_action when a critical or major
@@ -604,16 +603,43 @@ func malformedPlanRulingsAdvisory(ids []string) verdict.Finding {
 }
 
 // lightweightRulings builds a lightweight validate_completion review's ruling
-// state from the call's own controller_rulings: shape-checked with
-// planRulings, like validate_plan's, since a lightweight task keeps no
-// session to check an ID against. shown marks every ruling's ID so a
-// reviewer's same_as naming it renders through waiveRuled and markRepeats the
-// same way a session-backed review's shown set does.
-func lightweightRulings(rulingArgs []ControllerRulingArg) (rulings map[string]session.Ruling, shown map[string]bool, malformed []string) {
-	rulings, malformed = planRulings(rulingArgs)
-	shown = make(map[string]bool, len(rulings))
-	for _, r := range rulings {
-		shown[r.ID] = true
+// state. A lightweight task has no session, so its plan-run row stands in for
+// one: a ruling applies only when its base ID is among issued, the IDs earlier
+// lightweight calls on that row returned. shown is the issued set, so a
+// reviewer's same_as reaches a finding only through an ID the server showed.
+// unissued lists the well-formed ruling IDs that were dropped, sorted.
+func lightweightRulings(rulingArgs []ControllerRulingArg, issued []string) (rulings map[string]session.Ruling, shown map[string]bool, malformed, unissued []string) {
+	all, malformed := planRulings(rulingArgs)
+	shown = make(map[string]bool, len(issued))
+	issuedBase := make(map[string]bool, len(issued))
+	for _, id := range issued {
+		shown[id] = true
+		issuedBase[verdict.BaseID(id)] = true
 	}
-	return rulings, shown, malformed
+	rulings = make(map[string]session.Ruling, len(all))
+	for base, r := range all {
+		if issuedBase[base] {
+			rulings[base] = r
+			continue
+		}
+		unissued = appendUnique(unissued, truncate(r.ID, maxEchoedIDRunes))
+	}
+	sort.Strings(unissued)
+	return rulings, shown, malformed, unissued
+}
+
+// unboundLiteRulingsAdvisory reports controller_rulings on a lightweight call
+// that names no plan-run task: no earlier call issued an ID they could name.
+func unboundLiteRulingsAdvisory() verdict.Finding {
+	return ignoredArgumentAdvisory("controller_rulings",
+		"controller_rulings on a lightweight validate_completion apply only to finding ids an earlier lightweight validate_completion returned for the same plan_run_id and task; this call names no such task, so they were ignored.",
+		"Resubmit with plan_run_id and task_index (or task_title) naming the task whose earlier validate_completion returned the ids.")
+}
+
+// unissuedLiteRulingsAdvisory reports lightweight ruling IDs no earlier call
+// on the row returned. The IDs passed ValidDisplayID, so they are safe to echo.
+func unissuedLiteRulingsAdvisory(ids []string) verdict.Finding {
+	return ignoredArgumentAdvisory("controller_rulings",
+		"These controller_rulings ids were not returned by an earlier validate_completion on this task, so they were ignored: "+strings.Join(ids, ", ")+".",
+		"Rule only on ids a validate_completion response for this task showed.")
 }

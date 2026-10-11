@@ -1237,7 +1237,7 @@ type ValidateCompletionArgs struct {
 	RateDigest            any                   `json:"rate_digest,omitempty" jsonschema:"Optional and unverified, like codescene: the eval run behind the change, as an object. n (required, 1 to 10000) and before_k / after_k (0 to n) are the target eval's counts; target_eval (at most 300 characters), interval_after ([low, high] between 0 and 1), suite ({evals, regressions}), kept (true when the change is kept, false when reverted) and rigidity_delta ({outbound_strings, veto_keys, state_markers, strategy_lines}) are optional; other keys are ignored. A malformed digest is dropped with a minor finding. With boundary rules or an experiment task, kept true and no diff is rejected with diff_required."`
 	Codescene             *codescene.Digest     `json:"codescene,omitempty" jsonschema:"The CodeScene result for this task: analyze_change_set's raw JSON, or the reduced digest. Unknown keys are ignored. pre_commit_code_health_safeguard sees only uncommitted changes, so after a commit it reports zero files and is not a run of the task. When a run was attempted and failed, send ran false with skip_reason and skip_evidence."`
 	FindingResponses      []FindingResponseArg  `json:"finding_responses,omitempty" jsonschema:"Your answers to findings you dispute from this task's last validate_completion response that was not partial, one per finding id. If the reviewer raises a critical or major finding you answered again, the response sets escalate. At most 50 entries of at most 2000 characters each; not counted toward the payload cap."`
-	ControllerRulings     []ControllerRulingArg `json:"controller_rulings,omitempty" jsonschema:"Rulings your controller issued on findings from this task's session, copied verbatim. A ruling covers every later finding with the same id, ignoring any -n suffix, for the rest of the session, which keeps at most 50 rulings. At most 50 entries of at most 2000 characters each; not counted toward the payload cap."`
+	ControllerRulings     []ControllerRulingArg `json:"controller_rulings,omitempty" jsonschema:"Rulings your controller issued on findings from this task's session, copied verbatim. A ruling covers every later finding with the same id, ignoring any -n suffix, for the rest of the session, which keeps at most 50 rulings. At most 50 entries of at most 2000 characters each; not counted toward the payload cap. On a lightweight call (no session_id) a ruling applies only with plan_run_id and task_index or task_title, and only to an id an earlier validate_completion on that task returned."`
 	PlanRunID             string                `json:"plan_run_id,omitempty" jsonschema:"Lightweight calls only (empty session_id): the plan_run_id from the controller's final passing validate_plan call, so plan_run_report counts this task. Pass task_index or task_title with it. Ignored when session_id is set, because the session already carries it; an unknown or expired id does not fail the call."`
 	TaskIndex             int                   `json:"task_index,omitempty" jsonschema:"Lightweight calls only: the task's 1-based position in the plan. Ignored when session_id is set."`
 	TaskTitle             string                `json:"task_title,omitempty" jsonschema:"Lightweight calls only: the task's heading in the plan, used to find the task when task_index is absent. Ignored when session_id is set."`
@@ -2029,7 +2029,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	var sess *session.Session
 	var spec session.TaskSpec
 	var review completionReview
-	var lightweightMalformedRulingIDs []string
+	var lightweightMalformedRulingIDs, lightweightUnissuedRulingIDs []string
 	var liteState planrun.LiteState
 	var modeFindings []verdict.Finding
 	skipReported, overBuildingAnswered := false, false
@@ -2046,11 +2046,14 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			return nil, Envelope{}, err
 		}
 		mode.applyTo(&spec)
-		// A lightweight task has no session to remember a ruling, so the call
-		// carries them: shape-checked like validate_plan's, rendered as
-		// authoritative, and applied to this review's findings.
+		// A lightweight task has no session to remember the IDs it was shown,
+		// so its plan-run row does: rulings may name only those.
 		liteState = h.liteRowState(args)
-		review.rulings, review.shown, lightweightMalformedRulingIDs = lightweightRulings(rulingArgs)
+		var issued []string
+		if liteState.Found && !liteState.SessionOwned {
+			issued = liteState.IssuedIDs
+		}
+		review.rulings, review.shown, lightweightMalformedRulingIDs, lightweightUnissuedRulingIDs = lightweightRulings(rulingArgs, issued)
 	} else {
 		var ok bool
 		sess, ok = h.deps.Sessions.Get(args.SessionID)
@@ -2201,6 +2204,16 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	}
 	if len(lightweightMalformedRulingIDs) > 0 {
 		env.Findings = append(env.Findings, malformedPlanRulingsAdvisory(lightweightMalformedRulingIDs))
+	}
+	if len(lightweightUnissuedRulingIDs) > 0 {
+		switch {
+		case liteState.SessionOwned:
+			// sessionOwnedRowAdvisory already says where the task's rulings belong.
+		case !liteState.Found:
+			env.Findings = append(env.Findings, unboundLiteRulingsAdvisory())
+		default:
+			env.Findings = append(env.Findings, unissuedLiteRulingsAdvisory(lightweightUnissuedRulingIDs))
+		}
 	}
 	if lightweight && len(responses) > 0 {
 		env.Findings = append(env.Findings, noSessionResponsesAdvisory())
