@@ -94,8 +94,9 @@ func TestCheckPathChecksBothNames(t *testing.T) {
 }
 
 func TestWindowsFoldsCase(t *testing.T) {
-	g := gate(t, ModeOn)
-	assert.NoError(t, g.CheckPath("/r/.ENV", "/r/.ENV"), "case-sensitive off Windows")
+	g, err := newForOS(ModeOn, nil, "linux")
+	require.NoError(t, err)
+	assert.NoError(t, g.CheckPath("/r/.ENV", "/r/.ENV"), "case-sensitive off Windows and macOS")
 	g.goos = "windows"
 	r := refusalOf(t, g.CheckPath(`C:\Repo\.ENV`, `C:\Repo\.ENV`))
 	assert.Equal(t, "dotenv", r.Rule)

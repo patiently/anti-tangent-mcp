@@ -216,7 +216,7 @@ first_inprogress = -1
 errored_idx = []             # (idx) of validate_completion calls whose result was a tool error
 called_idx, texts, lite_idx = [], [], []   # (idx) of direct calls; (idx, text) of tool_result chunks; (idx) of lightweight markers
 call_ids = {}                # tool_use id -> idx, for validate_completion calls only
-completion_inputs = []       # (idx, input) for every validate_completion call, in order
+completion_inputs = []       # (idx, input, tool_use id) for every validate_completion call, in order
 
 # [ \t]* rather than \s*, since \s matches a newline: a blank session_id:
 # line followed by a one-token line would otherwise read that token as the
@@ -238,8 +238,8 @@ for idx, line in enumerate(lines):
                 name, inp = c.get("name", ""), (c.get("input") or {})
                 if name == "mcp__anti-tangent__validate_completion":
                     called_idx.append(idx)
-                    completion_inputs.append((idx, inp))
                     tuid = c.get("id")
+                    completion_inputs.append((idx, inp, tuid))
                     if tuid:
                         call_ids[tuid] = idx
                 elif name == "TaskUpdate":
@@ -282,7 +282,7 @@ for idx, line in enumerate(lines):
                     if call_ids[tuid] in called_idx:
                         called_idx.remove(call_ids[tuid])
                     for k in range(len(completion_inputs) - 1, -1, -1):
-                        if completion_inputs[k][0] == call_ids[tuid]:
+                        if completion_inputs[k][2] == tuid:
                             del completion_inputs[k]
                             break
                     continue
@@ -354,7 +354,7 @@ if qualifying:
 # lightweight heading is file content, not a dispatch decision, so it never
 # exempts.
 last_direct = None
-for (i, inp) in completion_inputs:
+for (i, inp, _tuid) in completion_inputs:
     if i >= scan_from:
         last_direct = (i, inp)
 last_block = None
@@ -568,7 +568,7 @@ comment_violations = []
 # would be permanently and invisibly disabled.
 comment_scan_unavailable = False
 scan_stats = None
-in_window_completions = [inp for (i, inp) in completion_inputs if i >= scan_from]
+in_window_completions = [inp for (i, inp, _tuid) in completion_inputs if i >= scan_from]
 if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
     scan_violations = None
     try:

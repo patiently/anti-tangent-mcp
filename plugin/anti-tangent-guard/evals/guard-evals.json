@@ -2905,7 +2905,11 @@
         "TYPESAFE_API_KEY": "eval-key"
       },
       "stdin_raw": "{\"tool_name\":\"Write\",\"session_id\":\"j6\",\"tool_input\":{\"file_path\":\"{{TMPDIR}}/atg-eval-yield.go\",\"content\":\"// YIELD-CASE-MARKER: the count cap used to return a plain error.\\npackage x\\n\"}}",
-      "expected_exits": [2, 2, 0],
+      "expected_exits": [
+        2,
+        2,
+        0
+      ],
       "expected_stderr_contains": [
         "reads as change history",
         "change_history"
@@ -3206,6 +3210,28 @@
         "TASK CLOSED AFTER A validate_completion TOOL ERROR"
       ],
       "reason": "a validate_completion whose tool_result carries is_error:true (for example a secret-gate refusal) produced no verdict, so it is not a call and the close must still be blocked, with a message that says the call errored rather than that none was made"
+    },
+    {
+      "id": 200,
+      "name": "errored-call-removes-its-own-input-not-a-sibling",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"toolu_e1\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-2\", \"final_diff\": \"+++ b/a.go\\n+// clean\\n\"}}, {\"type\": \"tool_use\", \"id\": \"toolu_e2\", \"name\": \"mcp__anti-tangent__validate_completion\", \"input\": {\"session_id\": \"sess-2\", \"final_diff\": \"+++ b/a.go\\n+// fixes #58\\n\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"toolu_e1\", \"is_error\": true, \"content\": [{\"type\": \"text\", \"text\": \"refused by the secret gate\"}]}, {\"type\": \"tool_result\", \"tool_use_id\": \"toolu_e2\", \"content\": [{\"type\": \"text\", \"text\": \"{\\\"tool\\\": \\\"validate_completion\\\", \\\"session_id\\\": \\\"sess-2\\\", \\\"verdict\\\": \\\"pass\\\", \\\"findings\\\": []}\"}]}]}}"
+      ],
+      "expected_exit": 2,
+      "reason": "two validate_completion calls share one assistant entry: the first errors, the second succeeds with a diff carrying a change-history comment. The errored call's own input must be the one dropped, so the comment scan reads the successful submission and blocks; dropping by transcript position would remove the successful call's input and let the close through",
+      "expected_stderr_contains": [
+        "TASK CLOSED WITH COMMENTS CARRYING CHANGE HISTORY"
+      ]
     }
   ]
 }
