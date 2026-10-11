@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A secret gate refuses any file the server is about to send to a model whose name looks like a secrets file or whose contents carry a private key or a well-known token, on every path input (context_paths, final_files, final_diff_path, test_evidence_path, plan_path, bulk_read, code_write's reference_path). A refusal is a tool error naming the rule, and no reviewer call is made. ANTI_TANGENT_SECRET_GATE (on, names, off; default on) and ANTI_TANGENT_FILE_DENY_EXTRA configure it. (#105)
 
+- A lightweight validate_completion no longer changes a plan_run_report row that a validate_task_spec session owns; it gets a minor plan_run_id advisory instead. A session that takes over a task a lightweight call recorded starts from no result, so a row never shows a lightweight verdict without its (lite) marker. (#107)
+
 ## [0.28.0] - 2026-10-08
 
 ### Added

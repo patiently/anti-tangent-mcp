@@ -2030,6 +2030,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	var spec session.TaskSpec
 	var review completionReview
 	var lightweightMalformedRulingIDs []string
+	var liteState planrun.LiteState
 	var modeFindings []verdict.Finding
 	skipReported, overBuildingAnswered := false, false
 	var codesceneEventKey string
@@ -2048,6 +2049,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		// A lightweight task has no session to remember a ruling, so the call
 		// carries them: shape-checked like validate_plan's, rendered as
 		// authoritative, and applied to this review's findings.
+		liteState = h.liteRowState(args)
 		review.rulings, review.shown, lightweightMalformedRulingIDs = lightweightRulings(rulingArgs)
 	} else {
 		var ok bool
@@ -2192,6 +2194,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if lightweight {
 		if f, ok := h.lightweightPlanRunAdvisory(args.PlanRunID, args.TaskIndex, args.TaskTitle); ok {
 			env.Findings = append(env.Findings, f)
+		}
+		if liteState.SessionOwned {
+			env.Findings = append(env.Findings, sessionOwnedRowAdvisory())
 		}
 	}
 	if len(lightweightMalformedRulingIDs) > 0 {

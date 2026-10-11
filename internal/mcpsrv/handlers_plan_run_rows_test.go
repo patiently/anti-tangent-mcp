@@ -251,3 +251,45 @@ func TestValidatePlan_RunKnowsItsTaskHeadings(t *testing.T) {
 	assert.Regexp(t, `^Task 1:`, snap.Tasks[0].Title)
 	assert.Equal(t, 2, snap.TaskCount)
 }
+
+func TestLiteCompletion_DoesNotRewriteASessionRow(t *testing.T) {
+	rv := &fakeReviewer{name: "anthropic", resp: passResp("m")}
+	h := &handlers{deps: newDeps(t, rv)}
+	run := titledRun(h, "Task 1: Alpha")
+	pre := specFor(t, h, run.ID, planrun.TaskRef{Index: 1, Title: "Alpha"})
+	rv.resp = reviewerFindingsResp(driftFinding)
+	sessionEnv := completeSession(t, h, pre.SessionID)
+	require.Equal(t, "warn", sessionEnv.Verdict)
+	before := rowsOf(t, h, run.ID)[0]
+
+	rv.resp = passResp("m")
+	args := completionCallArgs("")
+	args.PlanRunID, args.TaskIndex = run.ID, 1
+	args.RateDigest = digestArg(t, `{"n":10,"before_k":5,"after_k":8,"kept":true}`)
+	_, env, err := h.ValidateCompletion(context.Background(), nil, args)
+	require.NoError(t, err)
+	assert.Equal(t, "pass", env.Verdict, "the advisory never moves the verdict")
+	adv := findingsWithCriterion(env.Findings, "plan_run_id")
+	require.Len(t, adv, 1)
+	assert.Contains(t, adv[0].Evidence, "validate_task_spec session")
+
+	after := rowsOf(t, h, run.ID)[0]
+	assert.Equal(t, "warn", after.PostVerdict)
+	assert.False(t, after.Lite)
+	assert.Equal(t, before.RateDigest, after.RateDigest)
+
+	_, report, err := h.PlanRunReport(context.Background(), nil, PlanRunReportArgs{PlanRunID: run.ID})
+	require.NoError(t, err)
+	require.Len(t, report.Tasks, 1)
+	assert.Equal(t, "warn", report.Tasks[0].PostVerdict)
+}
+
+func TestLiteThenSession_RowStartsOpen(t *testing.T) {
+	h, run := alphaBetaRun(t)
+	completeLite(t, h, run.ID, planrun.TaskRef{Index: 1})
+	require.Equal(t, "pass", rowsOf(t, h, run.ID)[0].PostVerdict)
+	specFor(t, h, run.ID, planrun.TaskRef{Index: 1, Title: "Alpha"})
+	row := rowsOf(t, h, run.ID)[0]
+	assert.Empty(t, row.PostVerdict)
+	assert.False(t, row.Lite)
+}
