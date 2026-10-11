@@ -27,7 +27,7 @@
     {
       "name": "anti-tangent-shunt",
       "description": "Routes I/O-heavy implementer work to a cheap worker model via PreToolUse hooks. Intercepts oversized Read and Bash calls, delegating them to anti-tangent-mcp's bulk_read tool to keep the implementer's context small and token-efficient.",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "source": "./plugin/anti-tangent-shunt",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"
@@ -35,7 +35,7 @@
     {
       "name": "anti-tangent-guard",
       "description": "Four hooks enforcing anti-tangent-mcp's conventions. A PreToolUse hook on Edit/Write/NotebookEdit refuses a dispatched implementer's first edit until validate_task_spec has been called. A PostToolUse hook on TaskUpdate mandates the validate_completion gate at task close, blocks a full-protocol close whose completion ran with no task session, and, when the evidence that call submitted adds comments carrying change history, returns a blocking instruction to reopen and fix — reading the submitted diff, or a final_files completion through git, which reports nothing for work already committed. It detects rather than prevents: PostToolUse fires after the state change. A PreToolUse hook on Edit/Write refuses such a comment before it is written. A PostToolUse hook on Edit/Write/NotebookEdit asks a task once for a check_progress call when it reaches ten edits since validate_task_spec without one; it refuses nothing. Set ANTI_TANGENT_TICKET_PATTERN to your tracker's key shape to have tracker keys caught. Kill switches: ANTI_TANGENT_SESSION_GUARD=0 (start gate and no-session close rule), ANTI_TANGENT_COMPLETION_GUARD=0 (completion gate only), ANTI_TANGENT_COMMENT_GUARD=0 (comment scan, both hooks), ANTI_TANGENT_PROGRESS_GUARD=0 (progress reminder).",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "source": "./plugin/anti-tangent-guard",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"

@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `anti-tangent-protocol` 0.4.1: `implementer.md` says a lightweight call's `controller_rulings` need `plan_run_id` and `task_index`, and cover only ids an earlier call on that task returned.
+- `anti-tangent-protocol` 0.4.1: `implementer.md` says a lightweight call's `controller_rulings` need `plan_run_id` and `task_index` (or `task_title`), and cover only ids an earlier call on that task returned.
 
 - The advisory for `finding_responses` sent without a session no longer says a ruling applies without one; it points at ruling on a task in a plan run.
 
@@ -25,7 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The secret gate also refuses `.envrc` and `*.env` names, an exported PGP private key, and a private key indented in YAML, written with `\r\n` JSON escapes, or carried in a diff of either. `ANTI_TANGENT_SECRET_GATE` is case-insensitive, and a case-insensitive macOS volume folds file-name case like Windows. The `starting` log line reports `secret_gate` and `file_deny_extra`, and each refusal logs one warning naming the tier, rule and path, never the bytes.
 
-- `anti-tangent-guard` no longer counts a `validate_completion` or `validate_task_spec` call whose tool result is an error (such as a secret-gate refusal) as having been made.
+- `anti-tangent-guard` 0.7.1: `check-task-complete` and `check-task-start` no longer count a `validate_completion` or `validate_task_spec` call whose tool result is an error (such as a secret-gate refusal) as having been made, and when every call errored their block messages say the call failed instead of saying it was never made. The start gate stops reading the transcript at the first successful `validate_task_spec` result.
+
+- `anti-tangent-shunt` 0.1.4: the `bulk-reader` skill text describes the 0.29.0 secret gate refusal.
+
+- The secret gate's private-key rules also match a key quoted as source string literals (`"…\n" +` fragments), a key behind a `#`, `//` or `>` line prefix, and a base64-encoded private-key armour line at the start of a value, such as a Kubernetes Secret key. A base64-encoded certificate passes.
 
 ## [0.28.0] - 2026-10-08
 

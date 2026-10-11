@@ -3203,9 +3203,9 @@
       ],
       "expected_exit": 2,
       "expected_stderr_contains": [
-        "TASK CLOSED WITHOUT anti-tangent validate_completion"
+        "TASK CLOSED AFTER A validate_completion TOOL ERROR"
       ],
-      "reason": "a validate_completion whose tool_result carries is_error:true (for example a secret-gate refusal) produced no verdict, so it is not a call and the close must still be blocked"
+      "reason": "a validate_completion whose tool_result carries is_error:true (for example a secret-gate refusal) produced no verdict, so it is not a call and the close must still be blocked, with a message that says the call errored rather than that none was made"
     }
   ]
 }

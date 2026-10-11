@@ -49,7 +49,10 @@ gate becomes visible from the controller's own transcript). It blocks
 (`exit 2`) in exactly four cases:
 
 1. **Neither signal is present.** Nothing in the window shows the completion
-   gate ran at all.
+   gate ran at all. A `validate_completion` call whose result is a tool error
+   (a reviewer outage, a secret-gate refusal) is not a call; when every call in
+   the window errored, the block message says so rather than saying none was
+   made.
 2. **The last qualifying signal's verdict is `fail`.** The gate ran, but its
    most recent verdict in the window says the work is not done. This is read
    from either signal: a pasted summary block tagged `tool:
@@ -249,10 +252,12 @@ dispatch prompt — and gates the session only when that entry carries
 `## Drift-protection protocol (anti-tangent-mcp)` and not
 `Drift-protection protocol (lightweight)`. In a gated session every write is
 refused (`exit 2`) until an `mcp__anti-tangent__validate_task_spec` tool call
-appears in that transcript. Reads are never gated: read what the change
+appears in that transcript and its result is not a tool error. Reads are never gated: read what the change
 touches, call `validate_task_spec`, then edit. There is no cache: the scan
-stops at the first `validate_task_spec` call, which comes before every allowed
-edit, so each check reads only the transcript's opening.
+stops at the first successful `validate_task_spec` call, which comes before
+every allowed edit, so each check reads only the transcript's opening. When
+every call errored, the block message says the call failed rather than that it
+was never made.
 
 Limits: writes through `Bash` (`cat >`, `sed -i`) bypass this hook, as they
 bypass the comment guard; the close-time no-session rule is the backstop. A

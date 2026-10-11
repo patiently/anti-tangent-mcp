@@ -7,6 +7,7 @@
 package secretgate
 
 import (
+	"encoding/base64"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -207,17 +208,35 @@ type contentRule struct {
 // armoredKey builds a rule for an ASCII-armoured key: the armour line named
 // by begin, optional RFC 1421 header lines and a base64 body. A line break is
 // a real newline, optionally CRLF, or the two characters backslash and n (or
-// backslash, r, backslash, n), as in a JSON string. Each line may start with
-// one unified-diff marker followed by any indentation, which covers YAML
-// block scalars and indented diff hunks.
+// backslash, r, backslash, n), as in a JSON string, and may be followed by a
+// closing quote, an optional + or , and an opening quote, which joins the
+// fragments of a source string literal. Each line may start with one marker
+// (a unified-diff marker, a # or // line comment, or a > quote) followed by
+// any indentation, which covers YAML block scalars, indented diff hunks and
+// a key pasted into a comment or a markdown quote.
 func armoredKey(begin string) string {
-	const lead = `[-+ ]?[ \t]*`
+	const lead = `(?:[-+>#]|//)?[ \t]*`
 	return `-----BEGIN ` + begin + `-----` + pemNL +
 		`(?:` + lead + `[A-Za-z-]+:(?:[^\n\\]|\\[^n])*` + pemNL + `)*` +
 		`(?:` + lead + pemNL + `)?` + lead + `[A-Za-z0-9+/=]{40,}`
 }
 
-const pemNL = `(?:(?:\\r)?\\n|\r?\n)`
+const pemNL = `(?:(?:\\r)?\\n|\r?\n)(?:["'\x60][ \t]*[+,]?[ \t]*\r?\n?[ \t]*["'\x60])?`
+
+// base64PrivateKey matches the base64 encoding of a private-key armour line
+// at the start of a value, as in a Kubernetes Secret. Only whole three-byte
+// groups of the line are encoded into the prefix, and the prefix runs past
+// the part shared with a certificate's armour line, so a base64 certificate
+// does not match. The prefixes are computed rather than written out.
+func base64PrivateKey() string {
+	var alts []string
+	for _, kind := range []string{"", "RSA ", "EC ", "DSA ", "OPENSSH ", "ENCRYPTED "} {
+		line := []byte("-----BEGIN " + kind + "PRIVATE KEY-----")
+		enc := base64.StdEncoding.EncodeToString(line[:len(line)/3*3])
+		alts = append(alts, regexp.QuoteMeta(enc))
+	}
+	return `(?:` + strings.Join(alts, "|") + `)[A-Za-z0-9+/=]{4,}`
+}
 
 var (
 	pemPrivateKey = armoredKey(`(?:[A-Z0-9]+ )*PRIVATE KEY`)
@@ -230,6 +249,7 @@ var (
 // name reported: anthropic-key is checked before the broader openai-key.
 var contentRules = []contentRule{
 	{"pem-private-key", regexp.MustCompile(pemPrivateKey)},
+	{"pem-private-key-base64", regexp.MustCompile(base64PrivateKey())},
 	{"pgp-private-key", regexp.MustCompile(pgpPrivateKey)},
 	{"aws-access-key-id", regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)},
 	{"github-token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}|\bgithub_pat_[A-Za-z0-9_]{60,}`)},

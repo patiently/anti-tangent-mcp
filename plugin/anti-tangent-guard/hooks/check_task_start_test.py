@@ -29,7 +29,22 @@ def tool_result(tool_use_id, is_error):
 class ClassifyTest(unittest.TestCase):
     def test_refused_call_does_not_pass(self):
         lines = [user(CLAUSE), tool_use(SPEC_TOOL, {"goal": "g"}), tool_result("t1", True)]
-        self.assertEqual(classify(lines), "block")
+        self.assertEqual(classify(lines), "errored")
+
+    def test_scan_stops_at_the_first_successful_result(self):
+        lines = iter([user(CLAUSE), tool_use(SPEC_TOOL), tool_result("t1", False), user("never read")])
+        self.assertEqual(classify(lines), "pass")
+        self.assertEqual(len(list(lines)), 1)
+
+    def test_no_call_at_all_is_a_plain_block(self):
+        self.assertEqual(classify([user(CLAUSE)]), "block")
+
+    def test_legacy_call_without_id_stops_the_scan(self):
+        legacy = json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": SPEC_TOOL, "input": {}}]}})
+        lines = iter([user(CLAUSE), legacy, user("never read")])
+        self.assertEqual(classify(lines), "pass")
+        self.assertEqual(len(list(lines)), 1)
 
     def test_successful_call_passes(self):
         lines = [user(CLAUSE), tool_use(SPEC_TOOL, {"goal": "g"}), tool_result("t1", False)]

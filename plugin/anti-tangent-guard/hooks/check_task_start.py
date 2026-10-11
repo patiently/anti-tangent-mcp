@@ -38,6 +38,19 @@ Reads are not gated — read what the change touches, then call it, then edit.
 (Disable: ANTI_TANGENT_SESSION_GUARD=0. Trace: {trace})
 """
 
+ERRORED_MESSAGE = """EDIT AFTER A validate_task_spec TOOL ERROR
+
+This session was dispatched under the full anti-tangent protocol (§4.2), which
+requires validate_task_spec before any edit. It was called, but every call came
+back as a tool error (refused or failed), so no task session was opened.
+
+Read the error, fix its cause (for example leave a refused path out of
+context_paths), and call mcp__anti-tangent__validate_task_spec again before
+editing.
+
+(Disable: ANTI_TANGENT_SESSION_GUARD=0. Trace: {trace})
+"""
+
 
 def as_list(value):
     """Return value when it is already a list, else []. A malformed
@@ -66,14 +79,37 @@ def is_error_result(c):
     return isinstance(c, dict) and c.get("type") == "tool_result" and c.get("is_error") is True
 
 
+def spec_outcome(etype, c, pending):
+    """Fold one content block into the set of validate_task_spec call ids
+    still awaiting a result. Return "pass" for a call that cannot be matched
+    to a result (no id) or whose result succeeded, "errored" for a result that
+    was a tool error, and "" for anything else."""
+    if etype == "assistant" and is_spec_call(c):
+        tuid = c.get("id")
+        if isinstance(tuid, str) and tuid:
+            pending.add(tuid)
+            return ""
+        return "pass"
+    if etype == "user" and isinstance(c, dict) and c.get("type") == "tool_result":
+        tuid = c.get("tool_use_id")
+        if tuid in pending:
+            if is_error_result(c):
+                pending.discard(tuid)
+                return "errored"
+            return "pass"
+    return ""
+
+
 def classify(lines):
-    """Return "skip", "pass" or "block" for an iterable of transcript lines.
+    """Return "skip", "pass", "block" or "errored" for an iterable of
+    transcript lines. "errored" is a block where every validate_task_spec call
+    came back as a tool error.
 
     Entries before the first user entry (attachments, system records) are
     ignored. The first user entry decides whether the session is gated at all;
     after it, one validate_task_spec tool_use is a pass unless its tool_result
-    is an error (a refused call opened no session). Text merely naming the
-    tool is not a call.
+    is an error (a refused call opened no session); the scan stops at the
+    first successful result. Text merely naming the tool is not a call.
 
     A malformed entry -- a truthy non-dict "message", or assistant content
     that is not a list -- is skipped rather than raised on, the same way a
@@ -82,7 +118,7 @@ def classify(lines):
     allow.
     """
     seen_first_user = False
-    passed = False
+    errored = False
     pending = set()
     for line in lines:
         try:
@@ -104,17 +140,15 @@ def classify(lines):
                 return "skip"
             continue
         for c in as_list(msg.get("content")):
-            if etype == "assistant" and is_spec_call(c):
-                tuid = c.get("id")
-                if isinstance(tuid, str) and tuid:
-                    pending.add(tuid)
-                else:
-                    passed = True
-            elif etype == "user" and is_error_result(c):
-                pending.discard(c.get("tool_use_id"))
+            outcome = spec_outcome(etype, c, pending)
+            if outcome == "pass":
+                return "pass"
+            errored = errored or outcome == "errored"
     if not seen_first_user:
         return "skip"
-    return "pass" if passed or pending else "block"
+    if pending:
+        return "pass"
+    return "errored" if errored else "block"
 
 
 def subagent_transcript(data):
@@ -153,7 +187,8 @@ def main():
         return 3
     if verdict == "pass":
         return 0
-    sys.stderr.write(BLOCK_MESSAGE.format(trace=os.environ.get("ATG_TRACE_LOG", "")))
+    message = ERRORED_MESSAGE if verdict == "errored" else BLOCK_MESSAGE
+    sys.stderr.write(message.format(trace=os.environ.get("ATG_TRACE_LOG", "")))
     return 2
 
 

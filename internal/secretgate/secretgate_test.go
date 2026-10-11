@@ -1,6 +1,7 @@
 package secretgate
 
 import (
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -267,5 +268,47 @@ func TestContentNearMissesAndAlternatives(t *testing.T) {
 	}
 	for _, s := range nearMisses {
 		assert.NoError(t, g.CheckContent("/r/f", []byte(s)), s)
+	}
+}
+
+func TestPEMInSourceAndCommentCarriers(t *testing.T) {
+	g := gate(t, ModeOn)
+	begin, body, end := pemParts()
+	samples := map[string]string{
+		"hash-comment":  "# " + begin + "\n# " + body + "\n# " + end + "\n",
+		"slash-comment": "// " + begin + "\n// " + body + "\n",
+		"md-quote":      "> " + begin + "\n> " + body + "\n",
+		"go-concat":     `k := "` + begin + `\n" +` + "\n\t" + `"` + body + `\n" +` + "\n\t" + `"` + end + `\n"`,
+		"py-list":       `K = ["` + begin + `\n",` + "\n    " + `"` + body + `\n"]`,
+		"js-template":   "const k = `" + begin + "\n`+\n`" + body + "`",
+		"single-quotes": `k = '` + begin + `\n' + '` + body + `'`,
+	}
+	for name, sample := range samples {
+		assert.Equal(t, "pem-private-key", refusalOf(t, g.CheckContent("/r/f", []byte(sample))).Rule, name)
+	}
+	prose := []string{
+		"# " + begin + "\n# short\n",
+		`k := "` + begin + `\n" + "short"`,
+		"> the header " + begin + " is named here\n> and more prose follows it\n",
+	}
+	for _, s := range prose {
+		assert.NoError(t, g.CheckContent("/r/f", []byte(s)), s)
+	}
+}
+
+func b64Armour(kind string) string {
+	line := "-----BEGIN " + kind + "-----\n" + strings.Repeat("MIIE", 16) + "\n"
+	return base64.StdEncoding.EncodeToString([]byte(line))
+}
+
+func TestBase64EncodedPrivateKey(t *testing.T) {
+	g := gate(t, ModeOn)
+	for _, kind := range []string{"PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "DSA PRIVATE KEY", "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY"} {
+		sample := "data:\n  tls.key: " + b64Armour(kind) + "\n"
+		assert.Equal(t, "pem-private-key-base64", refusalOf(t, g.CheckContent("/r/f", []byte(sample))).Rule, kind)
+	}
+	for _, kind := range []string{"CERTIFICATE", "PUBLIC KEY", "CERTIFICATE REQUEST", "X509 CRL"} {
+		sample := "data:\n  tls.crt: " + b64Armour(kind) + "\n"
+		assert.NoError(t, g.CheckContent("/r/f", []byte(sample)), kind)
 	}
 }
