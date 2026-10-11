@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] - 2026-10-11
+
+### Security
+
+- A secret gate refuses any file the server is about to send to a model whose name looks like a secrets file or whose contents carry a private key or a well-known token, on every path input (context_paths, final_files, final_diff_path, test_evidence_path, plan_path, bulk_read, code_write's reference_path, and repo_root hint reads, where a refused file is silently skipped). A refusal is a tool error naming the rule, and no reviewer call is made. ANTI_TANGENT_SECRET_GATE (on, names, off; default on) and ANTI_TANGENT_FILE_DENY_EXTRA configure it. (#105) The gate is on by default, so a final_files, final_diff_path or context_paths file that is a secrets file by name (for example .npmrc, or a *.pem test certificate) or that carries a key-shaped fixture is now refused with a tool error; set ANTI_TANGENT_SECRET_GATE to names or off to opt out. Inline final_diff text is not gated.
+
+- A lightweight validate_completion applies a controller_rulings entry only when the call names its plan-run task (plan_run_id with task_index or task_title) and the ruled id was returned by an earlier validate_completion on that task; otherwise the ruling is ignored with a minor advisory. A reviewer's same_as reaches a finding only through such an id. Before, any well-formed id was honoured, including one guessed before the finding was ever shown. (#106)
+
+- A lightweight validate_completion no longer changes a plan_run_report row that a validate_task_spec session owns; it gets a minor plan_run_id advisory instead. A session that takes over a task a lightweight call recorded starts from no result, so a row never shows a lightweight verdict without its (lite) marker. (#107)
+
+### Changed
+
+- `anti-tangent-protocol` 0.4.1: `implementer.md` says a lightweight call's `controller_rulings` need `plan_run_id` and `task_index` (or `task_title`), and cover only ids an earlier call on that task returned.
+
+- The advisory for `finding_responses` sent without a session no longer says a ruling applies without one; it points at ruling on a task in a plan run.
+
+- `examples/lightweight-dispatch.md` and the README describe the lightweight ruling binding: a ruling applies only to a finding id an earlier lightweight `validate_completion` on that `plan_run_id` and task returned.
+
+- The secret gate also refuses `.envrc` and `*.env` names, an exported PGP private key, and a private key indented in YAML, written with `\r\n` JSON escapes, or carried in a diff of either. `ANTI_TANGENT_SECRET_GATE` is case-insensitive, and a case-insensitive macOS volume folds file-name case like Windows. The `starting` log line reports `secret_gate` and `file_deny_extra`, and each refusal logs one warning naming the tier, rule and path, never the bytes.
+
+- `anti-tangent-guard` 0.7.1: `check-task-complete` and `check-task-start` no longer count a `validate_completion` or `validate_task_spec` call whose tool result is an error (such as a secret-gate refusal) as having been made, and when every call errored their block messages say the call failed instead of saying it was never made. The start gate stops reading the transcript at the first successful `validate_task_spec` result.
+
+- `anti-tangent-shunt` 0.1.4: the `bulk-reader` skill text describes the 0.29.0 secret gate refusal.
+
+- The secret gate's private-key rules also match a key quoted as source string literals (`"…\n" +` fragments), a key behind a `#`, `//` or `>` line prefix, and a base64-encoded private-key armour line at the start of a value, such as a Kubernetes Secret key. A base64-encoded certificate passes.
+
 ## [0.28.0] - 2026-10-08
 
 ### Added

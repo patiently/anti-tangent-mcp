@@ -36,5 +36,5 @@ If the verdict is `fail` or contains `critical`/`major` findings, do not report 
   work is done — the server cannot enforce what a model counts. Same limits as `validate_task_spec`'s
   `context_paths`: under `ANTI_TANGENT_PLAN_ROOTS` when it is set, at most 50 files, within
   `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` and `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES`.
-- `controller_rulings`: a ruling your controller issued on a finding from an earlier review of this task, copied verbatim. Rulings apply without a session; `finding_responses` do not.
+- `controller_rulings`: a ruling your controller issued on a finding from an earlier review of this task, copied verbatim. They apply only with `plan_run_id` and `task_index` (or `task_title`), and only to ids an earlier `validate_completion` on this task returned; `finding_responses` need a session.
 - `codescene`: required under `ANTI_TANGENT_CODESCENE=required` — pass the `analyze_change_set` result the same as any other task; see the CodeScene bullets above for the skip shape and what draws a major. Optional and may be omitted when `ANTI_TANGENT_CODESCENE` is unset.

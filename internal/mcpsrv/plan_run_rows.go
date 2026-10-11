@@ -282,12 +282,43 @@ func (h *handlers) recordLightweightCompletionRow(args ValidateCompletionArgs, e
 		return
 	}
 	ref := planrun.TaskRef{Index: args.TaskIndex, Title: args.TaskTitle}
-	update := withRateDigest(countOverBuildingRuled(completionRowUpdate(env, args.Codescene, args.FinalDiff), overBuildingRuled), rd)
-	if row, ok := h.deps.PlanRuns.UpsertLite(args.PlanRunID, ref, update); ok {
+	update := withIssuedIDs(withRateDigest(countOverBuildingRuled(completionRowUpdate(env, args.Codescene, args.FinalDiff), overBuildingRuled), rd), envelopeIDs(env))
+	row, res := h.deps.PlanRuns.UpsertLite(args.PlanRunID, ref, update)
+	switch res {
+	case planrun.UpsertApplied:
 		h.appendPlanLedger(args.PlanRunID, row)
-	} else {
+	case planrun.UpsertSessionOwned:
+		slog.Warn("plan run lightweight update skipped; a session owns the task's row",
+			"plan_run_id", args.PlanRunID, "task_index", row.Index)
+	default:
 		slog.Warn("plan run lightweight update skipped; run unknown or expired, or no task named",
 			"plan_run_id", args.PlanRunID)
+	}
+}
+
+// liteRowState reads, before the review, the plan-run row a lightweight
+// validate_completion names. Zero when the call carries no plan_run_id.
+func (h *handlers) liteRowState(args ValidateCompletionArgs) planrun.LiteState {
+	if args.PlanRunID == "" {
+		return planrun.LiteState{}
+	}
+	return h.deps.PlanRuns.LiteState(args.PlanRunID, planrun.TaskRef{Index: args.TaskIndex, Title: args.TaskTitle})
+}
+
+// sessionOwnedRowAdvisory reports a lightweight validate_completion naming a
+// task a validate_task_spec session owns: its result is not recorded there.
+func sessionOwnedRowAdvisory() verdict.Finding {
+	return ignoredArgumentAdvisory("plan_run_id",
+		"This task has a validate_task_spec session in the plan run, so a lightweight validate_completion is not recorded against it.",
+		"Finish the task with validate_completion on its session_id (or re-run validate_task_spec if the session expired).")
+}
+
+// withIssuedIDs wraps a lightweight row update so it also records the finding
+// IDs the call returned, which the task's later controller_rulings may name.
+func withIssuedIDs(update func(*planrun.TaskRow), ids []string) func(*planrun.TaskRow) {
+	return func(row *planrun.TaskRow) {
+		update(row)
+		row.AddIssuedIDs(ids)
 	}
 }
 

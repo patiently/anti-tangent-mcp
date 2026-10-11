@@ -213,9 +213,10 @@ except Exception:
 
 last_inprogress = -1
 first_inprogress = -1
+errored_idx = []             # (idx) of validate_completion calls whose result was a tool error
 called_idx, texts, lite_idx = [], [], []   # (idx) of direct calls; (idx, text) of tool_result chunks; (idx) of lightweight markers
 call_ids = {}                # tool_use id -> idx, for validate_completion calls only
-completion_inputs = []       # (idx, input) for every validate_completion call, in order
+completion_inputs = []       # (idx, input, tool_use id) for every validate_completion call, in order
 
 # [ \t]* rather than \s*, since \s matches a newline: a blank session_id:
 # line followed by a one-token line would otherwise read that token as the
@@ -237,8 +238,8 @@ for idx, line in enumerate(lines):
                 name, inp = c.get("name", ""), (c.get("input") or {})
                 if name == "mcp__anti-tangent__validate_completion":
                     called_idx.append(idx)
-                    completion_inputs.append((idx, inp))
                     tuid = c.get("id")
+                    completion_inputs.append((idx, inp, tuid))
                     if tuid:
                         call_ids[tuid] = idx
                 elif name == "TaskUpdate":
@@ -274,6 +275,17 @@ for idx, line in enumerate(lines):
                 # textual block that flows through the same header-anchored
                 # extraction as a pasted marker.
                 tuid = c.get("tool_use_id")
+                if tuid in call_ids and c.get("is_error") is True:
+                    # A refused call (a tool error, such as a secret-gate
+                    # refusal) never produced a verdict: it is not a call.
+                    errored_idx.append(call_ids[tuid])
+                    if call_ids[tuid] in called_idx:
+                        called_idx.remove(call_ids[tuid])
+                    for k in range(len(completion_inputs) - 1, -1, -1):
+                        if completion_inputs[k][2] == tuid:
+                            del completion_inputs[k]
+                            break
+                    continue
                 if tuid in call_ids:
                     try:
                         parsed = json.loads("".join(chunks))
@@ -288,6 +300,7 @@ for idx, line in enumerate(lines):
 
 scan_from = last_inprogress if last_inprogress >= 0 else 0
 called = any(i >= scan_from for i in called_idx)
+call_errored = any(i >= scan_from for i in errored_idx)
 
 # Positional block extraction. A genuine
 # envelope always starts with a bare "anti-tangent envelope" header line --
@@ -341,7 +354,7 @@ if qualifying:
 # lightweight heading is file content, not a dispatch decision, so it never
 # exempts.
 last_direct = None
-for (i, inp) in completion_inputs:
+for (i, inp, _tuid) in completion_inputs:
     if i >= scan_from:
         last_direct = (i, inp)
 last_block = None
@@ -555,7 +568,7 @@ comment_violations = []
 # would be permanently and invisibly disabled.
 comment_scan_unavailable = False
 scan_stats = None
-in_window_completions = [inp for (i, inp) in completion_inputs if i >= scan_from]
+in_window_completions = [inp for (i, inp, _tuid) in completion_inputs if i >= scan_from]
 if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
     scan_violations = None
     try:
@@ -643,7 +656,7 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
                                              git_contexts.get(fpath)):
                 comment_violations.append({"path": fpath, "line": line, "why": why})
 
-print(json.dumps({"error": False, "called": called,
+print(json.dumps({"error": False, "called": called, "call_errored": call_errored,
                   "block_found": bool(qualifying), "verdict": verdict,
                   "no_session": no_session, "lite_marker": lite_marker,
                   "comment_violations": comment_violations,
@@ -673,6 +686,7 @@ BLOCK=$(echo "$RESULT" | jq -r '.block_found // false')
 VERDICT=$(echo "$RESULT" | jq -r '.verdict // ""')
 NO_SESSION=$(echo "$RESULT" | jq -r '.no_session // false')
 LITE_MARKER=$(echo "$RESULT" | jq -r '.lite_marker // false')
+CALL_ERRORED=$(echo "$RESULT" | jq -r '.call_errored // false')
 trace "$TASK_ID" "parsed" "called=$CALLED block=$BLOCK verdict=$VERDICT no_session=$NO_SESSION lite=$LITE_MARKER"
 
 # Recorded unconditionally, before any block/pass branch below, so a broken
@@ -793,6 +807,26 @@ fi
 if [[ "$CALLED" == "true" || "$BLOCK" == "true" ]]; then
     trace "$TASK_ID" "pass" "called=$CALLED block=$BLOCK"
     exit 0
+fi
+
+if [[ "$CALL_ERRORED" == "true" ]]; then
+    trace "$TASK_ID" "block" "call-errored"
+    {
+        echo "TASK CLOSED AFTER A validate_completion TOOL ERROR"
+        echo
+        echo "Task #$TASK_ID went to completed, but every mcp__anti-tangent__validate_completion"
+        echo "call in this task's window came back as a tool error (refused or failed),"
+        echo "so no verdict was produced and the completion gate has not run."
+        echo
+        echo "  1. TaskUpdate taskId=$TASK_ID status=in_progress"
+        echo "  2. Read the error and fix its cause (for example leave a refused path out"
+        echo "     of final_files or test_evidence_path)"
+        echo "  3. Call mcp__anti-tangent__validate_completion again"
+        echo "  4. Re-close once the verdict is pass"
+        echo
+        echo "(Disable: ANTI_TANGENT_COMPLETION_GUARD=0. Trace: $TRACE_LOG)"
+    } >&2
+    exit 2
 fi
 
 trace "$TASK_ID" "block" "no-validation"

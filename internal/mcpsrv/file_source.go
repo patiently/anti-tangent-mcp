@@ -12,12 +12,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/patiently/anti-tangent-mcp/internal/secretgate"
 )
 
 // fileSource is the provenance of one resolved file input. Path is the
@@ -98,7 +101,21 @@ func readCapped(r io.Reader, maxBytes int) ([]byte, error) {
 // second half by making the cap byte-accurate regardless of what os.Stat
 // reported a moment earlier. See README's filesystem-access section for the
 // caveats this does and does not cover.
-func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSource, error) {
+//
+// gate runs on both names before the open and on the bytes after the read; a
+// refusal returns the *secretgate.Refusal itself.
+func resolveFileInput(path string, roots []string, gate *secretgate.Gate, maxBytes int) (string, fileSource, error) {
+	content, src, err := readGatedFile(path, roots, gate, maxBytes)
+	var refusal *secretgate.Refusal
+	if errors.As(err, &refusal) {
+		slog.Warn("secret gate refused a file", "tier", refusal.Tier, "rule", refusal.Rule, "path", refusal.Path)
+	}
+	return content, src, err
+}
+
+// readGatedFile is resolveFileInput without the refusal log line, for callers
+// that skip a refused file instead of failing the call.
+func readGatedFile(path string, roots []string, gate *secretgate.Gate, maxBytes int) (string, fileSource, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", fileSource{}, errors.New("path is empty")
 	}
@@ -119,6 +136,9 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 				"when a root contains it, otherwise a file inside the repository that you delete after "+
 				"the call; a per-session scratch directory under /tmp is usually outside them",
 			resolved, strings.Join(roots, string(os.PathListSeparator)))
+	}
+	if err := gate.CheckPath(path, resolved); err != nil {
+		return "", fileSource{}, err
 	}
 
 	f, err := openNoFollow(resolved)
@@ -154,6 +174,9 @@ func resolveFileInput(path string, roots []string, maxBytes int) (string, fileSo
 	}
 	if err != nil {
 		return "", fileSource{}, fmt.Errorf("read %q: %w", resolved, err)
+	}
+	if err := gate.CheckContent(resolved, b); err != nil {
+		return "", fileSource{}, err
 	}
 
 	sum := sha256.Sum256(b)

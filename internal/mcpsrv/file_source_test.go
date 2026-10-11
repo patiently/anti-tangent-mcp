@@ -22,7 +22,7 @@ func TestResolveFileInput(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("reads file and reports provenance", func(t *testing.T) {
-		content, src, err := resolveFileInput(real, nil, 1024)
+		content, src, err := resolveFileInput(real, nil, nil, 1024)
 		require.NoError(t, err)
 		assert.Equal(t, "hello", content)
 		assert.Equal(t, 5, src.Bytes)
@@ -32,18 +32,18 @@ func TestResolveFileInput(t *testing.T) {
 	})
 
 	t.Run("relative path rejected", func(t *testing.T) {
-		_, _, err := resolveFileInput("docs/plan.md", nil, 1024)
+		_, _, err := resolveFileInput("docs/plan.md", nil, nil, 1024)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "absolute")
 	})
 
 	t.Run("missing file", func(t *testing.T) {
-		_, _, err := resolveFileInput(filepath.Join(dir, "nope.md"), nil, 1024)
+		_, _, err := resolveFileInput(filepath.Join(dir, "nope.md"), nil, nil, 1024)
 		require.Error(t, err)
 	})
 
 	t.Run("directory rejected", func(t *testing.T) {
-		_, _, err := resolveFileInput(dir, nil, 1024)
+		_, _, err := resolveFileInput(dir, nil, nil, 1024)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "regular file")
 	})
@@ -51,7 +51,7 @@ func TestResolveFileInput(t *testing.T) {
 	t.Run("over cap reports true size and does not read", func(t *testing.T) {
 		big := filepath.Join(dir, "big.md")
 		require.NoError(t, os.WriteFile(big, bytes.Repeat([]byte("x"), 5000), 0o644))
-		_, src, err := resolveFileInput(big, nil, 1024)
+		_, src, err := resolveFileInput(big, nil, nil, 1024)
 		require.ErrorIs(t, err, errTooLarge)
 		assert.Equal(t, 5000, src.Bytes, "true size, not cap+1")
 	})
@@ -63,7 +63,7 @@ func TestResolveFileInput(t *testing.T) {
 		link := filepath.Join(dir, "escape.md")
 		require.NoError(t, os.Symlink(target, link))
 
-		_, _, err := resolveFileInput(link, []string{dirResolved}, 1024)
+		_, _, err := resolveFileInput(link, []string{dirResolved}, nil, 1024)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
 	})
@@ -73,7 +73,7 @@ func TestResolveFileInput(t *testing.T) {
 		p := filepath.Join(outside, "evidence.diff")
 		require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))
 
-		_, _, err := resolveFileInput(p, []string{dirResolved}, 1024)
+		_, _, err := resolveFileInput(p, []string{dirResolved}, nil, 1024)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ANTI_TANGENT_PLAN_ROOTS")
 		assert.Contains(t, err.Error(), dirResolved, "the error must name the configured roots")
@@ -87,7 +87,7 @@ func TestResolveFileInput(t *testing.T) {
 		link := filepath.Join(linkDir, "into.md")
 		require.NoError(t, os.Symlink(real, link))
 
-		content, _, err := resolveFileInput(link, []string{dirResolved}, 1024)
+		content, _, err := resolveFileInput(link, []string{dirResolved}, nil, 1024)
 		require.NoError(t, err)
 		assert.Equal(t, "hello", content)
 	})
@@ -101,18 +101,18 @@ func TestResolveFileInput(t *testing.T) {
 		victim := filepath.Join(parent, "foobar", "p.md")
 		require.NoError(t, os.WriteFile(victim, []byte("x"), 0o644))
 
-		_, _, err = resolveFileInput(victim, []string{filepath.Join(parentResolved, "foo")}, 1024)
+		_, _, err = resolveFileInput(victim, []string{filepath.Join(parentResolved, "foo")}, nil, 1024)
 		require.Error(t, err, "/foo must not authorize /foobar")
 	})
 
 	t.Run("empty roots is unrestricted", func(t *testing.T) {
-		_, _, err := resolveFileInput(real, nil, 1024)
+		_, _, err := resolveFileInput(real, nil, nil, 1024)
 		require.NoError(t, err)
 	})
 
 	t.Run("filesystem root as root allows a nested path", func(t *testing.T) {
 		root := filepath.VolumeName(real) + string(filepath.Separator)
-		_, _, err := resolveFileInput(real, []string{root}, 1024)
+		_, _, err := resolveFileInput(real, []string{root}, nil, 1024)
 		require.NoError(t, err, `root "/" must authorize everything beneath it`)
 	})
 
@@ -129,7 +129,7 @@ func TestResolveFileInput(t *testing.T) {
 		// covered directly by TestReadCapped below.
 		small := filepath.Join(dir, "small.md")
 		require.NoError(t, os.WriteFile(small, bytes.Repeat([]byte("y"), 4), 0o644))
-		content, src, err := resolveFileInput(small, nil, 4)
+		content, src, err := resolveFileInput(small, nil, nil, 4)
 		require.NoError(t, err)
 		assert.Equal(t, "yyyy", content)
 		assert.Equal(t, 4, src.Bytes)

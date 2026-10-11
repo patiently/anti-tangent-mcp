@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/patiently/anti-tangent-mcp/internal/secretgate"
 )
 
 type Config struct {
@@ -53,6 +55,10 @@ type Config struct {
 	// and the calling agent already has unrestricted file read, so the server
 	// acquires no capability the caller lacks. See design §3.1 / §3.2.
 	PlanRoots []string
+	// SecretGate refuses files that look like secrets, by name or by content,
+	// on every path input before their bytes reach a model. Nil when
+	// ANTI_TANGENT_SECRET_GATE=off.
+	SecretGate *secretgate.Gate
 	// ContextMaxFileBytes caps each individual file attached to
 	// validate_plan via context_paths. ContextMaxPayloadBytes caps the
 	// attached set as a whole. Both are separate from PlanMaxPayloadBytes so
@@ -404,6 +410,12 @@ func Load(env func(string) string) (Config, error) {
 		}
 		cfg.ContextMaxFileBytes = cfg.ContextMaxPayloadBytes
 	}
+	gate, err := secretGateFromEnv(env)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.SecretGate = gate
+
 	if v := env("ANTI_TANGENT_PLAN_ROOTS"); v != "" {
 		for _, p := range filepath.SplitList(v) {
 			p = strings.TrimSpace(p)
@@ -536,6 +548,42 @@ func Load(env func(string) string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// secretGateFromEnv builds the file secret gate from ANTI_TANGENT_SECRET_GATE
+// and ANTI_TANGENT_FILE_DENY_EXTRA. It returns a nil gate when the mode is off.
+func secretGateFromEnv(env func(string) string) (*secretgate.Gate, error) {
+	mode := secretgate.ModeOn
+	if v := env("ANTI_TANGENT_SECRET_GATE"); v != "" {
+		m, err := secretgate.ParseMode(v)
+		if err != nil {
+			return nil, fmt.Errorf("ANTI_TANGENT_SECRET_GATE: %w", err)
+		}
+		mode = m
+	}
+	raw := env("ANTI_TANGENT_FILE_DENY_EXTRA")
+	globs := denyExtraGlobs(raw)
+	// A set value that yields no rule would leave the operator believing a
+	// name is denied when it is not, so it fails loudly like a malformed glob.
+	if raw != "" && len(globs) == 0 {
+		return nil, fmt.Errorf("ANTI_TANGENT_FILE_DENY_EXTRA: set but contains no usable glob entries: %q", raw)
+	}
+	gate, err := secretgate.New(mode, globs)
+	if err != nil {
+		return nil, fmt.Errorf("ANTI_TANGENT_FILE_DENY_EXTRA: %w", err)
+	}
+	return gate, nil
+}
+
+// denyExtraGlobs splits an OS path-list of glob patterns, dropping blank entries.
+func denyExtraGlobs(v string) []string {
+	var globs []string
+	for _, g := range filepath.SplitList(v) {
+		if g = strings.TrimSpace(g); g != "" {
+			globs = append(globs, g)
+		}
+	}
+	return globs
 }
 
 // resolvePlanRoot symlink-resolves an ANTI_TANGENT_PLAN_ROOTS entry so it

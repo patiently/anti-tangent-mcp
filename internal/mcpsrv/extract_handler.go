@@ -555,7 +555,7 @@ func (h *handlers) resolveEnvelopeTestEvidence(envs []CompletionEnvelopeArg, cla
 		if e.TestEvidence != "" {
 			return verdict.ExtractResult{}, false, fmt.Errorf("completion_envelopes[%d]: test_evidence and test_evidence_path are mutually exclusive", i)
 		}
-		content, rerr := resolveTestEvidencePath(e.TestEvidencePath, h.deps.Cfg.PlanRoots, h.deps.Cfg.TestEvidenceMaxBytes)
+		content, rerr := resolveTestEvidencePath(e.TestEvidencePath, h.deps.Cfg.PlanRoots, h.deps.Cfg.SecretGate, h.deps.Cfg.TestEvidenceMaxBytes)
 		var tooLarge *completionInputTooLargeError
 		if errors.As(rerr, &tooLarge) {
 			res := extractTooLargeResult(tooLarge.bytes, h.deps.Cfg.TestEvidenceMaxBytes)

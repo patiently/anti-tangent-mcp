@@ -23,6 +23,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
 	"github.com/patiently/anti-tangent-mcp/internal/ratedigest"
+	"github.com/patiently/anti-tangent-mcp/internal/secretgate"
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
@@ -108,7 +109,7 @@ type ValidateTaskSpecArgs struct {
 	// PlanRunID ties this task to a plan run minted by validate_plan. Best
 	// effort: an unknown or expired id must not fail the review.
 	PlanRunID     string   `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call. Left out, the task is attached only when this server holds exactly one live plan run and task_title matches exactly one of its headings."`
-	ContextPaths  []string `json:"context_paths,omitempty" jsonschema:"Absolute paths to files the implementer was told to work from, such as its dispatch brief: the server reads them and shows the reviewer their whole contents, so a term or step they define is not reported as missing from the spec. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the task-spec payload cap."`
+	ContextPaths  []string `json:"context_paths,omitempty" jsonschema:"Absolute paths to files the implementer was told to work from, such as its dispatch brief: the server reads them and shows the reviewer their whole contents, so a term or step they define is not reported as missing from the spec. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the task-spec payload cap. A file the secret gate refuses (ANTI_TANGENT_SECRET_GATE) fails the call."`
 	TaskIndex     int      `json:"task_index,omitempty" jsonschema:"The task's 1-based position in the plan, from the controller's dispatch. With plan_run_id it names the plan task this call belongs to; without it the task is found by matching task_title against the plan's headings. Validating the same task again updates its plan_run_report row instead of adding one."`
 	TaskKind      string   `json:"task_kind,omitempty" jsonschema:"experiment or build, the default: validate_plan's task_kind for this task. An experiment is reviewed as a measured, keep-or-revert change and can never close lightweight. When this call attaches to a plan run, the run's value wins and a different one draws a minor kind_conflict finding."`
 	Rung          string   `json:"rung,omitempty" jsonschema:"The task's fix-ladder rung, validate_plan's rung for this task: oracle, variance, facts, tool, commitment, prompt or owner. An experiment without one draws a minor rung_missing finding. The plan run's value wins, as for task_kind."`
@@ -1107,8 +1108,8 @@ const testEvidenceShrinkAdvice = "Attach the Markdown scoreboard, or a per-eval 
 // resolveTestEvidencePath reads a test_evidence_path under roots and its own
 // cap. An oversized file is a completionInputTooLargeError, so each tool can
 // answer it with its payload_too_large shape.
-func resolveTestEvidencePath(path string, roots []string, maxBytes int) (string, error) {
-	content, src, err := resolveFileInput(path, roots, maxBytes)
+func resolveTestEvidencePath(path string, roots []string, gate *secretgate.Gate, maxBytes int) (string, error) {
+	content, src, err := resolveFileInput(path, roots, gate, maxBytes)
 	if errors.Is(err, errTooLarge) {
 		return "", &completionInputTooLargeError{field: "test_evidence_path", bytes: src.Bytes, err: err}
 	}
@@ -1222,13 +1223,13 @@ func validateCompletionTool() *mcp.Tool {
 type ValidateCompletionArgs struct {
 	SessionID             string                `json:"session_id"  jsonschema:"The session_id returned by this task's validate_task_spec call. An empty string runs a lightweight review with no session."`
 	Summary               string                `json:"summary"     jsonschema:"What you implemented and how each acceptance criterion is met. A claim in the summary is not evidence on its own."`
-	FinalFiles            []CompletionFileArg   `json:"final_files,omitempty" jsonschema:"Changed files, with full content or with content omitted so the server reads them. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; do not also send a file that final_diff already covers."`
+	FinalFiles            []CompletionFileArg   `json:"final_files,omitempty" jsonschema:"Changed files, with full content or with content omitted so the server reads them. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; do not also send a file that final_diff already covers. A file the secret gate refuses (ANTI_TANGENT_SECRET_GATE) fails the call."`
 	FinalDiff             string                `json:"final_diff,omitempty" jsonschema:"A unified diff of the task's changes. Counts toward the payload cap, ANTI_TANGENT_MAX_PAYLOAD_BYTES, default 204800 bytes; when it is large, generate it with -U1 and leave out generated, lockfile and snapshot files."`
-	FinalDiffPath         string                `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, for example inside the repository; a per-session scratch directory under /tmp usually is not."`
+	FinalDiffPath         string                `json:"final_diff_path,omitempty" jsonschema:"Absolute path to a unified diff file that the server reads instead of final_diff. With ANTI_TANGENT_PLAN_ROOTS set it must be under one of those roots, for example inside the repository; a per-session scratch directory under /tmp usually is not. A file the secret gate refuses (ANTI_TANGENT_SECRET_GATE) fails the call."`
 	RepoRoot              string                `json:"repo_root,omitempty" jsonschema:"Absolute path to the checkout the diff applies to. The server reads the post-change version of each file the diff names beneath it, within ANTI_TANGENT_PLAN_ROOTS and the context_paths byte caps, and shows the reviewer only the comment lines that still name a symbol the diff removes, so nothing it reads counts toward the payload cap. Without it those comments are looked for in the evidence alone; an unusable repo_root draws a minor finding."`
-	ContextPaths          []string              `json:"context_paths,omitempty" jsonschema:"Absolute paths to related files that are not part of the change, such as a sibling helper the change might re-implement: the server reads them and shows the reviewer their whole contents. The reviewer is told they are never evidence for an acceptance criterion — the server cannot enforce what a model counts — and that the reuse: check needs a diff (final_diff or final_diff_path); with final_files alone it raises no over-building finding. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the validate_completion payload cap."`
+	ContextPaths          []string              `json:"context_paths,omitempty" jsonschema:"Absolute paths to related files that are not part of the change, such as a sibling helper the change might re-implement: the server reads them and shows the reviewer their whole contents. The reviewer is told they are never evidence for an acceptance criterion — the server cannot enforce what a model counts — and that the reuse: check needs a diff (final_diff or final_diff_path); with final_files alone it raises no over-building finding. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the validate_completion payload cap. A file the secret gate refuses (ANTI_TANGENT_SECRET_GATE) fails the call."`
 	TestEvidence          string                `json:"test_evidence,omitempty" jsonschema:"The test run output that proves the change, verbatim. Output showing no test executed draws a finding."`
-	TestEvidencePath      string                `json:"test_evidence_path,omitempty" jsonschema:"Absolute path to a file the server reads as test_evidence, such as an eval scoreboard; mutually exclusive with test_evidence. Within ANTI_TANGENT_PLAN_ROOTS when set, and within ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES, default 262144 bytes; it does not count toward the payload cap. The whole file goes to the reviewer vendor."`
+	TestEvidencePath      string                `json:"test_evidence_path,omitempty" jsonschema:"Absolute path to a file the server reads as test_evidence, such as an eval scoreboard; mutually exclusive with test_evidence. Within ANTI_TANGENT_PLAN_ROOTS when set, and within ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES, default 262144 bytes; it does not count toward the payload cap. The whole file goes to the reviewer vendor. A file the secret gate refuses (ANTI_TANGENT_SECRET_GATE) fails the call."`
 	ExitContracts         []string              `json:"exit_contracts,omitempty" jsonschema:"Symbols or behavior later tasks rely on this task leaving in place, copied from validate_plan's exit_contracts for this task; a hard miss draws missing_acceptance_criterion. At most 50 entries of at most 500 characters each."`
 	ExitContractsInferred bool                  `json:"exit_contracts_inferred,omitempty" jsonschema:"validate_plan's exit_contracts_inferred for this task: true when the contracts were inferred from cross-task references rather than written in the plan, which caps a miss at minor."`
 	ModelOverride         string                `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
@@ -1236,7 +1237,7 @@ type ValidateCompletionArgs struct {
 	RateDigest            any                   `json:"rate_digest,omitempty" jsonschema:"Optional and unverified, like codescene: the eval run behind the change, as an object. n (required, 1 to 10000) and before_k / after_k (0 to n) are the target eval's counts; target_eval (at most 300 characters), interval_after ([low, high] between 0 and 1), suite ({evals, regressions}), kept (true when the change is kept, false when reverted) and rigidity_delta ({outbound_strings, veto_keys, state_markers, strategy_lines}) are optional; other keys are ignored. A malformed digest is dropped with a minor finding. With boundary rules or an experiment task, kept true and no diff is rejected with diff_required."`
 	Codescene             *codescene.Digest     `json:"codescene,omitempty" jsonschema:"The CodeScene result for this task: analyze_change_set's raw JSON, or the reduced digest. Unknown keys are ignored. pre_commit_code_health_safeguard sees only uncommitted changes, so after a commit it reports zero files and is not a run of the task. When a run was attempted and failed, send ran false with skip_reason and skip_evidence."`
 	FindingResponses      []FindingResponseArg  `json:"finding_responses,omitempty" jsonschema:"Your answers to findings you dispute from this task's last validate_completion response that was not partial, one per finding id. If the reviewer raises a critical or major finding you answered again, the response sets escalate. At most 50 entries of at most 2000 characters each; not counted toward the payload cap."`
-	ControllerRulings     []ControllerRulingArg `json:"controller_rulings,omitempty" jsonschema:"Rulings your controller issued on findings from this task's session, copied verbatim. A ruling covers every later finding with the same id, ignoring any -n suffix, for the rest of the session, which keeps at most 50 rulings. At most 50 entries of at most 2000 characters each; not counted toward the payload cap."`
+	ControllerRulings     []ControllerRulingArg `json:"controller_rulings,omitempty" jsonschema:"Rulings your controller issued on findings from this task's session, copied verbatim. A ruling covers every later finding with the same id, ignoring any -n suffix, for the rest of the session, which keeps at most 50 rulings. At most 50 entries of at most 2000 characters each; not counted toward the payload cap. On a lightweight call (no session_id) a ruling applies only with plan_run_id and task_index or task_title, and only to an id an earlier validate_completion on that task returned."`
 	PlanRunID             string                `json:"plan_run_id,omitempty" jsonschema:"Lightweight calls only (empty session_id): the plan_run_id from the controller's final passing validate_plan call, so plan_run_report counts this task. Pass task_index or task_title with it. Ignored when session_id is set, because the session already carries it; an unknown or expired id does not fail the call."`
 	TaskIndex             int                   `json:"task_index,omitempty" jsonschema:"Lightweight calls only: the task's 1-based position in the plan. Ignored when session_id is set."`
 	TaskTitle             string                `json:"task_title,omitempty" jsonschema:"Lightweight calls only: the task's heading in the plan, used to find the task when task_index is absent. Ignored when session_id is set."`
@@ -1254,7 +1255,7 @@ type ValidatePlanArgs struct {
 	ModelOverride                string                `json:"model_override,omitempty" jsonschema:"Reviewer model for this call only, as provider:model, such as anthropic:claude-opus-4-7. Must be on the server's model allowlist."`
 	MaxTokensOverride            int                   `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default scaled by task count; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
 	Mode                         string                `json:"mode,omitempty" jsonschema:"thorough, the default, or quick, which surfaces only the most severe findings, at most 3 per scope."`
-	ContextPaths                 []string              `json:"context_paths,omitempty" jsonschema:"Absolute paths to source files the plan makes claims about, at most 50. Each file is sent in full to the reviewer vendor on every reviewer call of the round, so attach only files the plan touches and never secrets. With ANTI_TANGENT_PLAN_ROOTS set they must be under those roots."`
+	ContextPaths                 []string              `json:"context_paths,omitempty" jsonschema:"Absolute paths to source files the plan makes claims about, at most 50. Each file is sent in full to the reviewer vendor on every reviewer call of the round, so attach only files the plan touches and never secrets. With ANTI_TANGENT_PLAN_ROOTS set they must be under those roots. A file the secret gate refuses (ANTI_TANGENT_SECRET_GATE) fails the call."`
 	RepoRoot                     string                `json:"repo_root,omitempty" jsonschema:"Absolute path to the repository root; enables the disk tier of the Create/Modify consistency check. With ANTI_TANGENT_PLAN_ROOTS set it must be under those roots."`
 	ControllerRulings            []ControllerRulingArg `json:"controller_rulings,omitempty" jsonschema:"Rulings you made on findings from earlier rounds, resent every round. Each waives every finding with the same id, ignoring any -n suffix; only an id's shape is checked. At most 50 entries of at most 2000 characters each."`
 	PlanRunID                    string                `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id an earlier validate_plan round on this plan returned. The round then keeps that id, sends the reviewer only the tasks whose text changed, carries the other tasks' results forward, and re-runs the plan-level pass only when the plan text changed. A round in which nothing changed makes no reviewer call. An unknown or expired id does not fail the call: the whole plan is reviewed under a new run, unless the pass cache holds an identical passing result from the last three minutes, and a finding says so. Leave it out to review the whole plan, unless the pass cache holds an identical passing result from the last three minutes."`
@@ -1523,7 +1524,7 @@ func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) ([]File
 	diskTotal := 0
 
 	if args.TestEvidencePath != "" {
-		content, err := resolveTestEvidencePath(args.TestEvidencePath, roots, h.deps.Cfg.TestEvidenceMaxBytes)
+		content, err := resolveTestEvidencePath(args.TestEvidencePath, roots, h.deps.Cfg.SecretGate, h.deps.Cfg.TestEvidenceMaxBytes)
 		if err != nil {
 			return nil, err
 		}
@@ -1531,7 +1532,7 @@ func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) ([]File
 	}
 
 	if args.FinalDiffPath != "" {
-		content, src, err := resolveFileInput(args.FinalDiffPath, roots, maxBytes)
+		content, src, err := resolveFileInput(args.FinalDiffPath, roots, h.deps.Cfg.SecretGate, maxBytes)
 		if errors.Is(err, errTooLarge) {
 			return nil, &completionInputTooLargeError{field: "final_diff_path", bytes: src.Bytes, err: err}
 		}
@@ -1561,7 +1562,7 @@ func (h *handlers) resolveCompletionInputs(args *ValidateCompletionArgs) ([]File
 		if strings.TrimSpace(f.Path) == "" {
 			continue
 		}
-		content, src, err := resolveFileInput(f.Path, roots, maxBytes)
+		content, src, err := resolveFileInput(f.Path, roots, h.deps.Cfg.SecretGate, maxBytes)
 		if errors.Is(err, errTooLarge) {
 			return nil, &completionInputTooLargeError{field: fmt.Sprintf("final_files[%d].path", i), bytes: src.Bytes, err: err}
 		}
@@ -2028,7 +2029,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	var sess *session.Session
 	var spec session.TaskSpec
 	var review completionReview
-	var lightweightMalformedRulingIDs []string
+	var lightweightMalformedRulingIDs, lightweightUnissuedRulingIDs []string
+	var liteState planrun.LiteState
 	var modeFindings []verdict.Finding
 	skipReported, overBuildingAnswered := false, false
 	var codesceneEventKey string
@@ -2044,10 +2046,14 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 			return nil, Envelope{}, err
 		}
 		mode.applyTo(&spec)
-		// A lightweight task has no session to remember a ruling, so the call
-		// carries them: shape-checked like validate_plan's, rendered as
-		// authoritative, and applied to this review's findings.
-		review.rulings, review.shown, lightweightMalformedRulingIDs = lightweightRulings(rulingArgs)
+		// A lightweight task has no session to remember the IDs it was shown,
+		// so its plan-run row does: rulings may name only those.
+		liteState = h.liteRowState(args)
+		var issued []string
+		if liteState.Found && !liteState.SessionOwned {
+			issued = liteState.IssuedIDs
+		}
+		review.rulings, review.shown, lightweightMalformedRulingIDs, lightweightUnissuedRulingIDs = lightweightRulings(rulingArgs, issued)
 	} else {
 		var ok bool
 		sess, ok = h.deps.Sessions.Get(args.SessionID)
@@ -2192,9 +2198,22 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		if f, ok := h.lightweightPlanRunAdvisory(args.PlanRunID, args.TaskIndex, args.TaskTitle); ok {
 			env.Findings = append(env.Findings, f)
 		}
+		if liteState.SessionOwned {
+			env.Findings = append(env.Findings, sessionOwnedRowAdvisory())
+		}
 	}
 	if len(lightweightMalformedRulingIDs) > 0 {
 		env.Findings = append(env.Findings, malformedPlanRulingsAdvisory(lightweightMalformedRulingIDs))
+	}
+	if len(lightweightUnissuedRulingIDs) > 0 {
+		switch {
+		case liteState.SessionOwned:
+			// sessionOwnedRowAdvisory already says where the task's rulings belong.
+		case !liteState.Found:
+			env.Findings = append(env.Findings, unboundLiteRulingsAdvisory())
+		default:
+			env.Findings = append(env.Findings, unissuedLiteRulingsAdvisory(lightweightUnissuedRulingIDs))
+		}
 	}
 	if lightweight && len(responses) > 0 {
 		env.Findings = append(env.Findings, noSessionResponsesAdvisory())
@@ -2370,7 +2389,7 @@ func (h *handlers) ValidatePlan(ctx context.Context, _ *mcp.CallToolRequest, arg
 	if args.PlanPath != "" {
 		var rerr error
 		planText, planSrc, rerr = resolveFileInput(
-			args.PlanPath, h.deps.Cfg.PlanRoots, h.deps.Cfg.PlanMaxPayloadBytes)
+			args.PlanPath, h.deps.Cfg.PlanRoots, h.deps.Cfg.SecretGate, h.deps.Cfg.PlanMaxPayloadBytes)
 		if errors.Is(rerr, errTooLarge) {
 			total := planSrc.Bytes + pkBytes
 			pr := prependPlanClamp(

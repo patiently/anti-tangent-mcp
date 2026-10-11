@@ -20,7 +20,42 @@ def tool_use(name, inp=None):
 CLAUSE = "Implement Task 3.\n\n" + FULL_HEADING + "\n\nAt task start ..."
 
 
+def tool_result(tool_use_id, is_error):
+    return json.dumps({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tool_use_id, "is_error": is_error,
+         "content": [{"type": "text", "text": "refused"}]}]}})
+
+
 class ClassifyTest(unittest.TestCase):
+    def test_refused_call_does_not_pass(self):
+        lines = [user(CLAUSE), tool_use(SPEC_TOOL, {"goal": "g"}), tool_result("t1", True)]
+        self.assertEqual(classify(lines), "errored")
+
+    def test_scan_stops_at_the_first_successful_result(self):
+        lines = iter([user(CLAUSE), tool_use(SPEC_TOOL), tool_result("t1", False), user("never read")])
+        self.assertEqual(classify(lines), "pass")
+        self.assertEqual(len(list(lines)), 1)
+
+    def test_no_call_at_all_is_a_plain_block(self):
+        self.assertEqual(classify([user(CLAUSE)]), "block")
+
+    def test_legacy_call_without_id_stops_the_scan(self):
+        legacy = json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": SPEC_TOOL, "input": {}}]}})
+        lines = iter([user(CLAUSE), legacy, user("never read")])
+        self.assertEqual(classify(lines), "pass")
+        self.assertEqual(len(list(lines)), 1)
+
+    def test_successful_call_passes(self):
+        lines = [user(CLAUSE), tool_use(SPEC_TOOL, {"goal": "g"}), tool_result("t1", False)]
+        self.assertEqual(classify(lines), "pass")
+
+    def test_retry_after_a_refused_call_passes(self):
+        retry = json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t2", "name": SPEC_TOOL, "input": {}}]}})
+        lines = [user(CLAUSE), tool_use(SPEC_TOOL), tool_result("t1", True), retry, tool_result("t2", False)]
+        self.assertEqual(classify(lines), "pass")
+
     def test_implementer_without_call_blocks(self):
         self.assertEqual(classify([user(CLAUSE), tool_use("Read")]), "block")
 

@@ -37,4 +37,5 @@ locate the region, then take a targeted read — which the hooks never block:
 ## Limits
 
 Up to 50 absolute paths per call, subject to the server's payload cap. Split
-larger sets rather than raising the cap.
+larger sets rather than raising the cap. A path the secret gate refuses fails the
+whole call; leave it out and retry.

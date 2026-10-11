@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
+	"github.com/patiently/anti-tangent-mcp/internal/ratedigest"
 )
 
 // attacher binds t, s and runID so each attach records one validate_task_spec
@@ -118,8 +119,8 @@ func TestUpdateRow_EverySessionOfATaskUpdatesIt(t *testing.T) {
 func TestUpsertLite_AddsALiteRowTitledFromThePlan(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha", "Task 2: Beta"))
-	row, ok := s.UpsertLite(r.ID, TaskRef{Index: 2}, func(row *TaskRow) { row.PostVerdict = "pass" })
-	require.True(t, ok)
+	row, res := s.UpsertLite(r.ID, TaskRef{Index: 2}, func(row *TaskRow) { row.PostVerdict = "pass" })
+	require.Equal(t, UpsertApplied, res)
 	assert.True(t, row.Lite)
 	assert.Equal(t, 2, row.Index)
 	assert.Equal(t, "Task 2: Beta", row.TaskTitle)
@@ -127,17 +128,64 @@ func TestUpsertLite_AddsALiteRowTitledFromThePlan(t *testing.T) {
 	assert.Zero(t, row.Attempts, "a lightweight task has no validate_task_spec session")
 }
 
-func TestUpsertLite_UpdatesAnAttachedRowWithoutMarkingItLite(t *testing.T) {
+func TestUpsertLite_LeavesASessionRowAlone(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha"))
 	attach := attacher(t, s, r.ID)
 	attach("s1", "Alpha", "pass")
-	row, ok := s.UpsertLite(r.ID, TaskRef{Title: "Alpha"}, func(row *TaskRow) { row.PostVerdict = "warn" })
+	_, ok := s.UpdateRow(r.ID, "s1", func(row *TaskRow) { row.PostVerdict = "warn" })
 	require.True(t, ok)
-	assert.False(t, row.Lite)
+
+	called := false
+	row, res := s.UpsertLite(r.ID, TaskRef{Index: 1}, func(row *TaskRow) { called = true; row.PostVerdict = "pass" })
+	assert.Equal(t, UpsertSessionOwned, res)
+	assert.False(t, called)
 	assert.Equal(t, "warn", row.PostVerdict)
 	got, _ := s.Snapshot(r.ID)
-	assert.Len(t, got.Rows, 1)
+	require.Len(t, got.Rows, 1)
+	assert.Equal(t, "warn", got.Rows[0].PostVerdict)
+	assert.False(t, got.Rows[0].Lite)
+}
+
+func TestUpsertLite_UnknownRunOrEmptyRef(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha"))
+	_, res := s.UpsertLite("pr_000000000000", TaskRef{Index: 1}, func(*TaskRow) {})
+	assert.Equal(t, UpsertUnknown, res)
+	_, res = s.UpsertLite(r.ID, TaskRef{}, func(*TaskRow) {})
+	assert.Equal(t, UpsertUnknown, res)
+}
+
+func TestLiteState(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha", "Task 2: Beta"))
+	assert.Equal(t, LiteState{}, s.LiteState("pr_000000000000", TaskRef{Index: 1}))
+	assert.Equal(t, LiteState{Found: true}, s.LiteState(r.ID, TaskRef{Index: 2}))
+	got, _ := s.Snapshot(r.ID)
+	assert.Empty(t, got.Rows, "LiteState adds no row")
+
+	_, res := s.UpsertLite(r.ID, TaskRef{Index: 2}, func(row *TaskRow) { row.AddIssuedIDs([]string{"f_00000001"}) })
+	require.Equal(t, UpsertApplied, res)
+	st := s.LiteState(r.ID, TaskRef{Index: 2})
+	assert.Equal(t, LiteState{Found: true, IssuedIDs: []string{"f_00000001"}}, st)
+	st.IssuedIDs[0] = "mutated"
+	assert.Equal(t, "f_00000001", s.LiteState(r.ID, TaskRef{Index: 2}).IssuedIDs[0], "a copy")
+
+	attacher(t, s, r.ID)("s1", "Alpha", "pass")
+	assert.True(t, s.LiteState(r.ID, TaskRef{Index: 1}).SessionOwned)
+}
+
+func TestAddIssuedIDs_DedupesAndCaps(t *testing.T) {
+	var row TaskRow
+	row.AddIssuedIDs([]string{"a", "", "a", "b"})
+	assert.Equal(t, []string{"a", "b"}, row.IssuedIDs)
+	ids := make([]string, 250)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("f_%08x", i)
+	}
+	row.AddIssuedIDs(ids)
+	require.Len(t, row.IssuedIDs, 200)
+	assert.Equal(t, fmt.Sprintf("f_%08x", 249), row.IssuedIDs[199])
 }
 
 func TestRowsStayInIndexOrder(t *testing.T) {
@@ -154,12 +202,39 @@ func TestRowsStayInIndexOrder(t *testing.T) {
 func TestAttach_ClearsLiteOnARowALightweightCallCreated(t *testing.T) {
 	s := NewStore(time.Hour)
 	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha"))
-	_, ok := s.UpsertLite(r.ID, TaskRef{Index: 1}, func(row *TaskRow) { row.PostVerdict = "pass" })
-	require.True(t, ok)
+	_, res := s.UpsertLite(r.ID, TaskRef{Index: 1}, func(row *TaskRow) {
+		row.PostVerdict = "pass"
+		row.Waived = 2
+		row.Severity = map[string]int{"major": 1}
+		row.RateDigest = &ratedigest.Digest{N: 5}
+		row.CodesceneState = StateRan
+		row.AddIssuedIDs([]string{"f_00000001"})
+		row.AppendCall(ToolCall{Tool: "validate_completion"})
+	})
+	require.Equal(t, UpsertApplied, res)
 	row, ok := s.Attach(r.ID, "s1", TaskRef{Title: "Alpha"}, "warn")
 	require.True(t, ok)
 	assert.False(t, row.Lite, "a task with a validate_task_spec session is not lightweight")
 	assert.Equal(t, 1, row.Attempts)
+	assert.Empty(t, row.PostVerdict)
+	assert.Zero(t, row.Waived)
+	assert.Nil(t, row.Severity)
+	assert.Nil(t, row.RateDigest)
+	assert.Nil(t, row.IssuedIDs)
+	assert.Equal(t, StateMissing, row.CodesceneState)
+	assert.Len(t, row.Calls, 1, "the call log is history and is kept")
+}
+
+func TestAttach_ReattachKeepsASessionRowsResults(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha"))
+	attach := attacher(t, s, r.ID)
+	attach("s1", "Alpha", "pass")
+	_, ok := s.UpdateRow(r.ID, "s1", func(row *TaskRow) { row.PostVerdict = "warn" })
+	require.True(t, ok)
+	row := attach("s2", "Alpha", "pass")
+	assert.Equal(t, "warn", row.PostVerdict)
+	assert.Equal(t, 2, row.Attempts)
 }
 
 func TestPlanTaskCount(t *testing.T) {
@@ -563,4 +638,17 @@ func TestSoleLiveByTitle(t *testing.T) {
 	id, ok = s.SoleLiveByTitle("Store")
 	require.True(t, ok, "a run idle past the TTL is not live")
 	assert.Equal(t, run.ID, id)
+}
+
+func TestLiteState_NamesNoPlanTask(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha", "Task 2: Beta"))
+	assert.Equal(t, LiteState{}, s.LiteState(r.ID, TaskRef{Index: 9}), "out-of-range index")
+	assert.Equal(t, LiteState{}, s.LiteState(r.ID, TaskRef{Title: "Gamma"}), "unmatched title")
+
+	_, res := s.UpsertLite(r.ID, TaskRef{Title: "Gamma"}, func(row *TaskRow) { row.AddIssuedIDs([]string{"f_00000001"}) })
+	require.Equal(t, UpsertApplied, res)
+	st := s.LiteState(r.ID, TaskRef{Title: "Gamma"})
+	assert.True(t, st.Found, "an unmatched task that has a row is found")
+	assert.Equal(t, []string{"f_00000001"}, st.IssuedIDs)
 }

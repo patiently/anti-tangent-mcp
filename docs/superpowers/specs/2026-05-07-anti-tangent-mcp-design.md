@@ -77,6 +77,16 @@ A single Go binary, internally organized by layer.
   `validate_completion` read plan/evidence files from disk when given path inputs (`plan_path`,
   `final_diff_path`, `final_files[].path`) — see
   `docs/superpowers/specs/2026-08-31-plan-path-design.md`.
+- Secret gate (`internal/secretgate`): every file the server reads for a tool — `context_paths`,
+  `final_files`, `final_diff_path`, `test_evidence_path`, `plan_path`, `bulk_read` and `code_write`
+  reference paths — is refused before any bytes leave the host when its name looks like a secrets
+  file (`.env`, `*.pem`, `id_rsa`, `.netrc`, `.aws/credentials`, ...) or its contents carry a private
+  key or a well-known token prefix. The check runs in `resolveFileInput` on both the requested and
+  the symlink-resolved name, then on the bytes read. A refusal is a tool error naming the rule; the
+  matched bytes are never echoed, no reviewer call is made, and `validate_task_spec` creates no
+  session. `ANTI_TANGENT_SECRET_GATE=names` keeps only the name rules, `off` disables the gate, and
+  `ANTI_TANGENT_FILE_DENY_EXTRA` adds globs to the name rules. It stops accidental attachments, not a
+  caller that pastes a secret into a text field.
 - Sessions live in memory, expire after a configurable TTL (default 4h).
 - If the server restarts, in-flight sessions are lost — re-issuing `validate_task_spec` is cheap (~1-2s, one LLM call).
 

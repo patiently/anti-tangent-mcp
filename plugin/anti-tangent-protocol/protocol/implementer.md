@@ -152,13 +152,13 @@ Use anti-tangent per the standard dispatch protocol. For this task:
 
 ### Lightweight protocol mode
 
-For trivial tasks — doc-only edits, single-file mechanical relocations, dependency bumps — the full clause is overhead. Controllers may dispatch a **lightweight clause**: skip `validate_task_spec`, skip `check_progress`, keep `validate_completion` as the sanity gate (its handler accepts an empty `session_id` when any of `final_files` / `final_diff` / `test_evidence` is non-empty).
+For trivial tasks — doc-only edits, single-file mechanical relocations, dependency bumps — the full clause is overhead. Controllers may dispatch a **lightweight clause**: skip `validate_task_spec` and `check_progress`; keep `validate_completion` (empty `session_id`, with evidence). Its `controller_rulings` need `plan_run_id` + `task_index` (or `task_title`), and cover only ids an earlier call on that task returned.
 
 Use lightweight mode when ALL of: (a) ≤ 2 files or docs/config/data-only; (b) mechanical (no new logic, no test-design choices); (c) the spec gives literal text, an exact diff, command or insertion shape. `validate_plan`'s `lightweight_eligible` / `lightweight_reason` hints are advisory, not permission to skip judgment.
 
-Use the full protocol for new production logic, test-design choices, or ACs requiring observable invariants. An experiment task is never lightweight: its completion grades a measured protocol. Reference lightweight dispatch clause: `examples/lightweight-dispatch.md`.
+Use the full protocol for new production logic, test-design choices, or ACs with observable invariants. An experiment task is never lightweight: its completion grades a measured protocol. See lightweight dispatch clause: `examples/lightweight-dispatch.md`.
 
-**Lightweight mode and `ANTI_TANGENT_CODESCENE=required`.** Unset: lightweight tasks skip the companion calls (`pre_commit_code_health_safeguard` / `analyze_change_set`) — nothing meaningful on a trivial edit — and `codescene` is optional. `required` is an operator assertion CodeScene is present, so lightweight tasks must **run `analyze_change_set` and submit its result, exactly as any other task** — being lightweight is not a skip reason, and the failed-run shape in §4.2 step 3b covers an attempted run that failed, never one never attempted.
+**Lightweight mode and `ANTI_TANGENT_CODESCENE=required`.** Unset: lightweight tasks skip the companion calls (`pre_commit_code_health_safeguard` / `analyze_change_set`) and `codescene` is optional. `required` is an operator assertion CodeScene is present, so lightweight tasks must **run `analyze_change_set` and submit its result, exactly as any other task** — being lightweight is not a skip reason, and the failed-run shape in §4.2 step 3b covers an attempted run that failed, never one never attempted.
 
 ### CodeScene MCP companion
 

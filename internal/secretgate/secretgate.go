@@ -1,0 +1,261 @@
+// Package secretgate decides whether a file the server is about to send to a
+// model looks like a secret, by its name or by its bytes. It does no I/O and
+// reads no environment; config builds the Gate and the file reader calls it.
+//
+// It stops accidents, not a determined caller: an agent that can read a file
+// can paste its contents into a text field the gate never sees.
+package secretgate
+
+import (
+	"encoding/base64"
+	"fmt"
+	"path"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
+)
+
+// Mode selects which tiers run.
+type Mode string
+
+const (
+	ModeOn    Mode = "on"
+	ModeNames Mode = "names"
+	ModeOff   Mode = "off"
+)
+
+// ParseMode reads an ANTI_TANGENT_SECRET_GATE value.
+func ParseMode(s string) (Mode, error) {
+	switch m := Mode(strings.ToLower(strings.TrimSpace(s))); m {
+	case ModeOn, ModeNames, ModeOff:
+		return m, nil
+	}
+	return "", fmt.Errorf("%q is not one of on, names, off", s)
+}
+
+// Refusal is the error a refused file produces. It names the rule and never
+// the matched bytes, so the error can reach a summary block or a log safely.
+type Refusal struct {
+	Path string
+	Tier string // "names" or "content"
+	Rule string
+}
+
+func (r *Refusal) Error() string {
+	return fmt.Sprintf("%q refused by the secret gate (%s: %s); drop it, or set ANTI_TANGENT_SECRET_GATE to change the gate",
+		r.Path, r.Tier, r.Rule)
+}
+
+// Gate holds the compiled rules. A nil *Gate checks nothing.
+type Gate struct {
+	content bool
+	extra   []string
+	goos    string
+}
+
+// New builds a Gate, or nil for ModeOff. extra are path.Match globs added to
+// the name tier, matched against the slash-separated path (lowercased on
+// Windows and macOS, as the path is); a malformed one is an error.
+func New(mode Mode, extra []string) (*Gate, error) {
+	return newForOS(mode, extra, runtime.GOOS)
+}
+
+func newForOS(mode Mode, extra []string, goos string) (*Gate, error) {
+	globs := make([]string, 0, len(extra))
+	for _, g := range extra {
+		g = normalizeName(g, goos)
+		if _, err := path.Match(g, ""); err != nil {
+			return nil, fmt.Errorf("glob %q: %w", g, err)
+		}
+		globs = append(globs, g)
+	}
+	if mode == ModeOff {
+		return nil, nil
+	}
+	return &Gate{content: mode == ModeOn, extra: globs, goos: goos}, nil
+}
+
+// normalizeName puts a path or glob in the form the name rules match: forward
+// slashes on Windows, and lowercase on Windows and macOS where the default
+// volumes are case-insensitive.
+func normalizeName(p, goos string) string {
+	if goos == "windows" {
+		p = strings.ReplaceAll(p, `\`, "/")
+	} else {
+		p = filepath.ToSlash(p)
+	}
+	if goos == "windows" || goos == "darwin" {
+		p = strings.ToLower(p)
+	}
+	return p
+}
+
+// Mode reports the mode the gate was built with; a nil Gate is ModeOff.
+func (g *Gate) Mode() Mode {
+	switch {
+	case g == nil:
+		return ModeOff
+	case g.content:
+		return ModeOn
+	}
+	return ModeNames
+}
+
+// ExtraCount is the number of extra name globs the gate holds.
+func (g *Gate) ExtraCount() int {
+	if g == nil {
+		return 0
+	}
+	return len(g.extra)
+}
+
+// CheckPath runs the name tier on both the path the caller sent and the path
+// it resolved to, so a symlink cannot rename a secret in either direction.
+func (g *Gate) CheckPath(requested, resolved string) error {
+	if g == nil {
+		return nil
+	}
+	for _, p := range []string{requested, resolved} {
+		if rule := g.nameRule(p); rule != "" {
+			return &Refusal{Path: p, Tier: "names", Rule: rule}
+		}
+	}
+	return nil
+}
+
+// CheckContent runs the content tier on bytes already read and capped.
+func (g *Gate) CheckContent(p string, b []byte) error {
+	if g == nil || !g.content {
+		return nil
+	}
+	for _, r := range contentRules {
+		if r.re.Match(b) {
+			return &Refusal{Path: p, Tier: "content", Rule: r.name}
+		}
+	}
+	return nil
+}
+
+var (
+	envTemplates   = map[string]bool{"example": true, "sample": true, "template": true, "dist": true}
+	privateKeyExts = map[string]bool{".pem": true, ".key": true, ".p12": true, ".pfx": true, ".jks": true, ".keystore": true, ".kdbx": true}
+	sshKeyNames    = map[string]bool{"id_rsa": true, "id_dsa": true, "id_ecdsa": true, "id_ed25519": true}
+	sshPublic      = map[string]bool{"known_hosts": true, "authorized_keys": true, "config": true}
+	credFiles      = map[string]bool{".netrc": true, "_netrc": true, ".git-credentials": true, ".npmrc": true, ".pypirc": true, ".htpasswd": true, ".pgpass": true}
+	cloudSuffixes  = []string{"/.aws/credentials", "/.aws/config", "/.docker/config.json", "/.kube/config",
+		"/gcloud/credentials.db", "/gcloud/application_default_credentials.json"}
+	tfSuffixes = []string{".tfstate", ".tfstate.backup", ".tfvars"}
+)
+
+func (g *Gate) nameRule(p string) string {
+	p = normalizeName(p, g.goos)
+	base := path.Base(p)
+	switch {
+	case isDotenv(base):
+		return "dotenv"
+	case privateKeyExts[path.Ext(base)]:
+		return "private-key-file"
+	case sshKeyNames[base]:
+		return "ssh-key"
+	case strings.Contains(p, "/.ssh/") && !strings.HasSuffix(base, ".pub") && !sshPublic[base]:
+		return "ssh-key"
+	case credFiles[base]:
+		return "credential-file"
+	case hasAnySuffix(p, cloudSuffixes):
+		return "cloud-credentials"
+	case strings.Contains(p, "/.gnupg/"):
+		return "gnupg"
+	case hasAnySuffix(base, tfSuffixes):
+		return "terraform-state"
+	}
+	return g.extraRule(p, base)
+}
+
+func isDotenv(base string) bool {
+	if base == ".envrc" || strings.HasSuffix(base, ".env") {
+		return true
+	}
+	return strings.HasPrefix(base, ".env.") && !envTemplates[strings.TrimPrefix(base, ".env.")]
+}
+
+func (g *Gate) extraRule(p, base string) string {
+	for _, glob := range g.extra {
+		if ok, _ := path.Match(glob, base); ok {
+			return "extra"
+		}
+		if ok, _ := path.Match(glob, p); ok {
+			return "extra"
+		}
+	}
+	return ""
+}
+
+func hasAnySuffix(s string, suffixes []string) bool {
+	for _, suf := range suffixes {
+		if strings.HasSuffix(s, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+type contentRule struct {
+	name string
+	re   *regexp.Regexp
+}
+
+// armoredKey builds a rule for an ASCII-armoured key: the armour line named
+// by begin, optional RFC 1421 header lines and a base64 body. A line break is
+// a real newline, optionally CRLF, or the two characters backslash and n (or
+// backslash, r, backslash, n), as in a JSON string, and may be followed by a
+// closing quote, an optional + or , and an opening quote, which joins the
+// fragments of a source string literal. Each line may start with one marker
+// (a unified-diff marker, a # or // line comment, or a > quote) followed by
+// any indentation, which covers YAML block scalars, indented diff hunks and
+// a key pasted into a comment or a markdown quote.
+func armoredKey(begin string) string {
+	const lead = `(?:[-+>#]|//)?[ \t]*`
+	return `-----BEGIN ` + begin + `-----` + pemNL +
+		`(?:` + lead + `[A-Za-z-]+:(?:[^\n\\]|\\[^n])*` + pemNL + `)*` +
+		`(?:` + lead + pemNL + `)?` + lead + `[A-Za-z0-9+/=]{40,}`
+}
+
+const pemNL = `(?:(?:\\r)?\\n|\r?\n)(?:["'\x60][ \t]*[+,]?[ \t]*\r?\n?[ \t]*["'\x60])?`
+
+// base64PrivateKey matches the base64 encoding of a private-key armour line
+// at the start of a value, as in a Kubernetes Secret. Only whole three-byte
+// groups of the line are encoded into the prefix, and the prefix runs past
+// the part shared with a certificate's armour line, so a base64 certificate
+// does not match. The prefixes are computed rather than written out.
+func base64PrivateKey() string {
+	var alts []string
+	for _, kind := range []string{"", "RSA ", "EC ", "DSA ", "OPENSSH ", "ENCRYPTED "} {
+		line := []byte("-----BEGIN " + kind + "PRIVATE KEY-----")
+		enc := base64.StdEncoding.EncodeToString(line[:len(line)/3*3])
+		alts = append(alts, regexp.QuoteMeta(enc))
+	}
+	return `(?:` + strings.Join(alts, "|") + `)[A-Za-z0-9+/=]{4,}`
+}
+
+var (
+	pemPrivateKey = armoredKey(`(?:[A-Z0-9]+ )*PRIVATE KEY`)
+	pgpPrivateKey = armoredKey(`PGP PRIVATE KEY BLOCK`)
+)
+
+// contentRules each anchor on a fixed vendor prefix, which keeps false
+// positives rare. The PEM rule needs a base64 body after the armour line, so
+// prose that only names the header passes. Order matters only for the rule
+// name reported: anthropic-key is checked before the broader openai-key.
+var contentRules = []contentRule{
+	{"pem-private-key", regexp.MustCompile(pemPrivateKey)},
+	{"pem-private-key-base64", regexp.MustCompile(base64PrivateKey())},
+	{"pgp-private-key", regexp.MustCompile(pgpPrivateKey)},
+	{"aws-access-key-id", regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)},
+	{"github-token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}|\bgithub_pat_[A-Za-z0-9_]{60,}`)},
+	{"slack-token", regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}`)},
+	{"anthropic-key", regexp.MustCompile(`\bsk-ant-[A-Za-z0-9_-]{20,}`)},
+	{"openai-key", regexp.MustCompile(`\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}`)},
+	{"google-api-key", regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}`)},
+	{"stripe-live-key", regexp.MustCompile(`\b[rs]k_live_[0-9A-Za-z]{24,}`)},
+}
