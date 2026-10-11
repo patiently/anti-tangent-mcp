@@ -690,6 +690,16 @@ func TestLoad_SecretGateRejectsBadValues(t *testing.T) {
 	assert.Contains(t, err.Error(), "ANTI_TANGENT_FILE_DENY_EXTRA")
 }
 
+func TestLoad_FileDenyExtraRejectsValueWithNoGlobs(t *testing.T) {
+	sep := string(os.PathListSeparator)
+	for _, v := range []string{sep, " " + sep + " ", "   "} {
+		_, err := loadWith(t, map[string]string{"ANTI_TANGENT_FILE_DENY_EXTRA": v})
+		require.Error(t, err, "value %q", v)
+		assert.Contains(t, err.Error(), "ANTI_TANGENT_FILE_DENY_EXTRA")
+		assert.Contains(t, err.Error(), "no usable glob entries")
+	}
+}
+
 func TestLoad_FileDenyExtra(t *testing.T) {
 	sep := string(os.PathListSeparator)
 	cfg, err := loadWith(t, map[string]string{"ANTI_TANGENT_FILE_DENY_EXTRA": "*.secret" + sep + " /r/private/* "})

@@ -561,7 +561,14 @@ func secretGateFromEnv(env func(string) string) (*secretgate.Gate, error) {
 		}
 		mode = m
 	}
-	gate, err := secretgate.New(mode, denyExtraGlobs(env("ANTI_TANGENT_FILE_DENY_EXTRA")))
+	raw := env("ANTI_TANGENT_FILE_DENY_EXTRA")
+	globs := denyExtraGlobs(raw)
+	// A set value that yields no rule would leave the operator believing a
+	// name is denied when it is not, so it fails loudly like a malformed glob.
+	if raw != "" && len(globs) == 0 {
+		return nil, fmt.Errorf("ANTI_TANGENT_FILE_DENY_EXTRA: set but contains no usable glob entries: %q", raw)
+	}
+	gate, err := secretgate.New(mode, globs)
 	if err != nil {
 		return nil, fmt.Errorf("ANTI_TANGENT_FILE_DENY_EXTRA: %w", err)
 	}
