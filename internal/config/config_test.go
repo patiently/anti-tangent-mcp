@@ -647,3 +647,54 @@ func TestLoad_TestEvidenceMaxBytes(t *testing.T) {
 		require.ErrorContains(t, err, "ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES", bad)
 	}
 }
+
+func loadWith(t *testing.T, kv map[string]string) (Config, error) {
+	t.Helper()
+	base := map[string]string{"ANTHROPIC_API_KEY": "k"}
+	for k, v := range kv {
+		base[k] = v
+	}
+	return Load(func(k string) string { return base[k] })
+}
+
+func pemForTest() []byte {
+	return []byte("-----BEGIN " + "EC PRIVATE" + " KEY-----\n" + strings.Repeat("MIIB", 16) + "\n")
+}
+
+func TestLoad_SecretGateDefaultsOn(t *testing.T) {
+	cfg, err := loadWith(t, nil)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.SecretGate)
+	assert.Error(t, cfg.SecretGate.CheckPath("/r/.env", "/r/.env"))
+	assert.Error(t, cfg.SecretGate.CheckContent("/r/x", pemForTest()))
+}
+
+func TestLoad_SecretGateNamesAndOff(t *testing.T) {
+	cfg, err := loadWith(t, map[string]string{"ANTI_TANGENT_SECRET_GATE": "names"})
+	require.NoError(t, err)
+	assert.Error(t, cfg.SecretGate.CheckPath("/r/.env", "/r/.env"))
+	assert.NoError(t, cfg.SecretGate.CheckContent("/r/x", pemForTest()))
+
+	cfg, err = loadWith(t, map[string]string{"ANTI_TANGENT_SECRET_GATE": "off"})
+	require.NoError(t, err)
+	assert.Nil(t, cfg.SecretGate)
+}
+
+func TestLoad_SecretGateRejectsBadValues(t *testing.T) {
+	_, err := loadWith(t, map[string]string{"ANTI_TANGENT_SECRET_GATE": "yes"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_SECRET_GATE")
+
+	_, err = loadWith(t, map[string]string{"ANTI_TANGENT_FILE_DENY_EXTRA": "[a-"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ANTI_TANGENT_FILE_DENY_EXTRA")
+}
+
+func TestLoad_FileDenyExtra(t *testing.T) {
+	sep := string(os.PathListSeparator)
+	cfg, err := loadWith(t, map[string]string{"ANTI_TANGENT_FILE_DENY_EXTRA": "*.secret" + sep + " /r/private/* "})
+	require.NoError(t, err)
+	assert.Error(t, cfg.SecretGate.CheckPath("/r/a.secret", "/r/a.secret"))
+	assert.Error(t, cfg.SecretGate.CheckPath("/r/private/x.go", "/r/private/x.go"))
+	assert.NoError(t, cfg.SecretGate.CheckPath("/r/x.go", "/r/x.go"))
+}
