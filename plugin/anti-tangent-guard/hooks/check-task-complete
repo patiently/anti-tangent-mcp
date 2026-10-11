@@ -274,6 +274,16 @@ for idx, line in enumerate(lines):
                 # textual block that flows through the same header-anchored
                 # extraction as a pasted marker.
                 tuid = c.get("tool_use_id")
+                if tuid in call_ids and c.get("is_error") is True:
+                    # A refused call (a tool error, such as a secret-gate
+                    # refusal) never produced a verdict: it is not a call.
+                    if call_ids[tuid] in called_idx:
+                        called_idx.remove(call_ids[tuid])
+                    for k in range(len(completion_inputs) - 1, -1, -1):
+                        if completion_inputs[k][0] == call_ids[tuid]:
+                            del completion_inputs[k]
+                            break
+                    continue
                 if tuid in call_ids:
                     try:
                         parsed = json.loads("".join(chunks))

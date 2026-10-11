@@ -630,10 +630,11 @@ func lightweightRulings(rulingArgs []ControllerRulingArg, issued []string) (ruli
 }
 
 // unboundLiteRulingsAdvisory reports controller_rulings on a lightweight call
-// that names no plan-run task: no earlier call issued an ID they could name.
+// that matches no row of a live plan run (no run, an expired one, or no task
+// of it named): no earlier call issued an ID they could name.
 func unboundLiteRulingsAdvisory() verdict.Finding {
 	return ignoredArgumentAdvisory("controller_rulings",
-		"controller_rulings on a lightweight validate_completion apply only to finding ids an earlier lightweight validate_completion returned for the same plan_run_id and task; this call names no such task, so they were ignored.",
+		"controller_rulings on a lightweight validate_completion apply only to finding ids an earlier lightweight validate_completion returned for the same plan_run_id and task; the plan run is unknown or expired, or this call names no task of it, so they were ignored.",
 		"Resubmit with plan_run_id and task_index (or task_title) naming the task whose earlier validate_completion returned the ids.")
 }
 

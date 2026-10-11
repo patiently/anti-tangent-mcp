@@ -26,7 +26,7 @@ const (
 
 // ParseMode reads an ANTI_TANGENT_SECRET_GATE value.
 func ParseMode(s string) (Mode, error) {
-	switch m := Mode(strings.TrimSpace(s)); m {
+	switch m := Mode(strings.ToLower(strings.TrimSpace(s))); m {
 	case ModeOn, ModeNames, ModeOff:
 		return m, nil
 	}
@@ -55,7 +55,7 @@ type Gate struct {
 
 // New builds a Gate, or nil for ModeOff. extra are path.Match globs added to
 // the name tier, matched against the slash-separated path (lowercased on
-// Windows, as the path is); a malformed one is an error.
+// Windows and macOS, as the path is); a malformed one is an error.
 func New(mode Mode, extra []string) (*Gate, error) {
 	return newForOS(mode, extra, runtime.GOOS)
 }
@@ -76,12 +76,37 @@ func newForOS(mode Mode, extra []string, goos string) (*Gate, error) {
 }
 
 // normalizeName puts a path or glob in the form the name rules match: forward
-// slashes, and lowercase on Windows where names are case-insensitive.
+// slashes on Windows, and lowercase on Windows and macOS where the default
+// volumes are case-insensitive.
 func normalizeName(p, goos string) string {
 	if goos == "windows" {
-		return strings.ToLower(strings.ReplaceAll(p, `\`, "/"))
+		p = strings.ReplaceAll(p, `\`, "/")
+	} else {
+		p = filepath.ToSlash(p)
 	}
-	return filepath.ToSlash(p)
+	if goos == "windows" || goos == "darwin" {
+		p = strings.ToLower(p)
+	}
+	return p
+}
+
+// Mode reports the mode the gate was built with; a nil Gate is ModeOff.
+func (g *Gate) Mode() Mode {
+	switch {
+	case g == nil:
+		return ModeOff
+	case g.content:
+		return ModeOn
+	}
+	return ModeNames
+}
+
+// ExtraCount is the number of extra name globs the gate holds.
+func (g *Gate) ExtraCount() int {
+	if g == nil {
+		return 0
+	}
+	return len(g.extra)
 }
 
 // CheckPath runs the name tier on both the path the caller sent and the path
@@ -126,7 +151,7 @@ func (g *Gate) nameRule(p string) string {
 	p = normalizeName(p, g.goos)
 	base := path.Base(p)
 	switch {
-	case base == ".env" || (strings.HasPrefix(base, ".env.") && !envTemplates[strings.TrimPrefix(base, ".env.")]):
+	case isDotenv(base):
 		return "dotenv"
 	case privateKeyExts[path.Ext(base)]:
 		return "private-key-file"
@@ -144,6 +169,13 @@ func (g *Gate) nameRule(p string) string {
 		return "terraform-state"
 	}
 	return g.extraRule(p, base)
+}
+
+func isDotenv(base string) bool {
+	if base == ".envrc" || strings.HasSuffix(base, ".env") {
+		return true
+	}
+	return strings.HasPrefix(base, ".env.") && !envTemplates[strings.TrimPrefix(base, ".env.")]
 }
 
 func (g *Gate) extraRule(p, base string) string {
@@ -172,15 +204,25 @@ type contentRule struct {
 	re   *regexp.Regexp
 }
 
-// pemPrivateKey matches an armour line, optional RFC 1421 header lines and a
-// base64 body. A line break is a real newline or the two characters backslash
-// and n, as in a JSON string; each header and body line may start with one
-// unified-diff marker.
-const pemPrivateKey = `-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----` + pemNL +
-	`(?:[-+ ]?[A-Za-z-]+:(?:[^\n\\]|\\[^n])*` + pemNL + `)*` +
-	`(?:[-+ ]?` + pemNL + `)?[-+ ]?[A-Za-z0-9+/=]{40,}`
+// armoredKey builds a rule for an ASCII-armoured key: the armour line named
+// by begin, optional RFC 1421 header lines and a base64 body. A line break is
+// a real newline, optionally CRLF, or the two characters backslash and n (or
+// backslash, r, backslash, n), as in a JSON string. Each line may start with
+// one unified-diff marker followed by any indentation, which covers YAML
+// block scalars and indented diff hunks.
+func armoredKey(begin string) string {
+	const lead = `[-+ ]?[ \t]*`
+	return `-----BEGIN ` + begin + `-----` + pemNL +
+		`(?:` + lead + `[A-Za-z-]+:(?:[^\n\\]|\\[^n])*` + pemNL + `)*` +
+		`(?:` + lead + pemNL + `)?` + lead + `[A-Za-z0-9+/=]{40,}`
+}
 
-const pemNL = `(?:\\n|\r?\n)`
+const pemNL = `(?:(?:\\r)?\\n|\r?\n)`
+
+var (
+	pemPrivateKey = armoredKey(`(?:[A-Z0-9]+ )*PRIVATE KEY`)
+	pgpPrivateKey = armoredKey(`PGP PRIVATE KEY BLOCK`)
+)
 
 // contentRules each anchor on a fixed vendor prefix, which keeps false
 // positives rare. The PEM rule needs a base64 body after the armour line, so
@@ -188,6 +230,7 @@ const pemNL = `(?:\\n|\r?\n)`
 // name reported: anthropic-key is checked before the broader openai-key.
 var contentRules = []contentRule{
 	{"pem-private-key", regexp.MustCompile(pemPrivateKey)},
+	{"pgp-private-key", regexp.MustCompile(pgpPrivateKey)},
 	{"aws-access-key-id", regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)},
 	{"github-token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}|\bgithub_pat_[A-Za-z0-9_]{60,}`)},
 	{"slack-token", regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}`)},

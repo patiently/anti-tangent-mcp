@@ -483,7 +483,7 @@ func TestValidateCompletion_WithoutAPlanRunRowIgnoresAnswersAndRulings(t *testin
 	require.Len(t, findingsWithCriterion(env.Findings, "session_id"), 1)
 	adv := findingsWithCriterion(env.Findings, "controller_rulings")
 	require.Len(t, adv, 1)
-	assert.Contains(t, adv[0].Evidence, "names no such task")
+	assert.Contains(t, adv[0].Evidence, "names no task of it")
 	assert.Empty(t, env.ControllerRulings)
 	assert.NotContains(t, env.SummaryBlock, "ruling:")
 }

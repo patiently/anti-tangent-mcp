@@ -38,6 +38,8 @@ func TestNameRules(t *testing.T) {
 	refused := map[string]string{
 		"/r/.env":                               "dotenv",
 		"/r/.env.production":                    "dotenv",
+		"/r/.envrc":                             "dotenv",
+		"/r/deploy/production.env":              "dotenv",
 		"/r/certs/server.pem":                   "private-key-file",
 		"/r/tls.key":                            "private-key-file",
 		"/r/store.p12":                          "private-key-file",
@@ -75,7 +77,7 @@ func TestNameRules(t *testing.T) {
 	allowed := []string{
 		"/r/.env.example", "/r/.env.sample", "/r/.env.template", "/r/.env.dist",
 		"/home/u/.ssh/id_rsa.pub", "/home/u/.ssh/known_hosts", "/home/u/.ssh/authorized_keys", "/home/u/.ssh/config",
-		"/r/main.go", "/r/environment.go", "/r/docs/keys.md", "/r/config.json", "/r/.envrc.md",
+		"/r/main.go", "/r/environment.go", "/r/docs/keys.md", "/r/config.json", "/r/.envrc.md", "/r/foo.env.example", "/r/foo.env.sample",
 	}
 	for _, p := range allowed {
 		assert.NoError(t, g.CheckPath(p, p), p)
@@ -96,6 +98,13 @@ func TestWindowsFoldsCase(t *testing.T) {
 	g.goos = "windows"
 	r := refusalOf(t, g.CheckPath(`C:\Repo\.ENV`, `C:\Repo\.ENV`))
 	assert.Equal(t, "dotenv", r.Rule)
+}
+
+func TestDarwinFoldsCase(t *testing.T) {
+	g, err := newForOS(ModeOn, nil, "darwin")
+	require.NoError(t, err)
+	assert.Equal(t, "dotenv", refusalOf(t, g.CheckPath("/r/.ENV", "/r/.ENV")).Rule)
+	assert.NoError(t, g.CheckPath("/r/main.go", "/r/main.go"))
 }
 
 func TestExtraGlobs(t *testing.T) {
@@ -153,6 +162,11 @@ func TestParseMode(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, Mode(s), m)
 	}
+	for _, s := range []string{"OFF", " Names ", "On"} {
+		m, err := ParseMode(s)
+		require.NoError(t, err)
+		assert.Equal(t, Mode(strings.ToLower(strings.TrimSpace(s))), m)
+	}
 	_, err := ParseMode("yes")
 	assert.Error(t, err)
 }
@@ -188,13 +202,18 @@ func TestPEMInOtherCarriers(t *testing.T) {
 	g := gate(t, ModeOn)
 	begin, body, end := pemParts()
 	samples := map[string]string{
-		"json-escaped": `{"private_key": "` + begin + `\n` + body + `\n` + end + `\n"}`,
-		"json-header":  `"k": "` + begin + `\nProc-Type: 4,ENCRYPTED\n\n` + body + `"`,
-		"added":        "+" + begin + "\n+" + body + "\n+" + end + "\n",
-		"removed":      "-" + begin + "\n-" + body + "\n-" + end + "\n",
-		"context":      " " + begin + "\n " + body + "\n " + end + "\n",
-		"removed-hdr":  "-" + begin + "\n-Proc-Type: 4,ENCRYPTED\n-\n-" + body + "\n",
-		"crlf":         begin + "\r\n" + body + "\r\n",
+		"json-escaped":  `{"private_key": "` + begin + `\n` + body + `\n` + end + `\n"}`,
+		"json-header":   `"k": "` + begin + `\nProc-Type: 4,ENCRYPTED\n\n` + body + `"`,
+		"added":         "+" + begin + "\n+" + body + "\n+" + end + "\n",
+		"removed":       "-" + begin + "\n-" + body + "\n-" + end + "\n",
+		"context":       " " + begin + "\n " + body + "\n " + end + "\n",
+		"removed-hdr":   "-" + begin + "\n-Proc-Type: 4,ENCRYPTED\n-\n-" + body + "\n",
+		"crlf":          begin + "\r\n" + body + "\r\n",
+		"yaml-2sp":      "key: |\n  " + begin + "\n  " + body + "\n  " + end + "\n",
+		"yaml-tab":      "key: |\n\t" + begin + "\n\t" + body + "\n",
+		"diff-yaml":     "+  key: |\n+    " + begin + "\n+    " + body + "\n",
+		"json-crlf":     `{"k": "` + begin + `\r\n` + body + `\r\n` + end + `\r\n"}`,
+		"json-crlf-hdr": `"k": "` + begin + `\r\nProc-Type: 4,ENCRYPTED\r\n\r\n` + body + `"`,
 	}
 	for name, sample := range samples {
 		r := refusalOf(t, g.CheckContent("/r/f", []byte(sample)))
@@ -204,10 +223,29 @@ func TestPEMInOtherCarriers(t *testing.T) {
 		"the header " + begin + " appears in prose only",
 		`{"note": "` + begin + `\n"}`,
 		"-" + begin + "\n-short\n",
+		"  " + begin + "\n  short\n",
 	}
 	for _, s := range prose {
 		assert.NoError(t, g.CheckContent("/r/f", []byte(s)), s)
 	}
+}
+
+func TestPGPPrivateKey(t *testing.T) {
+	g := gate(t, ModeOn)
+	begin := "-----BEGIN " + "PGP PRIVATE KEY" + " BLOCK-----"
+	body := strings.Repeat("lQdG", 16)
+	samples := map[string]string{
+		"plain":  begin + "\n\n" + body + "\n",
+		"armour": begin + "\nVersion: GnuPG v2\nComment: x\n\n" + body + "\n",
+		"yaml":   "key: |\n  " + begin + "\n  \n  " + body + "\n",
+		"json":   `{"k": "` + begin + `\n\n` + body + `"}`,
+		"diff":   "+" + begin + "\n+\n+" + body + "\n",
+	}
+	for name, sample := range samples {
+		assert.Equal(t, "pgp-private-key", refusalOf(t, g.CheckContent("/r/f", []byte(sample))).Rule, name)
+	}
+	assert.NoError(t, g.CheckContent("/r/f", []byte("the "+begin+" header appears in prose only")))
+	assert.NoError(t, g.CheckContent("/r/f", []byte(begin+"\n\nshort\n")))
 }
 
 func TestContentNearMissesAndAlternatives(t *testing.T) {

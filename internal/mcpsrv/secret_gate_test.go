@@ -2,6 +2,7 @@ package mcpsrv
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,4 +120,27 @@ func TestSecretGate_BulkReadRefused(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "secret gate")
 	assert.Equal(t, 0, f.calls)
+}
+
+func TestSecretGate_RefusalIsLoggedOnceWithoutBytes(t *testing.T) {
+	var buf strings.Builder
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	gate, err := secretgate.New(secretgate.ModeOn, nil)
+	require.NoError(t, err)
+	d := gateDir(t)
+	p := writeFile(t, d, ".env", "SECRET_VALUE_BYTES=1\n")
+	_, _, err = resolveFileInput(p, []string{d}, gate, 1024)
+	require.Error(t, err)
+	assert.Equal(t, 1, strings.Count(buf.String(), "secret gate refused a file"))
+	assert.Contains(t, buf.String(), `"rule":"dotenv"`)
+	assert.Contains(t, buf.String(), `"tier":"names"`)
+	assert.NotContains(t, buf.String(), "SECRET_VALUE_BYTES")
+
+	buf.Reset()
+	_, _, err = readGatedFile(p, []string{d}, gate, 1024)
+	require.Error(t, err)
+	assert.Empty(t, buf.String(), "the hint path skips a refused file silently")
 }

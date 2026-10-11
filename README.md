@@ -208,7 +208,7 @@ ANTI_TANGENT_LOG_LEVEL=info
 # ANTI_TANGENT_PLAN_MAX_PAYLOAD_BYTES=1048576 # optional override; unset falls back to max(1048576, ANTI_TANGENT_MAX_PAYLOAD_BYTES) — raising the shared cap above raises this too; setting this always wins, even below the shared cap
 ANTI_TANGENT_PLAN_ROOTS=                      # OS path-list separator (":" on Unix, ";" on Windows) list of absolute roots; empty = unrestricted
 ANTI_TANGENT_SECRET_GATE=on                   # on | names | off — refuse files that look like secrets on every path input (names: by file name only)
-ANTI_TANGENT_FILE_DENY_EXTRA=                 # OS path-list separated filepath.Match globs added to the secret gate's name rules
+ANTI_TANGENT_FILE_DENY_EXTRA=                 # OS path-list separated filepath.Match globs added to the secret gate's name rules; * does not cross /, so deny each depth with its own glob
 
 # validate_plan context_paths attachments (design 2026-09-01)
 ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES=131072    # per-file cap for context_paths attachments; oversized files are refused, never truncated
@@ -350,7 +350,7 @@ In addition to `final_files` / `final_diff` / `final_diff_path` and other docume
 - `rate_digest` (optional, v0.28.0+): caller-supplied and unverified, like `codescene`: the eval run behind the change — `n`, `before_k`, `after_k`, `target_eval`, `interval_after`, `suite`, `kept` and `rigidity_delta`. The reviewer is shown it as unverified, checks it against an experiment's criteria, and `plan_run_report` shows it in a `Rate` column. A malformed digest is dropped with a minor finding, never refused.
 - `test_evidence_path` (optional, v0.28.0+): absolute path to a file the server reads as `test_evidence`, such as an eval scoreboard; mutually exclusive with `test_evidence`. Under `ANTI_TANGENT_PLAN_ROOTS` when set and within `ANTI_TANGENT_TEST_EVIDENCE_MAX_BYTES`; it does not count toward the payload cap. `extract_project_knowledge` envelopes take it too.
 - `context_paths` (optional, v0.25.0+): absolute paths to files the change does not touch, such as the package's existing helpers. The server reads them and shows the reviewer their contents, so the reviewer can report a helper the diff re-implements as an over-building `reuse:` instance — which needs a diff (`final_diff` or `final_diff_path`); with `final_files` alone the completion review makes no over-building finding. The reviewer is told they are never evidence for an acceptance criterion; the server cannot enforce what a model counts. Under `ANTI_TANGENT_PLAN_ROOTS` when it is set, at most 50 files, within `ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES` and `ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES`; they do not count toward the payload cap.
-- **Secret gate** (v0.29.0+): every file the server reads for a tool — context_paths, final_files, final_diff_path, test_evidence_path, plan_path, bulk_read and code_write reference paths — is refused before any bytes leave the host when its name looks like a secrets file (.env, *.pem, id_rsa, .netrc, .aws/credentials, …) or its contents carry a private key or a well-known token prefix. A refusal is a tool error naming the rule; the matched bytes are never echoed. ANTI_TANGENT_SECRET_GATE=names keeps only the name rules, off disables the gate. It stops accidental attachments, not a caller that pastes a secret into a text field.
+- **Secret gate** (v0.29.0+): every file the server reads for a tool — context_paths, final_files, final_diff_path, test_evidence_path, plan_path, bulk_read and code_write reference paths — is refused before any bytes leave the host when its name looks like a secrets file (.env, .envrc, *.env, *.pem, id_rsa, .netrc, .aws/credentials, …) or its contents carry a private key (PEM or PGP) or a well-known token prefix. The same gate covers the repo_root hint reads, where a refused file is silently skipped. A refusal is a tool error naming the rule; the matched bytes are never echoed. ANTI_TANGENT_SECRET_GATE=names keeps only the name rules, off disables the gate. It stops accidental attachments, not a caller that pastes a secret into a text field.
 
 The completion review walks every acceptance criterion and then reads the submitted change for defects of its own: a finding the evidence shows is reported as `correctness`, and a test that would not fail if the behaviour broke as `test_adequacy`. Either can be critical or major and so move the verdict. The reviewer sees only what the call submits, so a diff with little context limits what it can find.
 
@@ -384,7 +384,8 @@ The requirement is prompt-level: the pairing stays **advisory** on the anti-tang
 diff costs the calling agent no output tokens. `validate_completion` also accepts `repo_root`: the
 server reads the post-change version of each file the diff names beneath it, within the
 `context_paths` byte caps, and sends the reviewer only the comment lines that still name a symbol
-the diff removes.
+the diff removes. Every one of these reads, repo_root included, passes the secret gate (see
+above); a refused repo_root file is silently skipped rather than failing the call.
 
 This means the server reads files on your filesystem and sends their contents to the reviewer
 provider. It is stdio-only — the host spawns it as a child process, so it shares your container,

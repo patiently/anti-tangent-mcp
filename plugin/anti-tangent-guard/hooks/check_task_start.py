@@ -58,13 +58,22 @@ def text_of(content):
                      if isinstance(c, dict) and c.get("type") == "text")
 
 
+def is_spec_call(c):
+    return isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == SPEC_TOOL
+
+
+def is_error_result(c):
+    return isinstance(c, dict) and c.get("type") == "tool_result" and c.get("is_error") is True
+
+
 def classify(lines):
     """Return "skip", "pass" or "block" for an iterable of transcript lines.
 
     Entries before the first user entry (attachments, system records) are
     ignored. The first user entry decides whether the session is gated at all;
-    after it, one validate_task_spec tool_use is a pass, and the scan stops
-    there. Text merely naming the tool is not a call.
+    after it, one validate_task_spec tool_use is a pass unless its tool_result
+    is an error (a refused call opened no session). Text merely naming the
+    tool is not a call.
 
     A malformed entry -- a truthy non-dict "message", or assistant content
     that is not a list -- is skipped rather than raised on, the same way a
@@ -73,6 +82,8 @@ def classify(lines):
     allow.
     """
     seen_first_user = False
+    passed = False
+    pending = set()
     for line in lines:
         try:
             entry = json.loads(line)
@@ -92,11 +103,18 @@ def classify(lines):
             if FULL_HEADING not in first or LITE_HEADING in first:
                 return "skip"
             continue
-        if etype == "assistant":
-            for c in as_list(msg.get("content")):
-                if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == SPEC_TOOL:
-                    return "pass"
-    return "block" if seen_first_user else "skip"
+        for c in as_list(msg.get("content")):
+            if etype == "assistant" and is_spec_call(c):
+                tuid = c.get("id")
+                if isinstance(tuid, str) and tuid:
+                    pending.add(tuid)
+                else:
+                    passed = True
+            elif etype == "user" and is_error_result(c):
+                pending.discard(c.get("tool_use_id"))
+    if not seen_first_user:
+        return "skip"
+    return "pass" if passed or pending else "block"
 
 
 def subagent_transcript(data):

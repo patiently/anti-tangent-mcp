@@ -157,7 +157,7 @@ func readUnderRepoRoot(cfg config.Config, root, rel string, budget *diskReadBudg
 	if !ok {
 		return "", false
 	}
-	content, src, err := resolveFileInput(abs, cfg.PlanRoots, cfg.SecretGate, cfg.ContextMaxFileBytes)
+	content, src, err := readGatedFile(abs, cfg.PlanRoots, cfg.SecretGate, cfg.ContextMaxFileBytes)
 	if err != nil {
 		return "", false
 	}

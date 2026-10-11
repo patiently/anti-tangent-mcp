@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -104,6 +105,17 @@ func readCapped(r io.Reader, maxBytes int) ([]byte, error) {
 // gate runs on both names before the open and on the bytes after the read; a
 // refusal returns the *secretgate.Refusal itself.
 func resolveFileInput(path string, roots []string, gate *secretgate.Gate, maxBytes int) (string, fileSource, error) {
+	content, src, err := readGatedFile(path, roots, gate, maxBytes)
+	var refusal *secretgate.Refusal
+	if errors.As(err, &refusal) {
+		slog.Warn("secret gate refused a file", "tier", refusal.Tier, "rule", refusal.Rule, "path", refusal.Path)
+	}
+	return content, src, err
+}
+
+// readGatedFile is resolveFileInput without the refusal log line, for callers
+// that skip a refused file instead of failing the call.
+func readGatedFile(path string, roots []string, gate *secretgate.Gate, maxBytes int) (string, fileSource, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", fileSource{}, errors.New("path is empty")
 	}
