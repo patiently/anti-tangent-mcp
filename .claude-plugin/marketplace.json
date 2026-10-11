@@ -11,7 +11,7 @@
     {
       "name": "anti-tangent-protocol",
       "description": "On-demand loader for the anti-tangent-mcp drift-protection protocol. A description-triggered skill that loads only the role-scoped protocol part a task needs, and only when a Goal/Acceptance-criteria task appears — keeping the always-loaded footprint to one line.",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "source": "./plugin/anti-tangent-protocol",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"

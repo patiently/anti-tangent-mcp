@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A lightweight validate_completion no longer changes a plan_run_report row that a validate_task_spec session owns; it gets a minor plan_run_id advisory instead. A session that takes over a task a lightweight call recorded starts from no result, so a row never shows a lightweight verdict without its (lite) marker. (#107)
 
+### Changed
+
+- `anti-tangent-protocol` 0.4.1: `implementer.md` says a lightweight call's `controller_rulings` need `plan_run_id` and `task_index`, and cover only ids an earlier call on that task returned.
+
+- The advisory for `finding_responses` sent without a session no longer says a ruling applies without one; it points at ruling on a task in a plan run.
+
+- `examples/lightweight-dispatch.md` and the README describe the lightweight ruling binding.
+
 ## [0.28.0] - 2026-10-08
 
 ### Added
