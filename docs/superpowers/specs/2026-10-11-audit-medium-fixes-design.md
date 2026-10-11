@@ -117,7 +117,7 @@ on Windows, the way `withinRootsFold` handles it, and case-sensitive elsewhere.
 |------|---------|
 | `dotenv` | `.env`, `.env.*`, except `.env.example`, `.env.sample`, `.env.template`, `.env.dist` |
 | `private-key-file` | `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*.kdbx` |
-| `ssh-key` | `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519` (not `*.pub`); any file under a `.ssh/` directory except `*.pub`, `known_hosts`, `config` |
+| `ssh-key` | `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519` (not `*.pub`); any file under a `.ssh/` directory except `*.pub`, `known_hosts`, `authorized_keys`, `config` |
 | `credential-file` | `.netrc`, `_netrc`, `.git-credentials`, `.npmrc`, `.pypirc`, `.htpasswd`, `.pgpass` |
 | `cloud-credentials` | `.aws/credentials`, `.aws/config`, `.docker/config.json`, `.kube/config`, `gcloud/credentials.db`, `gcloud/application_default_credentials.json` |
 | `gnupg` | any file under a `.gnupg/` directory |
@@ -227,14 +227,15 @@ func (s *Store) LiteState(runID string, ref TaskRef) LiteState
 4. If `SessionOwned`, ignore every ruling with the same advisory shape and the F8 wording (§5.2).
    The finish-on-the-session remedy covers both.
 5. Otherwise keep only the rulings whose `BaseID` is in `IssuedIDs`. The rest are ignored with one
-   advisory listing them (`%q`-joined): *"These controller_rulings ids were not returned by an
+   advisory listing them (they passed `ValidDisplayID`, so they are `f_` plus hex and safe to echo): *"These controller_rulings ids were not returned by an
    earlier validate_completion on this task, so they were ignored: …"*.
 6. `review.shown` is the set of **`IssuedIDs`**, not the ruled IDs. A `same_as` can then reach a
    finding only through an ID the server actually issued, which is the session path's rule
    (`knownSessionFindings`).
-7. After the review, the reviewer finding IDs the envelope returns, waived ones included, are
-   appended to the row's `IssuedIDs`. This happens inside the `UpsertLite` mutate. Server findings
-   are not appended: no ruling can waive them anyway.
+7. After the review, every finding ID the envelope returns (`envelopeIDs`, waived ones included) is
+   appended to the row's `IssuedIDs` inside the `UpsertLite` mutate, the same set the session path
+   stores. Server findings' IDs are included. That is harmless, because `waiveRuled` never sees
+   server findings, and it saves telling the two kinds apart.
 
 `lightweightRulings` is replaced by a function taking `(rulingArgs, issued []string)` and returning
 `(rulings, shown, malformed, unissued)`. It stays in `finding_rulings.go`.
@@ -294,8 +295,8 @@ func (s *Store) LiteState(runID string, ref TaskRef) LiteState
 `criterion: plan_run_id`, via `ignoredArgumentAdvisory`, appended after the verdict is final (like
 `repoRootUnusableAdvisory`), so it never moves the verdict:
 
-*"Task N of this plan run has a validate_task_spec session; a lightweight validate_completion is not
-recorded against it. Finish the task with validate_completion on that session_id."*
+*"This task has a validate_task_spec session in the plan run, so a lightweight validate_completion is
+not recorded against it."* Suggestion: *"Finish the task with validate_completion on its session_id."*
 
 If the race in §5.1 happens (the session attaches after the read), the envelope has no advisory, but
 the row is still left alone. That is the outcome that matters.
