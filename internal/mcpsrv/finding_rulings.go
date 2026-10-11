@@ -507,7 +507,8 @@ func ignoredArgumentAdvisory(criterion, evidence, suggestion string) verdict.Fin
 // noSessionResponsesAdvisory reports finding_responses sent without a session.
 // A response answers a finding the reviewer raised in an earlier review of the
 // same session; without one there is no earlier review, and the server has no
-// finding to show. A controller ruling settles a finding here when the task is in a plan run.
+// finding to show. A controller ruling settles a finding here when the task is
+// in a plan run.
 func noSessionResponsesAdvisory() verdict.Finding {
 	return ignoredArgumentAdvisory("session_id",
 		"finding_responses were sent without a session_id; without a session there is no earlier review to answer, so they were ignored.",

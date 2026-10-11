@@ -639,3 +639,16 @@ func TestSoleLiveByTitle(t *testing.T) {
 	require.True(t, ok, "a run idle past the TTL is not live")
 	assert.Equal(t, run.ID, id)
 }
+
+func TestLiteState_NamesNoPlanTask(t *testing.T) {
+	s := NewStore(time.Hour)
+	r := s.CreateWithTasks("pass", "rigorous", titledTasks("Task 1: Alpha", "Task 2: Beta"))
+	assert.Equal(t, LiteState{}, s.LiteState(r.ID, TaskRef{Index: 9}), "out-of-range index")
+	assert.Equal(t, LiteState{}, s.LiteState(r.ID, TaskRef{Title: "Gamma"}), "unmatched title")
+
+	_, res := s.UpsertLite(r.ID, TaskRef{Title: "Gamma"}, func(row *TaskRow) { row.AddIssuedIDs([]string{"f_00000001"}) })
+	require.Equal(t, UpsertApplied, res)
+	st := s.LiteState(r.ID, TaskRef{Title: "Gamma"})
+	assert.True(t, st.Found, "an unmatched task that has a row is found")
+	assert.Equal(t, []string{"f_00000001"}, st.IssuedIDs)
+}

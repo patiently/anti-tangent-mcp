@@ -170,3 +170,64 @@ func TestSourceFilesPassTheContentTier(t *testing.T) {
 		assert.NoError(t, g.CheckContent(f, b), f)
 	}
 }
+
+func TestExtraGlobsOnWindows(t *testing.T) {
+	g, err := newForOS(ModeOn, []string{`C:\Repo\Private\*`, `*.SECRET`}, "windows")
+	require.NoError(t, err)
+	assert.Equal(t, "extra", refusalOf(t, g.CheckPath(`c:\repo\private\x.go`, `c:\repo\private\x.go`)).Rule)
+	assert.Equal(t, "extra", refusalOf(t, g.CheckPath(`C:\Repo\Private\X.go`, `C:\Repo\Private\X.go`)).Rule)
+	assert.Equal(t, "extra", refusalOf(t, g.CheckPath(`D:\a.Secret`, `D:\a.Secret`)).Rule)
+	assert.NoError(t, g.CheckPath(`C:\Repo\Public\x.go`, `C:\Repo\Public\x.go`))
+}
+
+func pemParts() (begin, body, end string) {
+	return "-----BEGIN " + "PRIVATE" + " KEY-----", strings.Repeat("MIIE", 16), "-----END " + "PRIVATE" + " KEY-----"
+}
+
+func TestPEMInOtherCarriers(t *testing.T) {
+	g := gate(t, ModeOn)
+	begin, body, end := pemParts()
+	samples := map[string]string{
+		"json-escaped": `{"private_key": "` + begin + `\n` + body + `\n` + end + `\n"}`,
+		"json-header":  `"k": "` + begin + `\nProc-Type: 4,ENCRYPTED\n\n` + body + `"`,
+		"added":        "+" + begin + "\n+" + body + "\n+" + end + "\n",
+		"removed":      "-" + begin + "\n-" + body + "\n-" + end + "\n",
+		"context":      " " + begin + "\n " + body + "\n " + end + "\n",
+		"removed-hdr":  "-" + begin + "\n-Proc-Type: 4,ENCRYPTED\n-\n-" + body + "\n",
+		"crlf":         begin + "\r\n" + body + "\r\n",
+	}
+	for name, sample := range samples {
+		r := refusalOf(t, g.CheckContent("/r/f", []byte(sample)))
+		assert.Equal(t, "pem-private-key", r.Rule, name)
+	}
+	prose := []string{
+		"the header " + begin + " appears in prose only",
+		`{"note": "` + begin + `\n"}`,
+		"-" + begin + "\n-short\n",
+	}
+	for _, s := range prose {
+		assert.NoError(t, g.CheckContent("/r/f", []byte(s)), s)
+	}
+}
+
+func TestContentNearMissesAndAlternatives(t *testing.T) {
+	g := gate(t, ModeOn)
+	refused := map[string]string{
+		"aws-access-key-id": "ASIA" + strings.Repeat("Q", 16),
+		"github-token":      "github" + "_pat_" + strings.Repeat("a", 60),
+	}
+	for rule, sample := range refused {
+		assert.Equal(t, rule, refusalOf(t, g.CheckContent("/r/f", []byte(sample))).Rule, rule)
+	}
+	nearMisses := []string{
+		"xox" + "b-" + strings.Repeat("1", 9),
+		"sk-" + "ant-" + strings.Repeat("a", 10),
+		"AI" + "za" + strings.Repeat("b", 30),
+		"sk" + "_live_" + strings.Repeat("c", 20),
+		"github" + "_pat_" + strings.Repeat("a", 30),
+		"ASIA" + strings.Repeat("Q", 15),
+	}
+	for _, s := range nearMisses {
+		assert.NoError(t, g.CheckContent("/r/f", []byte(s)), s)
+	}
+}

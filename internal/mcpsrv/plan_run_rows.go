@@ -310,7 +310,7 @@ func (h *handlers) liteRowState(args ValidateCompletionArgs) planrun.LiteState {
 func sessionOwnedRowAdvisory() verdict.Finding {
 	return ignoredArgumentAdvisory("plan_run_id",
 		"This task has a validate_task_spec session in the plan run, so a lightweight validate_completion is not recorded against it.",
-		"Finish the task with validate_completion on its session_id.")
+		"Finish the task with validate_completion on its session_id (or re-run validate_task_spec if the session expired).")
 }
 
 // withIssuedIDs wraps a lightweight row update so it also records the finding

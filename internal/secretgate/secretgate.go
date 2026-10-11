@@ -53,18 +53,35 @@ type Gate struct {
 	goos    string
 }
 
-// New builds a Gate, or nil for ModeOff. extra are filepath.Match globs added
-// to the name tier; a malformed one is an error.
+// New builds a Gate, or nil for ModeOff. extra are path.Match globs added to
+// the name tier, matched against the slash-separated path (lowercased on
+// Windows, as the path is); a malformed one is an error.
 func New(mode Mode, extra []string) (*Gate, error) {
+	return newForOS(mode, extra, runtime.GOOS)
+}
+
+func newForOS(mode Mode, extra []string, goos string) (*Gate, error) {
+	globs := make([]string, 0, len(extra))
 	for _, g := range extra {
-		if _, err := filepath.Match(g, ""); err != nil {
+		g = normalizeName(g, goos)
+		if _, err := path.Match(g, ""); err != nil {
 			return nil, fmt.Errorf("glob %q: %w", g, err)
 		}
+		globs = append(globs, g)
 	}
 	if mode == ModeOff {
 		return nil, nil
 	}
-	return &Gate{content: mode == ModeOn, extra: extra, goos: runtime.GOOS}, nil
+	return &Gate{content: mode == ModeOn, extra: globs, goos: goos}, nil
+}
+
+// normalizeName puts a path or glob in the form the name rules match: forward
+// slashes, and lowercase on Windows where names are case-insensitive.
+func normalizeName(p, goos string) string {
+	if goos == "windows" {
+		return strings.ToLower(strings.ReplaceAll(p, `\`, "/"))
+	}
+	return filepath.ToSlash(p)
 }
 
 // CheckPath runs the name tier on both the path the caller sent and the path
@@ -106,11 +123,7 @@ var (
 )
 
 func (g *Gate) nameRule(p string) string {
-	if g.goos == "windows" {
-		p = strings.ToLower(strings.ReplaceAll(p, `\`, "/"))
-	} else {
-		p = filepath.ToSlash(p)
-	}
+	p = normalizeName(p, g.goos)
 	base := path.Base(p)
 	switch {
 	case base == ".env" || (strings.HasPrefix(base, ".env.") && !envTemplates[strings.TrimPrefix(base, ".env.")]):
@@ -130,11 +143,15 @@ func (g *Gate) nameRule(p string) string {
 	case hasAnySuffix(base, tfSuffixes):
 		return "terraform-state"
 	}
+	return g.extraRule(p, base)
+}
+
+func (g *Gate) extraRule(p, base string) string {
 	for _, glob := range g.extra {
-		if ok, _ := filepath.Match(glob, base); ok {
+		if ok, _ := path.Match(glob, base); ok {
 			return "extra"
 		}
-		if ok, _ := filepath.Match(glob, p); ok {
+		if ok, _ := path.Match(glob, p); ok {
 			return "extra"
 		}
 	}
@@ -155,12 +172,22 @@ type contentRule struct {
 	re   *regexp.Regexp
 }
 
+// pemPrivateKey matches an armour line, optional RFC 1421 header lines and a
+// base64 body. A line break is a real newline or the two characters backslash
+// and n, as in a JSON string; each header and body line may start with one
+// unified-diff marker.
+const pemPrivateKey = `-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----` + pemNL +
+	`(?:[-+ ]?[A-Za-z-]+:(?:[^\n\\]|\\[^n])*` + pemNL + `)*` +
+	`(?:[-+ ]?` + pemNL + `)?[-+ ]?[A-Za-z0-9+/=]{40,}`
+
+const pemNL = `(?:\\n|\r?\n)`
+
 // contentRules each anchor on a fixed vendor prefix, which keeps false
 // positives rare. The PEM rule needs a base64 body after the armour line, so
 // prose that only names the header passes. Order matters only for the rule
 // name reported: anthropic-key is checked before the broader openai-key.
 var contentRules = []contentRule{
-	{"pem-private-key", regexp.MustCompile(`-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----\r?\n(?:[A-Za-z-]+:[^\n]*\r?\n)*(?:\r?\n)?[A-Za-z0-9+/=]{40,}`)},
+	{"pem-private-key", regexp.MustCompile(pemPrivateKey)},
 	{"aws-access-key-id", regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)},
 	{"github-token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{36,}|\bgithub_pat_[A-Za-z0-9_]{60,}`)},
 	{"slack-token", regexp.MustCompile(`\bxox[abposr]-[A-Za-z0-9-]{10,}`)},

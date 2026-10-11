@@ -744,9 +744,9 @@ func (s *Store) LiteState(runID string, ref TaskRef) LiteState {
 	if !ok || ref.empty() {
 		return LiteState{}
 	}
-	pos, _, _ := r.resolve(ref)
+	pos, _, unmatched := r.resolve(ref)
 	if pos < 0 {
-		return LiteState{Found: true}
+		return LiteState{Found: !unmatched}
 	}
 	row := r.Rows[pos]
 	st := LiteState{Found: true, SessionOwned: row.SessionID != ""}

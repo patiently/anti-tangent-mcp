@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- A secret gate refuses any file the server is about to send to a model whose name looks like a secrets file or whose contents carry a private key or a well-known token, on every path input (context_paths, final_files, final_diff_path, test_evidence_path, plan_path, bulk_read, code_write's reference_path). A refusal is a tool error naming the rule, and no reviewer call is made. ANTI_TANGENT_SECRET_GATE (on, names, off; default on) and ANTI_TANGENT_FILE_DENY_EXTRA configure it. (#105)
+- A secret gate refuses any file the server is about to send to a model whose name looks like a secrets file or whose contents carry a private key or a well-known token, on every path input (context_paths, final_files, final_diff_path, test_evidence_path, plan_path, bulk_read, code_write's reference_path). A refusal is a tool error naming the rule, and no reviewer call is made. ANTI_TANGENT_SECRET_GATE (on, names, off; default on) and ANTI_TANGENT_FILE_DENY_EXTRA configure it. (#105) The gate is on by default, so a final_files, final_diff_path or context_paths file that is a secrets file by name (for example .npmrc, or a *.pem test certificate) or that carries a key-shaped fixture is now refused with a tool error; set ANTI_TANGENT_SECRET_GATE to names or off to opt out. Inline final_diff text is not gated.
 
 - A lightweight validate_completion applies a controller_rulings entry only when the call names its plan-run task (plan_run_id with task_index or task_title) and the ruled id was returned by an earlier validate_completion on that task; otherwise the ruling is ignored with a minor advisory. A reviewer's same_as reaches a finding only through such an id. Before, any well-formed id was honoured, including one guessed before the finding was ever shown. (#106)
 
@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The advisory for `finding_responses` sent without a session no longer says a ruling applies without one; it points at ruling on a task in a plan run.
 
-- `examples/lightweight-dispatch.md` and the README describe the lightweight ruling binding.
+- `examples/lightweight-dispatch.md` and the README describe the lightweight ruling binding: a ruling applies only to a finding id an earlier lightweight `validate_completion` on that `plan_run_id` and task returned.
 
 ## [0.28.0] - 2026-10-08
 
