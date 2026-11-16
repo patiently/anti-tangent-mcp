@@ -5,8 +5,9 @@ drift-protection protocol available **on demand** instead of always-inlined.
 
 The plugin ships a single skill whose one-line `description` is the only thing
 always in context. When you are about to implement (or dispatch a subagent to
-implement) a task that has a **Goal / Acceptance-criteria** header from an
-implementation plan — or when a multi-task plan run has just finished and you
+implement) a task with acceptance criteria — from an implementation plan's
+**Goal / Acceptance criteria** block, a spec's Goal / Acceptance criteria section, or a goal
+stated in the conversation — or when a multi-task plan run has just finished and you
 need to report on it — the skill loads and `Read`s the bundled protocol,
 sliced by role, from [`protocol/`](protocol/):
 

@@ -215,6 +215,7 @@ last_inprogress = -1
 first_inprogress = -1
 errored_idx = []             # (idx) of validate_completion calls whose result was a tool error
 called_idx, texts, lite_idx = [], [], []   # (idx) of direct calls; (idx, text) of tool_result chunks; (idx) of lightweight markers
+protocol_idx = []            # (idx) of validate_task_spec calls and full-clause dispatches: this is a protocol task
 call_ids = {}                # tool_use id -> idx, for validate_completion calls only
 completion_inputs = []       # (idx, input, tool_use id) for every validate_completion call, in order
 
@@ -225,6 +226,7 @@ completion_inputs = []       # (idx, input, tool_use id) for every validate_comp
 SESSION_RE = re.compile(r"(?m)^[ \t]*session_id:[ \t]*(\S*)[ \t]*$")
 MODE_LITE_RE = re.compile(r"(?m)^[ \t]*mode:[ \t]*lightweight[ \t]*$")
 LITE_HEADING = "Drift-protection protocol (lightweight)"
+FULL_HEADING = "## Drift-protection protocol (anti-tangent-mcp)"
 
 for idx, line in enumerate(lines):
     try: entry = json.loads(line)
@@ -248,18 +250,26 @@ for idx, line in enumerate(lines):
                         if first_inprogress < 0:
                             first_inprogress = idx
                         last_inprogress = idx
+                elif name == "mcp__anti-tangent__validate_task_spec":
+                    protocol_idx.append(idx)
                 elif name in ("Agent", "Task"):
                     if LITE_HEADING in str(inp.get("prompt", "")):
                         lite_idx.append(idx)
+                    elif FULL_HEADING in str(inp.get("prompt", "")):
+                        protocol_idx.append(idx)
     elif etype == "user":
         content = msg.get("content")
         if isinstance(content, str):
             if LITE_HEADING in content:
                 lite_idx.append(idx)
+            elif FULL_HEADING in content:
+                protocol_idx.append(idx)
         elif isinstance(content, list):
             for c in content:
                 if isinstance(c, dict) and c.get("type") == "text" and LITE_HEADING in (c.get("text") or ""):
                     lite_idx.append(idx)
+                elif isinstance(c, dict) and c.get("type") == "text" and FULL_HEADING in (c.get("text") or ""):
+                    protocol_idx.append(idx)
         if isinstance(content, list):
             for c in content:
                 if not isinstance(c, dict) or c.get("type") != "tool_result": continue
@@ -382,6 +392,12 @@ elif last_block:
 # scan_from.
 marker_from = first_inprogress if first_inprogress >= 0 else 0
 lite_marker = any(i >= marker_from for i in lite_idx)
+# Whether this close is a protocol task at all: a validate_task_spec call, a
+# full-clause dispatch (or, in a subagent, its own full-clause prompt), or a
+# lightweight marker, from the same anchor as the lightweight marker and for
+# the same reason. Only the no-validation block is scoped by it: an ordinary
+# to-do never carried a duty to call validate_completion.
+protocol_task = lite_marker or any(i >= marker_from for i in protocol_idx)
 
 # Comment-hygiene scan over the diff evidence of the LAST validate_completion
 # call in the task window -- defence in depth for a comment that carries
@@ -659,6 +675,7 @@ if in_window_completions and os.environ.get("ATG_COMMENT_GUARD", "1") != "0":
 print(json.dumps({"error": False, "called": called, "call_errored": call_errored,
                   "block_found": bool(qualifying), "verdict": verdict,
                   "no_session": no_session, "lite_marker": lite_marker,
+                  "protocol_task": protocol_task,
                   "comment_violations": comment_violations,
                   "comment_scan_unavailable": comment_scan_unavailable,
                   "scan": scan_stats}))
@@ -687,6 +704,7 @@ VERDICT=$(echo "$RESULT" | jq -r '.verdict // ""')
 NO_SESSION=$(echo "$RESULT" | jq -r '.no_session // false')
 LITE_MARKER=$(echo "$RESULT" | jq -r '.lite_marker // false')
 CALL_ERRORED=$(echo "$RESULT" | jq -r '.call_errored // false')
+PROTOCOL_TASK=$(echo "$RESULT" | jq -r '.protocol_task // false')
 trace "$TASK_ID" "parsed" "called=$CALLED block=$BLOCK verdict=$VERDICT no_session=$NO_SESSION lite=$LITE_MARKER"
 
 # Recorded unconditionally, before any block/pass branch below, so a broken
@@ -827,6 +845,13 @@ if [[ "$CALL_ERRORED" == "true" ]]; then
         echo "(Disable: ANTI_TANGENT_COMPLETION_GUARD=0. Trace: $TRACE_LOG)"
     } >&2
     exit 2
+fi
+
+# An ordinary to-do (no validate_task_spec, no protocol dispatch, no
+# lightweight marker in its window) never owed a validate_completion call.
+if [[ "$PROTOCOL_TASK" != "true" ]]; then
+    trace "$TASK_ID" "skip" "not-protocol-task"
+    exit 0
 fi
 
 trace "$TASK_ID" "block" "no-validation"

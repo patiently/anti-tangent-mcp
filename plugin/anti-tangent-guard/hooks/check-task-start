@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# PreToolUse hook on Edit/Write/NotebookEdit: in a session whose first user
-# message is a full-protocol dispatch prompt, refuse every write until
-# validate_task_spec has been called. Reads are never gated. The Python body
-# owns the transcript work; this wrapper owns the kill switch, the trace log
-# and the exit-code mapping, the same split as check-comment-write.
+# PreToolUse hook on Edit/Write/NotebookEdit: refuse a write until the
+# session has called validate_task_spec, in a subagent whose dispatch prompt
+# is a full-protocol one, and -- when ANTI_TANGENT_EDIT_GATE opts in -- in
+# every subagent or every session. Reads are never gated. The Python body
+# owns the transcript work; this wrapper owns the switches, the trace log and
+# the exit-code mapping, the same split as check-comment-write.
 set -uo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -37,7 +38,17 @@ trace() {
         >> "$TRACE_LOG" 2>/dev/null || true
 }
 
-[[ "${ANTI_TANGENT_SESSION_GUARD:-1}" == "0" ]] && { trace "skip" "guard=0"; exit 0; }
+# The two switches are independent: SESSION_GUARD governs the fingerprinted
+# start gate, EDIT_GATE the opt-in one. Only when both are off does the hook
+# stop before reading stdin. An unrecognised EDIT_GATE value is "off".
+SESSION_GUARD="${ANTI_TANGENT_SESSION_GUARD:-1}"
+EDIT_GATE=$(printf '%s' "${ANTI_TANGENT_EDIT_GATE:-off}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+case "$EDIT_GATE" in
+    ""|off) EDIT_GATE=off ;;
+    subagents|all) ;;
+    *) trace "skip" "bad-edit-gate-value"; EDIT_GATE=off ;;
+esac
+[[ "$SESSION_GUARD" == "0" && "$EDIT_GATE" == "off" ]] && { trace "skip" "guard=0"; exit 0; }
 command -v python3 >/dev/null 2>&1 || { trace "skip" "no-python3"; exit 0; }
 [[ -r "$PLUGIN_ROOT/hooks/check_task_start.py" ]] || { trace "skip" "no-body"; exit 0; }
 
@@ -45,11 +56,20 @@ ATG_INPUT="$(cat)"
 ATG_SESSION_RAW=$(printf '%s' "$ATG_INPUT" | jq -r '(.session_id // "") | gsub("[^A-Za-z0-9_-]"; "") | .[0:8]' 2>/dev/null) || ATG_SESSION_RAW=""
 [[ -n "$ATG_SESSION_RAW" ]] && ATG_SESSION="$ATG_SESSION_RAW"
 
-printf '%s' "$ATG_INPUT" | ATG_TRACE_LOG="$TRACE_LOG" python3 -I -B "$PLUGIN_ROOT/hooks/check_task_start.py"
-status=${PIPESTATUS[1]}
+# The body prints one word for the trace on stdout and the message for the
+# model on stderr, which passes through untouched.
+ATG_DETAIL=$(printf '%s' "$ATG_INPUT" | ATG_TRACE_LOG="$TRACE_LOG" ATG_EDIT_GATE="$EDIT_GATE" \
+    ATG_SESSION_GUARD="$SESSION_GUARD" python3 -I -B "$PLUGIN_ROOT/hooks/check_task_start.py")
+status=$?
+ATG_DETAIL=${ATG_DETAIL//[^a-z0-9-]/}
+ATG_DETAIL=${ATG_DETAIL:0:32}
 case "$status" in
-    0) trace "pass" "spec-called"; exit 0 ;;
-    2) trace "block" "no-spec-call"; exit 2 ;;
-    3) trace "skip" "not-gated"; exit 0 ;;
+    0) trace "pass" "${ATG_DETAIL:-spec-called}"; exit 0 ;;
+    2)
+        # The interpreter itself exits 2 when it cannot start the body. Only
+        # the body's own exit 2 comes with a trace word, and only that blocks.
+        [[ -n "$ATG_DETAIL" ]] || { trace "error" "python-exit=2"; exit 0; }
+        trace "block" "$ATG_DETAIL"; exit 2 ;;
+    3) trace "skip" "${ATG_DETAIL:-not-gated}"; exit 0 ;;
     *) trace "error" "python-exit=$status"; exit 0 ;;
 esac

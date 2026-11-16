@@ -234,13 +234,20 @@ is checked against the current Claude Code during implementation.
   never closed: call `validate_completion` with the session's `session_id` and the evidence,
   then finish. If every `validate_completion` call errored, the message says that instead.
 
-### Never trapping the session
+### Never trapping the session, and not asking too early
 
-- **Once per task.** Before blocking, it creates a `stop-asked-<hash>` file next to the trace
-  log, exclusively, with `O_CREAT|O_EXCL`. The hash covers the transcript path and the
-  `validate_task_spec` call's id. When the file already exists, it allows. An agent that is
-  asked and still stops is let go. A new `validate_task_spec` gets a new hash, so the next
-  task can be asked again.
+`Stop` fires at the end of every turn, including one that pauses mid-task to ask the user
+something, so the ask is keyed on the task's last edit rather than on the task:
+
+- **No edit, no ask.** With no `Edit`/`Write`/`NotebookEdit` call since the spec call there is
+  nothing to review, and the hook allows (`pass | no-edits`).
+- **Once per stretch of edits.** Before blocking it creates a `stop-asked-<hash>` file next to
+  the trace log, exclusively, with `O_CREAT|O_EXCL`. The hash covers the transcript path, the
+  `validate_task_spec` call's id and the id of the task's last edit. When the file already
+  exists, it allows. A session asked while pausing, and told by the message to say so and stop
+  without calling `validate_completion`, is asked again only once it has edited further. The
+  ask therefore still comes at the task's real end, and a pause costs one extra model turn,
+  not a reviewer call.
 - `stop_hook_active: true` in the payload also allows. That is Claude Code's own
   already-continued-once signal, and honouring it guards against a marker that cannot be
   written.
@@ -296,7 +303,7 @@ like a protocol task. That is the existing over-reach, made no worse, and the RE
 - `check-task-start` already runs on every `Edit`/`Write`/`NotebookEdit`.
 - New: `check-task-stop` runs on every `Stop` and `SubagentStop`. With the switch off it reads
   one environment variable and exits 0 before reading stdin. With it on, it reads the stopping
-  session's own transcript, and at most once per task it creates one empty marker file beside
+  session's own transcript, and at most once per stretch of edits it creates one empty marker file beside
   the trace log.
 - Default (`off`): one more environment read, then today's path, byte for byte.
 - `subagents`: reads the subagent's own transcript (as today), now for every subagent.
@@ -335,7 +342,9 @@ wrapper, which is where the environment variables are read):
 | stop, `all`: spec call, completion only errored | block with the errored message |
 | stop, `all`: pasted `tool: validate_completion` envelope only | block |
 | stop, `all`: no spec call at all | allow |
-| stop, `all`: second stop for the same task (marker exists) | allow |
+| stop, `all`: second stop with no edit in between (marker exists) | allow |
+| stop, `all`: spec call and no edit since | allow, `no-edits` |
+| stop, `all`: asked, then more edits, then stop again | block again (unit test: the harness cannot change a transcript between invocations) |
 | stop, `all`: completion for task A, then a new spec call for B without completion | block |
 | stop, `subagents`: `Stop` in main session | allow |
 | stop, `subagents`: `SubagentStop` with an open task | block |

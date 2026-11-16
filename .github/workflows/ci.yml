@@ -179,8 +179,11 @@ jobs:
       - name: Semantic tier
         run: python3 -B plugin/anti-tangent-guard/hooks/jev_scan_test.py
 
-      - name: Session guard
+      - name: Session guard and edit gate
         run: python3 -B plugin/anti-tangent-guard/hooks/check_task_start_test.py
+
+      - name: Stop check
+        run: python3 -B plugin/anti-tangent-guard/hooks/check_task_stop_test.py
 
       - name: Progress reminder
         run: python3 -B plugin/anti-tangent-guard/hooks/check_progress_nudge_test.py

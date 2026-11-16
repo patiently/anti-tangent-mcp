@@ -28,14 +28,16 @@ Give each task a small structured header block. The implementing subagent passes
 <… your existing plan structure: Files / Steps / Code / etc. …>
 ```
 
-This is the shape superpowers' `writing-plans` skill emits. It writes
-`**Acceptance Criteria:**` with a capital C; the parser matches case-insensitively, so either
-casing works.
+Plan generators such as superpowers' `writing-plans` emit this shape, and a spec's closing
+Goal / Acceptance criteria section uses the same field names, so a spec-driven implementer
+copies it the same way. Some generators write `**Acceptance Criteria:**` with a capital C; the
+parser matches case-insensitively, so either casing works.
 
-`writing-plans` does **not** emit `**Non-goals:**`. Plans from it arrive with no scope bound,
-and the reviewer will say so. Add non-goals by hand, or set a repo-level instruction that does.
+Not every generator emits `**Non-goals:**` (`writing-plans` does not). A task without them
+has no scope bound, and the reviewer will say so. Add non-goals by hand, or set a repo-level
+instruction that does.
 
-The existing "Files:" / "Steps:" structure that superpowers, hone-ai, and most CLAUDE.md plans already use lives below the header block. The header is additive.
+Any existing "Files:" / "Steps:" structure lives below the header block. The header is additive.
 
 ### 3.2 Worked example
 

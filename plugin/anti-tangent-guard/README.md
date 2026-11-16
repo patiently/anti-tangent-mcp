@@ -10,14 +10,22 @@ such comments from being written in the first place; and a `PostToolUse` hook
 on `Edit`/`Write`/`NotebookEdit` that asks a task, once, for a
 `check_progress` call when it reaches ten edits without one.
 
+Two more behaviours are **off by default** and turned on together by one switch,
+`ANTI_TANGENT_EDIT_GATE` (`off`, `subagents` or `all`): the start gate widens into an
+**edit gate** covering every subagent, or every session including the main one, and a
+`Stop`/`SubagentStop` hook adds a **stop check** that asks a session to close the task it
+opened before it stops. They exist for a spec-driven workflow with no plan, where no
+`TaskUpdate` ever fires. See "Edit gate (opt-in)" and "Stop check (opt-in)" below.
+
 ## Active on install
 
-This plugin has four hooks and no configuration step. As soon as it is
+Four of its hooks are active with no configuration step. As soon as it is
 installed, every `TaskUpdate` call is watched for the completion gate, every
 `Edit`/`Write`/`NotebookEdit` call inside a dispatched subagent is watched for
 the start gate, and every `Edit`/`Write` call is intercepted for the write-time
 comment-hygiene scan, and each of those edits is counted toward the progress
-reminder — there is nothing further to turn on.
+reminder — there is nothing further to turn on. The `Stop`/`SubagentStop` hook is
+registered too, but with `ANTI_TANGENT_EDIT_GATE` unset it exits before reading its input.
 
 ## What it does, and what it does not do
 
@@ -48,8 +56,19 @@ pasted into a `tool_result` (this is how a subagent's report of running the
 gate becomes visible from the controller's own transcript). It blocks
 (`exit 2`) in exactly four cases:
 
-1. **Neither signal is present.** Nothing in the window shows the completion
-   gate ran at all. A `validate_completion` call whose result is a tool error
+1. **Neither signal is present, and the task is a protocol task.** Nothing in
+   the window shows the completion gate ran at all. A protocol task is one whose
+   window holds a `validate_task_spec` call, an `Agent`/`Task` dispatch (or, in a
+   subagent, its own prompt) carrying the full clause heading, or the lightweight
+   marker; the window for this test starts at the task's first `in_progress`, as the
+   lightweight marker's does. Any other close — an ordinary to-do — never owed a
+   `validate_completion` call and passes with `skip | not-protocol-task`. One case
+   is given up by this: a controller that implements a plan task in its own session
+   with no `validate_task_spec` and no dispatch is no longer blocked at close. With
+   `ANTI_TANGENT_EDIT_GATE=all` that session cannot edit without a
+   `validate_task_spec` call, which brings the close back into scope. When the task
+   has no `in_progress` entry the window is the whole transcript, so an earlier
+   `validate_task_spec` in the session makes a later to-do look like a protocol task. A `validate_completion` call whose result is a tool error
    (a reviewer outage, a secret-gate refusal) is not a call; when every call in
    the window errored, the block message says so rather than saying none was
    made.
@@ -244,8 +263,9 @@ inside a dispatched subagent. A hook firing there receives the parent's
 `transcript_path` and `session_id`; what marks the subagent is `agent_id`, and
 its own transcript sits beside the parent's at
 `<transcript_path without .jsonl>/subagents/agent-<agent_id>.jsonl`. A payload
-with no `agent_id` is the main session, which is never gated — so a
-controller editing a CHANGELOG is never touched.
+with no `agent_id` is the main session, which this fingerprint never gates — so a
+controller editing a CHANGELOG is never touched unless the opt-in edit gate below
+says otherwise.
 
 The hook reads the subagent's transcript up to its first user entry — the
 dispatch prompt — and gates the session only when that entry carries
@@ -266,6 +286,105 @@ hook fails open — the heading is the contract. The `subagents/` layout is what
 Claude Code writes today, not a documented interface: a subagent transcript
 that is missing or unreadable exits 0, so a layout change disables the gate
 rather than blocking every write. Kill switch: `ANTI_TANGENT_SESSION_GUARD=0`.
+
+## Edit gate (opt-in)
+
+`ANTI_TANGENT_EDIT_GATE` widens the start gate. It is read by the same
+`check-task-start` hook, case-insensitively:
+
+| Value | Who is gated |
+|---|---|
+| unset / `off` (default) | Only the fingerprinted subagents above: no change. |
+| `subagents` | Every dispatched subagent (any payload with `agent_id`), clause heading or not. |
+| `all` | Every subagent, and the main session, whose own `transcript_path` is read. |
+
+Any other value is `off`, with a `skip | bad-edit-gate-value` trace line. A subagent whose
+dispatch prompt carries the lightweight heading stays exempt in every mode: the controller
+ruled it lightweight in a prompt the subagent cannot rewrite. The main session has no
+dispatch prompt, so under `all` nothing is fingerprinted: the mode alone gates it.
+
+**What unlocks it** is the start gate's rule, unchanged: a
+`mcp__anti-tangent__validate_task_spec` tool call in the session's **own** transcript whose
+result is not a tool error. A pasted envelope (`anti-tangent envelope` /
+`tool: validate_task_spec` text in a message or a tool result) is not a call. A
+controller's call does not unlock its subagent, and a subagent's call does not unlock the
+main session. One call unlocks a session for the rest of it; `/clear` starts a new
+transcript and re-arms the gate, a compaction does not.
+
+**Which paths are gated.** Only a target inside the payload's `cwd`. Both sides go through
+`realpath` first, so `..` and symlinks resolve before the check. A write outside `cwd` —
+auto-memory, a scratchpad, another repository — is not gated. Under `cwd`, a target that
+matches an `ANTI_TANGENT_EDIT_GATE_EXEMPT` glob is not gated either. The default is
+`docs/**/*.md`, which lets a spec be written before `validate_task_spec` can run. It is
+deliberately not `*.md`: that would also exempt `CLAUDE.md`, `AGENTS.md`, `SKILL.md`,
+`.claude/commands/*.md` and agent definitions, which are instructions that change behaviour.
+The match is on the resolved path, so a `docs/x.md` symlinked into `src/` is gated. These
+path rules apply to sessions the edit gate gates; a fingerprinted subagent keeps the start
+gate's every-path rule.
+
+**Getting out of it.** Under `all`, a one-line fix needs a `validate_task_spec` too. The
+switch is read from the hook's environment, which the blocked session cannot change, so:
+
+1. *In the session:* call `validate_task_spec` with a one-line goal and one acceptance
+   criterion. That is one reviewer call, and the block message offers nothing else.
+2. *Per session:* launch with the switch set, `ANTI_TANGENT_EDIT_GATE=off claude`.
+3. *Per repository:* set it in the `env` block of that repository's
+   `.claude/settings.local.json`, which wins over user-level settings. A value set there
+   reaches the hook's environment; treat a change as taking effect in the next session,
+   because Claude Code does not document whether a running session picks it up. The file
+   is inside `cwd` and not exempt, so a blocked session's `Write` to it is refused.
+
+**Switches.** `ANTI_TANGENT_EDIT_GATE` is independent of `ANTI_TANGENT_SESSION_GUARD`.
+`SESSION_GUARD=0` still turns off the fingerprinted start gate, but not the edit gate: with
+the edit gate on, every clause-dispatched subagent is gated by its `agent_id` anyway. The
+hook exits before reading stdin only when both are off.
+
+**What it is not.** A drift guard, not an adversarial control. `Bash` writes (`cat >`,
+`sed -i`, `git apply`) bypass it, as they bypass the start gate and the comment guard, and
+the same `Bash` can edit `settings.local.json`. The `subagents/` layout is not a documented
+interface, and every failure allows: no `python3`, a malformed payload, an unreadable
+transcript, a payload with no `cwd`, or the 10-second timeout in `hooks.json`. A
+main-session transcript can be tens of megabytes; a line that names neither the tool nor a
+`tool_use_id` is skipped unparsed.
+
+## Stop check (opt-in)
+
+`check-task-stop` is registered on `Stop` and `SubagentStop` and does nothing unless
+`ANTI_TANGENT_EDIT_GATE` is set: `subagents` checks `SubagentStop`, `all` checks both. With
+the switch off it exits 0 before reading stdin and writes no trace line. It closes the gap
+the `TaskUpdate` completion gate leaves in a flow with no task list: nothing marks a task
+done, so without this hook nothing asks for `validate_completion`.
+
+It reads the stopping session's own transcript (`transcript_path` for `Stop`;
+`agent_transcript_path` for `SubagentStop`, or the `subagents/` file when the payload lacks
+it) and finds the last successful `validate_task_spec` call. With none, it allows. With a
+successful `validate_completion` after it, the task is closed and it allows, whatever the
+verdict. With no `Edit`/`Write`/`NotebookEdit` call since the spec call, there is nothing to
+review and it allows (`pass | no-edits`). Otherwise it exits 2, and Claude Code carries on with the message as the next
+instruction: call `validate_completion`, then finish. When every `validate_completion` after
+the spec call errored, the message says so. Successful means the start gate's rule: a call
+this session made whose result is not an error. A pasted envelope never counts.
+
+`Stop` fires at the end of every turn, including one that pauses mid-task to ask the user
+something, so the ask is built not to be spent early. It asks once per stretch of edits:
+before blocking it creates an empty `stop-asked-<hash>` file beside the trace log (the hash
+is of the transcript path, the `validate_task_spec` call id and the id of the task's last
+edit), and when that file already exists it allows. A session asked while pausing, which
+the message tells to say so and stop without calling `validate_completion`, is asked again
+only once it has edited further — so the ask still comes at the task's real end. A pause
+costs one extra model turn, not a reviewer call. It never traps a session. It also allows
+when the payload's `stop_hook_active` is `true`, and on every failure: no `python3`, an
+unreadable transcript, a marker that cannot be written, or the 10-second timeout.
+
+It enforces that an opened task gets closed, not that every change belongs to a task. A
+session that closes task A and then edits for task B without a new `validate_task_spec`
+stops freely. It does not re-arm the edit gate after `validate_completion`, so edits that
+address review findings stay allowed. In a run that also uses `TaskUpdate`, one
+`validate_completion` call satisfies both checks.
+
+Kill switch: `ANTI_TANGENT_STOP_GUARD=0`, which turns off the stop check alone.
+`ANTI_TANGENT_COMPLETION_GUARD` does not affect it: a deployment that silences the
+`TaskUpdate` check keeps this one.
 
 ## Progress reminder (PostToolUse hook)
 
@@ -665,6 +784,23 @@ Colon-separated glob patterns (`fnmatch` syntax), matched against the edited fil
 tool call names it. A match disables the semantic tier for that write (`jev-skip | excluded`)
 while leaving the pattern tier running. Unset by default — nothing is excluded.
 
+### `ANTI_TANGENT_EDIT_GATE`
+
+`off` (default), `subagents` or `all`, case-insensitive. Turns on the edit gate and the stop
+check; see "Edit gate (opt-in)" and "Stop check (opt-in)". Any other value is `off`.
+
+### `ANTI_TANGENT_EDIT_GATE_EXEMPT`
+
+Colon-separated globs, relative to the session's `cwd`, naming files the edit gate lets be
+written before `validate_task_spec`. `**` crosses directories; `*` and `?` stay within one;
+every other character is literal. Unset means `docs/**/*.md`. Set but empty means nothing is
+exempt.
+
+### `ANTI_TANGENT_STOP_GUARD`
+
+`0` turns off the stop check alone. Any other value, or unset, leaves it governed by
+`ANTI_TANGENT_EDIT_GATE`.
+
 ### `ANTI_TANGENT_PROGRESS_EDITS`
 
 How many edits a task makes after `validate_task_spec` before the progress
@@ -678,9 +814,12 @@ number above zero is ignored and the default applies.
   close-time comment-hygiene scan is a separate concern and keeps running.
 - `ANTI_TANGENT_COMMENT_GUARD=0` disables the comment-hygiene scan, both
   write-time and close-time, while leaving the completion-gate check active.
-- `ANTI_TANGENT_SESSION_GUARD=0` disables the start gate (`PreToolUse`) and
-  the no-session close rule (block condition 4). It leaves the completion gate
-  and the comment scan alone.
+- `ANTI_TANGENT_SESSION_GUARD=0` disables the fingerprinted start gate
+  (`PreToolUse`) and the no-session close rule (block condition 4). It leaves the
+  completion gate, the comment scan and the opt-in edit gate alone.
+- `ANTI_TANGENT_EDIT_GATE` unset or `off` disables the edit gate and the stop check,
+  which is the default. `ANTI_TANGENT_STOP_GUARD=0` disables the stop check alone and
+  leaves the edit gate on. Neither is touched by `ANTI_TANGENT_COMPLETION_GUARD`.
 - Setting all three to `0` is what short-circuits the `PostToolUse` hook to
   `exit 0` before it reads stdin. With any one still on, the hook reads stdin
   and runs the rules that are still enabled.
@@ -774,10 +913,30 @@ hook's fourth block condition traces `block | no-session`.
 
 `check-task-start` carries the literal tag `task-start` in that same column,
 since it has no task id to report, and its own event set: `pass | spec-called`
-(the edit is allowed), `block | no-spec-call` (the edit is refused),
-`skip | not-gated` (not a dispatched full-protocol subagent, or its transcript
-could not be read), `skip | guard=0`, `skip | no-python3`, `skip | no-body`,
-and `error | python-exit=N`.
+(the edit is allowed), `block | no-spec-call` and `block | spec-errored` (the
+fingerprinted start gate refused it), `block | edit-gate-no-spec-call` and
+`block | edit-gate-spec-errored` (the edit gate refused it), `skip | not-gated`
+(neither gate covers this session), `skip | lightweight` (a lightweight dispatch
+under the edit gate), `skip | outside` and `skip | exempt` (the path is not
+gated), `skip | no-transcript`, `skip | bad-agent-id`,
+`skip | bad-edit-gate-value`, `skip | guard=0` (both gates off),
+`skip | no-python3`, `skip | no-body`, and `error | python-exit=N` (which
+includes an exit 2 with no trace word: the interpreter failing, not the body
+blocking).
+
+`check-task-stop` carries the tag `task-stop` and the same `s=<session>.<agent>`
+session column as the progress reminder. Its events: `pass | no-task` (no
+`validate_task_spec` call), `pass | closed`, `block | open` and
+`block | open-errored` (asked to call `validate_completion`), `pass | no-edits`
+(no edit since the spec call), `skip | asked` (already asked since the task's
+last edit), `skip | already-continued` (`stop_hook_active`),
+`skip | not-gated` (`subagents` mode on a main-session `Stop`),
+`skip | no-transcript`, `skip | no-state` (the ask could not be recorded, so it
+was not made), `skip | no-python3`, `skip | no-body`, and
+`error | python-exit=N`. With the switch off it writes nothing.
+
+The close-time hook adds `skip | not-protocol-task` for a close whose window
+shows no protocol task.
 
 `check-progress-nudge` carries the literal tag `progress` in that column, and
 inside a subagent its session column reads `s=<session>.<agent>` (the first 8
@@ -864,7 +1023,7 @@ bash evals/run.sh
 ```
 
 Runs the hooks' own unit tests (`hooks/*_test.py`) first, then the full eval
-suite (200 cases) against all four hooks, and exits non-zero on either — the
+suite (237 cases) against all five hook scripts, and exits non-zero on either — the
 cases cover check-task-complete's four block conditions (the third being its
 own close-time comment-hygiene scan, the fourth being the no-session rule),
 check-comment-write's write-time comment-hygiene guard — both the pattern

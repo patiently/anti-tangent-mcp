@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Stop / SubagentStop hook: once per task, when ANTI_TANGENT_EDIT_GATE opts in,
+# refuse to let a session stop while the task its validate_task_spec call
+# opened has no validate_completion. Exit 2 makes Claude Code carry on with
+# the message as its next instruction. The Python body owns the transcript
+# work; this wrapper owns the switches, the trace log and the exit-code
+# mapping, the same split as check-task-start. Every failure allows.
+set -uo pipefail
+
+# Off by default, and this fires at the end of every turn: with the gate off
+# or the kill switch set, leave before touching stdin or the trace log.
+EDIT_GATE=$(printf '%s' "${ANTI_TANGENT_EDIT_GATE:-off}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+case "$EDIT_GATE" in
+    subagents|all) ;;
+    *) exit 0 ;;
+esac
+[[ "${ANTI_TANGENT_STOP_GUARD:-1}" == "0" ]] && exit 0
+
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
+# Mode 700 on creation: the default lives in a world-writable directory.
+mkdir -p -m 700 "$(dirname "$TRACE_LOG")" 2>/dev/null || true
+ATG_SESSION="-"
+
+atg_rotate_trace() {
+    local max=${ANTI_TANGENT_GUARD_TRACE_MAX_BYTES:-1048576} size
+    [[ "$max" =~ ^[0-9]+$ ]] || max=1048576
+    [[ -L "$TRACE_LOG" ]] && return 0
+    [[ -f "$TRACE_LOG" ]] || return 0
+    size=$(wc -c < "$TRACE_LOG" 2>/dev/null) || return 0
+    [[ "$size" -gt "$max" ]] || return 0
+    mv -f "$TRACE_LOG" "$TRACE_LOG.1" 2>/dev/null || true
+    return 0
+}
+atg_rotate_trace
+
+trace() {
+    # Never append through a symlink, and scrub the field separators out of
+    # every argument at the sink: a newline or "|" reaching printf would split
+    # one record into two.
+    [[ -L "$TRACE_LOG" ]] && return 0
+    local ev=${1:-?} detail=${2:-}
+    ev=${ev//[$'\r\n|']/}
+    detail=${detail//[$'\r\n|']/}
+    printf '%s | s=%s | task-stop | %s%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ATG_SESSION" "${ev:-?}" "${detail:+ | $detail}" \
+        >> "$TRACE_LOG" 2>/dev/null || true
+}
+
+command -v python3 >/dev/null 2>&1 || { trace "skip" "no-python3"; exit 0; }
+[[ -r "$PLUGIN_ROOT/hooks/check_task_stop.py" ]] || { trace "skip" "no-body"; exit 0; }
+
+ATG_INPUT="$(cat)"
+ATG_SESSION_RAW=$(printf '%s' "$ATG_INPUT" | jq -r '
+    def short: tostring | gsub("[^A-Za-z0-9_-]"; "") | .[0:8];
+    ((.session_id // "") | short) as $s | ((.agent_id // "") | short) as $a
+    | if $a == "" then $s else $s + "." + $a end' 2>/dev/null) || ATG_SESSION_RAW=""
+[[ -n "$ATG_SESSION_RAW" ]] && ATG_SESSION="$ATG_SESSION_RAW"
+
+# The body prints one word for the trace on stdout and the message for the
+# model on stderr, which passes through untouched.
+ATG_DETAIL=$(printf '%s' "$ATG_INPUT" | ATG_TRACE_LOG="$TRACE_LOG" ATG_EDIT_GATE="$EDIT_GATE" \
+    python3 -I -B "$PLUGIN_ROOT/hooks/check_task_stop.py")
+status=$?
+ATG_DETAIL=${ATG_DETAIL//[^a-z0-9-]/}
+ATG_DETAIL=${ATG_DETAIL:0:32}
+case "$status" in
+    0) trace "pass" "$ATG_DETAIL"; exit 0 ;;
+    2)
+        # The interpreter itself exits 2 when it cannot start the body. Only
+        # the body's own exit 2 comes with a trace word, and only that blocks.
+        [[ "$ATG_DETAIL" == open* ]] || { trace "error" "python-exit=2"; exit 0; }
+        trace "block" "$ATG_DETAIL"; exit 2 ;;
+    3) trace "skip" "${ATG_DETAIL:-not-gated}"; exit 0 ;;
+    *) trace "error" "python-exit=$status"; exit 0 ;;
+esac

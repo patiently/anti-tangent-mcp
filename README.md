@@ -247,6 +247,11 @@ ANTI_TANGENT_SHUNT_MIN_LINES=350         # threshold file line count; Reads exce
 # NOTE: ANTI_TANGENT_TICKET_PATTERN is read by the Claude Code plugin hooks ONLY, never by the server itself.
 ANTI_TANGENT_TICKET_PATTERN=             # optional regex for your tracker's key shape, e.g. ABC-\d+; no default, so tracker keys go undetected until you set it
 
+# --- Plugin hooks (anti-tangent-guard edit gate and stop check; read by the hooks ONLY) ---
+ANTI_TANGENT_EDIT_GATE=off               # off | subagents | all: refuse project edits until the session's own validate_task_spec; also turns on the stop check
+ANTI_TANGENT_EDIT_GATE_EXEMPT=           # unset = docs/**/*.md; colon-separated globs relative to cwd; set but empty = nothing exempt
+ANTI_TANGENT_STOP_GUARD=1                # 0 turns off the stop check alone
+
 # --- Opt-in statistics (off unless ANTI_TANGENT_STATS_DIR is set) ---
 # Output directory; enables the subsystem. Files in ANTI_TANGENT_STATS_DIR:
 #   events.jsonl          — per-call counts (server-written)
@@ -650,9 +655,9 @@ See [`plugin/anti-tangent-shunt/README.md`](plugin/anti-tangent-shunt/README.md)
 
 ### anti-tangent-guard
 
-Four hooks that enforce anti-tangent-mcp's conventions. Three block; the fourth asks.
+Four hooks that enforce anti-tangent-mcp's conventions, plus an opt-in edit gate and stop check. Three block; the fourth asks.
 
-A `PostToolUse` hook on `TaskUpdate` enforces the `validate_completion` gate at task close: when a task is marked completed without running `validate_completion`, or the evidence it was validated against adds comments carrying change history, the guard returns a blocking instruction to reopen, fix, and re-close. It detects rather than prevents — `PostToolUse` fires after the state change, so it cannot stop the close itself.
+A `PostToolUse` hook on `TaskUpdate` enforces the `validate_completion` gate at task close: when a protocol task (one whose window shows a `validate_task_spec` call, a protocol dispatch or a lightweight marker) is marked completed without running `validate_completion`, or the evidence it was validated against adds comments carrying change history, the guard returns a blocking instruction to reopen, fix, and re-close. It detects rather than prevents — `PostToolUse` fires after the state change, so it cannot stop the close itself.
 
 A `PreToolUse` hook on `Edit`/`Write` refuses a write that adds such a comment, before it lands. **Installing this plugin means some of your edits will be rejected until the comment is rewritten.**
 
@@ -660,7 +665,9 @@ A second `PreToolUse` hook, on `Edit`/`Write`/`NotebookEdit`, refuses a dispatch
 
 A `PostToolUse` hook on `Edit`/`Write`/`NotebookEdit` asks a task for a `check_progress` call, once, when it has made ten edits since `validate_task_spec` without one (`ANTI_TANGENT_PROGRESS_EDITS` changes the ten). It refuses nothing: the edit is kept and the message goes to the model. It is silent when the session has no `validate_task_spec` call, and after `validate_completion`.
 
-Kill switches: `ANTI_TANGENT_SESSION_GUARD=0` turns off the start gate and the no-session close rule; `ANTI_TANGENT_COMPLETION_GUARD=0` turns off the completion gate only; `ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning at both write time and close time; setting all three is what silences the close-time hook entirely; `ANTI_TANGENT_PROGRESS_GUARD=0` turns off the progress reminder.
+**Opt-in, off by default:** `ANTI_TANGENT_EDIT_GATE=subagents` or `all` refuses edits to project files in every subagent, or every session including the main one, until that session has made its own successful `validate_task_spec` call. Paths outside the session's `cwd` and those matching `ANTI_TANGENT_EDIT_GATE_EXEMPT` (default `docs/**/*.md`) are not gated. The same switch turns on a `Stop`/`SubagentStop` check that asks a session to call `validate_completion` before it stops, once per stretch of edits, so a mid-task pause does not spend the ask. This is for a spec-driven workflow with no plan and no task list. It is a drift guard, not an adversarial control: writes through `Bash` bypass it. To turn it down for one repository, set the variable in that repository's `.claude/settings.local.json` `env` block; it applies from the next session.
+
+Kill switches: `ANTI_TANGENT_SESSION_GUARD=0` turns off the fingerprinted start gate and the no-session close rule; `ANTI_TANGENT_COMPLETION_GUARD=0` turns off the completion gate only; `ANTI_TANGENT_COMMENT_GUARD=0` turns off comment scanning at both write time and close time; setting all three is what silences the close-time hook entirely; `ANTI_TANGENT_PROGRESS_GUARD=0` turns off the progress reminder; `ANTI_TANGENT_STOP_GUARD=0` turns off the stop check alone. `ANTI_TANGENT_EDIT_GATE` is independent of all of them.
 
 **Install:**
 

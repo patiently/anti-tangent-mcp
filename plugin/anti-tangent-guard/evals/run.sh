@@ -289,7 +289,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=200
+EXPECTED_CASE_COUNT=237
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
@@ -351,6 +351,10 @@ JEV_PORT=$(cat "$JEV_PORT_FILE" 2>/dev/null)
 # real endpoint in their environment must not have the suite spend their key.
 unset ANTI_TANGENT_TICKET_PATTERN
 unset ANTI_TANGENT_COMPLETION_GUARD
+unset ANTI_TANGENT_SESSION_GUARD
+unset ANTI_TANGENT_STOP_GUARD
+unset ANTI_TANGENT_EDIT_GATE
+unset ANTI_TANGENT_EDIT_GATE_EXEMPT
 unset ANTI_TANGENT_COMMENT_GUARD
 unset ANTI_TANGENT_PROGRESS_GUARD
 unset ANTI_TANGENT_PROGRESS_EDITS

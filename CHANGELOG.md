@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0] - 2026-11-16
+
+### Added
+
+- `anti-tangent-guard` 0.8.0, edit gate: `ANTI_TANGENT_EDIT_GATE` (`off`, the default, `subagents` or `all`) widens the start gate. `subagents` refuses `Edit`/`Write`/`NotebookEdit` in every dispatched subagent until it has made its own successful `validate_task_spec` call, whatever its dispatch prompt says. `all` does the same for the main session too, reading its own `transcript_path`. Only targets inside the payload's `cwd` are gated, after `realpath`, and of those not the ones matching `ANTI_TANGENT_EDIT_GATE_EXEMPT` (colon-separated globs; default `docs/**/*.md`, deliberately not `*.md`). A pasted envelope never counts, an errored call does not unlock it, and a lightweight dispatch stays exempt. The gate is independent of `ANTI_TANGENT_SESSION_GUARD`.
+
+- `anti-tangent-guard` 0.8.0, stop check: a new `check-task-stop` hook on `Stop` and `SubagentStop`, turned on by the same switch (`subagents` checks `SubagentStop`, `all` both). When the stopping session's last successful `validate_task_spec` has no successful `validate_completion` after it, the hook exits 2 so the session closes the task before it stops. `Stop` fires at every turn's end, pauses included, so the ask is made once per stretch of edits: a session asked while pausing to ask the user something is told to say so and stop, and is asked again only after further edits. A task with no edit since `validate_task_spec` is never asked. It allows on `stop_hook_active`, on a second stop with no edit in between, and on every failure. `ANTI_TANGENT_STOP_GUARD=0` turns it off alone; `ANTI_TANGENT_COMPLETION_GUARD` does not affect it.
+
+- `anti-tangent-protocol` 0.5.0: a spec-driven workflow with no plan. The skill triggers on a task with acceptance criteria from a plan's task block, a spec's Goal / Acceptance criteria section, or a goal stated in the conversation. `core.md` §1 documents the plan-less loop (`validate_task_spec` → `check_progress` → `validate_completion`, the spec's path in `context_paths`, no `plan_run_id`), and the controller and implementer parts say which steps belong to plan runs only.
+
+### Changed
+
+- `anti-tangent-guard` 0.8.0: the `TaskUpdate` completion check's "closed without `validate_completion`" block now fires only for a protocol task, one whose window shows a `validate_task_spec` call, a dispatch carrying the full clause heading, or the lightweight marker. An ordinary to-do closes freely and traces `skip | not-protocol-task`. A `fail` verdict, an errored call, the no-session rule and the close-time comment scan are unchanged. One case is given up: a controller that implements a plan task in its own session with no `validate_task_spec` and no dispatch is no longer blocked at close.
+
+- `anti-tangent-guard` 0.8.0: `check-task-start` gains a 10-second timeout in `hooks.json`, and blocks only on an exit 2 from its own body that carries a trace word, so an interpreter that cannot start the body allows instead of blocking.
+
+- The protocol no longer depends on superpowers: `controller.md` describes the reviewer tier bar without naming `~/.claude/superpowers/model-routing.json`, `authoring.md` names `writing-plans` as one plan generator among others, and `core.md` lists superpowers as one harness among others. `core.md`'s environment-variable list now points at the README's dotenv block.
+
+### Security
+
+- What auto-executes, for anyone auditing a pin bump of `anti-tangent-guard` 0.8.0. No hook makes a network call, reads a credential, or starts a subprocess beyond `python3` and `jq`, as before.
+  - `check-task-start` (already registered on every `Edit`/`Write`/`NotebookEdit`): with `ANTI_TANGENT_EDIT_GATE` unset it reads one more environment variable and otherwise behaves as before. Under `subagents` it reads each subagent's own transcript, as it already did for fingerprinted ones. Under `all` it also reads the main session's `transcript_path`, a file the session itself writes, and calls `realpath` on the target and on `cwd`.
+  - `check-task-stop` (new, registered on `Stop` and `SubagentStop`): with the switch unset or `ANTI_TANGENT_STOP_GUARD=0` it exits 0 before reading stdin or touching the trace log. When on, it reads the stopping session's own transcript and, at most once per stretch of edits, creates one empty `stop-asked-<hash>` file beside the trace log.
+  - `check-task-complete` (already registered on `TaskUpdate`): looks for protocol evidence in the window it already scans. It reads nothing new.
+
 ## [0.29.0] - 2026-10-11
 
 ### Security

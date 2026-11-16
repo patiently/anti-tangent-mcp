@@ -6,17 +6,17 @@ catch, when the protocol applies, and the FAQ. Then read your role's part:
 (writing the code), [`controller.md`](controller.md) (dispatching subagents or running a plan
 end to end).
 
-`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **tasks from a written implementation plan**. It exposes ten tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`), an optional project-knowledge pair (`prime_project_knowledge` / `extract_project_knowledge`), a deterministic plan-run report and outcome record (`plan_run_report` / `record_review_outcome`), and an I/O-delegation pair (`bulk_read` / `code_write`) routing large reads and boilerplate generation to a cheap worker model. The first six use a reviewer LLM deliberately different from the implementer, so review isn't blind to its blind spots; the delegation pair sends nothing for review — it moves volume, not judgement. Authoritative design: [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md).
+`anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift while working on **specced tasks**, from an implementation plan or from a spec. It exposes ten tools: a plan-level handoff gate (`validate_plan`), three per-task lifecycle hooks (`validate_task_spec` / `check_progress` / `validate_completion`), an optional project-knowledge pair (`prime_project_knowledge` / `extract_project_knowledge`), a deterministic plan-run report and outcome record (`plan_run_report` / `record_review_outcome`), and an I/O-delegation pair (`bulk_read` / `code_write`) routing large reads and boilerplate generation to a cheap worker model. The first six use a reviewer LLM deliberately different from the implementer, so review isn't blind to its blind spots; the delegation pair sends nothing for review — it moves volume, not judgement. Authoritative design: [`docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/docs/superpowers/specs/2026-05-07-anti-tangent-mcp-design.md).
 
 **Install, configure, and the full tool surface:** see [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md).
 
 This document has three audiences:
 
 - **Plan authors** — a task format that maps directly to `validate_task_spec` inputs (one-time read while drafting).
-- **Controllers** (orchestrators dispatching implementers — superpowers' `subagent-driven-development`, hone-ai's equivalent, or a hand-rolled loop) — a **required plan-handoff gate** plus a paste-in dispatch clause per subagent prompt.
+- **Controllers** (orchestrators dispatching implementers, in any harness) — on a plan run a **required plan-handoff gate**, and always a paste-in dispatch clause per subagent prompt.
 - **Implementing subagents** — a paste-in lifecycle clause mandating pre + post calls, with mid calls when the guard asks or drift is suspected, and how to handle findings.
 
-The integration is **system-agnostic**: superpowers, hone-ai, vanilla Claude Code, Cursor, or any MCP-capable harness. It ships as this core part plus the role parts above and the optional `project-knowledge.md`; load the ones your role needs and paste the relevant chunks where they belong.
+The integration is **system-agnostic**: vanilla Claude Code, Cursor, superpowers, hone-ai, or any MCP-capable harness. No plan tooling is required. It ships as this core part plus the role parts above and the optional `project-knowledge.md`; load the ones your role needs and paste the relevant chunks where they belong.
 
 > **When does anti-tangent-mcp earn its keep?** Its value compounds when (a) tasks are specced before implementation, (b) the implementer is an LLM that can drift, and (c) implementer and reviewer LLMs differ. Without all three it is just extra latency.
 
@@ -93,7 +93,9 @@ responsibility: they still answer for the result at `validate_completion`.
 
 ## 1. When the protocol applies
 
-**Strict trigger:** the work is a task from an implementation plan with the structured **Goal / Acceptance criteria / (Non-goals) / (Context)** header (see [`authoring.md`](authoring.md) §3). If those fields are present, the protocol applies — whether you implement directly or dispatch it.
+**Strict trigger:** the work is a task with acceptance criteria — from an implementation plan's **Goal / Acceptance criteria / (Non-goals) / (Context)** block ([`authoring.md`](authoring.md) §3), a spec's Goal / Acceptance criteria section, or a goal stated in the conversation. The protocol then applies, whether you implement directly or dispatch it.
+
+**Two workflows.** *Spec-driven* (no plan): one implementer per spec passes the spec's goal, criteria and non-goals verbatim, with the spec's absolute path in `context_paths`, and runs `validate_task_spec` → `check_progress` → `validate_completion` with no `plan_run_id`, `task_index` or `validate_plan`. *Plan-driven*: the controller flow in [`controller.md`](controller.md) §5.
 
 **Skip the protocol entirely** for:
 
@@ -101,11 +103,11 @@ responsibility: they still answer for the result at `validate_completion`.
 - Code review of existing code.
 - Plan or spec authoring (the author isn't implementing yet).
 - Brainstorming / design discussions.
-- One-off changes that didn't come from a plan (typo fixes, config tweaks, mid-conversation refactors, debugging help).
+- One-off changes with no spec or plan behind them (typo fixes, config tweaks, debugging help).
 - Subagents dispatched for non-implementation work (Explore, summarizers, code/security reviewers).
 - Doc-only edits unless the doc IS the planned task.
 
-If unsure, look for the structured task block. No block → no protocol. Don't fire the tools "for safety" on ad-hoc work — calls cost and noise dilutes the signal.
+If unsure, look for acceptance criteria. None → no protocol. Don't fire the tools "for safety" on ad-hoc work — calls cost and noise dilutes the signal.
 
 ---
 
@@ -162,13 +164,4 @@ implied; the reviewer has not yet seen your code.
 
 ## Environment variables
 
-Defaults shown; [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md) has the full dotenv block.
-
-- `ANTI_TANGENT_CODESCENE` — `""` (off). Set to `required` to add a `major` finding on a missing
-  `codescene` argument or an unevidenced skip — see the ladder above. A lone CodeScene major
-  yields `warn`; combined with another major it can tip a verdict to `fail`.
-- `ANTI_TANGENT_PLAN_LEDGER` — `0` (off). With `ANTI_TANGENT_STATS_DIR` set, `1` persists each
-  completed task row to `plan-runs.jsonl` so `plan_run_report` survives a restart. It also holds
-  one header line per run minted by `validate_plan` (run id, verdict, quality, task count, creation
-  time — no task title), pruned by its creation time. Unlike every other stats artifact it carries
-  task titles, hence its own opt-in.
+See [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md)'s dotenv block, which lists every variable with its default.
