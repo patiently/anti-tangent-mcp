@@ -181,6 +181,16 @@ Considered and rejected: an in-chat release phrase typed by the human. Telling a
 prompt apart from skill or command expansions depends on the undocumented `origin.kind` field in
 the transcript, and a valve that silently stops working leaves the user stuck.
 
+### Settings precedence and the per-repo bypass (verified 2026-11-16)
+
+A headless `claude -p` run showed that a `.claude/settings.local.json` `env` value reaches
+hook processes and wins over the launch environment. Two consequences, both stated in the
+README: the per-session launch override works only when no settings file sets the variable,
+and the per-repo setting is a bypass. An agent can write `off` there, through `Bash` while
+blocked or with `Write` after validating, and every later session in that repository starts
+ungated. "A blocked session cannot lift its own block" therefore holds per session, not per
+repository. No countermeasure is built; that is Patrick's call.
+
 ### Honesty (README)
 
 This is a drift guard, not an adversarial control:

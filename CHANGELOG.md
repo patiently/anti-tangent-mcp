@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `check-task-start` (already registered on every `Edit`/`Write`/`NotebookEdit`): with `ANTI_TANGENT_EDIT_GATE` unset it reads one more environment variable and otherwise behaves as before. Under `subagents` it reads each subagent's own transcript, as it already did for fingerprinted ones. Under `all` it also reads the main session's `transcript_path`, a file the session itself writes, and calls `realpath` on the target and on `cwd`.
   - `check-task-stop` (new, registered on `Stop` and `SubagentStop`): with the switch unset or `ANTI_TANGENT_STOP_GUARD=0` it exits 0 before reading stdin or touching the trace log. When on, it reads the stopping session's own transcript and, at most once per stretch of edits, creates one empty `stop-asked-<hash>` file beside the trace log.
   - `check-task-complete` (already registered on `TaskUpdate`): looks for protocol evidence in the window it already scans. It reads nothing new.
+  - The edit gate is a drift guard, not an adversarial control. Besides `Bash` writes, an agent can disarm it for a whole repository by writing `ANTI_TANGENT_EDIT_GATE=off` into `.claude/settings.local.json`, whose `env` value wins over the launch environment (observed with a headless `claude -p` run). The guard README says so.
 
 ## [0.29.0] - 2026-10-11
 

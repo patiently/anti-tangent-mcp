@@ -298,7 +298,15 @@ rather than blocking every write. Kill switch: `ANTI_TANGENT_SESSION_GUARD=0`.
 | `subagents` | Every dispatched subagent (any payload with `agent_id`), clause heading or not. |
 | `all` | Every subagent, and the main session, whose own `transcript_path` is read. |
 
-Any other value is `off`, with a `skip | bad-edit-gate-value` trace line. A subagent whose
+Any other value is `off`, with a `skip | bad-edit-gate-value` trace line.
+
+**Where the value comes from.** The hook reads its process environment. A value in the `env`
+block of `.claude/settings.local.json` reaches that environment and **wins over** the
+environment Claude Code was launched with: a hook in a session started as
+`ANTI_TANGENT_EDIT_GATE=off claude`, in a repository whose `settings.local.json` sets it to
+`all`, sees `all`. That was observed for the local settings file; the other settings scopes
+were not tested, so assume any settings file that sets the variable beats the launch
+environment. A subagent whose
 dispatch prompt carries the lightweight heading stays exempt in every mode: the controller
 ruled it lightweight in a prompt the subagent cannot rewrite. The main session has no
 dispatch prompt, so under `all` nothing is fingerprinted: the mode alone gates it.
@@ -327,12 +335,13 @@ switch is read from the hook's environment, which the blocked session cannot cha
 
 1. *In the session:* call `validate_task_spec` with a one-line goal and one acceptance
    criterion. That is one reviewer call, and the block message offers nothing else.
-2. *Per session:* launch with the switch set, `ANTI_TANGENT_EDIT_GATE=off claude`.
+2. *Per session:* launch with the switch set, `ANTI_TANGENT_EDIT_GATE=off claude`. This
+   works only when no settings file sets the variable, because a settings value wins.
 3. *Per repository:* set it in the `env` block of that repository's
-   `.claude/settings.local.json`, which wins over user-level settings. A value set there
-   reaches the hook's environment; treat a change as taking effect in the next session,
+   `.claude/settings.local.json`. Treat a change as taking effect in the next session,
    because Claude Code does not document whether a running session picks it up. The file
-   is inside `cwd` and not exempt, so a blocked session's `Write` to it is refused.
+   is inside `cwd` and not exempt, so a blocked session's `Write` to it is refused — but
+   see the bypass below.
 
 **Switches.** `ANTI_TANGENT_EDIT_GATE` is independent of `ANTI_TANGENT_SESSION_GUARD`.
 `SESSION_GUARD=0` still turns off the fingerprinted start gate, but not the edit gate: with
@@ -340,8 +349,16 @@ the edit gate on, every clause-dispatched subagent is gated by its `agent_id` an
 hook exits before reading stdin only when both are off.
 
 **What it is not.** A drift guard, not an adversarial control. `Bash` writes (`cat >`,
-`sed -i`, `git apply`) bypass it, as they bypass the start gate and the comment guard, and
-the same `Bash` can edit `settings.local.json`. The `subagents/` layout is not a documented
+`sed -i`, `git apply`) bypass it, as they bypass the start gate and the comment guard.
+
+**The per-repository setting is also a bypass.** Because a `settings.local.json` value wins,
+an agent can turn the gate off for a whole repository by writing
+`"ANTI_TANGENT_EDIT_GATE": "off"` into that file's `env` block: through `Bash` while it is
+blocked, or with `Write` once it has called `validate_task_spec`. The block in the current
+session stays, but every later session in that repository starts ungated. So "a blocked
+session cannot lift its own block" holds per session only; per repository it does not. The
+block message tells the agent not to change the setting, which is an instruction, not a
+control. Check `.claude/settings.local.json` if a repository that should be gated is not. The `subagents/` layout is not a documented
 interface, and every failure allows: no `python3`, a malformed payload, an unreadable
 transcript, a payload with no `cwd`, or the 10-second timeout in `hooks.json`. A
 main-session transcript can be tens of megabytes; a line that names neither the tool nor a

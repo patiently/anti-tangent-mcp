@@ -76,8 +76,9 @@ validate_completion. Reads are not gated.
 Not gated: files outside {cwd}, and files under it matching
 ANTI_TANGENT_EDIT_GATE_EXEMPT ({globs}).
 
-Whether this gate is on is the user's setting, read when the session starts.
-Do not change it from inside this session. (Trace: {trace})
+Whether this gate is on is the user's setting. Do not change it: not in this
+session's environment, and not in any settings file such as
+.claude/settings.local.json. (Trace: {trace})
 """
 
 EDIT_GATE_NO_CALL = "It has not made one."

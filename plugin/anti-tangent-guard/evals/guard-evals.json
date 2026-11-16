@@ -3379,7 +3379,8 @@
       "expected_exit": 2,
       "expected_stderr_contains": [
         "EDIT BEFORE validate_task_spec (ANTI_TANGENT_EDIT_GATE=all)",
-        "It has not made one."
+        "It has not made one.",
+        "not in any settings file"
       ],
       "expected_file_contains": {
         "{{TMPDIR}}/trace.log": [
