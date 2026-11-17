@@ -125,10 +125,10 @@ this block if there is no KB attached.)
 - context:              <from "Context:" if present>
 - verification:         <optional; step lines and Verify commands>
 - pinned_by:            <optional anchors for existing behavior>
-- controller_verified_references: <optional references the controller already verified>
+- controller_verified_references: <optional; refs the controller verified>
 - plan_run_id:          <plan runs only; from validate_plan>
-- context_paths:        <spec runs: the spec's absolute path>
-- project_knowledge:    <optional; markdown excerpts the controller pre-selected from the KB>
+- context_paths:        <the spec's absolute path, or the brief file a dispatch names>
+- project_knowledge:    <optional; KB excerpts the controller pre-selected>
 - harness_shape_attestation: <optional structured input; see §3.8>
 - phase:                <optional; "pre" (default) or "post" for post-hoc/session-recovery>
 ```
