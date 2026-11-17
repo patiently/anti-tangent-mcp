@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `anti-tangent-guard` 0.8.0: the `TaskUpdate` completion check's "closed without `validate_completion`" block now fires only for a protocol task, one whose window shows a `validate_task_spec` call, a dispatch carrying the full clause heading, or the lightweight marker. An ordinary to-do closes freely and traces `skip | not-protocol-task`. A `fail` verdict, an errored call, the no-session rule and the close-time comment scan are unchanged. One case is given up: a controller that implements a plan task in its own session with no `validate_task_spec` and no dispatch is no longer blocked at close.
+- `anti-tangent-guard` 0.8.0: the `TaskUpdate` completion check's "closed without `validate_completion`" block now fires only for a protocol task, one whose window shows a `validate_task_spec` call, a dispatch carrying the full clause heading or the short variant's `## Drift protection` heading (as a line of its own), or the lightweight marker. An ordinary to-do closes freely and traces `skip | not-protocol-task`. A `fail` verdict, an errored call, the no-session rule and the close-time comment scan are unchanged. Two cases are given up: a controller that implements a plan task in its own session with no `validate_task_spec` and no dispatch is no longer blocked at close, and neither is a session whose `validate_task_spec` came before the task's first `in_progress`, since the window starts there.
 
 - `anti-tangent-guard` 0.8.0: `check-task-start` gains a 10-second timeout in `hooks.json`, and blocks only on an exit 2 from its own body that carries a trace word, so an interpreter that cannot start the body allows instead of blocking.
 

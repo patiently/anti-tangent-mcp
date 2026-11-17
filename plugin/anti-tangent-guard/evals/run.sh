@@ -300,11 +300,13 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # ANTI_TANGENT_COMPLETION_GUARD; stop_hook_active passing; no edit since the
 # spec call passing; and a bad switch value read as off.
 #
-# Six check-task-complete cases pin the no-validation block's scoping to
+# Eight check-task-complete cases pin the no-validation block's scoping to
 # protocol tasks: a plain to-do passing; a validate_task_spec call, a
-# full-clause dispatch and a lightweight dispatch each still blocking; a
-# validate_task_spec from before the task's first in_progress not counting;
-# and a plain to-do with a fail verdict still blocking.
+# full-clause dispatch, a short-variant dispatch and a lightweight dispatch
+# each still blocking; a prompt naming drift protection mid-line or under a
+# deeper heading not counting; a validate_task_spec from before the task's
+# first in_progress not counting; and a plain to-do with a fail verdict still
+# blocking.
 #
 # The per-group counts above PARTITION this table: every case belongs to
 # exactly one group, and they sum to EXPECTED_CASE_COUNT. Adding a case means
@@ -315,7 +317,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=238
+EXPECTED_CASE_COUNT=240
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and

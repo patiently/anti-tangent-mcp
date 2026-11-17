@@ -59,14 +59,18 @@ gate becomes visible from the controller's own transcript). It blocks
 1. **Neither signal is present, and the task is a protocol task.** Nothing in
    the window shows the completion gate ran at all. A protocol task is one whose
    window holds a `validate_task_spec` call, an `Agent`/`Task` dispatch (or, in a
-   subagent, its own prompt) carrying the full clause heading, or the lightweight
-   marker; the window for this test starts at the task's first `in_progress`, as the
-   lightweight marker's does. Any other close — an ordinary to-do — never owed a
-   `validate_completion` call and passes with `skip | not-protocol-task`. One case
-   is given up by this: a controller that implements a plan task in its own session
-   with no `validate_task_spec` and no dispatch is no longer blocked at close. With
-   `ANTI_TANGENT_EDIT_GATE=all` that session cannot edit without a
-   `validate_task_spec` call, which brings the close back into scope. When the task
+   subagent, its own prompt) carrying the full clause heading or the short
+   variant's `## Drift protection` heading (as a line of its own), or the
+   lightweight marker; the window for this test starts at the task's first
+   `in_progress`, as the lightweight marker's does. Any other close — an ordinary
+   to-do — never owed a `validate_completion` call and passes with
+   `skip | not-protocol-task`. Two cases are given up by this. A controller that
+   implements a plan task in its own session with no `validate_task_spec` and no
+   dispatch is no longer blocked at close; with `ANTI_TANGENT_EDIT_GATE=all` that
+   session cannot edit without a `validate_task_spec` call, which brings the close
+   back into scope. And a `validate_task_spec` made before the task's first
+   `in_progress` falls outside the window, so a session that calls it first and
+   marks the task `in_progress` afterwards is not blocked at close. When the task
    has no `in_progress` entry the window is the whole transcript, so an earlier
    `validate_task_spec` in the session makes a later to-do look like a protocol task. A `validate_completion` call whose result is a tool error
    (a reviewer outage, a secret-gate refusal) is not a call; when every call in
@@ -335,6 +339,8 @@ switch is read from the hook's environment, which the blocked session cannot cha
 
 1. *In the session:* call `validate_task_spec` with a one-line goal and one acceptance
    criterion. That is one reviewer call, and the block message offers nothing else.
+   When the anti-tangent server is not connected this exit is unavailable, and exits 2
+   and 3 are the way out.
 2. *Per session:* launch with the switch set, `ANTI_TANGENT_EDIT_GATE=off claude`. This
    works only when no settings file sets the variable, because a settings value wins.
 3. *Per repository:* set it in the `env` block of that repository's
@@ -406,7 +412,10 @@ them blocked the stop that led to this turn. A turn another plugin's `Stop` hook
 therefore never asked about, even when it edited. The markers need a writable directory
 beside the trace log; where the log's directory is not writable — owned by another account,
 or a log pointed at `/dev/null` — no ask can be recorded, so none is made and the stop check
-is in effect off (`skip | no-state`). Nothing removes the markers, which are empty, or the
+is in effect off. Usually nothing is logged when that happens, because the trace line goes
+to the same unwritable place, so check that the trace log's directory is writable rather
+than looking for `skip | no-state`. A bare relative log name puts the markers in the
+hook's working directory. Nothing removes the markers, which are empty, or the
 progress reminder's `progress-asked-*` files beside them; to clear old ones, run
 `find /tmp/claude-hooks -name 'stop-asked-*' -mtime +7 -delete` (and the same for
 `progress-asked-*`) against your trace log's directory.

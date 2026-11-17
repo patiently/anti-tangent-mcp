@@ -91,8 +91,9 @@ def scan(lines):
     It collects the calls of the two tools and the edit tools in order and the ids whose result was an
     error, then judges: the task is the last spec call not in that set, and it
     is closed when a validate_completion after it is not in that set either.
-    last_edit is the key of the last Edit/Write/NotebookEdit call after the
-    spec call, or "" when there is none. A line worth_parsing rejects is
+    last_edit is the key of the last successful Edit/Write/NotebookEdit call
+    after the spec call, or "" when there is none: a refused edit changed
+    nothing, so it must not open a new stretch to ask about. A line worth_parsing rejects is
     skipped before it is parsed. A malformed line or entry is skipped rather
     than raised on.
     """
@@ -128,7 +129,7 @@ def scan(lines):
     start = opened[-1]
     after = [key for name, key in calls[start + 1:] if name == COMPLETION_TOOL]
     closed = any(key not in failed for key in after)
-    edits = [key for name, key in calls[start + 1:] if name in EDIT_TOOLS]
+    edits = [key for name, key in calls[start + 1:] if name in EDIT_TOOLS and key not in failed]
     return Task(calls[start][1], closed, bool(after) and not closed, edits[-1] if edits else "")
 
 

@@ -69,6 +69,11 @@ class ScanTest(unittest.TestCase):
         task = scan(["not json", "{", call(SPEC_TOOL, "s1"), json.dumps({"type": "assistant", "message": "x"})])
         self.assertFalse(task.closed)
 
+    def test_refused_edit_is_not_the_last_edit(self):
+        task = scan([call(SPEC_TOOL, "s1"), result("s1"), call("Edit", "e1"), result("e1"),
+                     call("Edit", "e2"), result("e2", True)])
+        self.assertEqual(task.last_edit, "e1")
+
     def test_notebook_edit_counts_as_an_edit(self):
         task = scan([call(SPEC_TOOL, "s1"), result("s1"), call("NotebookEdit", "n1")])
         self.assertEqual(task.last_edit, "n1")
@@ -166,6 +171,13 @@ class DecideTest(unittest.TestCase):
         self.assertEqual(decide(self.stop(), "all", self.try_claim)[:2], (3, "asked"))
         self.write(self.main, opened + [user("yes, go on"), call("Write", "e2")])
         self.assertEqual(decide(self.stop(), "all", self.try_claim)[:2], (2, "open"))
+
+    def test_a_refused_edit_after_a_pause_is_not_asked_about(self):
+        opened = [call(SPEC_TOOL, "s0"), result("s0"), call("Edit", "e1")]
+        self.write(self.main, opened)
+        self.assertEqual(decide(self.stop(), "all", self.try_claim)[0], 2)
+        self.write(self.main, opened + [user("yes, go on"), call("Edit", "e2"), result("e2", True)])
+        self.assertEqual(decide(self.stop(), "all", self.try_claim)[:2], (3, "asked"))
 
     def test_stop_hook_active_passes(self):
         self.write(self.main, [call(SPEC_TOOL, "s1"), result("s1"), call("Edit", "e1")])

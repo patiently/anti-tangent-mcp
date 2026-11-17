@@ -4037,10 +4037,62 @@
       "expected_exit": 0,
       "expected_file_contains": {
         "{{TMPDIR}}/trace.log": [
-          "task-stop | skip | bad-edit-gate-value"
+          "s=parent | task-stop | skip | bad-edit-gate-value"
         ]
       },
-      "reason": "an unrecognised ANTI_TANGENT_EDIT_GATE value is off, as in check-task-start, and says so in the trace; this task is open, so a value read as a mode would block"
+      "reason": "an unrecognised ANTI_TANGENT_EDIT_GATE value is off, as in check-task-start, and says so in the trace under the session that read it; this task is open, so a value read as a mode would block"
+    },
+    {
+      "id": 239,
+      "name": "close-short-variant-dispatch-without-envelope-blocks",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3.\\n\\n## Drift protection\\n\\nUse anti-tangent per the standard dispatch protocol. For this task:\\n- Call `validate_task_spec` before edits.\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 2,
+      "expected_stderr_contains": [
+        "TASK CLOSED WITHOUT anti-tangent validate_completion"
+      ],
+      "reason": "a dispatch carrying the short-variant clause heading (implementer.md section 4.2) makes this a protocol task even though the controller's own transcript holds no validate_task_spec"
+    },
+    {
+      "id": 240,
+      "name": "close-drift-protection-mid-line-is-not-a-protocol-task",
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log"
+      },
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3. Mind the ## Drift protection notes in the README, and keep\\n### Drift protection\\nsections intact.\\n\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Bash\", \"input\": {\"command\": \"echo hi\"}}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "the short-variant heading counts only as a whole line of its own: a prompt mentioning drift protection mid-line, or under a deeper heading, is an ordinary to-do",
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "skip | not-protocol-task"
+        ]
+      }
     }
   ]
 }

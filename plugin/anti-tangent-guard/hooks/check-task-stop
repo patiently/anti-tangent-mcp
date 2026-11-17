@@ -54,6 +54,12 @@ trace() {
         >> "$TRACE_LOG" 2>/dev/null || true
 }
 
+ATG_SESSION_RAW=$(printf '%s' "$ATG_INPUT" | jq -r '
+    def short: tostring | gsub("[^A-Za-z0-9_-]"; "") | .[0:8];
+    ((.session_id // "") | short) as $s | ((.agent_id // "") | short) as $a
+    | if $a == "" then $s else $s + "." + $a end' 2>/dev/null) || ATG_SESSION_RAW=""
+[[ -n "$ATG_SESSION_RAW" ]] && ATG_SESSION="$ATG_SESSION_RAW"
+
 # An unrecognised value is "off", as in check-task-start, with a trace line.
 case "$EDIT_GATE" in
     subagents|all) ;;
@@ -61,12 +67,6 @@ case "$EDIT_GATE" in
 esac
 command -v python3 >/dev/null 2>&1 || { trace "skip" "no-python3"; exit 0; }
 [[ -r "$PLUGIN_ROOT/hooks/check_task_stop.py" ]] || { trace "skip" "no-body"; exit 0; }
-
-ATG_SESSION_RAW=$(printf '%s' "$ATG_INPUT" | jq -r '
-    def short: tostring | gsub("[^A-Za-z0-9_-]"; "") | .[0:8];
-    ((.session_id // "") | short) as $s | ((.agent_id // "") | short) as $a
-    | if $a == "" then $s else $s + "." + $a end' 2>/dev/null) || ATG_SESSION_RAW=""
-[[ -n "$ATG_SESSION_RAW" ]] && ATG_SESSION="$ATG_SESSION_RAW"
 
 # The body prints one word for the trace on stdout and the message for the
 # model on stderr, which passes through untouched.

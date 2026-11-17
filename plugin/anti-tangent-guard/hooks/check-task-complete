@@ -227,6 +227,14 @@ SESSION_RE = re.compile(r"(?m)^[ \t]*session_id:[ \t]*(\S*)[ \t]*$")
 MODE_LITE_RE = re.compile(r"(?m)^[ \t]*mode:[ \t]*lightweight[ \t]*$")
 LITE_HEADING = "Drift-protection protocol (lightweight)"
 FULL_HEADING = "## Drift-protection protocol (anti-tangent-mcp)"
+# The short-variant dispatch clause (implementer.md section 4.2) opens with a
+# bare "## Drift protection" heading. Matched as a whole line, never as a
+# substring: ordinary prose mentioning drift protection must not turn a
+# to-do into a protocol task.
+SHORT_HEADING_RE = re.compile(r"(?m)^## Drift protection[ \t]*$")
+
+def full_clause(text):
+    return FULL_HEADING in text or SHORT_HEADING_RE.search(text) is not None
 
 for idx, line in enumerate(lines):
     try: entry = json.loads(line)
@@ -255,20 +263,20 @@ for idx, line in enumerate(lines):
                 elif name in ("Agent", "Task"):
                     if LITE_HEADING in str(inp.get("prompt", "")):
                         lite_idx.append(idx)
-                    elif FULL_HEADING in str(inp.get("prompt", "")):
+                    elif full_clause(str(inp.get("prompt", ""))):
                         protocol_idx.append(idx)
     elif etype == "user":
         content = msg.get("content")
         if isinstance(content, str):
             if LITE_HEADING in content:
                 lite_idx.append(idx)
-            elif FULL_HEADING in content:
+            elif full_clause(content):
                 protocol_idx.append(idx)
         elif isinstance(content, list):
             for c in content:
                 if isinstance(c, dict) and c.get("type") == "text" and LITE_HEADING in (c.get("text") or ""):
                     lite_idx.append(idx)
-                elif isinstance(c, dict) and c.get("type") == "text" and FULL_HEADING in (c.get("text") or ""):
+                elif isinstance(c, dict) and c.get("type") == "text" and full_clause(c.get("text") or ""):
                     protocol_idx.append(idx)
         if isinstance(content, list):
             for c in content:
@@ -393,9 +401,9 @@ elif last_block:
 marker_from = first_inprogress if first_inprogress >= 0 else 0
 lite_marker = any(i >= marker_from for i in lite_idx)
 # Whether this close is a protocol task at all: a validate_task_spec call, a
-# full-clause dispatch (or, in a subagent, its own full-clause prompt), or a
-# lightweight marker, from the same anchor as the lightweight marker and for
-# the same reason. Only the no-validation block is scoped by it: an ordinary
+# full-clause or short-variant dispatch (or, in a subagent, its own such
+# prompt), or a lightweight marker, from the same anchor as the lightweight
+# marker and for the same reason. Only the no-validation block is scoped by it: an ordinary
 # to-do never carried a duty to call validate_completion.
 protocol_task = lite_marker or any(i >= marker_from for i in protocol_idx)
 
