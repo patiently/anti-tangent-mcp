@@ -95,7 +95,7 @@ responsibility: they still answer for the result at `validate_completion`.
 
 **Strict trigger:** the work is a task with acceptance criteria — from an implementation plan's **Goal / Acceptance criteria / (Non-goals) / (Context)** block ([`authoring.md`](authoring.md) §3), a spec's Goal / Acceptance criteria section, or a goal stated in the conversation. The protocol then applies, whether you implement directly or dispatch it.
 
-**Two workflows.** *Spec-driven* (no plan): one implementer per spec passes the spec's goal, criteria and non-goals verbatim, with the spec's absolute path in `context_paths` (a goal stated only in the conversation has no file: pass its goal and criteria, omit `context_paths`), and runs `validate_task_spec` → `check_progress` → `validate_completion` with no `plan_run_id`, `task_index` or `validate_plan`. *Plan-driven*: the controller flow in [`controller.md`](controller.md) §5.
+**Two workflows.** *Spec-driven* (no plan): one implementer per spec passes the spec's goal, criteria and non-goals verbatim, with the spec's absolute path in `context_paths` (a goal stated only in the conversation has no file: pass its goal and criteria, omit `context_paths`), and runs `validate_task_spec` → `check_progress` → `validate_completion` with no `plan_run_id`, `task_index` or `validate_plan` (give the task a title no live plan run uses: an exact title match attaches the call to that run). *Plan-driven*: the controller flow in [`controller.md`](controller.md) §5.
 
 **Skip the protocol entirely** for:
 
