@@ -282,14 +282,15 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # without the tier ever being asked, a request the stub never answers, and a
 # third attempt on one path yielding.
 #
-# The opt-in edit gate contributes seventeen check-task-start cases: off by
+# The opt-in edit gate contributes eighteen check-task-start cases: off by
 # default for the main session and for a plain subagent; "subagents" blocking
 # a plain subagent until its own call, leaving the main session alone and
 # exempting a lightweight dispatch; "all" blocking the main session, passing it
 # after a call, and blocking on an errored call and on a pasted envelope; the
 # exempt-doc, CLAUDE.md, outside-cwd, empty-exemption and symlinked-doc path
-# rules; independence from ANTI_TANGENT_SESSION_GUARD; and a bad switch value
-# read as off.
+# rules; a sibling of a cd'd-into cwd still gated under CLAUDE_PROJECT_DIR;
+# independence from ANTI_TANGENT_SESSION_GUARD; and a bad switch value read as
+# off.
 #
 # The stop check contributes fifteen check-task-stop cases: off by default with
 # no trace line; an open task blocking, a closed one passing, an errored
@@ -317,7 +318,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=240
+EXPECTED_CASE_COUNT=241
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
@@ -383,6 +384,7 @@ unset ANTI_TANGENT_SESSION_GUARD
 unset ANTI_TANGENT_STOP_GUARD
 unset ANTI_TANGENT_EDIT_GATE
 unset ANTI_TANGENT_EDIT_GATE_EXEMPT
+unset CLAUDE_PROJECT_DIR
 unset ANTI_TANGENT_COMMENT_GUARD
 unset ANTI_TANGENT_PROGRESS_GUARD
 unset ANTI_TANGENT_PROGRESS_EDITS

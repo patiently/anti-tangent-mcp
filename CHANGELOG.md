@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.1] - 2026-11-17
+
+### Fixed
+
+- `anti-tangent-guard` 0.8.1: the edit gate judges "inside the project" against `CLAUDE_PROJECT_DIR`, falling back to the payload's `cwd` only when it is unset. The payload's `cwd` follows a Bash `cd` (observed with a headless `claude -p` run), so after `cd src` a write to a sibling such as `lib/x.go` read as outside the project and passed ungated. Exemption globs are matched from the same root; a relative target is still resolved against `cwd`. The block message names that root.
+
+- `anti-tangent-guard` 0.8.1: the edit-gate block message tells a session whose `validate_task_spec` tool is unavailable to stop and tell the user, since the anti-tangent server is not connected and the session cannot unlock the gate itself.
+
+### Security
+
+- What auto-executes, for a pin bump from 0.8.0: `check-task-start` additionally reads `CLAUDE_PROJECT_DIR` from its environment. No new network call, credential read, subprocess or file write.
+
 ## [0.30.0] - 2026-11-16
 
 ### Added
