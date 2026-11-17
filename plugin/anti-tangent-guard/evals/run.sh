@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Eval runner for the anti-tangent-guard hooks: check-task-complete
-# (PostToolUse) and check-comment-write (PreToolUse).
+# (PostToolUse on TaskUpdate), check-comment-write and check-task-start
+# (PreToolUse), check-progress-nudge (PostToolUse on Edit/Write/NotebookEdit)
+# and check-task-stop (Stop and SubagentStop).
 #
 # Reads guard-evals.json (shape: {skill_name, description, evals: [...]}),
 # builds each case's stdin payload — and, unless the case supplies its own
@@ -280,6 +282,32 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # without the tier ever being asked, a request the stub never answers, and a
 # third attempt on one path yielding.
 #
+# The opt-in edit gate contributes seventeen check-task-start cases: off by
+# default for the main session and for a plain subagent; "subagents" blocking
+# a plain subagent until its own call, leaving the main session alone and
+# exempting a lightweight dispatch; "all" blocking the main session, passing it
+# after a call, and blocking on an errored call and on a pasted envelope; the
+# exempt-doc, CLAUDE.md, outside-cwd, empty-exemption and symlinked-doc path
+# rules; independence from ANTI_TANGENT_SESSION_GUARD; and a bad switch value
+# read as off.
+#
+# The stop check contributes fifteen check-task-stop cases: off by default with
+# no trace line; an open task blocking, a closed one passing, an errored
+# completion and a pasted completion envelope still blocking, no task passing;
+# one ask per stretch of edits; a second task without its completion blocking;
+# "subagents" leaving a main-session Stop alone with no trace line and blocking
+# an open subagent; the kill switch; independence from
+# ANTI_TANGENT_COMPLETION_GUARD; stop_hook_active passing; no edit since the
+# spec call passing; and a bad switch value read as off.
+#
+# Eight check-task-complete cases pin the no-validation block's scoping to
+# protocol tasks: a plain to-do passing; a validate_task_spec call, a
+# full-clause dispatch, a short-variant dispatch and a lightweight dispatch
+# each still blocking; a prompt naming drift protection mid-line or under a
+# deeper heading not counting; a validate_task_spec from before the task's
+# first in_progress not counting; and a plain to-do with a fail verdict still
+# blocking.
+#
 # The per-group counts above PARTITION this table: every case belongs to
 # exactly one group, and they sum to EXPECTED_CASE_COUNT. Adding a case means
 # growing the group that describes it, or writing a new group; a breakdown
@@ -289,7 +317,7 @@ EVALS_FILE="$SCRIPT_DIR/guard-evals.json"
 # file must declare EXPECTED_CASE_COUNT cases, AND the loop must actually
 # execute that many (a silently-skipped case would satisfy the first check
 # alone).
-EXPECTED_CASE_COUNT=200
+EXPECTED_CASE_COUNT=240
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/anti-tangent-guard-evals.XXXXXX")
 # Both hooks default their trace log to a fixed shared path under /tmp, and
@@ -351,6 +379,10 @@ JEV_PORT=$(cat "$JEV_PORT_FILE" 2>/dev/null)
 # real endpoint in their environment must not have the suite spend their key.
 unset ANTI_TANGENT_TICKET_PATTERN
 unset ANTI_TANGENT_COMPLETION_GUARD
+unset ANTI_TANGENT_SESSION_GUARD
+unset ANTI_TANGENT_STOP_GUARD
+unset ANTI_TANGENT_EDIT_GATE
+unset ANTI_TANGENT_EDIT_GATE_EXEMPT
 unset ANTI_TANGENT_COMMENT_GUARD
 unset ANTI_TANGENT_PROGRESS_GUARD
 unset ANTI_TANGENT_PROGRESS_EDITS

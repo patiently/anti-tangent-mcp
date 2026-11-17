@@ -36,8 +36,8 @@ returned `session_id` — you'll thread it through subsequent calls.
   iterate while any finding is `critical` or `major`, proceed once every
   remaining one is `severity: minor`. That is the stop signal. A `major`
   finding whose wording has stopped changing across rounds will not move by
-  re-validating again — fix it, or accept it with the one-sentence
-  mitigation below and proceed on that basis.
+  re-validating — fix it, or accept it with the one-sentence
+  mitigation below and proceed.
 
 **2. During work.** Call `check_progress` when the guard asks, or when
 you suspect drift: a test that 'should' fail doesn't, or you've spent
@@ -125,9 +125,10 @@ this block if there is no KB attached.)
 - context:              <from "Context:" if present>
 - verification:         <optional; step lines and Verify commands>
 - pinned_by:            <optional anchors for existing behavior>
-- controller_verified_references: <optional references the controller already verified>
-- plan_run_id:          <optional; from the controller's validate_plan>
-- project_knowledge:    <optional; markdown excerpts the controller pre-selected from the KB>
+- controller_verified_references: <optional; refs the controller verified>
+- plan_run_id:          <plan runs only; from validate_plan>
+- context_paths:        <the spec's absolute path, or the brief file a dispatch names>
+- project_knowledge:    <optional; KB excerpts the controller pre-selected>
 - harness_shape_attestation: <optional structured input; see §3.8>
 - phase:                <optional; "pre" (default) or "post" for post-hoc/session-recovery>
 ```

@@ -7,7 +7,7 @@ and end-of-run reporting. The clause you paste into each subagent lives in
 
 ## 5. For controllers — plan-handoff gate + dispatch addendum
 
-Controllers (superpowers' `subagent-driven-development`, hone-ai's equivalent, or a hand-rolled loop) have **two** responsibilities the implementer can't cover.
+Controllers (any loop that dispatches implementers) have **two** responsibilities the implementer can't cover. A spec-driven run (core §1) has no plan: only the dispatch clause applies.
 
 ### 5.1 Plan-handoff gate (REQUIRED before any dispatch)
 
@@ -38,22 +38,20 @@ The implementing subagent still calls `validate_task_spec` in its own session (�
 
 **Why this matters:** a vague AC caught at handoff costs one `validate_plan` call (§5.8 on attachment cost); missed, it costs a wasted dispatch.
 
-**Skip this gate** when the plan has only one task (go straight to per-task validation), or when the work didn't come from a plan at all (see §1).
+**Skip this gate** when the plan has only one task (go straight to per-task validation), or on a spec-driven run with no plan (core §1).
 
 ### 5.2 Dispatch addendum (paste the §4.2 clause into every implementer prompt)
 
-For each task you dispatch to an implementing subagent, paste the §4.2 clause verbatim into that subagent's prompt — subagents do not inherit your CLAUDE.md or any harness-level system prompt. Append it right before the "Report Format" section of your existing dispatch template. Apply only to subagents that will implement a Goal/AC/Non-goals task; skip for read-only research subagents per §1.
+For each task you dispatch to an implementing subagent, paste the §4.2 clause verbatim into that subagent's prompt — subagents do not inherit your CLAUDE.md or any harness-level system prompt. Append it right before the "Report Format" section of your existing dispatch template. Apply only to subagents that will implement a task with acceptance criteria; skip for read-only research subagents per §1.
 
 ### Which tier a review earns
 
-A review defaults to superpowers' `standard` tier (sonnet;
-`~/.claude/superpowers/model-routing.json`); escalate to `frontier` (opus)
-only for the COMPLEX bar — a named failure mode reaching a real user plus
+A review defaults to a mid-tier reviewer model; escalate to the frontier
+tier only for the COMPLEX bar — a named failure mode reaching a real user plus
 reasoning a cheaper model is weaker at: concurrency, wall-clock timing, a
 security boundary. Volume, unfamiliarity, or looking important are not
-reasons. HIGH RISK is a `model` pin, not a tier, letting the routing guard
-allow any model for that task; both COMPLEX and HIGH RISK need a written
-`tierReason`.
+reasons. A harness with a model-routing file maps these tiers there, and may add a
+HIGH RISK model pin; record the reason for any escalation.
 
 ### 5.3 DONE-gate (recommended)
 
@@ -63,7 +61,7 @@ After the subagent reports DONE, you may want evidence that `validate_completion
 
 The `anti-tangent-guard` plugin turns §5.3's DONE-gate into an automated
 check instead of a prompt-only convention. It installs one `PostToolUse`
-hook on `TaskUpdate`: whenever a task's status flips to `completed`, the hook
+hook on `TaskUpdate`: whenever a protocol task's status flips to `completed`, the hook
 scans the transcript window for that task for a pass signal — either a
 direct `mcp__anti-tangent__validate_completion` call, or a pasted
 `summary_block` tagged `tool: validate_completion`. **This is why

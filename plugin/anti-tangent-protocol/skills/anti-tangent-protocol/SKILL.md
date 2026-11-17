@@ -1,6 +1,6 @@
 ---
 name: anti-tangent-protocol:anti-tangent-protocol
-description: Use when you are about to implement, or dispatch a subagent to implement, a task that has a Goal / Acceptance-criteria header from an implementation plan — or when a multi-task plan run has just finished and you need to report on it. Loads the anti-tangent-mcp drift-protection protocol (validate_task_spec → check_progress → validate_completion; validate_plan and plan_run_report for controllers).
+description: Use when you are about to implement, or dispatch a subagent to implement, a task with acceptance criteria — from an implementation plan's task block, a spec's Goal / Acceptance criteria section, or a goal stated in the conversation — or when a multi-task plan run has just finished and you need to report on it. Loads the anti-tangent-mcp drift-protection protocol (validate_task_spec → check_progress → validate_completion; validate_plan and plan_run_report for controllers).
 ---
 
 # anti-tangent-protocol
@@ -10,10 +10,12 @@ only the part that applies to it.
 
 ## When this applies
 
-Either of:
+Any of:
 
-- The current task carries a structured **Goal / Acceptance criteria / (Non-goals) /
-  (Context)** header from an implementation plan.
+- The current task has acceptance criteria: an implementation plan's **Goal / Acceptance
+  criteria / (Non-goals) / (Context)** block, a spec's Goal / Acceptance criteria section, or
+  a goal stated in the conversation. With a spec and no plan, the loop is
+  `validate_task_spec` → `check_progress` → `validate_completion` with no `plan_run_id`.
 - A multi-task plan run has just finished and you are reporting on it.
 - You are drafting or revising task blocks for an implementation plan (plan authoring).
 
@@ -51,10 +53,10 @@ no prime/extract calls.
 - **Implementer:** follow the §4 lifecycle — call `validate_task_spec` before editing,
   `validate_completion` before reporting DONE, and paste its `summary_block`. When CodeScene
   MCP is configured, pass the `analyze_change_set` result as the `codescene` argument.
-- **Controller:** run the §5.1 `validate_plan` handoff gate before dispatch, capture the
-  returned `plan_run_id`, and paste the §4.2 clause into each implementer's prompt. When the
-  last task has reported DONE, call `plan_run_report` with that `plan_run_id` and surface the
-  table to the user.
+- **Controller:** paste the §4.2 clause into each implementer's prompt. On a plan run, also
+  run the §5.1 `validate_plan` handoff gate before dispatch, capture the returned
+  `plan_run_id`, and when the last task has reported DONE call `plan_run_report` with it and
+  surface the table to the user. A spec-driven run has no plan gate and no `plan_run_id`.
 - **Plan author:** follow §3's task-block format so `validate_task_spec` inputs map cleanly.
   Plan authors do not call any of the lifecycle tools themselves — those run once the plan is
   handed off for implementation.

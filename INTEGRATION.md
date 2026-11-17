@@ -1,7 +1,7 @@
 # Integrating anti-tangent-mcp
 
 `anti-tangent-mcp` is an advisory MCP server that helps prevent implementing-subagent drift
-while working on **tasks from a written implementation plan**. The protocol is split by reader
+while working on **specced tasks, from an implementation plan or a spec**. The protocol is split by reader
 role so an agent loads only what applies to it.
 
 **Install and configure:** see [`README.md`](https://github.com/patiently/anti-tangent-mcp/blob/main/README.md).
