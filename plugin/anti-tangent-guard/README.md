@@ -323,9 +323,12 @@ controller's call does not unlock its subagent, and a subagent's call does not u
 main session. One call unlocks a session for the rest of it; `/clear` starts a new
 transcript and re-arms the gate, a compaction does not.
 
-**Which paths are gated.** Only a target inside the payload's `cwd`. Both sides go through
-`realpath` first, so `..` and symlinks resolve before the check. A write outside `cwd` —
-auto-memory, a scratchpad, another repository — is not gated. Under `cwd`, a target that
+**Which paths are gated.** Only a target inside the project: `CLAUDE_PROJECT_DIR`, which
+Claude Code sets for hooks, or the payload's `cwd` when it is unset. The payload's `cwd`
+follows a Bash `cd`, so it alone would let a session that `cd`s into `src/` write `lib/`
+ungated; a relative target is still resolved against `cwd`, where the tool runs. Both sides
+go through `realpath` first, so `..` and symlinks resolve before the check. A write outside
+the project — auto-memory, a scratchpad, another repository — is not gated. Inside it, a target that
 matches an `ANTI_TANGENT_EDIT_GATE_EXEMPT` glob is not gated either. The default is
 `docs/**/*.md`, which lets a spec be written before `validate_task_spec` can run. It is
 deliberately not `*.md`: that would also exempt `CLAUDE.md`, `AGENTS.md`, `SKILL.md`,
@@ -338,9 +341,9 @@ gate's every-path rule.
 switch is read from the hook's environment, which the blocked session cannot change, so:
 
 1. *In the session:* call `validate_task_spec` with a one-line goal and one acceptance
-   criterion. That is one reviewer call, and the block message offers nothing else.
-   When the anti-tangent server is not connected this exit is unavailable, and exits 2
-   and 3 are the way out.
+   criterion. That is one reviewer call. When the anti-tangent server is not connected
+   this exit is unavailable: the block message then tells the session to stop and tell
+   the user, and exits 2 and 3 are the way out.
 2. *Per session:* launch with the switch set, `ANTI_TANGENT_EDIT_GATE=off claude`. This
    works only when no settings file sets the variable, because a settings value wins.
 3. *Per repository:* set it in the `env` block of that repository's

@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from check_task_start import (classify, decide, edit_gate_mode, exempt_globs, glob_regex, path_scope,
                               subagent_transcript, FULL_HEADING, LITE_HEADING, SPEC_TOOL)
@@ -199,6 +200,20 @@ class PathScopeTest(unittest.TestCase):
     def test_no_cwd_is_outside(self):
         self.assertEqual(path_scope("x.go", None, []), "outside")
 
+    def test_project_root_gates_a_sibling_of_the_cwd(self):
+        cwd = os.path.join(self.root, "src")
+        target = os.path.join(self.root, "lib/x.go")
+        self.assertEqual(path_scope(target, cwd, [], self.root), "gated")
+        self.assertEqual(path_scope("../lib/x.go", cwd, [], self.root), "gated")
+
+    def test_project_root_anchors_the_exemption_globs(self):
+        cwd = os.path.join(self.root, "src")
+        self.assertEqual(path_scope("../docs/x.md", cwd, ["docs/**/*.md"], self.root), "exempt")
+
+    def test_project_root_still_leaves_other_repositories_outside(self):
+        cwd = os.path.join(self.root, "src")
+        self.assertEqual(path_scope("/tmp/elsewhere/x.go", cwd, [], self.root), "outside")
+
 
 class DecideTest(unittest.TestCase):
     """decide() end to end over real transcript files."""
@@ -207,9 +222,13 @@ class DecideTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = os.path.realpath(self.tmp.name)
         self.parent = os.path.join(self.root, "parent.jsonl")
+        self.env = mock.patch.dict(os.environ)
+        self.env.start()
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
         os.makedirs(os.path.join(self.root, "parent", "subagents"))
 
     def tearDown(self):
+        self.env.stop()
         self.tmp.cleanup()
 
     def write(self, path, lines):
@@ -282,6 +301,18 @@ class DecideTest(unittest.TestCase):
         data = self.payload()
         data["tool_input"]["file_path"] = "/tmp/elsewhere-memory.md"
         self.assertEqual(decide(data, "all", True, [])[:2], (3, "outside"))
+
+    def test_all_mode_after_cd_gates_a_sibling_under_the_project_dir(self):
+        self.write(self.parent, [user("fix it")])
+        os.makedirs(os.path.join(self.root, "src"))
+        data = self.payload("lib/x.go")
+        data["cwd"] = os.path.join(self.root, "src")
+        self.assertEqual(decide(data, "all", True, [])[:2], (3, "outside"))
+        os.environ["CLAUDE_PROJECT_DIR"] = self.root
+        code, word, message = decide(data, "all", True, [])
+        self.assertEqual((code, word), (2, "edit-gate-no-spec-call"))
+        self.assertIn("files outside " + self.root + ",", message)
+        self.assertIn("If validate_task_spec is not available in this session, stop and tell the\nuser", message)
 
     def test_fingerprint_without_edit_gate_keeps_every_path_gated(self):
         self.sub([user(CLAUSE)])

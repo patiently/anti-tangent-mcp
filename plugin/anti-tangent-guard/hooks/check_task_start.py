@@ -20,8 +20,11 @@ Two things gate a session, independently:
   clause heading and not the lightweight one. Every path is gated.
 - The edit gate (ATG_EDIT_GATE, "off" unless the wrapper says otherwise):
   "subagents" gates every subagent, "all" also the main session. A lightweight
-  dispatch is never gated. Only paths inside the payload's cwd are gated, and
-  of those, not the ones matching ANTI_TANGENT_EDIT_GATE_EXEMPT.
+  dispatch is never gated. Only paths inside the project are gated, and of
+  those, not the ones matching ANTI_TANGENT_EDIT_GATE_EXEMPT. The project is
+  CLAUDE_PROJECT_DIR when Claude Code sets it, else the payload's cwd: the
+  payload's cwd follows a Bash `cd`, so after one it names a subdirectory and
+  a sibling of it would read as outside.
 
 ANTI_TANGENT_EDIT_GATE_EXEMPT is read here, raw, not normalised by the wrapper
 into an ATG_ variable like the two switches: the wrapper needs the switches to
@@ -81,6 +84,9 @@ validate_completion. Reads are not gated.
 
 Not gated: files outside {cwd}, and files under it matching
 ANTI_TANGENT_EDIT_GATE_EXEMPT ({globs}).
+
+If validate_task_spec is not available in this session, stop and tell the
+user: the anti-tangent server is not connected, and only they can fix that.
 
 Whether this gate is on is the user's setting. Do not change it: not in this
 session's environment, and not in any settings file such as
@@ -258,18 +264,22 @@ def glob_regex(glob):
     return re.compile("".join(out) + r"\Z", re.DOTALL)
 
 
-def path_scope(target, cwd, globs):
+def path_scope(target, cwd, globs, project=None):
     """Return "gated", "outside" or "exempt" for a write target.
 
     Both sides go through realpath first, so ".." segments and symlinks are
     resolved before the comparison: a docs/x.md that links into src/ is
-    judged as the file it writes. A relative target is taken against cwd.
-    Without a usable target or cwd the call cannot be placed, and it is
-    "outside" -- the hook's failures allow."""
+    judged as the file it writes. A relative target is taken against cwd,
+    where the tool runs; containment and the exemption globs are judged
+    against project, which defaults to cwd. Without a usable target or cwd
+    the call cannot be placed, and it is "outside" -- the hook's failures
+    allow."""
     if not isinstance(target, str) or not target or not isinstance(cwd, str) or not cwd:
         return "outside"
-    root = os.path.realpath(cwd)
-    real = os.path.realpath(os.path.join(root, target))
+    if not isinstance(project, str) or not project:
+        project = cwd
+    root = os.path.realpath(project)
+    real = os.path.realpath(os.path.join(os.path.realpath(cwd), target))
     rel = os.path.relpath(real, root)
     if rel == os.curdir or rel == os.pardir or rel.startswith(os.pardir + os.sep) or os.path.isabs(rel):
         return "outside"
@@ -316,7 +326,8 @@ def decide(data, mode, fingerprint, globs):
     if mode == "off" or (not sub and mode != "all"):
         return 3, "not-gated", ""
     target = write_target(data)
-    scope = path_scope(target, data.get("cwd"), globs)
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd")
+    scope = path_scope(target, data.get("cwd"), globs, project)
     if scope != "gated":
         return 3, scope, ""
     if sub:
@@ -334,7 +345,7 @@ def decide(data, mode, fingerprint, globs):
         return 0, "spec-called", ""
     state = EDIT_GATE_ERRORED if verdict == "errored" else EDIT_GATE_NO_CALL
     message = EDIT_GATE_MESSAGE.format(
-        mode=mode, state=state, cwd=data.get("cwd"), globs=":".join(globs) or "none",
+        mode=mode, state=state, cwd=project, globs=":".join(globs) or "none",
         trace="{trace}")
     return 2, "edit-gate-" + ("spec-errored" if verdict == "errored" else "no-spec-call"), message
 

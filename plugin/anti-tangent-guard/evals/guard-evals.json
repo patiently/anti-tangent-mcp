@@ -4093,6 +4093,28 @@
           "skip | not-protocol-task"
         ]
       }
+    },
+    {
+      "id": 241,
+      "name": "edit-gate-all-after-cd-gates-sibling-under-project-dir",
+      "hook": "check-task-start",
+      "stdin_raw": "{\"tool_name\": \"Write\", \"tool_input\": {\"file_path\": \"{{TMPDIR}}/lib/x.go\"}, \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"cwd\": \"{{TMPDIR}}/src\"}",
+      "tmpdir_fixture": {
+        "parent.jsonl": "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"fix it\"}}\n",
+        "src/.keep": ""
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log",
+        "ANTI_TANGENT_EDIT_GATE": "all",
+        "CLAUDE_PROJECT_DIR": "{{TMPDIR}}"
+      },
+      "expected_exit": 2,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "task-start | block | edit-gate-no-spec-call"
+        ]
+      },
+      "reason": "the payload cwd follows a Bash cd, so after `cd src` a write to a sibling directory must still be judged against CLAUDE_PROJECT_DIR and gated"
     }
   ]
 }
