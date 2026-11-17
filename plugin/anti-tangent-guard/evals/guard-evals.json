@@ -3746,12 +3746,10 @@
         "ANTI_TANGENT_EDIT_GATE": "subagents"
       },
       "expected_exit": 0,
-      "expected_file_contains": {
-        "{{TMPDIR}}/trace.log": [
-          "task-stop | skip | not-gated"
-        ]
-      },
-      "reason": "subagents mode checks SubagentStop only; the main session's Stop is left alone"
+      "expected_file_absent": [
+        "{{TMPDIR}}/trace.log"
+      ],
+      "reason": "subagents mode checks SubagentStop only; the main session's Stop leaves the wrapper before Python starts and writes no trace line"
     },
     {
       "id": 226,
@@ -4023,6 +4021,26 @@
         ]
       },
       "reason": "a task with no edit since validate_task_spec has nothing to review, so a stop right after the spec call (to ask the user something, say) is not asked for validate_completion"
+    },
+    {
+      "id": 238,
+      "name": "stop-bad-edit-gate-value-is-off",
+      "hook": "check-task-stop",
+      "stdin_raw": "{\"hook_event_name\": \"Stop\", \"transcript_path\": \"{{TMPDIR}}/parent.jsonl\", \"session_id\": \"parent\", \"stop_hook_active\": false}",
+      "tmpdir_fixture": {
+        "parent.jsonl": "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"s1\", \"name\": \"mcp__anti-tangent__validate_task_spec\", \"input\": {}}]}}\n{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"s1\", \"is_error\": false, \"content\": [{\"type\": \"text\", \"text\": \"ok\"}]}]}}\n{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"id\": \"e1\", \"name\": \"Edit\", \"input\": {}}]}}\n"
+      },
+      "env": {
+        "ANTI_TANGENT_GUARD_TRACE_LOG": "{{TMPDIR}}/trace.log",
+        "ANTI_TANGENT_EDIT_GATE": "yes"
+      },
+      "expected_exit": 0,
+      "expected_file_contains": {
+        "{{TMPDIR}}/trace.log": [
+          "task-stop | skip | bad-edit-gate-value"
+        ]
+      },
+      "reason": "an unrecognised ANTI_TANGENT_EDIT_GATE value is off, as in check-task-start, and says so in the trace; this task is open, so a value read as a mode would block"
     }
   ]
 }

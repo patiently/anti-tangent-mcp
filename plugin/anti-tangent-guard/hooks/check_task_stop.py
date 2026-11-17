@@ -28,6 +28,7 @@ review and is never asked.
 import hashlib
 import json
 import os
+import re
 import sys
 
 # The wrapper runs this under python3 -I, which leaves the script's own
@@ -38,6 +39,13 @@ from check_task_start import as_list, edit_gate_mode, subagent_transcript  # noq
 SPEC_TOOL = "mcp__anti-tangent__validate_task_spec"
 COMPLETION_TOOL = "mcp__anti-tangent__validate_completion"
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit")
+# A line is parsed only when it names a watched tool as a JSON string or holds
+# an errored tool_result. Under "all" this runs at every turn end over the
+# whole main-session transcript, and a line holding a large file read must
+# not cost a json.loads. Inside an embedded string a quote is escaped, so a
+# tool name merely mentioned in file content does not match.
+WATCHED = tuple('"%s"' % name for name in (SPEC_TOOL, COMPLETION_TOOL) + EDIT_TOOLS)
+ERROR_RESULT = re.compile(r'"is_error"\s*:\s*true')
 
 STOP_MESSAGE = """TASK OPENED BUT NOT CLOSED: call validate_completion
 
@@ -70,6 +78,12 @@ class Task:
         self.last_edit = last_edit
 
 
+def worth_parsing(line):
+    """Return True when a transcript line can hold a call scan collects or an
+    errored result: it names a watched tool, or carries "is_error": true."""
+    return any(name in line for name in WATCHED) or ERROR_RESULT.search(line) is not None
+
+
 def scan(lines):
     """Return the Task opened by the last successful validate_task_spec call in
     an iterable of transcript lines, or None when there is none.
@@ -78,13 +92,14 @@ def scan(lines):
     error, then judges: the task is the last spec call not in that set, and it
     is closed when a validate_completion after it is not in that set either.
     last_edit is the key of the last Edit/Write/NotebookEdit call after the
-    spec call, or "" when there is none. A line with neither a tool_use nor a
-    tool_use_id is skipped before it is parsed. A malformed line or entry is skipped rather than raised on.
+    spec call, or "" when there is none. A line worth_parsing rejects is
+    skipped before it is parsed. A malformed line or entry is skipped rather
+    than raised on.
     """
     calls = []
     failed = set()
     for number, line in enumerate(lines):
-        if '"tool_use"' not in line and "tool_use_id" not in line:
+        if not worth_parsing(line):
             continue
         try:
             entry = json.loads(line)

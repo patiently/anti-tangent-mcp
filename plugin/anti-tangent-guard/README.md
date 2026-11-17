@@ -1,6 +1,6 @@
 # anti-tangent-guard
 
-Four hooks enforcing anti-tangent-mcp's conventions: a `PostToolUse` hook that
+Five hooks enforcing anti-tangent-mcp's conventions. Four are on by default: a `PostToolUse` hook that
 mandates the `validate_completion` gate at task close, blocks a full-protocol
 close that ran with no task session, and detects when submitted diffs add
 comments carrying change history; a `PreToolUse` hook on `Edit`/`Write`/
@@ -12,9 +12,9 @@ on `Edit`/`Write`/`NotebookEdit` that asks a task, once, for a
 
 Two more behaviours are **off by default** and turned on together by one switch,
 `ANTI_TANGENT_EDIT_GATE` (`off`, `subagents` or `all`): the start gate widens into an
-**edit gate** covering every subagent, or every session including the main one, and a
-`Stop`/`SubagentStop` hook adds a **stop check** that asks a session to close the task it
-opened before it stops. They exist for a spec-driven workflow with no plan, where no
+**edit gate** covering every subagent, or every session including the main one, and the
+fifth hook, on `Stop` and `SubagentStop`, adds a **stop check** that asks a session to close
+the task it opened before it stops, blocking the stop once per stretch of edits. They exist for a spec-driven workflow with no plan, where no
 `TaskUpdate` ever fires. See "Edit gate (opt-in)" and "Stop check (opt-in)" below.
 
 ## Active on install
@@ -343,6 +343,12 @@ switch is read from the hook's environment, which the blocked session cannot cha
    is inside `cwd` and not exempt, so a blocked session's `Write` to it is refused — but
    see the bypass below.
 
+The default exemption covers only `.md` files under `docs/`. A plan generator that writes a
+sibling file there, such as a `docs/superpowers/plans/<plan>.md.tasks.json`, is refused on
+that file under `all`, and a controller writing a plan never calls `validate_task_spec`
+itself. Add the sibling's glob to the list, for example
+`ANTI_TANGENT_EDIT_GATE_EXEMPT=docs/**/*.md:docs/**/*.tasks.json`.
+
 **Switches.** `ANTI_TANGENT_EDIT_GATE` is independent of `ANTI_TANGENT_SESSION_GUARD`.
 `SESSION_GUARD=0` still turns off the fingerprinted start gate, but not the edit gate: with
 the edit gate on, every clause-dispatched subagent is gated by its `agent_id` anyway. The
@@ -368,7 +374,9 @@ main-session transcript can be tens of megabytes; a line that names neither the 
 
 `check-task-stop` is registered on `Stop` and `SubagentStop` and does nothing unless
 `ANTI_TANGENT_EDIT_GATE` is set: `subagents` checks `SubagentStop`, `all` checks both. With
-the switch off it exits 0 before reading stdin and writes no trace line. It closes the gap
+the switch off it exits 0 before reading stdin and writes no trace line. Under `subagents`, a
+main-session `Stop` exits 0 once stdin names the event, before Python starts, and writes no
+trace line either. Any other value is off, with a `skip | bad-edit-gate-value` trace line. It closes the gap
 the `TaskUpdate` completion gate leaves in a flow with no task list: nothing marks a task
 done, so without this hook nothing asks for `validate_completion`.
 
@@ -392,6 +400,16 @@ only once it has edited further — so the ask still comes at the task's real en
 costs one extra model turn, not a reviewer call. It never traps a session. It also allows
 when the payload's `stop_hook_active` is `true`, and on every failure: no `python3`, an
 unreadable transcript, a marker that cannot be written, or the 10-second timeout.
+
+`stop_hook_active` is shared by every `Stop` hook installed: it is `true` whenever any of
+them blocked the stop that led to this turn. A turn another plugin's `Stop` hook forced is
+therefore never asked about, even when it edited. The markers need a writable directory
+beside the trace log; where the log's directory is not writable — owned by another account,
+or a log pointed at `/dev/null` — no ask can be recorded, so none is made and the stop check
+is in effect off (`skip | no-state`). Nothing removes the markers, which are empty, or the
+progress reminder's `progress-asked-*` files beside them; to clear old ones, run
+`find /tmp/claude-hooks -name 'stop-asked-*' -mtime +7 -delete` (and the same for
+`progress-asked-*`) against your trace log's directory.
 
 It enforces that an opened task gets closed, not that every change belongs to a task. A
 session that closes task A and then edits for task B without a new `validate_task_spec`
@@ -947,10 +965,12 @@ session column as the progress reminder. Its events: `pass | no-task` (no
 `block | open-errored` (asked to call `validate_completion`), `pass | no-edits`
 (no edit since the spec call), `skip | asked` (already asked since the task's
 last edit), `skip | already-continued` (`stop_hook_active`),
-`skip | not-gated` (`subagents` mode on a main-session `Stop`),
+`skip | not-gated` (an event the mode does not check),
+`skip | bad-edit-gate-value` (an unrecognised switch value, read as off),
 `skip | no-transcript`, `skip | no-state` (the ask could not be recorded, so it
 was not made), `skip | no-python3`, `skip | no-body`, and
-`error | python-exit=N`. With the switch off it writes nothing.
+`error | python-exit=N` (which includes an exit 2 with no trace word). With the
+switch off, and for a main-session `Stop` under `subagents`, it writes nothing.
 
 The close-time hook adds `skip | not-protocol-task` for a close whose window
 shows no protocol task.

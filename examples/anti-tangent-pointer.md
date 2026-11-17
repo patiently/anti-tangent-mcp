@@ -8,8 +8,9 @@ pair).
 **When the protocol applies:** either of:
 
 - The task you are about to implement (or dispatch a subagent to implement)
-  carries a structured **Goal / Acceptance criteria / (Non-goals) / (Context)**
-  header from an implementation plan.
+  has acceptance criteria: an implementation plan's **Goal / Acceptance
+  criteria / (Non-goals) / (Context)** block, a spec's Goal / Acceptance
+  criteria section, or a goal stated in the conversation.
 - A multi-task plan run has just finished and you are reporting on it.
 
 For read-only research, Q&A, ad-hoc edits, plan authoring, or code review, it
@@ -24,5 +25,5 @@ task in a plan run has reported DONE, load the controller part and call
 this pointer alone; the parts are the source of truth.
 
 This pointer is the only always-loaded piece; the router and its role-scoped
-parts load only when a Goal/Acceptance-criteria task, or a just-finished
+parts load only when a task with acceptance criteria, or a just-finished
 plan run, actually appears.

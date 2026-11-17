@@ -1,9 +1,12 @@
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 
-from check_task_stop import COMPLETION_TOOL, SPEC_TOOL, claim, decide, scan
+from check_task_stop import COMPLETION_TOOL, SPEC_TOOL, claim, decide, scan, worth_parsing
+
+HOOKS = os.path.dirname(os.path.abspath(__file__))
 
 
 def user(text):
@@ -65,6 +68,28 @@ class ScanTest(unittest.TestCase):
     def test_malformed_lines_are_skipped(self):
         task = scan(["not json", "{", call(SPEC_TOOL, "s1"), json.dumps({"type": "assistant", "message": "x"})])
         self.assertFalse(task.closed)
+
+    def test_notebook_edit_counts_as_an_edit(self):
+        task = scan([call(SPEC_TOOL, "s1"), result("s1"), call("NotebookEdit", "n1")])
+        self.assertEqual(task.last_edit, "n1")
+
+
+class WorthParsingTest(unittest.TestCase):
+    def test_watched_calls_are_parsed_in_either_spacing(self):
+        for name in (SPEC_TOOL, COMPLETION_TOOL, "Edit", "Write", "NotebookEdit"):
+            self.assertTrue(worth_parsing(call(name, "x1")), name)
+            self.assertTrue(worth_parsing(json.dumps(json.loads(call(name, "x1")), separators=(",", ":"))), name)
+
+    def test_errored_result_is_parsed_in_either_spacing(self):
+        self.assertTrue(worth_parsing(result("s1", True)))
+        self.assertTrue(worth_parsing(json.dumps(json.loads(result("s1", True)), separators=(",", ":"))))
+
+    def test_other_calls_and_successful_results_are_not_parsed(self):
+        read = json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "r1", "name": "Read", "input": {"file_path": "/x"}}]}})
+        content = 'def f():\n    return {"name": "Edit", "is_error": true}\n' * 1000
+        self.assertFalse(worth_parsing(read))
+        self.assertFalse(worth_parsing(result("r1", False, content)))
 
 
 class DecideTest(unittest.TestCase):
@@ -170,6 +195,15 @@ class DecideTest(unittest.TestCase):
     def test_missing_transcript_allows(self):
         self.assertEqual(decide(self.stop(), "all", self.try_claim)[:2], (3, "no-transcript"))
 
+    def test_malformed_agent_id_without_agent_path_allows(self):
+        # Joined unchecked, this id would walk to subagents/x.jsonl, which holds an open task.
+        subagents = os.path.join(self.root, "main", "subagents")
+        os.makedirs(os.path.join(subagents, "agent-x"))
+        self.write(os.path.join(subagents, "x.jsonl"), [call(SPEC_TOOL, "s1"), result("s1"), call("Edit", "e1")])
+        data = self.sub_stop(agent_path=False)
+        data["agent_id"] = "x/../x"
+        self.assertEqual(decide(data, "all", self.try_claim)[:2], (3, "no-transcript"))
+
 
 class ClaimTest(unittest.TestCase):
     def test_claim_is_exclusive(self):
@@ -177,6 +211,35 @@ class ClaimTest(unittest.TestCase):
             self.assertTrue(claim(d, "/t.jsonl", "s1"))
             self.assertFalse(claim(d, "/t.jsonl", "s1"))
             self.assertTrue(claim(d, "/t.jsonl", "s2"))
+
+
+class WrapperTest(unittest.TestCase):
+    """Runs the bash wrapper with a stand-in python3 on PATH."""
+
+    def run_wrapper(self, fake_body, payload, mode="all"):
+        with tempfile.TemporaryDirectory() as d:
+            fake = os.path.join(d, "python3")
+            with open(fake, "w") as fh:
+                fh.write("#!/bin/sh\n" + fake_body + "\n")
+            os.chmod(fake, 0o755)
+            trace = os.path.join(d, "trace.log")
+            env = {k: v for k, v in os.environ.items() if not k.startswith("ANTI_TANGENT_")}
+            env.update(PATH=d + os.pathsep + env.get("PATH", ""), ANTI_TANGENT_EDIT_GATE=mode,
+                       ANTI_TANGENT_GUARD_TRACE_LOG=trace, CLAUDE_PLUGIN_ROOT=os.path.dirname(HOOKS))
+            proc = subprocess.run([os.path.join(HOOKS, "check-task-stop")], input=json.dumps(payload),
+                                  capture_output=True, text=True, env=env, timeout=20)
+            log = open(trace).read() if os.path.exists(trace) else ""
+        return proc.returncode, log
+
+    def test_interpreter_exit_2_without_a_trace_word_allows(self):
+        code, log = self.run_wrapper("cat >/dev/null; exit 2", {"hook_event_name": "Stop", "session_id": "s"})
+        self.assertEqual(code, 0)
+        self.assertIn("task-stop | error | python-exit=2", log)
+
+    def test_body_exit_2_with_an_open_word_blocks(self):
+        code, log = self.run_wrapper("cat >/dev/null; printf open; exit 2", {"hook_event_name": "Stop", "session_id": "s"})
+        self.assertEqual(code, 2)
+        self.assertIn("task-stop | block | open", log)
 
 
 if __name__ == "__main__":

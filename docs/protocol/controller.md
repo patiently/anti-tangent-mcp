@@ -61,7 +61,7 @@ After the subagent reports DONE, you may want evidence that `validate_completion
 
 The `anti-tangent-guard` plugin turns §5.3's DONE-gate into an automated
 check instead of a prompt-only convention. It installs one `PostToolUse`
-hook on `TaskUpdate`: whenever a task's status flips to `completed`, the hook
+hook on `TaskUpdate`: whenever a protocol task's status flips to `completed`, the hook
 scans the transcript window for that task for a pass signal — either a
 direct `mcp__anti-tangent__validate_completion` call, or a pasted
 `summary_block` tagged `tool: validate_completion`. **This is why

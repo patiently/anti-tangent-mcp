@@ -249,7 +249,7 @@ ANTI_TANGENT_TICKET_PATTERN=             # optional regex for your tracker's key
 
 # --- Plugin hooks (anti-tangent-guard edit gate and stop check; read by the hooks ONLY) ---
 ANTI_TANGENT_EDIT_GATE=off               # off | subagents | all: refuse project edits until the session's own validate_task_spec; also turns on the stop check
-ANTI_TANGENT_EDIT_GATE_EXEMPT=           # unset = docs/**/*.md; colon-separated globs relative to cwd; set but empty = nothing exempt
+# ANTI_TANGENT_EDIT_GATE_EXEMPT=docs/**/*.md  # leave unset for this default; colon-separated globs relative to cwd; set but empty = nothing exempt
 ANTI_TANGENT_STOP_GUARD=1                # 0 turns off the stop check alone
 
 # --- Opt-in statistics (off unless ANTI_TANGENT_STATS_DIR is set) ---
@@ -655,7 +655,7 @@ See [`plugin/anti-tangent-shunt/README.md`](plugin/anti-tangent-shunt/README.md)
 
 ### anti-tangent-guard
 
-Four hooks that enforce anti-tangent-mcp's conventions, plus an opt-in edit gate and stop check. Three block; the fourth asks.
+Five hooks that enforce anti-tangent-mcp's conventions. Four are on by default: three block and the fourth asks. The fifth, the opt-in stop check, also blocks, and the same switch widens the start gate into an opt-in edit gate.
 
 A `PostToolUse` hook on `TaskUpdate` enforces the `validate_completion` gate at task close: when a protocol task (one whose window shows a `validate_task_spec` call, a protocol dispatch or a lightweight marker) is marked completed without running `validate_completion`, or the evidence it was validated against adds comments carrying change history, the guard returns a blocking instruction to reopen, fix, and re-close. It detects rather than prevents — `PostToolUse` fires after the state change, so it cannot stop the close itself.
 

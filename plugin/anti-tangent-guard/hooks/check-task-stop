@@ -11,10 +11,17 @@ set -uo pipefail
 # or the kill switch set, leave before touching stdin or the trace log.
 EDIT_GATE=$(printf '%s' "${ANTI_TANGENT_EDIT_GATE:-off}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
 case "$EDIT_GATE" in
-    subagents|all) ;;
-    *) exit 0 ;;
+    ""|off) exit 0 ;;
 esac
 [[ "${ANTI_TANGENT_STOP_GUARD:-1}" == "0" ]] && exit 0
+
+ATG_INPUT="$(cat)"
+# "subagents" checks SubagentStop only. A main-session Stop fires at every
+# turn end, so it leaves here, before Python starts or a trace line is written.
+if [[ "$EDIT_GATE" == "subagents" ]]; then
+    ATG_EVENT=$(printf '%s' "$ATG_INPUT" | jq -r '.hook_event_name // ""' 2>/dev/null) || ATG_EVENT=""
+    [[ "$ATG_EVENT" == "Stop" ]] && exit 0
+fi
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 TRACE_LOG="${ANTI_TANGENT_GUARD_TRACE_LOG:-/tmp/claude-hooks/anti-tangent-guard.log}"
@@ -47,10 +54,14 @@ trace() {
         >> "$TRACE_LOG" 2>/dev/null || true
 }
 
+# An unrecognised value is "off", as in check-task-start, with a trace line.
+case "$EDIT_GATE" in
+    subagents|all) ;;
+    *) trace "skip" "bad-edit-gate-value"; exit 0 ;;
+esac
 command -v python3 >/dev/null 2>&1 || { trace "skip" "no-python3"; exit 0; }
 [[ -r "$PLUGIN_ROOT/hooks/check_task_stop.py" ]] || { trace "skip" "no-body"; exit 0; }
 
-ATG_INPUT="$(cat)"
 ATG_SESSION_RAW=$(printf '%s' "$ATG_INPUT" | jq -r '
     def short: tostring | gsub("[^A-Za-z0-9_-]"; "") | .[0:8];
     ((.session_id // "") | short) as $s | ((.agent_id // "") | short) as $a

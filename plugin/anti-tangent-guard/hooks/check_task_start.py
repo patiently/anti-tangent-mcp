@@ -22,6 +22,12 @@ Two things gate a session, independently:
   "subagents" gates every subagent, "all" also the main session. A lightweight
   dispatch is never gated. Only paths inside the payload's cwd are gated, and
   of those, not the ones matching ANTI_TANGENT_EDIT_GATE_EXEMPT.
+
+ANTI_TANGENT_EDIT_GATE_EXEMPT is read here, raw, not normalised by the wrapper
+into an ATG_ variable like the two switches: the wrapper needs the switches to
+decide whether to start Python at all, and the exemption list only matters
+once it has. Unset and set-but-empty mean different things (the default, and
+nothing exempt), a distinction os.environ keeps.
 """
 import json
 import os
@@ -292,7 +298,7 @@ def decide(data, mode, fingerprint, globs):
     """Return (exit code, trace word, message) for one payload.
 
     The fingerprint is checked first and, when it gates, wins: a session
-    dispatched under the full clause keeps today's every-path gate whatever
+    dispatched under the full clause keeps the every-path gate whatever
     the mode. Otherwise the edit gate applies, path scope first so an exempt
     or outside write never reads a transcript."""
     sub = subagent_transcript(data)
