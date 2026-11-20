@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -73,6 +74,27 @@ func (s *Store) SetPreFindings(id string, findings []verdict.Finding) bool {
 	sess.PreFindings = findings
 	sess.LastAccessed = time.Now()
 	return true
+}
+
+// UpdateRow applies fn to the session's own task row under the store lock and
+// returns a deep copy of the result, so the caller can marshal it unlocked.
+// firstWrite is true exactly once per session, on the first update that leaves
+// the row with a post verdict: the caller that must write the run header.
+func (s *Store) UpdateRow(id string, fn func(*planrun.TaskRow)) (row planrun.TaskRow, firstWrite bool, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, found := s.sessions[id]
+	if !found {
+		return planrun.TaskRow{}, false, false
+	}
+	fn(&sess.Row)
+	sess.Row.Index = 1
+	sess.LastAccessed = time.Now()
+	if sess.Row.PostVerdict != "" && !sess.RunHeaderWritten {
+		sess.RunHeaderWritten = true
+		firstWrite = true
+	}
+	return planrun.CloneRow(sess.Row), firstWrite, true
 }
 
 func (s *Store) SetImplementerModel(id, model string) bool {

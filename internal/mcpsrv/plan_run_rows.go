@@ -254,9 +254,13 @@ func countOverBuildingRuled(update func(*planrun.TaskRow), ruled bool) func(*pla
 // recordCheckpointRow increments the plan-run row's checkpoint count for a
 // session-backed check_progress call and writes the updated row to the plan
 // ledger. Best effort: an unknown run or row logs a warning and never
-// changes the result. A no-op when sess carries no plan run.
+// changes the result. A session with no plan run updates its own row.
 func (h *handlers) recordCheckpointRow(sess *session.Session, env Envelope) {
 	if sess.PlanRunID == "" {
+		h.recordSessionRow(sess, func(row *planrun.TaskRow) {
+			row.Checkpoints++
+			row.AppendCall(callFromEnvelope("check_progress", env))
+		})
 		return
 	}
 	row, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
@@ -274,11 +278,8 @@ func (h *handlers) recordCheckpointRow(sess *session.Session, env Envelope) {
 // recordCompletionRow updates the plan-run row for a session-backed
 // validate_completion call and writes the updated row to the plan ledger.
 // Best effort: an unknown run or row logs a warning and never changes the
-// result. A no-op when sess carries no plan run.
+// result. A session with no plan run updates its own row.
 func (h *handlers) recordCompletionRow(sess *session.Session, env Envelope, cs *codescene.Digest, finalDiff string, overBuildingRuled bool, rd *ratedigest.Digest) {
-	if sess.PlanRunID == "" {
-		return
-	}
 	update := withRateDigest(countOverBuildingRuled(completionRowUpdate(env, cs, finalDiff), overBuildingRuled), rd)
 	base := update
 	update = func(row *planrun.TaskRow) {
@@ -286,6 +287,10 @@ func (h *handlers) recordCompletionRow(sess *session.Session, env Envelope, cs *
 		if sess.ImplementerModel != "" {
 			row.ImplementerModel = sess.ImplementerModel
 		}
+	}
+	if sess.PlanRunID == "" {
+		h.recordSessionRow(sess, update)
+		return
 	}
 	if row, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, update); ok {
 		h.appendPlanLedger(sess.PlanRunID, row)

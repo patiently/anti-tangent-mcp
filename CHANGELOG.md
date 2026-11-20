@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `validate_completion`'s reviewer judges the tests a change adds against the test-value rule and reports them in one `quality` / `test_value` finding: major for absence guards, tests that read the source under test as text, or over-testing (at least three tests or cases that could go, and at least half of those added); minor for per-function trivia and incidental-output pins. A test an acceptance criterion mandates is reported as a minor `test_value_mandated` addressed to the spec author. Test value alone never fails the verdict.
 - `test_weakened` (major, `quality`): an existing test loosened, skipped or deleted with no acceptance criterion changing its behaviour or naming it as the thing to fix.
 - `validate_task_spec` accepts `implementer_model`, the implementer's own model ID. Run snapshots and stats events carry it, along with tests added, acceptance-criterion count, ledger and declined counts, and per-criterion finding counts (server sentinels only; ledger text is never stored).
+- A task run without a plan (a session with no `plan_run_id`) is now a one-task run in `runs.jsonl` (`kind: session`), so the scorecard covers spec-driven work. Cohorts are keyed by run kind and never compared across kinds, and implementer models are matched with any `provider:` prefix and `[...]` suffix removed.
 
 ### Changed
 

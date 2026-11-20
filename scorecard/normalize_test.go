@@ -32,7 +32,7 @@ func TestCohortsMergeDatedAndUndatedImplementerModel(t *testing.T) {
 	o2 := outcome("r2", SourceFinalReview, t0.Add(time.Hour))
 	o2.ImplementerModels = []ImplementerModel{{TaskIndex: 1, Model: "anthropic:claude-haiku-4-5-20251001"}}
 	g := only(t, Compute(lines, []OutcomeLine{o1, o2}, Options{}).Cohorts, SourceFinalReview)
-	if g.Runs != 2 || g.Key.ImplementerModel != "anthropic:claude-haiku-4-5" {
+	if g.Runs != 2 || g.Key.ImplementerModel != "claude-haiku-4-5" {
 		t.Fatalf("cohort = %+v runs=%d", g.Key, g.Runs)
 	}
 }

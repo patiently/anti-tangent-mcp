@@ -158,7 +158,7 @@ func TestRender_RateColumnOnlyWithADigest(t *testing.T) {
 func TestCloneRow_DeepCopiesRateDigest(t *testing.T) {
 	k := 3
 	row := TaskRow{RateDigest: &ratedigest.Digest{N: 10, AfterK: &k}}
-	cp := cloneRow(row)
+	cp := CloneRow(row)
 	*cp.RateDigest.AfterK = 9
 	require.Equal(t, 3, *row.RateDigest.AfterK)
 }

@@ -15,6 +15,7 @@ const (
 )
 
 type CohortKey struct {
+	Kind             string `json:"kind,omitempty"`
 	ReviewModel      string `json:"review_model"`
 	ServerVersion    string `json:"server_version,omitempty"`
 	ImplementerModel string `json:"implementer_model,omitempty"`
@@ -68,7 +69,7 @@ func Compute(lines []RunLine, outcomes []OutcomeLine, opts Options) Scorecard {
 		GeneratedAt: opts.Now,
 		MinRuns:     opts.MinRuns,
 		Cohorts: groupTasks(runs, func(r *run, t *task) CohortKey {
-			return CohortKey{t.reviewModel(), t.serverVersion(), r.implementerModel(t.snap.Index)}
+			return CohortKey{r.kind(), t.reviewModel(), t.serverVersion(), r.implementerModel(t.snap.Index)}
 		}, false, opts.MinRuns),
 		ByReviewModel: groupTasks(runs, byReview, false, opts.MinRuns),
 		ByToolModel:   toolModelRows(runs, false),
@@ -148,13 +149,19 @@ func groupTasks(runs map[runKey]*run, keyOf func(*run, *task) CohortKey, byPubli
 // the most recent candidate of any key is used. groups arrives sorted, and the
 // strict After below keeps the first-sorted group on a tie. Only a disjoint
 // interval counts as a regression, and only once both sides have minRuns runs.
+// comparableGroups reports whether c may serve as a baseline for g: same
+// source, publisher and run kind, and wholly earlier.
+func comparableGroups(g, c *Group) bool {
+	return c.Source == g.Source && c.Publisher == g.Publisher && c.Key.Kind == g.Key.Kind && c.last.Before(g.first)
+}
+
 func assignRegression(groups []Group, minRuns int) {
 	for i := range groups {
 		g := &groups[i]
 		var base, sameModels *Group
 		for j := range groups {
 			c := &groups[j]
-			if j == i || c.Source != g.Source || c.Publisher != g.Publisher || !c.last.Before(g.first) {
+			if j == i || !comparableGroups(g, c) {
 				continue
 			}
 			if base == nil || c.last.After(base.last) {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
+	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
@@ -71,6 +72,7 @@ func (h *handlers) onPlanRunHeader(runID string, call planrun.ToolCall, tasksCar
 		RunHash:          h.deps.Stats.RunHash(run.ID),
 		ServerVersion:    Version,
 		Header:           true,
+		Kind:             scorecard.KindPlan,
 		PlanVerdict:      run.PlanVerdict,
 		PlanQuality:      run.PlanQuality,
 		TaskCount:        run.TaskCount,
@@ -81,8 +83,39 @@ func (h *handlers) onPlanRunHeader(runID string, call planrun.ToolCall, tasksCar
 	})
 }
 
-// snapshotRow writes the content-free form of a changed row. TaskTitle and
-// SessionID are deliberately not copied.
+// recordSessionRow applies update to the row of a session with no plan run
+// and, once the row carries a post verdict, writes its run lines: a header on
+// the first and the task line on every one. A session that never reaches
+// validate_completion writes nothing.
+func (h *handlers) recordSessionRow(sess *session.Session, update func(*planrun.TaskRow)) {
+	row, firstWrite, ok := h.deps.Sessions.UpdateRow(sess.ID, update)
+	if !ok {
+		return
+	}
+	if h.deps.Stats == nil || row.PostVerdict == "" {
+		return
+	}
+	hash := h.deps.Stats.SessionRunHash(sess.ID)
+	if firstWrite {
+		h.deps.Stats.RecordRunLine(scorecard.RunLine{
+			Ts:               time.Now().UTC(),
+			RunHash:          hash,
+			ServerVersion:    Version,
+			Header:           true,
+			Kind:             scorecard.KindSession,
+			TaskCount:        1,
+			ConfiguredModels: h.configuredModels(),
+		})
+	}
+	h.deps.Stats.RecordRunLine(scorecard.RunLine{
+		Ts:            time.Now().UTC(),
+		RunHash:       hash,
+		ServerVersion: Version,
+		Task:          taskSnapshot(row),
+	})
+}
+
+// snapshotRow writes the content-free form of a changed row.
 func (h *handlers) snapshotRow(runID string, row planrun.TaskRow) {
 	if h.deps.Stats == nil {
 		return
@@ -91,31 +124,37 @@ func (h *handlers) snapshotRow(runID string, row planrun.TaskRow) {
 		Ts:            time.Now().UTC(),
 		RunHash:       h.deps.Stats.RunHash(runID),
 		ServerVersion: Version,
-		Task: &scorecard.TaskSnapshot{
-			Index:          row.Index,
-			PreVerdict:     row.PreVerdict,
-			PostVerdict:    row.PostVerdict,
-			Checkpoints:    row.Checkpoints,
-			Attempts:       row.Attempts,
-			Severity:       row.Severity,
-			Waived:         row.Waived,
-			Escalated:      row.Escalated,
-			Lite:           row.Lite,
-			Unmatched:      row.Unmatched,
-			CodesceneState: row.CodesceneState,
-			Calls:          row.Calls,
-			CallsDropped:   row.CallsDropped,
-			Categories:     row.Categories,
-			LinesAdded:     row.LinesAdded,
-			LinesRemoved:   row.LinesRemoved,
-
-			OverBuildingRuled: row.OverBuildingRuled,
-			ImplementerModel:  row.ImplementerModel,
-			TestsAdded:        row.TestsAdded,
-			ACCount:           row.ACCount,
-			LedgerEntries:     row.LedgerEntries,
-			TestsDeclined:     row.TestsDeclined,
-			Criteria:          row.Criteria,
-		},
+		Task:          taskSnapshot(row),
 	})
+}
+
+// taskSnapshot is the content-free form of a row. TaskTitle and SessionID are
+// deliberately not copied.
+func taskSnapshot(row planrun.TaskRow) *scorecard.TaskSnapshot {
+	return &scorecard.TaskSnapshot{
+		Index:          row.Index,
+		PreVerdict:     row.PreVerdict,
+		PostVerdict:    row.PostVerdict,
+		Checkpoints:    row.Checkpoints,
+		Attempts:       row.Attempts,
+		Severity:       row.Severity,
+		Waived:         row.Waived,
+		Escalated:      row.Escalated,
+		Lite:           row.Lite,
+		Unmatched:      row.Unmatched,
+		CodesceneState: row.CodesceneState,
+		Calls:          row.Calls,
+		CallsDropped:   row.CallsDropped,
+		Categories:     row.Categories,
+		LinesAdded:     row.LinesAdded,
+		LinesRemoved:   row.LinesRemoved,
+
+		OverBuildingRuled: row.OverBuildingRuled,
+		ImplementerModel:  row.ImplementerModel,
+		TestsAdded:        row.TestsAdded,
+		ACCount:           row.ACCount,
+		LedgerEntries:     row.LedgerEntries,
+		TestsDeclined:     row.TestsDeclined,
+		Criteria:          row.Criteria,
+	}
 }

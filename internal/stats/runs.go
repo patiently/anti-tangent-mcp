@@ -17,6 +17,15 @@ func (r *Recorder) RunHash(planRunID string) string {
 	return scorecard.HashRunID(r.state.Salt, planRunID)
 }
 
+// SessionRunHash returns the salted digest of a standalone session's id. The
+// "session:" prefix keeps it apart from the digest of any plan_run_id.
+func (r *Recorder) SessionRunHash(sessionID string) string {
+	if r == nil || sessionID == "" {
+		return ""
+	}
+	return scorecard.HashRunID(r.state.Salt, "session:"+sessionID)
+}
+
 // RecordRunLine appends one content-free run snapshot. Best-effort.
 func (r *Recorder) RecordRunLine(l scorecard.RunLine) {
 	if r == nil {

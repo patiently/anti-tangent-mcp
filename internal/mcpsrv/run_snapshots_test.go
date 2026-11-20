@@ -294,3 +294,67 @@ func TestRunSnapshots_ImplementerModelAndTestCounts(t *testing.T) {
 		assert.NotContains(t, string(raw), protects, name)
 	}
 }
+
+// TestRunSnapshots_StandaloneSessionIsOneTaskRun covers a session with no plan
+// run: its completions write one session header and index-1 task lines under
+// the session run hash, and a session that never completes writes nothing.
+func TestRunSnapshots_StandaloneSessionIsOneTaskRun(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := stats.New(stats.Options{
+		Dir: dir, SummaryInterval: 24 * time.Hour, SummaryThreshold: 100000, RetentionDays: 30,
+		Logger: slog.Default(),
+	})
+	require.NoError(t, err)
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	require.NoError(t, err)
+	rv := &scriptedRunReviewer{name: "anthropic", resps: []providers.Response{passResp("claude-sonnet-4-6")}}
+	h := &handlers{deps: Deps{
+		Cfg:       cfg,
+		Sessions:  session.NewStore(cfg.SessionTTL),
+		Reviews:   providers.Registry{"anthropic": rv},
+		Stats:     rec,
+		planCache: newPlanPassCache(),
+		PlanRuns:  planrun.NewStore(cfg.SessionTTL),
+	}}
+	ctx := context.Background()
+	spec := func(model string) ValidateTaskSpecArgs {
+		return ValidateTaskSpecArgs{TaskTitle: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}, ImplementerModel: model}
+	}
+
+	_, done, err := h.ValidateTaskSpec(ctx, nil, spec("claude-sonnet-5-5[1m]"))
+	require.NoError(t, err)
+	for range 2 {
+		_, _, err = h.ValidateCompletion(ctx, nil, completionCallArgs(done.SessionID))
+		require.NoError(t, err)
+	}
+	_, idle, err := h.ValidateTaskSpec(ctx, nil, spec(""))
+	require.NoError(t, err)
+
+	lines, err := rec.RunLines(rec.SessionRunHash(done.SessionID))
+	require.NoError(t, err)
+	var headers, tasks int
+	for _, l := range lines {
+		if l.Header {
+			headers++
+			assert.Equal(t, scorecard.KindSession, l.Kind)
+			assert.Equal(t, 1, l.TaskCount)
+			assert.NotEmpty(t, l.ConfiguredModels)
+			continue
+		}
+		tasks++
+		require.NotNil(t, l.Task)
+		assert.Equal(t, 1, l.Task.Index)
+		assert.Equal(t, "claude-sonnet-5-5[1m]", l.Task.ImplementerModel)
+	}
+	assert.Equal(t, 1, headers)
+	assert.Equal(t, 2, tasks)
+
+	idleLines, err := rec.RunLines(rec.SessionRunHash(idle.SessionID))
+	require.NoError(t, err)
+	assert.Empty(t, idleLines)
+}

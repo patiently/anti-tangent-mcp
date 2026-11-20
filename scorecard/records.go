@@ -83,6 +83,7 @@ type RunLine struct {
 	Publisher        string            `json:"publisher,omitempty"`
 	ServerVersion    string            `json:"server_version,omitempty"`
 	Header           bool              `json:"header,omitempty"`
+	Kind             string            `json:"kind,omitempty"`
 	PlanVerdict      string            `json:"plan_verdict,omitempty"`
 	PlanQuality      string            `json:"plan_quality,omitempty"`
 	TaskCount        int               `json:"task_count,omitempty"`
@@ -164,6 +165,25 @@ var modelDateSuffix = regexp.MustCompile(`-\d{4}-?\d{2}-?\d{2}$`)
 // existed group the same way as new ones.
 func NormalizeModel(s string) string {
 	return modelDateSuffix.ReplaceAllString(strings.ToLower(strings.TrimSpace(s)), "")
+}
+
+// Run kinds. A run line with no kind reads as KindPlan.
+const (
+	KindPlan    = "plan"
+	KindSession = "session"
+)
+
+var modelBracketSuffix = regexp.MustCompile(`\[[^\]]*\]$`)
+
+// NormalizeImplementerModel is NormalizeModel for an implementer's model,
+// which arrives either as provider:model from a controller or as the bare,
+// sometimes bracket-suffixed ID a model reports for itself.
+func NormalizeImplementerModel(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.LastIndex(s, ":"); i >= 0 {
+		s = s[i+1:]
+	}
+	return NormalizeModel(modelBracketSuffix.ReplaceAllString(s, ""))
 }
 
 // MaxModelRunes bounds ReviewerModel and ImplementerModel.Model: both are

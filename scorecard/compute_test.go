@@ -2,6 +2,8 @@ package scorecard
 
 import (
 	"math"
+	"slices"
+	"sort"
 	"testing"
 	"time"
 )
@@ -115,7 +117,7 @@ func TestCohortKeyCarriesVersionAndImplementer(t *testing.T) {
 	o := outcome("r1", SourceFinalReview, t0)
 	o.ImplementerModels = []ImplementerModel{{TaskIndex: 1, Model: "anthropic:claude-sonnet-5"}}
 	g := only(t, Compute(lines, []OutcomeLine{o}, Options{}).Cohorts, SourceFinalReview)
-	want := CohortKey{ReviewModel: "m", ServerVersion: "0.26.0", ImplementerModel: "anthropic:claude-sonnet-5"}
+	want := CohortKey{Kind: KindPlan, ReviewModel: "m", ServerVersion: "0.26.0", ImplementerModel: "claude-sonnet-5"}
 	if g.Key != want {
 		t.Fatalf("key = %+v", g.Key)
 	}
@@ -212,5 +214,71 @@ func TestTasksWithVerdict(t *testing.T) {
 	}
 	if got := TasksWithVerdict(nil); got == nil || len(got) != 0 {
 		t.Fatalf("TasksWithVerdict(nil) = %#v, want an empty non-nil slice", got)
+	}
+}
+
+func TestCohortsKeyOnRunKindAndNormalisedImplementerModel(t *testing.T) {
+	header := func(hash, kind string, ts time.Time) RunLine {
+		return RunLine{Ts: ts, RunHash: hash, ServerVersion: "0.26.0", Header: true, Kind: kind}
+	}
+	snap := func(hash string, ts time.Time, model string) RunLine {
+		l := taskLine(hash, ts, 1, "pass", completion("m", "pass"))
+		l.Task.ImplementerModel = model
+		return l
+	}
+	planOutcome := func(ts time.Time, model string) OutcomeLine {
+		o := outcome("plan", SourceFinalReview, ts.Add(time.Hour))
+		o.ImplementerModels = []ImplementerModel{{TaskIndex: 1, Model: model}}
+		return o
+	}
+	later := t0.Add(48 * time.Hour)
+
+	tests := []struct {
+		name        string
+		lines       []RunLine
+		outs        []OutcomeLine
+		wantKinds   []string
+		wantSession string
+	}{
+		{
+			name: "provider prefix and bracket suffix share a model, kinds stay apart",
+			lines: []RunLine{
+				header("plan", "", t0), snap("plan", t0, ""),
+				header("sess", KindSession, t0), snap("sess", t0, "claude-sonnet-5-5[1m]"),
+			},
+			outs:      []OutcomeLine{planOutcome(t0, "anthropic:claude-sonnet-5-5"), outcome("sess", SourceFinalReview, t0.Add(time.Hour))},
+			wantKinds: []string{KindPlan, KindSession},
+		},
+		{
+			name: "a later session cohort has no plan baseline",
+			lines: []RunLine{
+				header("plan", KindPlan, t0), snap("plan", t0, "claude-sonnet-5-5"),
+				header("sess", KindSession, later), snap("sess", later, "claude-sonnet-5-5"),
+			},
+			outs:        []OutcomeLine{planOutcome(t0, "claude-sonnet-5-5"), outcome("sess", SourceFinalReview, later.Add(time.Hour))},
+			wantKinds:   []string{KindPlan, KindSession},
+			wantSession: RegressionNoBaseline,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var kinds []string
+			for _, g := range Compute(tc.lines, tc.outs, Options{}).Cohorts {
+				if g.Source != SourceFinalReview {
+					continue
+				}
+				kinds = append(kinds, g.Key.Kind)
+				if g.Key.ImplementerModel != "claude-sonnet-5-5" {
+					t.Errorf("implementer model = %q", g.Key.ImplementerModel)
+				}
+				if g.Key.Kind == KindSession && g.Regression != tc.wantSession && tc.wantSession != "" {
+					t.Errorf("session regression = %q, want %q", g.Regression, tc.wantSession)
+				}
+			}
+			sort.Strings(kinds)
+			if !slices.Equal(kinds, tc.wantKinds) {
+				t.Errorf("kinds = %v, want %v", kinds, tc.wantKinds)
+			}
+		})
 	}
 }
