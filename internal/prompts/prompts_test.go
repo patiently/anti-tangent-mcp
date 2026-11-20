@@ -2511,7 +2511,7 @@ func TestRenderPost_AsksForCorrectnessBeforeCommentHygiene(t *testing.T) {
 	assert.Contains(t, out.User, "Do not speculate about code that was not submitted")
 	assert.Contains(t, out.User, "that the submitted code contradicts")
 	assert.Contains(t, out.User, "report a defect only in code the summary or an acceptance criterion ties to this task")
-	assert.Contains(t, out.User, "OR for a `correctness` or `test_adequacy` finding that meets the severity bar in its own section below")
+	assert.Contains(t, out.User, "OR for a `correctness`, `test_adequacy`, `test_value` or `test_weakened` finding that meets the severity bar in its own section below")
 }
 
 func TestRenderMid_AsksForCorrectnessAndKeepsTheStyleRule(t *testing.T) {
@@ -2599,4 +2599,29 @@ func TestRulesMirrorTemplates(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, string(want), string(got), "%s drifted from %s; recopy it", c.mirror, c.tmpl)
 	}
+}
+
+func TestTestValueSections(t *testing.T) {
+	post, err := RenderPost(PostInput{Spec: sampleSpec(), Summary: "s", FinalDiff: "diff --git a/x b/x\n",
+		TestLedger:    []TestLedgerEntry{{Test: "x_test.go::TestB", Protects: "AC 2 boundary", FailedWhen: "removed the guard"}},
+		TestsDeclined: []TestDeclined{{Test: "getter test", Reason: "no behaviour"}}})
+	require.NoError(t, err)
+	pre, err := RenderPre(PreInput{Spec: sampleSpec()})
+	require.NoError(t, err)
+	plan, err := RenderPlan(PlanInput{PlanText: "### Task 1: x\n\n**Goal:** g\n"})
+	require.NoError(t, err)
+	for _, c := range []struct {
+		name, text string
+		anchors    []string
+	}{
+		{"post", post.User, []string{"### Test value", "### Tests (apply before writing each one)", "criterion: test_value", "### Weakened tests", "AC 2 boundary"}},
+		{"pre", pre.User, []string{"never to ask for tests the criteria do not need"}},
+		{"plan", plan.User, []string{"never to ask for tests the criteria do not need"}},
+	} {
+		for _, a := range c.anchors {
+			assert.Contains(t, c.text, a, c.name)
+		}
+	}
+	assert.NotContains(t, post.User, "`minor` otherwise", "the test_adequacy catch-all is gone")
+	golden(t, "post_with_test_ledger", post.User)
 }

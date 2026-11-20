@@ -42,7 +42,7 @@ that prevents data loss, security measures, accessibility basics, the tests
 the task calls for, or anything explicitly requested.
 
 The reviewer checks your changes against this ruleset at check_progress and
-validate_completion and reports departures as quality / over_building, minor.
+validate_completion and reports departures from this build ruleset as quality / over_building, minor. Tests are judged separately, against the working practice.
 
 ## Working practice (apply while implementing this task)
 

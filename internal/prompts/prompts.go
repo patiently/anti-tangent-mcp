@@ -215,6 +215,11 @@ func (h *StaleCommentHint) Fence() string {
 	return fence(h.Hits...)
 }
 
+// TestLedgerEntry and TestDeclined are the implementer's caller-attested test
+// accounting, rendered to the reviewer as data.
+type TestLedgerEntry struct{ Test, Protects, FailedWhen string }
+type TestDeclined struct{ Test, Reason string }
+
 type PostInput struct {
 	Spec                           session.TaskSpec
 	Summary                        string
@@ -230,6 +235,8 @@ type PostInput struct {
 	PriorFindings                  []PriorFinding
 	ControllerRulings              []session.Ruling
 	StaleComments                  *StaleCommentHint
+	TestLedger                     []TestLedgerEntry
+	TestsDeclined                  []TestDeclined
 	// ContextFiles are related files the caller attached that the change does
 	// not touch. ContextFilesNonce pairs their BEGIN/END delimiters; left
 	// empty, RenderPost derives it from the files.
@@ -352,6 +359,20 @@ func RenderMid(in MidInput) (Output, error) {
 		return Output{}, err
 	}
 	return Output{System: systemPrompt, User: body, UserSuffix: body}, nil
+}
+
+// TestLedgerFence returns one delimiter safe for the ledger block: it is longer
+// than any backtick run in a value, measured after the one-line collapse the
+// template applies.
+func (in PostInput) TestLedgerFence() string {
+	parts := make([]string, 0, 3*len(in.TestLedger)+2*len(in.TestsDeclined))
+	for _, e := range in.TestLedger {
+		parts = append(parts, oneLine(e.Test), oneLine(e.Protects), oneLine(e.FailedWhen))
+	}
+	for _, d := range in.TestsDeclined {
+		parts = append(parts, oneLine(d.Test), oneLine(d.Reason))
+	}
+	return fence(parts...)
 }
 
 func RenderPost(in PostInput) (Output, error) {

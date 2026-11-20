@@ -7,6 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/patiently/anti-tangent-mcp/internal/prompts"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -22,6 +23,22 @@ type TestLedgerEntryArg struct {
 type TestDeclinedArg struct {
 	Test   string `json:"test" jsonschema:"What you considered testing."`
 	Reason string `json:"reason" jsonschema:"Why you did not write it."`
+}
+
+func toPromptTestLedger(in []TestLedgerEntryArg) []prompts.TestLedgerEntry {
+	out := make([]prompts.TestLedgerEntry, len(in))
+	for i, e := range in {
+		out[i] = prompts.TestLedgerEntry{Test: e.Test, Protects: e.Protects, FailedWhen: e.FailedWhen}
+	}
+	return out
+}
+
+func toPromptTestsDeclined(in []TestDeclinedArg) []prompts.TestDeclined {
+	out := make([]prompts.TestDeclined, len(in))
+	for i, d := range in {
+		out[i] = prompts.TestDeclined{Test: d.Test, Reason: d.Reason}
+	}
+	return out
 }
 
 const (

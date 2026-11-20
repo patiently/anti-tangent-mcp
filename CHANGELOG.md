@@ -12,8 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `validate_task_spec`'s `implementation_guidance` adds working practice after the lean build ruleset: test first per acceptance criterion, the test-value rule (which tests to write and which not to), and debugging guidance (reproduce first, one change per attempt, never weaken a test to get green, stop and report after two failed attempts on the same failure).
 - `anti-tangent-protocol` ships the test-value and debugging rules as `rules/test-value.md` and `rules/debugging.md`, byte-identical to the text the server uses, for review tooling to read.
 - `validate_completion` accepts `test_ledger` (each test beyond the first for an acceptance criterion: what it protects, and optionally how it was seen to fail) and `tests_declined`. The server counts the test declarations a diff adds (Go, Kotlin/Java, Python, JS/TS; table rows and parametrised cases count once), raises a minor `test_ledger_absent` when a task adds more tests than it has acceptance criteria without a ledger, and prints `tests: +N for M ACs (declined K)` in the summary block (`n/a` when not comparable).
+- `validate_completion`'s reviewer judges the tests a change adds against the test-value rule and reports them in one `quality` / `test_value` finding: major for absence guards, tests that read the source under test as text, or over-testing (at least three tests or cases that could go, and at least half of those added); minor for per-function trivia and incidental-output pins. A test an acceptance criterion mandates is reported as a minor `test_value_mandated` addressed to the spec author. Test value alone never fails the verdict.
+- `test_weakened` (major, `quality`): an existing test loosened, skipped or deleted with no acceptance criterion changing its behaviour or naming it as the thing to fix.
 
 ### Changed
+
+- `test_adequacy` no longer raises a minor finding whenever a criterion lacks a test the task did not ask for, in `validate_completion`, `validate_task_spec` or `validate_plan`. It still raises a major for a behaviour criterion with no test when tests are called for, and for a test that asserts nothing about the behaviour.
 
 ## [0.30.1] - 2026-11-17
 

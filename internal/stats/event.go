@@ -68,6 +68,10 @@ type Event struct {
 var countedCriteria = map[string]bool{
 	"comment_hygiene":              true,
 	"over_building":                true,
+	"test_value":                   true,
+	"test_value_mandated":          true,
+	"test_ledger_absent":           true,
+	"test_weakened":                true,
 	"over_building_mandated":       true,
 	"comment_policy_absent":        true,
 	"test_evidence":                true,

@@ -2124,6 +2124,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				Codescene:                      args.Codescene,
 				RateDigest:                     rateDigest,
 				StaleComments:                  staleComments,
+				TestLedger:                     toPromptTestLedger(args.TestLedger),
+				TestsDeclined:                  toPromptTestsDeclined(args.TestsDeclined),
 				ContextFiles:                   toPromptContextFiles(relatedFiles),
 			})
 		},
