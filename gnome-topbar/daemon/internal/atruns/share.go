@@ -63,8 +63,9 @@ func NoteBody(publisher string, lines []scorecard.RunLine, outcomes []scorecard.
 }
 
 // clampRunLines returns copies of lines with every model string bounded:
-// configured models, the plan call, and each task call. The copies share no
-// map, pointer or slice with the input.
+// configured models, the plan call, each task call and the task's implementer
+// model, and with task criteria limited to the counted sentinels. The copies
+// share no map, pointer or slice with the input.
 func clampRunLines(lines []scorecard.RunLine) []scorecard.RunLine {
 	out := make([]scorecard.RunLine, len(lines))
 	for i, l := range lines {
@@ -105,7 +106,28 @@ func clampTaskCalls(t *scorecard.TaskSnapshot) *scorecard.TaskSnapshot {
 	for k := range cp.Calls {
 		cp.Calls[k].Model = scorecard.ClampModelString(cp.Calls[k].Model)
 	}
+	cp.ImplementerModel = scorecard.ClampModelString(cp.ImplementerModel)
+	if t.TestsAdded != nil {
+		n := *t.TestsAdded
+		cp.TestsAdded = &n
+	}
+	cp.Categories = copyCounts(t.Categories, func(string) bool { return true })
+	cp.Criteria = copyCounts(t.Criteria, scorecard.CountedCriterion)
 	return &cp
+}
+
+func copyCounts(m map[string]int, keep func(string) bool) map[string]int {
+	var out map[string]int
+	for k, v := range m {
+		if !keep(k) {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]int, len(m))
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // ParseNote extracts a note's records and stamps every one with the note's
