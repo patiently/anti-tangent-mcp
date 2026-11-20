@@ -34,7 +34,8 @@ fix-to-convergence run, `review_now` for a human-adjudicated review. The PR-body
 
 **Attributing a finding to a task.** Use the file it points at: the task whose `**Files:**` list
 (or `plan_run_report` row) owns that file is its task. When a finding genuinely spans tasks, or
-names no file, use `task_index: 0`. It is then counted for the run, never for a task.
+names no file, use `task_index: 0`. In a plan run it is then counted for the run, never for a task;
+a run without a plan has only task 1, so there `0` is task 1.
 
 **Severity.** `critical`, `major` or `minor`. Map the reviewer's scale onto these. Drop nits and
 style preferences rather than sending them as `minor`.
