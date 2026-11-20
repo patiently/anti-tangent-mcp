@@ -80,3 +80,22 @@ func TestRunsFallsBackToTaskImplementerModel(t *testing.T) {
 		t.Fatalf("plan run models: %v", m)
 	}
 }
+
+func TestRunsResolvesOneModelPerTask(t *testing.T) {
+	t0 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	lines := []scorecard.RunLine{
+		{Ts: t0, RunHash: "r", Header: true, TaskCount: 3},
+		{Ts: t0.Add(time.Minute), RunHash: "r", Task: &scorecard.TaskSnapshot{Index: 2, ImplementerModel: "claude-sonnet-5-5"}},
+		{Ts: t0.Add(time.Minute), RunHash: "r", Task: &scorecard.TaskSnapshot{Index: 3, ImplementerModel: "model-a"}},
+		{Ts: t0.Add(2 * time.Minute), RunHash: "r", Task: &scorecard.TaskSnapshot{Index: 3, ImplementerModel: "model-b"}},
+	}
+	outs := []scorecard.OutcomeLine{{Ts: t0.Add(time.Hour), RunHash: "r", Source: "final_review",
+		ImplementerModels: []scorecard.ImplementerModel{{TaskIndex: 1, Model: "anthropic:claude-sonnet-5-5"}}}}
+	rs := Runs(lines, outs)
+	if len(rs) != 1 {
+		t.Fatalf("runs: %+v", rs)
+	}
+	if m := rs[0].ImplementerModels; len(m) != 2 || m[0] != "claude-sonnet-5-5" || m[1] != "model-b" {
+		t.Fatalf("models: %v", m)
+	}
+}
