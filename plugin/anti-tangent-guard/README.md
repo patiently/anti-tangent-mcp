@@ -406,7 +406,9 @@ is of the transcript path, the `validate_task_spec` call id and the id of the ta
 edit), and when that file already exists it allows. A session asked while pausing, which
 the message tells to say so and stop without calling `validate_completion`, is asked again
 only once it has edited further — so the ask still comes at the task's real end. A pause
-costs one extra model turn, not a reviewer call. It never traps a session. It also allows
+costs one extra model turn, not a reviewer call. An implementer stopping to ask its controller
+(stuck, or the fix belongs outside its Files list) gets the stop check's one prompt; it answers by
+stopping again with a report that opens `stopping to ask, not complete`. It never traps a session. It also allows
 when the payload's `stop_hook_active` is `true`, and on every failure: no `python3`, an
 unreadable transcript, a marker that cannot be written, or the 10-second timeout.
 

@@ -17,10 +17,16 @@ sliced by role, from [`protocol/`](protocol/):
 | [`protocol/authoring.md`](protocol/authoring.md) | plan authors | §3 task-block format, normative test bodies, attestations |
 | [`protocol/implementer.md`](protocol/implementer.md) | implementing subagents | §4 lifecycle, the paste-in dispatch clause, lightweight mode, CodeScene companion |
 | [`protocol/controller.md`](protocol/controller.md) | controllers | §5 plan-handoff gate, dispatch addendum, end-of-run reporting |
+| [`protocol/cycle.md`](protocol/cycle.md) | controllers | §7 the development cycle: stages, parallelism, roles, revisiting, investigating a reported error |
 | [`protocol/project-knowledge.md`](protocol/project-knowledge.md) | controllers, only with a KB | prime/extract loop, note types, Basic Memory translation |
 
-An agent reads `core.md` plus only the part matching its role — never all five by default. For
+An agent reads `core.md` plus only the part matching its role — never all of them by default. For
 everything else — Q&A, exploration, ad-hoc edits — none of it loads.
+
+The plugin also ships `rules/` (`test-value.md` and `debugging.md`, the same text the server
+delivers in `implementation_guidance`, for review tooling to read) and a second skill,
+`investigate`, which turns a reported error or incident into an approved bug-fix brief that enters
+the cycle in `cycle.md`.
 
 This replaces the older install that `@`-imported the whole protocol document
 into global `~/.claude/CLAUDE.md` (a flat ~10k-token cost on every call).
