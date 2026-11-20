@@ -59,8 +59,8 @@ behaviour it protects. If you cannot, do not write it.
 Start from one test per acceptance criterion. Add another only for a failure
 or boundary case the criterion names, and write several inputs to one
 behaviour as one table-driven or parametrised test, not as separate tests.
-Prefer one test that drives a criterion through its public entry point over
-several that cover its helpers. Each test beyond the first for a criterion
+Test each criterion once, at the cheapest layer that observes it, not through
+each of its helpers. Each test beyond the first for a criterion
 gets a `test_ledger` entry saying what it protects that the others cannot;
 each test you considered and did not write goes in `tests_declined`.
 
@@ -81,7 +81,9 @@ Do not write:
 - tests that read the source code under test as text instead of running it
   (checking a generated artefact, golden file, schema or config the product
   ships is fine);
-- tests pinning incidental output no caller depends on (log wording, map order).
+- tests pinning incidental output no caller depends on (log wording, map
+  order), or asserting only a snapshot (a snapshot beside a real assertion is
+  fine).
 
 Existing tests are out of scope: do not delete or rewrite tests the task did
 not ask you to touch.
@@ -135,7 +137,7 @@ and `tests_declined`, and reads the code, not the ledger's claims.
 | `source-grep:` | reads the source of the code under test as text instead of running it. Not: goldens, generated artefacts, schemas, notices, shipped config | heavy |
 | `consolidate:` | for an AC group of several tests (grouped by `protects`, else by the code): merging into one table-driven test or deleting all but one would lose no failure or boundary case the AC names. Judged on **cases**, not declarations: one test with 40 near-identical subtests or assertions is a `consolidate:` instance too | heavy when ≥ 3 tests (or cases) could go AND they are ≥ half of those added; else light |
 | `trivia:` | per-function, or restates the implementation | light (exempt if `failed_when` given) |
-| `quirk:` | pins incidental output | light (exempt if `failed_when` given) |
+| `quirk:` | pins incidental output, or asserts only a snapshot with no real assertion beside it | light (exempt if `failed_when` given) |
 
 **One finding per task:** `category: quality`, `criterion: test_value`; **major** if any heavy instance
 exists, else **minor**; `evidence` lists `path:line: <tag>: <what>` per instance, AC groups as
