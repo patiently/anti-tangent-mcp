@@ -61,6 +61,17 @@ type TaskSnapshot struct {
 	// OverBuildingRuled counts the task's validate_completion calls whose
 	// over_building finding was answered or ruled on instead of fixed.
 	OverBuildingRuled int `json:"over_building_ruled,omitempty"`
+	// ImplementerModel is the model the implementer reported on
+	// validate_task_spec, raw; cohorts normalise it when read.
+	ImplementerModel string `json:"implementer_model,omitempty"`
+	// TestsAdded is nil when the count is unknown.
+	TestsAdded    *int `json:"tests_added,omitempty"`
+	ACCount       int  `json:"ac_count,omitempty"`
+	LedgerEntries int  `json:"ledger_entries,omitempty"`
+	TestsDeclined int  `json:"tests_declined,omitempty"`
+	// Criteria sums, over the task's validate_completion calls, the findings
+	// per server-recognised criterion sentinel; never free text.
+	Criteria map[string]int `json:"criteria,omitempty"`
 }
 
 // RunLine is one line of runs.jsonl: a run header (Header true, Task nil) or

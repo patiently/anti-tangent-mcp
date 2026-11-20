@@ -189,7 +189,7 @@ func diffLineCounts(diff string) (added, removed int) {
 // completionRowUpdate is the plan-run row write for one validate_completion
 // result. finalDiff is the diff the call submitted, or "" when it sent none.
 func completionRowUpdate(env Envelope, cs *codescene.Digest, finalDiff string) func(*planrun.TaskRow) {
-	sev, cats, _, _ := stats.CountFindings(env.Findings)
+	sev, cats, crit, _ := stats.CountFindings(env.Findings)
 	added, removed := diffLineCounts(finalDiff)
 	state := planrun.StateMissing
 	if cs != nil {
@@ -204,12 +204,9 @@ func completionRowUpdate(env Envelope, cs *codescene.Digest, finalDiff string) f
 	return func(row *planrun.TaskRow) {
 		row.PostVerdict = env.Verdict
 		row.Severity = sev
-		for c, n := range cats {
-			if row.Categories == nil {
-				row.Categories = map[string]int{}
-			}
-			row.Categories[c] += n
-		}
+		row.Categories = addCounts(row.Categories, cats)
+		row.Criteria = addCounts(row.Criteria, crit)
+		applyTestTally(row, env.Tests)
 		if finalDiff != "" {
 			row.LinesAdded, row.LinesRemoved = added, removed
 		}
@@ -221,6 +218,25 @@ func completionRowUpdate(env Envelope, cs *codescene.Digest, finalDiff string) f
 		row.Escalated = row.Escalated || env.Escalate
 		row.AppendCall(call)
 	}
+}
+
+// addCounts adds src into dst, allocating dst on first use.
+func addCounts(dst, src map[string]int) map[string]int {
+	for k, n := range src {
+		if dst == nil {
+			dst = map[string]int{}
+		}
+		dst[k] += n
+	}
+	return dst
+}
+
+// applyTestTally copies the latest validate_completion test counts onto row.
+func applyTestTally(row *planrun.TaskRow, t *TestTally) {
+	if t == nil {
+		return
+	}
+	row.TestsAdded, row.ACCount, row.LedgerEntries, row.TestsDeclined = t.Added, t.ACs, t.Ledger, t.Declined
 }
 
 // countOverBuildingRuled wraps a row update so it also counts a call whose
@@ -264,6 +280,13 @@ func (h *handlers) recordCompletionRow(sess *session.Session, env Envelope, cs *
 		return
 	}
 	update := withRateDigest(countOverBuildingRuled(completionRowUpdate(env, cs, finalDiff), overBuildingRuled), rd)
+	base := update
+	update = func(row *planrun.TaskRow) {
+		base(row)
+		if sess.ImplementerModel != "" {
+			row.ImplementerModel = sess.ImplementerModel
+		}
+	}
 	if row, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, update); ok {
 		h.appendPlanLedger(sess.PlanRunID, row)
 	} else {

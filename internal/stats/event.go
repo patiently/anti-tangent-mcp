@@ -47,6 +47,14 @@ type Event struct {
 	// a finding, so no other field counts it.
 	ChecklistItems int `json:"checklist_items,omitempty"`
 
+	// ImplementerModel and the test counts are set only on validate_completion
+	// events. TestsAdded is nil when the diff did not allow a count.
+	ImplementerModel string `json:"implementer_model,omitempty"`
+	TestsAdded       *int   `json:"tests_added,omitempty"`
+	ACCount          int    `json:"ac_count,omitempty"`
+	LedgerEntries    int    `json:"ledger_entries,omitempty"`
+	TestsDeclined    int    `json:"tests_declined,omitempty"`
+
 	// InputTokens / OutputTokens are set only by the I/O-delegation tools
 	// (bulk_read, code_write). They are what makes "tokens kept out of the
 	// implementer's context" computable. omitempty so no existing event shape

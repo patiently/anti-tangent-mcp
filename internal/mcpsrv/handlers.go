@@ -27,6 +27,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
+	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
 // Envelope is the JSON returned to the subagent for every hook.
@@ -112,13 +113,14 @@ type ValidateTaskSpecArgs struct {
 	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
 	// PlanRunID ties this task to a plan run minted by validate_plan. Best
 	// effort: an unknown or expired id must not fail the review.
-	PlanRunID     string   `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call. Left out, the task is attached only when this server holds exactly one live plan run and task_title matches exactly one of its headings."`
-	ContextPaths  []string `json:"context_paths,omitempty" jsonschema:"Absolute paths to files the implementer was told to work from, such as its dispatch brief: the server reads them and shows the reviewer their whole contents, so a term or step they define is not reported as missing from the spec. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the task-spec payload cap. A file the secret gate refuses (ANTI_TANGENT_SECRET_GATE) fails the call."`
-	TaskIndex     int      `json:"task_index,omitempty" jsonschema:"The task's 1-based position in the plan, from the controller's dispatch. With plan_run_id it names the plan task this call belongs to; without it the task is found by matching task_title against the plan's headings. Validating the same task again updates its plan_run_report row instead of adding one."`
-	TaskKind      string   `json:"task_kind,omitempty" jsonschema:"experiment or build, the default: validate_plan's task_kind for this task. An experiment is reviewed as a measured, keep-or-revert change and can never close lightweight. When this call attaches to a plan run, the run's value wins and a different one draws a minor kind_conflict finding."`
-	Rung          string   `json:"rung,omitempty" jsonschema:"The task's fix-ladder rung, validate_plan's rung for this task: oracle, variance, facts, tool, commitment, prompt or owner. An experiment without one draws a minor rung_missing finding. The plan run's value wins, as for task_kind."`
-	PlanKind      string   `json:"plan_kind,omitempty" jsonschema:"agent-network when the plan is agent-network work: validate_plan's plan_kind. The plan run's value wins, as for task_kind."`
-	BoundaryRules []string `json:"boundary_rules,omitempty" jsonschema:"Your project's rules for what code may do with reply and user text. A spec, and later a change, that does what a rule forbids draws boundary_violation. Left out on a call that attaches to a plan run, the run's rules apply. Stored on the session for check_progress and validate_completion. At most 20 entries of at most 1000 characters each."`
+	PlanRunID        string   `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call. Left out, the task is attached only when this server holds exactly one live plan run and task_title matches exactly one of its headings."`
+	ContextPaths     []string `json:"context_paths,omitempty" jsonschema:"Absolute paths to files the implementer was told to work from, such as its dispatch brief: the server reads them and shows the reviewer their whole contents, so a term or step they define is not reported as missing from the spec. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the task-spec payload cap. A file the secret gate refuses (ANTI_TANGENT_SECRET_GATE) fails the call."`
+	TaskIndex        int      `json:"task_index,omitempty" jsonschema:"The task's 1-based position in the plan, from the controller's dispatch. With plan_run_id it names the plan task this call belongs to; without it the task is found by matching task_title against the plan's headings. Validating the same task again updates its plan_run_report row instead of adding one."`
+	TaskKind         string   `json:"task_kind,omitempty" jsonschema:"experiment or build, the default: validate_plan's task_kind for this task. An experiment is reviewed as a measured, keep-or-revert change and can never close lightweight. When this call attaches to a plan run, the run's value wins and a different one draws a minor kind_conflict finding."`
+	Rung             string   `json:"rung,omitempty" jsonschema:"The task's fix-ladder rung, validate_plan's rung for this task: oracle, variance, facts, tool, commitment, prompt or owner. An experiment without one draws a minor rung_missing finding. The plan run's value wins, as for task_kind."`
+	PlanKind         string   `json:"plan_kind,omitempty" jsonschema:"agent-network when the plan is agent-network work: validate_plan's plan_kind. The plan run's value wins, as for task_kind."`
+	BoundaryRules    []string `json:"boundary_rules,omitempty" jsonschema:"Your project's rules for what code may do with reply and user text. A spec, and later a change, that does what a rule forbids draws boundary_violation. Left out on a call that attaches to a plan run, the run's rules apply. Stored on the session for check_progress and validate_completion. At most 20 entries of at most 1000 characters each."`
+	ImplementerModel string   `json:"implementer_model,omitempty" jsonschema:"Your exact model ID, as the host reports it (for example claude-sonnet-5-5). Used only to group statistics by implementer model. At most 100 characters, no control character."`
 }
 
 type handlers struct {
@@ -148,6 +150,9 @@ func validateTaskSpecTool() *mcp.Tool {
 func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest, args ValidateTaskSpecArgs) (*mcp.CallToolResult, Envelope, error) {
 	if args.TaskTitle == "" || args.Goal == "" {
 		return nil, Envelope{}, errors.New("task_title and goal are required")
+	}
+	if !scorecard.ValidModelString(strings.TrimSpace(args.ImplementerModel)) {
+		return nil, Envelope{}, errors.New("implementer_model must be at most 100 characters with no control character")
 	}
 
 	inputs, err := normalizeTaskSpecInputs(args, h.deps.Cfg.MaxPayloadBytes)
@@ -269,6 +274,10 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		// The plan_run_id advisory describes this call's arguments, not the
 		// spec, so later prompts must not show it as a pre-task finding.
 		h.deps.Sessions.SetPreFindings(sess.ID, append([]verdict.Finding(nil), env.Findings[:len(result.Findings)]...))
+		if model := strings.TrimSpace(args.ImplementerModel); model != "" {
+			h.deps.Sessions.SetImplementerModel(sess.ID, model)
+			sess.ImplementerModel = model
+		}
 		h.deps.Sessions.RecordIssuedIDs(sess.ID, envelopeIDs(env))
 		// Re-fetch so LastAccessed reflects the final mutation.
 		if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
@@ -419,6 +428,9 @@ type statParams struct {
 	// checklistItems is how many codebase_reference_checklist entries the
 	// call returned.
 	checklistItems int
+	// implementerModel and tests are set only on validate_completion events.
+	implementerModel string
+	tests            *TestTally
 }
 
 // recordStat maps a statParams into a stats.Event and records it.
@@ -429,7 +441,7 @@ func (h *handlers) recordStat(p statParams) {
 		return
 	}
 	sev, cat, crit, total := stats.CountFindings(p.findings)
-	h.deps.Stats.Record(stats.Event{
+	ev := stats.Event{
 		Ts:              time.Now().UTC().Truncate(time.Second),
 		Tool:            p.tool,
 		Verdict:         p.verdict,
@@ -447,7 +459,16 @@ func (h *handlers) recordStat(p statParams) {
 		TasksWithHeader: p.tasksWithHeader,
 		ChecklistItems:  p.checklistItems,
 		TasksCarried:    p.tasksCarried,
-	})
+
+		ImplementerModel: p.implementerModel,
+	}
+	if p.tests != nil {
+		ev.TestsAdded = p.tests.Added
+		ev.ACCount = p.tests.ACs
+		ev.LedgerEntries = p.tests.Ledger
+		ev.TestsDeclined = p.tests.Declined
+	}
+	h.deps.Stats.Record(ev)
 }
 
 // planFindings aggregates plan-level and per-task findings from a PlanResult
@@ -2305,6 +2326,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		partial:      env.Partial,
 		sessionID:    env.SessionID,
 		payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
+
+		implementerModel: sessionImplementerModel(sess),
+		tests:            env.Tests,
 	})
 	return envelopeResult(env)
 }
@@ -3575,4 +3599,13 @@ func planRunReportResult(res PlanRunReportResult) (*mcp.CallToolResult, PlanRunR
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
 	}, res, nil
+}
+
+// sessionImplementerModel is the model the session's implementer reported, or
+// "" for a lightweight call, which has no session.
+func sessionImplementerModel(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	return sess.ImplementerModel
 }

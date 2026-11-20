@@ -110,6 +110,12 @@ func (h *handlers) snapshotRow(runID string, row planrun.TaskRow) {
 			LinesRemoved:   row.LinesRemoved,
 
 			OverBuildingRuled: row.OverBuildingRuled,
+			ImplementerModel:  row.ImplementerModel,
+			TestsAdded:        row.TestsAdded,
+			ACCount:           row.ACCount,
+			LedgerEntries:     row.LedgerEntries,
+			TestsDeclined:     row.TestsDeclined,
+			Criteria:          row.Criteria,
 		},
 	})
 }

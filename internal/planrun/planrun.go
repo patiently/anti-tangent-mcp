@@ -85,6 +85,17 @@ type TaskRow struct {
 	// RateDigest is the counts of the most recent rate_digest a
 	// validate_completion call on the task sent, without its eval path.
 	RateDigest *ratedigest.Digest `json:"rate_digest,omitempty"`
+	// ImplementerModel is the model the implementer reported on
+	// validate_task_spec, raw; cohorts normalise it when read.
+	ImplementerModel string `json:"implementer_model,omitempty"`
+	// TestsAdded is nil when the count is unknown.
+	TestsAdded    *int `json:"tests_added,omitempty"`
+	ACCount       int  `json:"ac_count,omitempty"`
+	LedgerEntries int  `json:"ledger_entries,omitempty"`
+	TestsDeclined int  `json:"tests_declined,omitempty"`
+	// Criteria sums, over the task's validate_completion calls, the findings
+	// per server-recognised criterion sentinel; never free text.
+	Criteria map[string]int `json:"criteria,omitempty"`
 	// IssuedIDs is the finding IDs lightweight validate_completion calls on
 	// this task returned, oldest first, capped at maxIssuedIDs. A lightweight
 	// call's controller_rulings may name only these. In memory only.

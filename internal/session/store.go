@@ -75,6 +75,18 @@ func (s *Store) SetPreFindings(id string, findings []verdict.Finding) bool {
 	return true
 }
 
+func (s *Store) SetImplementerModel(id, model string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[id]
+	if !ok {
+		return false
+	}
+	sess.ImplementerModel = model
+	sess.LastAccessed = time.Now()
+	return true
+}
+
 // EvictExpired removes sessions whose LastAccessed is older than now - ttl.
 // Returns the number of sessions evicted. Intended to be called periodically
 // from a background goroutine.

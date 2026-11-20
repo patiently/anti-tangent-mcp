@@ -2,9 +2,11 @@ package mcpsrv
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,5 +198,99 @@ func TestRunSnapshots_NilStatsWritesNothing(t *testing.T) {
 	require.NoError(t, err)
 	for _, e := range entries {
 		assert.NotEqual(t, "runs.jsonl", e.Name())
+	}
+}
+
+// TestRunSnapshots_ImplementerModelAndTestCounts covers the implementer model
+// and test counts on the run snapshot and the stats event, and that the
+// ledger's text reaches neither file.
+func TestRunSnapshots_ImplementerModelAndTestCounts(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := stats.New(stats.Options{
+		Dir: dir, SummaryInterval: 24 * time.Hour, SummaryThreshold: 100000, RetentionDays: 30,
+		Logger: slog.Default(),
+	})
+	require.NoError(t, err)
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	require.NoError(t, err)
+
+	const model = "anthropic:claude-sonnet-5-5"
+	const protects = "UNIQUE-PROTECTS-TEXT"
+	rv := &scriptedRunReviewer{name: "anthropic", resps: []providers.Response{
+		runSnapshotPlanResp(),
+		passResp("claude-sonnet-4-6"),
+		reviewerFindingsResp(`{"severity":"minor","category":"quality","criterion":"test_value","evidence":"e","suggestion":"s"}`),
+	}}
+	h := &handlers{deps: Deps{
+		Cfg:       cfg,
+		Sessions:  session.NewStore(cfg.SessionTTL),
+		Reviews:   providers.Registry{"anthropic": rv},
+		Stats:     rec,
+		planCache: newPlanPassCache(),
+		PlanRuns:  planrun.NewStore(cfg.SessionTTL),
+	}}
+
+	ctx := context.Background()
+	plan := "# Plan\n\n### Task 1: Secret title ZXQ\n\n**Goal:** g1\n\n**Acceptance criteria:**\n- ac1\n\n"
+	_, pr, err := h.ValidatePlan(ctx, nil, ValidatePlanArgs{PlanText: plan})
+	require.NoError(t, err)
+	_, pre, err := h.ValidateTaskSpec(ctx, nil, ValidateTaskSpecArgs{
+		TaskTitle: "Task 1: Secret title ZXQ", Goal: "g1", AcceptanceCriteria: []string{"ac1"},
+		PlanRunID: pr.PlanRunID, TaskIndex: 1, ImplementerModel: model,
+	})
+	require.NoError(t, err)
+
+	diff := "diff --git a/f_test.go b/f_test.go\n--- a/f_test.go\n+++ b/f_test.go\n@@ -0,0 +1,3 @@\n" +
+		"+func TestA(t *testing.T) {}\n+func TestB(t *testing.T) {}\n+func TestC(t *testing.T) {}\n"
+	args := completionCallArgs(pre.SessionID)
+	args.FinalDiff = diff
+	args.FinalFiles = nil
+	args.TestLedger = []TestLedgerEntryArg{{Test: "f_test.go::TestB", Protects: protects}}
+	_, _, err = h.ValidateCompletion(ctx, nil, args)
+	require.NoError(t, err)
+
+	lines, err := rec.RunLines(rec.RunHash(pr.PlanRunID))
+	require.NoError(t, err)
+	var last *scorecard.TaskSnapshot
+	for i := range lines {
+		if lines[i].Task != nil {
+			last = lines[i].Task
+		}
+	}
+	require.NotNil(t, last)
+	assert.Equal(t, model, last.ImplementerModel)
+	require.NotNil(t, last.TestsAdded)
+	assert.Equal(t, 3, *last.TestsAdded)
+	assert.Equal(t, 1, last.ACCount)
+	assert.Equal(t, 1, last.LedgerEntries)
+	assert.Equal(t, 1, last.Criteria["test_value"])
+
+	events, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	require.NoError(t, err)
+	var found bool
+	for _, ln := range strings.Split(strings.TrimSpace(string(events)), "\n") {
+		var ev stats.Event
+		require.NoError(t, json.Unmarshal([]byte(ln), &ev))
+		if ev.Tool != "validate_completion" {
+			continue
+		}
+		found = true
+		assert.Equal(t, model, ev.ImplementerModel)
+		require.NotNil(t, ev.TestsAdded)
+		assert.Equal(t, 3, *ev.TestsAdded)
+		assert.Equal(t, 1, ev.ACCount)
+		assert.Equal(t, 1, ev.LedgerEntries)
+	}
+	assert.True(t, found, "no validate_completion event")
+
+	for _, name := range []string{"runs.jsonl", "events.jsonl"} {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		require.NoError(t, err)
+		assert.NotContains(t, string(raw), protects, name)
 	}
 }
