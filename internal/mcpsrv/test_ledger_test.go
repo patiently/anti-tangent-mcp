@@ -42,6 +42,18 @@ func TestCountAddedTests(t *testing.T) {
 		{"no test file", diffAdding("main.go", "func main() {"), 0, true},
 		{"unknown language", diffAdding("tests/run.bats", `@test "x" {`), 0, false},
 		{"rename shows changed hunk only", renameDiff("old_test.go", "new_test.go", "func TestNew(t *testing.T) {"), 1, true},
+		{"fixture json under tests ignored", diffAdding("x_test.go", "func TestA(t *testing.T) {") + diffAdding("tests/fixture.json", `{"a": 1}`), 1, true},
+		{"jest snapshot ignored", diffAdding("a.test.ts", "it('a', () => {") + diffAdding("__tests__/x.snap", "exports[`a 1`] = `x`;"), 1, true},
+		{"yaml md txt golden under tests ignored", diffAdding("tests/a.yaml", "a: 1") + diffAdding("tests/b.yml", "b: 2") +
+			diffAdding("tests/c.md", "# c") + diffAdding("tests/d.txt", "d") + diffAdding("tests/e.golden", "e"), 0, true},
+		{"rust inline test makes count unknown", diffAdding("x_test.go", "func TestA(t *testing.T) {") +
+			diffAdding("src/lib.rs", "#[test]", "fn adds() {}"), 0, false},
+		{"ruby source makes count unknown", diffAdding("lib/x.rb", "def x; end"), 0, false},
+		{"c header makes count unknown", diffAdding("include/x.hpp", "int x();"), 0, false},
+		{"junit Tests.java counted", diffAdding("FooTests.java", "@Test", "void a() {}", "@Test", "void b() {}"), 2, true},
+		{"java under src/test counted", diffAdding("src/test/java/x/FooHelper.java", "@Test", "void a() {}"), 1, true},
+		{"resource under src/test ignored", diffAdding("src/test/resources/app.properties", "a=1"), 0, true},
+		{"kotest spec makes count unknown", diffAdding("FooSpec.kt", `"adds" {`, "1 + 1 shouldBe 2"), 0, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

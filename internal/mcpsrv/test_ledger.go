@@ -49,7 +49,17 @@ const (
 
 // testPathRe matches the files a diff adding tests is recognised by. A file
 // matching it whose language has no declaration rule makes the count unknown.
-var testPathRe = regexp.MustCompile(`(_test\.go|Tests?\.kt|Test\.java|IT\.java|_test\.py|\.test\.[^/]+|\.spec\.[^/]+|\.bats)$|(^|/)test_[^/]*\.py$|(^|/)(__tests__|tests)/`)
+var testPathRe = regexp.MustCompile(`(_test\.go|Tests?\.kt|Spec\.kt|Tests?\.java|IT\.java|_test\.py|\.test\.[^/]+|\.spec\.[^/]+|\.bats)$|(^|/)test_[^/]*\.py$|(^|/)(__tests__|tests|src/test)/`)
+
+// testDataRe matches fixtures, snapshots and resources kept beside tests. They
+// declare no test, so they neither count nor make the count unknown.
+var testDataRe = regexp.MustCompile(`\.(json|ya?ml|md|snap|txt|golden|xml|csv|properties|sql)$`)
+
+// uncountedSourceRe matches source files that can declare a test anywhere, not
+// only under a test path (Rust's inline #[test], for one), in a language with no
+// declaration rule, and Kotest specs, whose declarations are DSL calls in too
+// many styles to count. An added line in one makes the count unknown.
+var uncountedSourceRe = regexp.MustCompile(`\.(rs|rb|cs|swift|scala|php|c|cc|cpp|h|hpp)$|Spec\.kts?$`)
 
 // testDeclRules maps a file type to the line shape that declares one test.
 // exclude, when set, rejects a declaration whose first capture group equals it.
@@ -66,10 +76,9 @@ var testDeclRules = []struct {
 
 // countAddedTests counts the test declarations a unified diff adds. Table rows
 // and parametrised cases are not counted, so one table-driven test counts once.
-// known is false when an added line sits in a test file whose language has no
-// declaration rule: such a task has no comparable count.
+// known is false when an added line sits in a file that may declare tests in a
+// language with no declaration rule: such a task has no comparable count.
 func countAddedTests(diff string) (added int, known bool) {
-	known = true
 	var path string
 	for _, line := range strings.Split(diff, "\n") {
 		if p, ok := strings.CutPrefix(line, "+++ "); ok {
@@ -77,23 +86,35 @@ func countAddedTests(diff string) (added int, known bool) {
 			continue
 		}
 		body, isAdd := strings.CutPrefix(line, "+")
-		if !isAdd || !testPathRe.MatchString(path) {
+		if !isAdd || !mayDeclareTests(path) {
 			continue
 		}
 		isTest, ruled := declaresTest(path, body)
 		if !ruled {
-			known = false
+			return 0, false
 		}
 		if isTest {
 			added++
 		}
 	}
-	return added, known
+	return added, true
+}
+
+// mayDeclareTests reports whether an added line in path is read for test
+// declarations. A file it admits that no rule covers makes the count unknown.
+func mayDeclareTests(path string) bool {
+	if uncountedSourceRe.MatchString(path) {
+		return true
+	}
+	return testPathRe.MatchString(path) && !testDataRe.MatchString(path)
 }
 
 // declaresTest reports whether an added line declares a test, and whether any
 // rule covers the file's language at all.
 func declaresTest(path, body string) (isTest, ruled bool) {
+	if uncountedSourceRe.MatchString(path) {
+		return false, false
+	}
 	for _, r := range testDeclRules {
 		if !r.file.MatchString(path) {
 			continue
