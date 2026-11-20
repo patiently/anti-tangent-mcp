@@ -242,6 +242,23 @@ func TestValidateTaskSpec_InvalidPhaseRejected(t *testing.T) {
 	assert.Equal(t, 0, rv.Calls)
 }
 
+func TestValidateTaskSpec_InvalidImplementerModelRejected(t *testing.T) {
+	for name, model := range map[string]string{
+		"over 100 characters": strings.Repeat("m", 101),
+		"control character":   "claude\x07sonnet",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
+			h := &handlers{deps: newDeps(t, rv)}
+			_, _, err := h.ValidateTaskSpec(context.Background(), nil, ValidateTaskSpecArgs{
+				TaskTitle: "T", Goal: "G", ImplementerModel: model,
+			})
+			require.ErrorContains(t, err, "implementer_model")
+			assert.Equal(t, 0, rv.Calls)
+		})
+	}
+}
+
 func TestValidateTaskSpec_PinnedByTrimmedAndStored(t *testing.T) {
 	rv := &fakeReviewer{name: "anthropic", resp: passResp("claude-sonnet-4-6")}
 	d := newDeps(t, rv)
