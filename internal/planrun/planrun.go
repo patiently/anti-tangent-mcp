@@ -516,6 +516,11 @@ func (r *Run) snapshot() *Run {
 func cloneRow(row TaskRow) TaskRow {
 	row.Severity = cloneIntMap(row.Severity)
 	row.Categories = cloneIntMap(row.Categories)
+	row.Criteria = cloneIntMap(row.Criteria)
+	if row.TestsAdded != nil {
+		n := *row.TestsAdded
+		row.TestsAdded = &n
+	}
 	row.Codescene = cloneDigest(row.Codescene)
 	row.RateDigest = row.RateDigest.ForRecord()
 	row.Calls = append([]ToolCall(nil), row.Calls...)
