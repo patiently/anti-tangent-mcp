@@ -17,12 +17,12 @@ Round 1 is at `6f412e1`. Round 2 is at `4f9ebaa` and reruns five sets: over-test
 
 | Set | n | Bar | Round 1 k | Round 2 k | Round 3 k | Latest result |
 |---|---|---|---|---|---|---|
-| over-tested (real superpowers-era diffs) | 10 | `test_value` major ≥ 7 | 0 (2 minor) | 1 (3 minor) | not rerun | **miss** (round 2) |
+| over-tested (real superpowers-era diffs) | 10 | `test_value` major ≥ 7 | 0 (2 minor) | 1 (3 minor) | not rerun | **miss** (round 2, with wording 2; not measured on the shipped template) |
 | lean, well-tested | 30 | no `test_value` major ≥ 28 | 30 | 30 | 30 | pass |
 | legitimate look-alikes | 30 | no `test_value` / `test_weakened` major ≥ 28 | 30 | 30 | 29 | pass |
-| gamed (near-identical subtests; padded ledgers) | 10 | `test_value` major ≥ 7 | 3 | 5 (subtests 5/5, ledgers 0/5 with 2 minor) | not rerun | **miss** (round 2, with wording 2) |
+| gamed (near-identical subtests; padded ledgers) | 10 | `test_value` major ≥ 7 | 3 | 5 (subtests 5/5, ledgers 0/5 with 2 minor) | not rerun | **miss** (round 2, with wording 2; not measured on the shipped template) |
 | under-tested (AC with no test; vacuous test) | 10 | `test_adequacy` major ≥ 8 | 7 | 10 | 10 | pass |
-| loosened assertions | 10 | `test_weakened` ≥ 7 | 9 (all major) | not rerun | not rerun | pass (round 1) |
+| loosened assertions | 10 | `test_weakened` ≥ 7 | 9 (all major) | not rerun | not rerun | pass (round 1, before wordings 3–6; not re-measured) |
 | lean `test_adequacy` vs 0.30.1, pre + post | 30 | ≥ 50% fewer | 4 vs 6 (−33%) | 8 vs 6 (+33%) | 5 vs 6 (−17%) | **miss** |
 
 ### `test_adequacy` majors on legitimate diffs, pre + post
