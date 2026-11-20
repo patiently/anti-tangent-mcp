@@ -417,4 +417,12 @@ func TestSummaryBlockContractModeLineDoesNotDisturbMarkers(t *testing.T) {
 	lite := formatEnvelopeSummary(Envelope{Tool: "validate_completion", SessionID: "s", Verdict: "pass", Lightweight: true, NextAction: "x", ModelUsed: "m"})
 	require.Equal(t, plain, strings.Replace(lite, "  mode:          lightweight\n", "", 1),
 		"the mode line is the only difference the flag makes")
+
+	n := 3
+	tested := formatEnvelopeSummary(Envelope{Tool: "validate_completion", SessionID: "s", Verdict: "pass", NextAction: "x", ModelUsed: "m",
+		Tests: &TestTally{Added: &n, ACs: 2}})
+	require.Equal(t, plain, strings.Replace(tested, "  tests:         +3 for 2 ACs (declined 0)\n", "", 1),
+		"the tests line is the only difference a tally makes")
+	require.Regexp(t, `(?s)review_ms:\s+0\n\s+tests:\s+\+3 for 2 ACs \(declined 0\)\n\s+findings:`, tested)
+	require.True(t, regexp.MustCompile(`(?m)^\s*verdict:\s*(\w+)`).MatchString(tested), tested)
 }

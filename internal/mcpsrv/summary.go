@@ -56,6 +56,9 @@ func formatEnvelopeSummary(env Envelope) string {
 	}
 	fmt.Fprintf(&b, "  model_used:    %s\n", escapeBlockValue(env.ModelUsed))
 	fmt.Fprintf(&b, "  review_ms:     %d\n", env.ReviewMS)
+	if env.Tests != nil {
+		fmt.Fprintf(&b, "  tests:         %s\n", escapeBlockValue(env.Tests.line()))
+	}
 	if env.SessionTTLRemainingSeconds != nil {
 		fmt.Fprintf(&b, "  session_ttl_remaining_seconds: %d\n", *env.SessionTTLRemainingSeconds)
 	}

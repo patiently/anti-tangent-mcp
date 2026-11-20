@@ -74,6 +74,9 @@ type Envelope struct {
 	// review on any host. formatEnvelopeSummary prints it as a
 	// `mode: lightweight` header line.
 	Lightweight bool `json:"lightweight,omitempty"`
+	// Tests is the test count a validate_completion diff adds against the
+	// task's acceptance criteria. Only validate_completion sets it.
+	Tests *TestTally `json:"tests,omitempty"`
 	// ImplementationGuidance is what the implementer applies while working:
 	// the lean build ruleset (lean.tmpl, which mid.tmpl and post.tmpl also
 	// include as the reviewer's definition of over-building) followed by the
@@ -1246,6 +1249,8 @@ type ValidateCompletionArgs struct {
 	Rung                  string                `json:"rung,omitempty" jsonschema:"Lightweight calls only: the task's fix-ladder rung, as for validate_task_spec. Ignored when session_id is set."`
 	PlanKind              string                `json:"plan_kind,omitempty" jsonschema:"Lightweight calls only: agent-network or empty, as for validate_task_spec. Ignored when session_id is set."`
 	BoundaryRules         []string              `json:"boundary_rules,omitempty" jsonschema:"Lightweight calls only: boundary rules, as for validate_task_spec. With boundary rules, a call that sends final_files and no diff is rejected with diff_required. Ignored when session_id is set. At most 20 entries of at most 1000 characters each."`
+	TestLedger            []TestLedgerEntryArg  `json:"test_ledger,omitempty" jsonschema:"One entry per test you added beyond the first for an acceptance criterion: the test, what it protects that the others cannot, and optionally how you saw it fail. At most 40 entries, each value at most 300 characters, 16 KB in total with tests_declined. Caller-attested and not verified."`
+	TestsDeclined         []TestDeclinedArg     `json:"tests_declined,omitempty" jsonschema:"Tests you considered and did not write, with why. At most 40 entries, same bounds as test_ledger."`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
@@ -1986,6 +1991,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if err != nil {
 		return nil, Envelope{}, err
 	}
+	if err := validateTestLedger(args.TestLedger, args.TestsDeclined); err != nil {
+		return nil, Envelope{}, err
+	}
 
 	// 6. evidence-shape guard. Runs BEFORE session lookup so a broken payload
 	// rejects fast regardless of session state. Cache hit → return the same
@@ -2137,6 +2145,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// the block the session keeps as this call's prior findings.
 	var head []verdict.Finding
 	head = append(head, testEvidenceFindings(args.TestEvidence)...)
+	tally := testTally(args.FinalDiff, len(spec.AcceptanceCriteria), len(args.TestLedger), len(args.TestsDeclined))
+	head = append(head, ledgerAbsentFindings(tally)...)
 	// An evidenced skip's finding asks for nothing, so a session returns it
 	// once. A lightweight call has no session to remember it in and returns it
 	// every time.
@@ -2192,6 +2202,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		WaivedFindings:    waived,
 		ControllerRulings: appliedRulings(review.rulings),
 		Lightweight:       lightweight,
+		Tests:             &tally,
 	}
 	env.Findings = append(env.Findings, review.advisories...)
 	env.Findings = append(env.Findings, repoRootAdvisories...)

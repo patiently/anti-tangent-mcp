@@ -178,6 +178,8 @@ func TestToolInputSchemas_RequiredSetsUnchanged(t *testing.T) {
 		"validate_completion.controller_rulings[]":                       {"finding_id", "ruling"},
 		"validate_completion.final_files[]":                              {"path"},
 		"validate_completion.finding_responses[]":                        {"finding_id", "response"},
+		"validate_completion.test_ledger[]":                              {"protects", "test"},
+		"validate_completion.tests_declined[]":                           {"reason", "test"},
 		"validate_plan.controller_rulings[]":                             {"finding_id", "ruling"},
 		"validate_task_spec":                                             {"goal", "task_title"},
 		"validate_task_spec.harness_shape_attestation[]":                 {"assertions", "harness", "path"},
