@@ -27,7 +27,8 @@ held up.
 
 **A run without a plan.** For a task run from a spec with no `validate_plan`, pass `session_id` (the
 implementer's `validate_task_spec` session) instead of `plan_run_id`; the session need not still be
-live. `task_index` is `1` (0 is read as 1). Use `source: "finishup"` for an automated
+live. `session_id` is only for a task run without `validate_plan`: a session that belongs to a plan
+run is rejected (`recorded: false`), so file that run's outcome by its `plan_run_id`. `task_index` is `1` (0 is read as 1). Use `source: "finishup"` for an automated
 fix-to-convergence run, `review_now` for a human-adjudicated review. The PR-body line is
 `anti-tangent-session: <session_id>`.
 

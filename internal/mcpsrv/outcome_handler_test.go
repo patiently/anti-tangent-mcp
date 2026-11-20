@@ -279,17 +279,29 @@ func TestRecordReviewOutcome_ReviewNowDoesNotListMissingModels(t *testing.T) {
 	waitForScorecard(t, dir)
 }
 
-func TestRecordReviewOutcome_SessionRuns(t *testing.T) {
+// owningRun is the plan run a test session is created in: runID when the case
+// puts the session in a plan run, else none.
+func owningRun(inPlanRun bool, runID string) string {
+	if inPlanRun {
+		return runID
+	}
+	return ""
+}
+
+type sessionOutcomeCase struct {
+	name       string
+	evict      bool
+	inPlanRun  bool
+	args       func(sessionID, planRunID string) RecordReviewOutcomeArgs
+	wantReason []string
+	wantIndex  int
+}
+
+func sessionOutcomeCases() []sessionOutcomeCase {
 	finding := func(idx int) []OutcomeFindingArg {
 		return []OutcomeFindingArg{{TaskIndex: idx, Severity: "major", Category: "correctness"}}
 	}
-	cases := []struct {
-		name       string
-		evict      bool
-		args       func(sessionID, planRunID string) RecordReviewOutcomeArgs
-		wantReason []string
-		wantIndex  int
-	}{
+	return []sessionOutcomeCase{
 		{name: "live session, index 0 stored as 1", wantIndex: 1,
 			args: func(s, _ string) RecordReviewOutcomeArgs {
 				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Findings: finding(0)}
@@ -324,16 +336,23 @@ func TestRecordReviewOutcome_SessionRuns(t *testing.T) {
 			}},
 		{name: "neither id rejected", wantReason: []string{"plan_run_id", "session_id"},
 			args: func(string, string) RecordReviewOutcomeArgs { return RecordReviewOutcomeArgs{Source: "final_review"} }},
+		{name: "session of a plan run rejected", inPlanRun: true, wantReason: []string{"plan run", "plan_run_id"},
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Findings: finding(1)}
+			}},
 		{name: "finishup source accepted", wantIndex: 1,
 			args: func(s, _ string) RecordReviewOutcomeArgs {
 				return RecordReviewOutcomeArgs{SessionID: s, Source: "finishup", Findings: finding(1)}
 			}},
 	}
-	for _, tc := range cases {
+}
+
+func TestRecordReviewOutcome_SessionRuns(t *testing.T) {
+	for _, tc := range sessionOutcomeCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			h, rec, dir := outcomeHandlers(t)
-			sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
 			run := h.deps.PlanRuns.Create("pass", "rigorous", 2)
+			sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, owningRun(tc.inPlanRun, run.ID))
 			if tc.evict {
 				h.deps.Sessions.EvictExpired(time.Now().Add(24 * time.Hour))
 			}

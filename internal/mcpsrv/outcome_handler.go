@@ -66,6 +66,8 @@ func recordReviewOutcomeTool() *mcp.Tool {
 		Name: "record_review_outcome",
 		Description: "Record what an independent review of a finished plan run found, per task, so anti-tangent's own verdicts can be scored against it. " +
 			"Call once after the final whole-plan review (source final_review), and again after a human-adjudicated PR review (source review_now); a later call for the same run and source replaces the earlier one. " +
+			"For a single task run without validate_plan, pass session_id (the validate_task_spec session) in place of plan_run_id; a session that belongs to a plan run is rejected. " +
+			"Source finishup records the findings a fix-to-convergence review pass resolved. " +
 			"Send categories and severities only, never finding text. Deterministic and free: no reviewer model is called. Returns the tasks anti-tangent passed that the review found a critical or major problem in.",
 	}
 }
@@ -96,7 +98,7 @@ func (h *handlers) recordReviewOutcome(args RecordReviewOutcomeArgs) RecordRevie
 	if sessionID != "" {
 		args = sessionOutcomeArgs(args)
 	}
-	if reason := validateOutcomeArgs(runID, sessionID, args); reason != "" {
+	if reason := h.outcomeArgsReason(args); reason != "" {
 		res.Reason = reason
 		return res
 	}
@@ -154,6 +156,25 @@ func zeroToOne(i int) int {
 		return 1
 	}
 	return i
+}
+
+// outcomeArgsReason is why the call cannot be recorded, or "" when it can. A
+// session_id whose live session belongs to a plan run is refused: that run's
+// lines are written under the plan run's hash, so an outcome keyed by the
+// session would land under a hash no run uses. An evicted session cannot be
+// checked and is let through.
+func (h *handlers) outcomeArgsReason(args RecordReviewOutcomeArgs) string {
+	sessionID := strings.TrimSpace(args.SessionID)
+	if reason := validateOutcomeArgs(strings.TrimSpace(args.PlanRunID), sessionID, args); reason != "" {
+		return reason
+	}
+	if sessionID == "" {
+		return ""
+	}
+	if sess, ok := h.deps.Sessions.Get(sessionID); ok && sess.PlanRunID != "" {
+		return "session_id belongs to a plan run: pass that run's plan_run_id instead; session_id is only for a task run without validate_plan"
+	}
+	return ""
 }
 
 func (h *handlers) outcomeRunLive(runID, sessionID string) bool {
