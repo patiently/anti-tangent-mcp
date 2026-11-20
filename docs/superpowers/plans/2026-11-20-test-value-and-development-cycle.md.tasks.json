@@ -1,0 +1,275 @@
+{
+  "planPath": "docs/superpowers/plans/2026-11-20-test-value-and-development-cycle.md",
+  "tasks": [
+    {
+      "id": 2,
+      "planTask": 0,
+      "subject": "Task 0: Version branch and changelog block",
+      "status": "pending",
+      "blockedBy": [],
+      "metadata": {
+        "files": [
+          "CHANGELOG.md"
+        ],
+        "verifyCommand": "git branch --show-current && grep -n '^## \\[0.31.0\\]' CHANGELOG.md && cat VERSION",
+        "acceptanceCriteria": [
+          "branch is version/0.31.0 and contains the spec commits",
+          "CHANGELOG has the 0.31.0 block above 0.30.1",
+          "VERSION unchanged at 0.30.1"
+        ],
+        "modelTier": "mechanical"
+      }
+    },
+    {
+      "id": 3,
+      "planTask": 1,
+      "subject": "Task 1: Guidance templates, rules mirrors and implementer guidance",
+      "status": "pending",
+      "blockedBy": [
+        2
+      ],
+      "metadata": {
+        "files": [
+          "internal/prompts/templates/test_value.tmpl",
+          "internal/prompts/templates/debugging.tmpl",
+          "internal/prompts/templates/practice.tmpl",
+          "plugin/anti-tangent-protocol/rules/test-value.md",
+          "plugin/anti-tangent-protocol/rules/debugging.md",
+          "internal/prompts/prompts.go",
+          "internal/prompts/prompts_test.go",
+          "internal/mcpsrv/handlers.go",
+          "internal/mcpsrv/handlers_test.go",
+          "CHANGELOG.md"
+        ],
+        "verifyCommand": "go test -race ./internal/prompts/... ./internal/mcpsrv/... -run 'Guidance|RulesMirror' -v",
+        "acceptanceCriteria": [
+          "templates match spec 3.1/7.1/7.2 verbatim",
+          "ImplementationGuidance = lean + practice and is what validate_task_spec returns, not in the summary block",
+          "mirror identity test seen to fail on a one-byte edit",
+          "CHANGELOG Added entries"
+        ],
+        "modelTier": "standard"
+      }
+    },
+    {
+      "id": 4,
+      "planTask": 2,
+      "subject": "Task 2: Test ledger arguments, test counting and the `tests:` summary line",
+      "status": "pending",
+      "blockedBy": [
+        3
+      ],
+      "metadata": {
+        "files": [
+          "internal/mcpsrv/test_ledger.go",
+          "internal/mcpsrv/test_ledger_test.go",
+          "internal/mcpsrv/handlers.go",
+          "internal/mcpsrv/summary.go",
+          "internal/mcpsrv/summary_contract_test.go",
+          "plugin/anti-tangent-guard/evals/guard-evals.json",
+          "CHANGELOG.md"
+        ],
+        "verifyCommand": "go test -race ./internal/mcpsrv/... -run 'TestCountAddedTests|TestLedger|TestSummaryBlock' -v && bash plugin/anti-tangent-guard/evals/run.sh",
+        "acceptanceCriteria": [
+          "countAddedTests counts per-language declarations, excludes TestMain and table rows, unknown language -> unknown",
+          "ledger bounds enforced with field-named errors",
+          "test_ledger_absent minor only above AC count without ledger",
+          "tests: line in summary block, n/a when not comparable, guard parser unaffected",
+          "CHANGELOG entry"
+        ],
+        "modelTier": "standard"
+      }
+    },
+    {
+      "id": 5,
+      "planTask": 3,
+      "subject": "Task 3: Reviewer templates \u2014 test value, `test_adequacy` recalibration, `test_weakened`",
+      "status": "pending",
+      "blockedBy": [
+        4
+      ],
+      "metadata": {
+        "files": [
+          "internal/prompts/templates/post.tmpl",
+          "internal/prompts/templates/lean.tmpl",
+          "internal/prompts/templates/pre.tmpl",
+          "internal/prompts/templates/plan_rules.tmpl",
+          "internal/prompts/prompts.go",
+          "internal/prompts/prompts_test.go",
+          "internal/prompts/testdata",
+          "internal/mcpsrv/handlers.go",
+          "internal/stats/event.go",
+          "internal/verdict/finalize_test.go",
+          "CHANGELOG.md"
+        ],
+        "verifyCommand": "go test -race ./internal/prompts/... ./internal/verdict/... ./internal/stats/... ./internal/mcpsrv/...",
+        "acceptanceCriteria": [
+          "post.tmpl Test value section per spec 4.2 with one aggregated finding",
+          "Test adequacy keeps four cases, no catch-all; line 174 lists test_value/test_weakened",
+          "Weakened tests section per spec 4.3",
+          "ledger rendered fenced as data",
+          "pre/plan paragraph; lean closing line scoped",
+          "countedCriteria extended",
+          "major test_value alone -> warn",
+          "CHANGELOG entries"
+        ],
+        "modelTier": "standard"
+      }
+    },
+    {
+      "id": 6,
+      "planTask": 4,
+      "subject": "Task 4: Implementer model, test counts and criteria on rows, snapshots and events",
+      "status": "pending",
+      "blockedBy": [
+        5
+      ],
+      "metadata": {
+        "files": [
+          "internal/mcpsrv/handlers.go",
+          "internal/session/session.go",
+          "internal/session/store.go",
+          "internal/planrun/planrun.go",
+          "internal/mcpsrv/plan_run_rows.go",
+          "internal/mcpsrv/run_snapshots.go",
+          "scorecard/records.go",
+          "internal/stats/event.go",
+          "CHANGELOG.md"
+        ],
+        "verifyCommand": "go test -race ./internal/... ./scorecard/...",
+        "acceptanceCriteria": [
+          "implementer_model validated and stored raw",
+          "TaskRow/TaskSnapshot carry model, test counts, criteria",
+          "stats.Event carries model and test counts",
+          "no ledger text in runs.jsonl or events.jsonl",
+          "CHANGELOG entry"
+        ],
+        "modelTier": "standard"
+      }
+    },
+    {
+      "id": 7,
+      "planTask": 5,
+      "subject": "Task 5: Standalone sessions write one-task runs; cohorts separate kinds",
+      "status": "pending",
+      "blockedBy": [
+        6
+      ],
+      "metadata": {
+        "files": [
+          "internal/session/session.go",
+          "internal/session/store.go",
+          "internal/mcpsrv/plan_run_rows.go",
+          "internal/mcpsrv/run_snapshots.go",
+          "internal/stats/runs.go",
+          "scorecard/records.go",
+          "scorecard/assemble.go",
+          "scorecard/compute.go",
+          "scorecard/compute_test.go",
+          "CHANGELOG.md"
+        ],
+        "verifyCommand": "go test -race ./internal/mcpsrv/... ./scorecard/... ./internal/stats/... && (cd gnome-topbar/daemon && go build ./...)",
+        "acceptanceCriteria": [
+          "session run writes one kind=session header with task_count 1 and index-1 task lines under the session run hash",
+          "no lines for a session without completion",
+          "NormalizeImplementerModel merges provider-prefixed and bracket-suffixed ids",
+          "CohortKey.Kind; implementer model falls back to snapshot; no cross-kind baseline",
+          "CHANGELOG entry"
+        ],
+        "modelTier": "standard"
+      }
+    },
+    {
+      "id": 8,
+      "planTask": 6,
+      "subject": "Task 6: Session-keyed outcomes and `source: finishup`",
+      "status": "pending",
+      "blockedBy": [
+        7
+      ],
+      "metadata": {
+        "files": [
+          "internal/mcpsrv/outcome_handler.go",
+          "internal/mcpsrv/summary.go",
+          "scorecard/records.go",
+          "docs/protocol/outcome.md",
+          "plugin/anti-tangent-protocol/protocol/outcome.md",
+          "CHANGELOG.md"
+        ],
+        "verifyCommand": "go test -race ./internal/mcpsrv/... ./scorecard/... -run 'Outcome' -v && diff -r docs/protocol plugin/anti-tangent-protocol/protocol && wc -c docs/protocol/outcome.md",
+        "acceptanceCriteria": [
+          "exactly one of plan_run_id/session_id",
+          "session outcome stored under session run hash, live or expired; index 0->1; >1 rejected",
+          "finishup source accepted and listed",
+          "outcome.md documents it, bundle in sync, under cap",
+          "CHANGELOG entry"
+        ],
+        "modelTier": "standard"
+      }
+    },
+    {
+      "id": 9,
+      "planTask": 7,
+      "subject": "Task 7: `cycle.md`, routing, and the `investigate` skill",
+      "status": "pending",
+      "blockedBy": [
+        8
+      ],
+      "metadata": {
+        "files": [
+          "docs/protocol/cycle.md",
+          "plugin/anti-tangent-protocol/skills/investigate/SKILL.md",
+          "INTEGRATION.md",
+          "scripts/check-protocol-docs.sh",
+          "plugin/anti-tangent-protocol/skills/anti-tangent-protocol/SKILL.md",
+          "plugin/anti-tangent-protocol/README.md",
+          "plugin/anti-tangent-protocol/.claude-plugin/plugin.json",
+          ".claude-plugin/marketplace.json",
+          "plugin/anti-tangent-guard/README.md",
+          "plugin/anti-tangent-protocol/protocol",
+          "CHANGELOG.md"
+        ],
+        "verifyCommand": "bash scripts/check-protocol-docs.sh && wc -c docs/protocol/*.md INTEGRATION.md && diff -r docs/protocol plugin/anti-tangent-protocol/protocol",
+        "acceptanceCriteria": [
+          "cycle.md has 7 and 7.1-7.5 per spec 8.1-8.5, no model names, under cap",
+          "section check tracks 7.x and was seen to fail",
+          "INTEGRATION routes to cycle.md, seven parts, under 2000 bytes",
+          "skill router points controllers at cycle.md",
+          "investigate SKILL.md per spec 8.5",
+          "plugin 0.6.0 in plugin.json and marketplace.json; guard README stop note",
+          "bundle in sync",
+          "CHANGELOG entries"
+        ],
+        "modelTier": "standard"
+      }
+    },
+    {
+      "id": 10,
+      "planTask": 8,
+      "subject": "Task 8: Paid replay of the reviewer lens and template tuning",
+      "status": "pending",
+      "blockedBy": [
+        9
+      ],
+      "metadata": {
+        "files": [
+          "docs/superpowers/plans/2026-11-20-test-value-and-development-cycle-replay.md",
+          "internal/prompts/templates/post.tmpl",
+          "internal/prompts/templates/pre.tmpl",
+          "internal/prompts/templates/plan_rules.tmpl",
+          "internal/prompts/testdata"
+        ],
+        "verifyCommand": "cat docs/superpowers/plans/2026-11-20-test-value-and-development-cycle-replay.md && go test -race ./...",
+        "acceptanceCriteria": [
+          "Patrick approved the launch before any paid call",
+          "fixtures for all seven sets at spec n, real diffs for over-tested and gamed sets",
+          "every spec 10 bar met on gpt-5.6-terra judged from finding text",
+          "results record with k/n, model, commit, template changes"
+        ],
+        "modelTier": "frontier",
+        "tierReason": "Judging 130 reviewer responses for false-major rates decides whether a lens that blocks DONE wrongly reaches every user's tasks; telling a correct consolidate: from a wrong one on real diffs is judgement the cheaper tier is measurably weaker at."
+      }
+    }
+  ],
+  "lastUpdated": "2026-11-20T00:00:00Z"
+}
