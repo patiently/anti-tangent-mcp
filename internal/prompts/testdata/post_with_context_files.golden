@@ -149,7 +149,7 @@ Existing tests are out of scope: do not delete or rewrite tests the task did
 not ask you to touch.
 
 
-Judge ONLY tests this change adds, and ONLY when a diff is present; with `final_files` and no diff emit no test-value finding. Line numbers come from the diff's hunk headers, never invented. Do this before writing any `test_adequacy` finding: group the tests this change adds by the criterion they run, and compare each group's count with the failure and boundary cases that criterion names. A group larger than that is a `consolidate:` instance even when another test finding applies to the same tests. Tag each instance:
+Judge ONLY tests this change adds, and ONLY when a diff is present; with `final_files` and no diff emit no test-value finding. Line numbers come from the diff's hunk headers, never invented. Tag each instance:
 
 - `absence:` asserts that a removed framework, symbol, file or dependency stays gone. Not an instance: a behavioural negative an acceptance criterion names ("rejects a request without a token", "never logs the secret"), or a licence or security ban. Heavy.
 - `source-grep:` reads the source code under test as text instead of running it. Not an instance: a check on a golden file, generated artefact, schema, notice or shipped config. Heavy.
