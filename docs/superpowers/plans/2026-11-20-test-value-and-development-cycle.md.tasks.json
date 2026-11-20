@@ -5,7 +5,7 @@
       "id": 2,
       "planTask": 0,
       "subject": "Task 0: Version branch and changelog block",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [],
       "metadata": {
         "files": [
@@ -24,7 +24,7 @@
       "id": 3,
       "planTask": 1,
       "subject": "Task 1: Guidance templates, rules mirrors and implementer guidance",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         2
       ],
@@ -55,7 +55,7 @@
       "id": 4,
       "planTask": 2,
       "subject": "Task 2: Test ledger arguments, test counting and the `tests:` summary line",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         3
       ],
@@ -83,8 +83,8 @@
     {
       "id": 5,
       "planTask": 3,
-      "subject": "Task 3: Reviewer templates \u2014 test value, `test_adequacy` recalibration, `test_weakened`",
-      "status": "pending",
+      "subject": "Task 3: Reviewer templates — test value, `test_adequacy` recalibration, `test_weakened`",
+      "status": "completed",
       "blockedBy": [
         4
       ],
@@ -120,7 +120,7 @@
       "id": 6,
       "planTask": 4,
       "subject": "Task 4: Implementer model, test counts and criteria on rows, snapshots and events",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         5
       ],
@@ -151,7 +151,7 @@
       "id": 7,
       "planTask": 5,
       "subject": "Task 5: Standalone sessions write one-task runs; cohorts separate kinds",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         6
       ],
@@ -183,7 +183,7 @@
       "id": 8,
       "planTask": 6,
       "subject": "Task 6: Session-keyed outcomes and `source: finishup`",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         7
       ],
@@ -211,7 +211,7 @@
       "id": 9,
       "planTask": 7,
       "subject": "Task 7: `cycle.md`, routing, and the `investigate` skill",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         8
       ],
@@ -247,7 +247,7 @@
       "id": 10,
       "planTask": 8,
       "subject": "Task 8: Paid replay of the reviewer lens and template tuning",
-      "status": "pending",
+      "status": "completed",
       "blockedBy": [
         9
       ],
@@ -271,5 +271,5 @@
       }
     }
   ],
-  "lastUpdated": "2026-11-20T00:00:00Z"
+  "lastUpdated": "2026-11-20T11:28:28Z"
 }
