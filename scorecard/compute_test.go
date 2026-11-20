@@ -282,3 +282,71 @@ func TestCohortsKeyOnRunKindAndNormalisedImplementerModel(t *testing.T) {
 		})
 	}
 }
+
+// kindSplitFixture is one plan run and one later session run per publisher,
+// all reviewed by the same model, each with a final review outcome.
+func kindSplitFixture() ([]RunLine, []OutcomeLine) {
+	later := t0.Add(48 * time.Hour)
+	var lines []RunLine
+	var outs []OutcomeLine
+	for _, pub := range []string{"alice", "bob"} {
+		for _, r := range []struct {
+			hash, kind string
+			ts         time.Time
+		}{{pub + "-plan", KindPlan, t0}, {pub + "-sess", KindSession, later}} {
+			task := taskLine(r.hash, r.ts, 1, "pass", completion("m", "pass"))
+			task.Publisher = pub
+			o := outcome(r.hash, SourceFinalReview, r.ts.Add(time.Hour))
+			o.Publisher = pub
+			lines = append(lines, RunLine{Ts: r.ts, RunHash: r.hash, ServerVersion: "0.26.0", Header: true, Kind: r.kind, Publisher: pub}, task)
+			outs = append(outs, o)
+		}
+	}
+	return lines, outs
+}
+
+// assertKindSplit checks that gs's final-review groups are want groups across
+// both kinds and that no session group took a baseline.
+func assertKindSplit(t *testing.T, name string, gs []Group, want int) {
+	t.Helper()
+	var kinds []string
+	for _, g := range gs {
+		if g.Source != SourceFinalReview {
+			continue
+		}
+		kinds = append(kinds, g.Key.Kind)
+		if g.Key.Kind == KindSession && g.Regression != RegressionNoBaseline {
+			t.Errorf("%s: session group regression = %q against %+v, want %q", name, g.Regression, g.Baseline, RegressionNoBaseline)
+		}
+	}
+	sort.Strings(kinds)
+	wantKinds := slices.Repeat([]string{KindPlan}, want/2)
+	wantKinds = append(wantKinds, slices.Repeat([]string{KindSession}, want/2)...)
+	if !slices.Equal(kinds, wantKinds) {
+		t.Errorf("%s: kinds = %v, want %v", name, kinds, wantKinds)
+	}
+}
+
+// TestViewsKeyOnRunKind covers the review-model, tool-model and publisher
+// views: with one plan run and one later session run reviewed by the same
+// model, each view keeps the kinds apart, and the session group finds no plan
+// group to take as its baseline.
+func TestViewsKeyOnRunKind(t *testing.T) {
+	lines, outs := kindSplitFixture()
+	sc := Compute(lines, outs, Options{})
+	if sc.ByPublisher == nil {
+		t.Fatal("no per-publisher views for two publishers")
+	}
+	assertKindSplit(t, "by_review_model", sc.ByReviewModel, 2)
+	assertKindSplit(t, "by_publisher.by_review_model", sc.ByPublisher.ByReviewModel, 4)
+
+	var kinds []string
+	for _, row := range sc.ByToolModel {
+		if row.Tool == "validate_completion" {
+			kinds = append(kinds, row.Kind)
+		}
+	}
+	if !slices.Equal(kinds, []string{KindPlan, KindSession}) {
+		t.Errorf("by_tool_model validate_completion kinds = %v, want [plan session]", kinds)
+	}
+}
