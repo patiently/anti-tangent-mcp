@@ -64,7 +64,7 @@ Each package has one responsibility. `cmd/` only wires; logic lives in `internal
 
 ## Editing the protocol
 
-The protocol lives in `docs/protocol/` as five role-scoped parts; `INTEGRATION.md` is a router
+The protocol lives in `docs/protocol/` as seven role-scoped parts; `INTEGRATION.md` is a router
 over them, and the parts are bundled into the `anti-tangent-protocol` plugin so Claude Code can
 load only what a given role needs. Three invariants are CI-enforced:
 

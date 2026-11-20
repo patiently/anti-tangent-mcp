@@ -136,14 +136,14 @@ reports — redact to `***` whenever a step would otherwise print one.
          }
        }
 6. Download the protocol for the installed version — the router plus all
-   five role-scoped parts — into a single local directory. An agent reads
+   seven role-scoped parts — into a single local directory. An agent reads
    the router, then only the part its role needs. All of it is loaded ON
    DEMAND — none of it is added to `instructions`:
        mkdir -p ~/.config/opencode/anti-tangent-protocol
        BASE=https://raw.githubusercontent.com/patiently/anti-tangent-mcp/v${VERSION}
        curl -fsSL $BASE/INTEGRATION.md \
          -o ~/.config/opencode/anti-tangent-protocol/anti-tangent.md
-       for p in core authoring implementer controller project-knowledge; do
+       for p in core authoring implementer controller outcome cycle project-knowledge; do
          curl -fsSL $BASE/docs/protocol/$p.md \
            -o ~/.config/opencode/anti-tangent-protocol/$p.md
        done
@@ -565,7 +565,7 @@ The middle three (`validate_task_spec`, `check_progress`, `validate_completion`)
 
 `session_expires_at` and `session_ttl_remaining_seconds` are included in stateful-hook responses (v0.2.0+). If a stateful hook returns a `category: other` finding with `criterion: reviewer_response`, the reviewer response was cut off at the token budget — raise `ANTI_TANGENT_PER_TASK_MAX_TOKENS` and retry.
 
-`implementation_guidance` (v0.23.0+) is set only by `validate_task_spec`: the lean build ruleset the implementer applies, the same text `check_progress` holds the changed files to and `validate_completion` holds the diff to as `quality` / `over_building` (always `minor`). From 0.27.0 an `over_building` finding raised on two consecutive `validate_completion` calls, with no `finding_responses` answer and no controller ruling, gains a `major` `unaddressed_finding` companion (`criterion: over_building`): cut the structure, or answer the finding with the reason it stays. Structure an acceptance criterion itself mandated is reported separately as `quality` / `over_building_mandated`, addressed to the plan author, and never draws the companion. The example above shows every field at once; `implementation_guidance` appears only on `validate_task_spec` responses and `lightweight` only on empty-session `validate_completion` responses. `lightweight: true` (v0.23.0+) is set by a `validate_completion` that ran with an empty `session_id`; its `summary_block` carries a `mode: lightweight` line, so a controller can tell a call that had no acceptance criteria — reviewed or rejected before review — from a session-backed one.
+`implementation_guidance` (v0.23.0+) is set only by `validate_task_spec`: the lean build ruleset the implementer applies, followed by the working practice (test-first, test value, debugging). `check_progress` holds the changed files to the lean ruleset, and `validate_completion` holds the diff to it as `quality` / `over_building` (always `minor`). From 0.27.0 an `over_building` finding raised on two consecutive `validate_completion` calls, with no `finding_responses` answer and no controller ruling, gains a `major` `unaddressed_finding` companion (`criterion: over_building`): cut the structure, or answer the finding with the reason it stays. Structure an acceptance criterion itself mandated is reported separately as `quality` / `over_building_mandated`, addressed to the plan author, and never draws the companion. The example above shows every field at once; `implementation_guidance` appears only on `validate_task_spec` responses and `lightweight` only on empty-session `validate_completion` responses. `lightweight: true` (v0.23.0+) is set by a `validate_completion` that ran with an empty `session_id`; its `summary_block` carries a `mode: lightweight` line, so a controller can tell a call that had no acceptance criteria — reviewed or rejected before review — from a session-backed one.
 
 `validate_completion` (v0.2.0+) accepts `final_diff` as an alternative or supplement to `final_files`. Pass a unified diff when the changed files are too large to inline. At least one of `final_files`, `final_diff`, or `test_evidence` must be non-empty — summary-only requests are rejected. Timeout errors (default 180s, configurable via `ANTI_TANGENT_REQUEST_TIMEOUT`) include the configured timeout value and the env-var name for self-diagnosis.
 
