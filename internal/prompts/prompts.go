@@ -377,6 +377,21 @@ func LeanGuidance() (string, error) {
 	return render("lean.tmpl", nil)
 }
 
+// ImplementationGuidance is what validate_task_spec hands an implementer: the
+// lean build ruleset, then the working practice, which includes the
+// test-value and debugging text post.tmpl judges against.
+func ImplementationGuidance() (string, error) {
+	lean, err := LeanGuidance()
+	if err != nil {
+		return "", err
+	}
+	practice, err := render("practice.tmpl", nil)
+	if err != nil {
+		return "", err
+	}
+	return lean + "\n" + practice, nil
+}
+
 // NewContextFilesNonce returns a fresh random hex token (crypto/rand-backed).
 // The production render path does NOT call this: RenderPlan,
 // RenderPlanFindingsOnly, and RenderPlanTasksChunk derive a DETERMINISTIC

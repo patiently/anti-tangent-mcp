@@ -2569,3 +2569,34 @@ func TestRenderPlanFindingsOnly_ShowsEarlierPlanFindingsInTheSuffixOnly(t *testi
 		"the limit on new findings must not forbid the findings later sections make mandatory")
 	assert.NotContains(t, out.UserSuffix, "the edit\nintroduced", "the reviewer is not shown what the edit changed")
 }
+
+func TestImplementationGuidance(t *testing.T) {
+	lean, err := LeanGuidance()
+	require.NoError(t, err)
+	got, err := ImplementationGuidance()
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(got, lean), "lean ruleset comes first")
+	for _, anchor := range []string{
+		"## Working practice (apply while implementing this task)",
+		"### Tests (apply before writing each one)",
+		"If two attempts leave the same command failing with the same symptom",
+	} {
+		assert.Contains(t, got, anchor)
+	}
+	golden(t, "implementation_guidance", got)
+}
+
+// The plugin's rules/ files are what review-now reads; they must be the exact
+// text the server hands implementers and the reviewer.
+func TestRulesMirrorTemplates(t *testing.T) {
+	for _, c := range []struct{ tmpl, mirror string }{
+		{"templates/test_value.tmpl", "../../plugin/anti-tangent-protocol/rules/test-value.md"},
+		{"templates/debugging.tmpl", "../../plugin/anti-tangent-protocol/rules/debugging.md"},
+	} {
+		want, err := templatesFS.ReadFile(c.tmpl)
+		require.NoError(t, err)
+		got, err := os.ReadFile(c.mirror)
+		require.NoError(t, err)
+		assert.Equal(t, string(want), string(got), "%s drifted from %s; recopy it", c.mirror, c.tmpl)
+	}
+}

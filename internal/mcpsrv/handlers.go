@@ -74,9 +74,10 @@ type Envelope struct {
 	// review on any host. formatEnvelopeSummary prints it as a
 	// `mode: lightweight` header line.
 	Lightweight bool `json:"lightweight,omitempty"`
-	// ImplementationGuidance is the build ruleset the implementer applies
-	// while working: lean.tmpl, which mid.tmpl and post.tmpl also include as
-	// the reviewer's definition of over-building. Only validate_task_spec sets
+	// ImplementationGuidance is what the implementer applies while working:
+	// the lean build ruleset (lean.tmpl, which mid.tmpl and post.tmpl also
+	// include as the reviewer's definition of over-building) followed by the
+	// working practice (practice.tmpl). Only validate_task_spec sets
 	// it, because only implementers call that tool; it is not part of the
 	// summary block, which is what gets pasted into DONE reports.
 	ImplementationGuidance string `json:"implementation_guidance,omitempty"`
@@ -236,9 +237,9 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		CodebaseReferenceChecklist: checklist,
 	}
 
-	guidance, err := prompts.LeanGuidance()
+	guidance, err := prompts.ImplementationGuidance()
 	if err != nil {
-		return nil, Envelope{}, fmt.Errorf("render lean guidance: %w", err)
+		return nil, Envelope{}, fmt.Errorf("render implementation guidance: %w", err)
 	}
 	env.ImplementationGuidance = guidance
 	env.NextAction = strings.TrimRight(env.NextAction, " \t\r\n") + " Read `implementation_guidance` before writing code."

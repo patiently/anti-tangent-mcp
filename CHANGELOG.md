@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `validate_task_spec`'s `implementation_guidance` adds working practice after the lean build ruleset: test first per acceptance criterion, the test-value rule (which tests to write and which not to), and debugging guidance (reproduce first, one change per attempt, never weaken a test to get green, stop and report after two failed attempts on the same failure).
+- `anti-tangent-protocol` ships the test-value and debugging rules as `rules/test-value.md` and `rules/debugging.md`, byte-identical to the text the server uses, for review tooling to read.
+
 ### Changed
 
 ## [0.30.1] - 2026-11-17

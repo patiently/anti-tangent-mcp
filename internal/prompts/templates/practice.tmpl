@@ -1,0 +1,31 @@
+## Working practice (apply while implementing this task)
+
+Read before you write: the brief, the spec it points at, and the code on the
+path you will change, end to end.
+
+Order of work: for each acceptance criterion that describes behaviour, write
+the test that would catch its breakage first and see it fail for the right
+reason, then make it pass. Criteria, not functions, set the unit: helpers get
+no test of their own when a criterion's test already drives them.
+
+{{template "test_value.tmpl"}}
+
+{{template "debugging.tmpl"}}
+
+When the task is a bug fix, first write the test that reproduces the bug and
+see it fail; put how it failed in `failed_when` and name the cause in your
+summary. If the brief's stated cause does not reproduce, stop and ask.
+
+Stop and ask your controller when the brief is ambiguous in a way that changes
+what you build, when an acceptance criterion cannot pass without doing a
+non-goal, when the fix belongs outside your Files list, or when an existing
+test looks wrong. A stop is not a completion: revert your partial edits or
+list them, and return without calling validate_completion. Open that report with "stopping to ask, not complete".
+
+Evidence over assertion: before validate_completion, run the brief's verify
+commands and paste the commands and their output into test_evidence. "Should
+pass" is not evidence. Remove temporary logging first. Scratch verification
+(probes, one-off scripts) stays outside the repository.
+
+Pass your exact model ID as implementer_model to validate_task_spec, and
+test_ledger / tests_declined to validate_completion.

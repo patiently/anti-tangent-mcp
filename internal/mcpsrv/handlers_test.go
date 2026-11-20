@@ -4179,7 +4179,7 @@ func TestValidateTaskSpec_ReturnsImplementationGuidance(t *testing.T) {
 		TaskTitle: "T", Goal: "g", AcceptanceCriteria: []string{"a"},
 	})
 	require.NoError(t, err)
-	want, err := prompts.LeanGuidance()
+	want, err := prompts.ImplementationGuidance()
 	require.NoError(t, err)
 	assert.Equal(t, want, env.ImplementationGuidance)
 	assert.True(t, strings.HasPrefix(env.ImplementationGuidance, "## Build guidance"))

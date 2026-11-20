@@ -1,0 +1,133 @@
+## Build guidance (apply while implementing this task)
+
+Build every acceptance criterion in its leanest working form. Lean means
+efficient, not careless: read the task and the code it touches first, trace
+the real flow end to end, then climb the ladder and stop at the first rung
+that holds.
+
+1. Already in this codebase? A helper, util, type or pattern that already
+   lives here → reuse it. Look before you write; re-implementing what sits a
+   few files over is the most common slop.
+2. Stdlib does it? Use it.
+3. Native platform feature covers it? `<input type="date">` over a picker
+   lib, CSS over JS, a DB constraint over app code.
+4. An already-installed dependency solves it? Use it. Never add a new one
+   for what a few lines can do.
+5. Can it be one line? One line.
+6. Only then: the minimum code that works.
+
+Rules:
+- No unrequested abstractions: no interface with one implementation, no
+  factory for one product, no config for a value that never changes.
+- No boilerplate, no scaffolding "for later"; later can scaffold for itself.
+- Deletion over addition. Boring over clever — clever is what someone
+  decodes at 3am.
+- Fewest files, shortest working diff — once you understand the problem.
+  The smallest change in the wrong place is not lean, it is a second bug.
+- Bug fix = root cause, not symptom. Grep every caller before you edit; one
+  guard in the shared function is a smaller diff than a guard in every caller.
+- Two stdlib options, same size? Take the one that is correct on edge cases.
+- A deliberate simplification with a known ceiling (global lock, O(n²) scan,
+  naive heuristic) gets a comment naming the ceiling and the upgrade path.
+
+Scope is set by the acceptance criteria, not by this guidance: never skip,
+narrow or defer an AC to be lean. Speculative work beyond the ACs is what
+to skip. If an AC itself mandates more structure than its goal needs, build
+it as written — scope is the controller's call. The completion review will
+still name it, and your summary_block carries that to the controller.
+Anything the task spec's Context: justifies is deliberate; build it.
+
+Never simplify away: input validation at trust boundaries, error handling
+that prevents data loss, security measures, accessibility basics, the tests
+the task calls for, or anything explicitly requested.
+
+The reviewer checks your changes against this ruleset at check_progress and
+validate_completion and reports departures as quality / over_building, minor.
+
+## Working practice (apply while implementing this task)
+
+Read before you write: the brief, the spec it points at, and the code on the
+path you will change, end to end.
+
+Order of work: for each acceptance criterion that describes behaviour, write
+the test that would catch its breakage first and see it fail for the right
+reason, then make it pass. Criteria, not functions, set the unit: helpers get
+no test of their own when a criterion's test already drives them.
+
+### Tests (apply before writing each one)
+
+A test earns its place by failing when behaviour someone depends on breaks.
+Before writing a test, name the acceptance criterion or caller-visible
+behaviour it protects. If you cannot, do not write it.
+
+Start from one test per acceptance criterion. Add another only for a failure
+or boundary case the criterion names, and write several inputs to one
+behaviour as one table-driven or parametrised test, not as separate tests.
+Test each criterion once, at the cheapest layer that observes it, not through
+each of its helpers. Each test beyond the first for a criterion
+gets a `test_ledger` entry saying what it protects that the others cannot;
+each test you considered and did not write goes in `tests_declined`.
+
+Write:
+- tests that run the behaviour an acceptance criterion describes, including
+  the failure and boundary cases it names — "rejects a request without a
+  token" or "never logs the secret" is behaviour, not an absence guard;
+- a regression test for the bug this task fixes, written first and seen to
+  fail (say how in `failed_when`);
+- a guard for a property that matters, after seeing it fail with the property
+  broken (say how in `failed_when`).
+
+Do not write:
+- absence guards: assertions that a removed framework, symbol, file or
+  dependency stays removed (git and review catch a return);
+- one test per function, or a test that restates the implementation;
+- a second test for behaviour another test already asserts;
+- tests that read the source code under test as text instead of running it
+  (checking a generated artefact, golden file, schema or config the product
+  ships is fine);
+- tests pinning incidental output no caller depends on (log wording, map
+  order), or asserting only a snapshot (a snapshot beside a real assertion is
+  fine).
+
+Existing tests are out of scope: do not delete or rewrite tests the task did
+not ask you to touch.
+
+
+When something fails: reproduce it and find the cause before you change
+anything. Check what changed first. When the failure crosses components, log
+what enters and leaves each boundary once to find where it breaks before you
+theorise. If the cause is not visible, probe; do not edit to see what happens.
+
+For an intermittent failure, repeating runs to measure it is reproduction, not
+a fix: record the rate. Check order dependence (run it alone, then bisect the
+tests before it) and waits on time instead of on a condition before blaming
+the code.
+
+Fix it where it originates. A fix attempt is a change made for a stated cause,
+followed by re-running the failing command; take out an attempt that did not
+help. Do not reach green by weakening, skipping or deleting a test,
+special-casing its inputs, or re-running until it passes.
+
+If two attempts leave the same command failing with the same symptom, stop
+and report: the failure, each cause you tested, what each run showed, and the
+state you left the tree in. A different failure is progress, not a third
+attempt.
+
+
+When the task is a bug fix, first write the test that reproduces the bug and
+see it fail; put how it failed in `failed_when` and name the cause in your
+summary. If the brief's stated cause does not reproduce, stop and ask.
+
+Stop and ask your controller when the brief is ambiguous in a way that changes
+what you build, when an acceptance criterion cannot pass without doing a
+non-goal, when the fix belongs outside your Files list, or when an existing
+test looks wrong. A stop is not a completion: revert your partial edits or
+list them, and return without calling validate_completion. Open that report with "stopping to ask, not complete".
+
+Evidence over assertion: before validate_completion, run the brief's verify
+commands and paste the commands and their output into test_evidence. "Should
+pass" is not evidence. Remove temporary logging first. Scratch verification
+(probes, one-off scripts) stays outside the repository.
+
+Pass your exact model ID as implementer_model to validate_task_spec, and
+test_ledger / tests_declined to validate_completion.
