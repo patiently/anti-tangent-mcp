@@ -363,3 +363,48 @@ func TestRunSnapshots_StandaloneSessionIsOneTaskRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, idleLines)
 }
+
+// TestRunSnapshots_SessionHeaderRetriedAfterFailedAppend covers a session whose
+// first header append fails: the next completion must write the header, so the
+// run is never left with task lines and no session header.
+func TestRunSnapshots_SessionHeaderRetriedAfterFailedAppend(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := stats.New(stats.Options{
+		Dir: dir, SummaryInterval: 24 * time.Hour, SummaryThreshold: 100000, RetentionDays: 30,
+		Logger: slog.Default(),
+	})
+	require.NoError(t, err)
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	require.NoError(t, err)
+	rv := &scriptedRunReviewer{name: "anthropic", resps: []providers.Response{passResp("claude-sonnet-4-6")}}
+	h := &handlers{deps: Deps{
+		Cfg:       cfg,
+		Sessions:  session.NewStore(cfg.SessionTTL),
+		Reviews:   providers.Registry{"anthropic": rv},
+		Stats:     rec,
+		planCache: newPlanPassCache(),
+		PlanRuns:  planrun.NewStore(cfg.SessionTTL),
+	}}
+	ctx := context.Background()
+	_, done, err := h.ValidateTaskSpec(ctx, nil, ValidateTaskSpecArgs{TaskTitle: "t", Goal: "g", AcceptanceCriteria: []string{"ac1"}})
+	require.NoError(t, err)
+
+	blocker := filepath.Join(dir, "runs.jsonl")
+	require.NoError(t, os.Mkdir(blocker, 0o755))
+	_, _, err = h.ValidateCompletion(ctx, nil, completionCallArgs(done.SessionID))
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(blocker))
+	_, _, err = h.ValidateCompletion(ctx, nil, completionCallArgs(done.SessionID))
+	require.NoError(t, err)
+
+	lines, err := rec.RunLines(rec.SessionRunHash(done.SessionID))
+	require.NoError(t, err)
+	require.NotEmpty(t, lines)
+	assert.True(t, lines[0].Header, "the first line written for the session must be its header")
+	assert.Equal(t, scorecard.KindSession, lines[0].Kind)
+}

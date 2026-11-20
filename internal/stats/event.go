@@ -3,7 +3,8 @@
 // Everything is opt-in via ANTI_TANGENT_STATS_DIR and best-effort: a stats
 // failure never affects a hook's result or latency.
 //
-// Import direction: stats imports internal/verdict and internal/providers only.
+// Import direction: stats imports internal/verdict, internal/providers and the
+// public scorecard package only.
 // internal/mcpsrv imports stats, never the reverse, so there is no import cycle.
 package stats
 
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
+	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
 // Event is one counts-only record appended per hook call. It deliberately holds
@@ -63,37 +65,6 @@ type Event struct {
 	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
-// countedCriteria bounds what the ledger records. Criterion is free-form
-// reviewer text — the pre-hook prompt instructs the reviewer to quote verbatim
-// acceptance-criterion text into it — so counting every distinct value would
-// give the histogram one key per acceptance criterion ever reviewed and write
-// specification text into the ledger, which otherwise holds no free text at all.
-// Only these server-recognised sentinels are counted; everything else is dropped.
-// Keys are lower-case, and lookups normalise the reviewer's text to match:
-// Criterion is free text on the wire, so a reviewer writing "Comment_Hygiene"
-// or " comment_hygiene" means the same sentinel and must land in the same
-// bucket rather than vanishing from the metric.
-var countedCriteria = map[string]bool{
-	"comment_hygiene":              true,
-	"over_building":                true,
-	"test_value":                   true,
-	"test_value_mandated":          true,
-	"test_ledger_absent":           true,
-	"test_weakened":                true,
-	"over_building_mandated":       true,
-	"comment_policy_absent":        true,
-	"test_evidence":                true,
-	"codescene_adoption":           true,
-	"noise_cluster":                true,
-	"codebase_reference_checklist": true,
-	"codebase_convention":          true,
-	"exit_contract":                true,
-	"spec":                         true,
-	"structure":                    true,
-	"max_tokens_override":          true,
-	"plan_run_id":                  true,
-}
-
 // CountFindings builds severity, category, and criterion histograms (and the total) from a
 // finding slice. Returns nil maps when there are no findings so empty Events
 // serialize without empty objects.
@@ -107,7 +78,7 @@ func CountFindings(findings []verdict.Finding) (severity, category, criterion ma
 		severity[string(f.Severity)]++
 		category[string(f.Category)]++
 		key := strings.ToLower(strings.TrimSpace(f.Criterion))
-		if countedCriteria[key] {
+		if scorecard.CountedCriterion(key) {
 			if criterion == nil {
 				criterion = make(map[string]int)
 			}

@@ -148,6 +148,15 @@ func HashRunID(salt, planRunID string) string {
 	return "r_" + hex.EncodeToString(sum[:12])
 }
 
+// HashSessionRunID is the salted digest that stands in for a standalone
+// session's id as its run's key. Its hash input carries a different domain
+// label from HashRunID's, so no plan_run_id, whatever its text, hashes to a
+// session run's key.
+func HashSessionRunID(salt, sessionID string) string {
+	sum := sha256.Sum256([]byte(salt + ":session-run:" + sessionID))
+	return "r_" + hex.EncodeToString(sum[:12])
+}
+
 // NormalizeCategory is the only transformation free text gets before it is
 // stored: lower-cased, trimmed, and cut to 40 runes so a caller that pastes
 // a finding description instead of a category word cannot store it whole.
@@ -237,3 +246,39 @@ func ClampModelString(s string) string {
 	}
 	return b.String()
 }
+
+// countedCriteria bounds what the ledger records and what TaskSnapshot.Criteria
+// may hold. Criterion is free-form
+// reviewer text — the pre-hook prompt instructs the reviewer to quote verbatim
+// acceptance-criterion text into it — so counting every distinct value would
+// give the histogram one key per acceptance criterion ever reviewed and write
+// specification text into the ledger, which otherwise holds no free text at all.
+// Only these server-recognised sentinels are counted; everything else is dropped.
+// Keys are lower-case, and lookups normalise the reviewer's text to match:
+// Criterion is free text on the wire, so a reviewer writing "Comment_Hygiene"
+// or " comment_hygiene" means the same sentinel and must land in the same
+// bucket rather than vanishing from the metric.
+var countedCriteria = map[string]bool{
+	"comment_hygiene":              true,
+	"over_building":                true,
+	"test_value":                   true,
+	"test_value_mandated":          true,
+	"test_ledger_absent":           true,
+	"test_weakened":                true,
+	"over_building_mandated":       true,
+	"comment_policy_absent":        true,
+	"test_evidence":                true,
+	"codescene_adoption":           true,
+	"noise_cluster":                true,
+	"codebase_reference_checklist": true,
+	"codebase_convention":          true,
+	"exit_contract":                true,
+	"spec":                         true,
+	"structure":                    true,
+	"max_tokens_override":          true,
+	"plan_run_id":                  true,
+}
+
+// CountedCriterion reports whether key, already lower-cased and trimmed, is a
+// criterion sentinel the ledger counts.
+func CountedCriterion(key string) bool { return countedCriteria[key] }

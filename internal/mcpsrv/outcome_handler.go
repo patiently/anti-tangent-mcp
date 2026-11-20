@@ -292,8 +292,9 @@ func validateOutcomeImplementerModels(models []OutcomeImplementerModelArg) strin
 	return ""
 }
 
-// validateOutcomeTaskIndexes range-checks every finding's and measurement's
-// task_index against the run's task count n. It returns "" both when every
+// validateOutcomeTaskIndexes range-checks every finding's, measurement's and
+// implementer model's task_index against the run's task count n, for a plan
+// run and a session run alike. It returns "" both when every
 // index is in range and when the run itself is unknown, since an unknown
 // run's indexes cannot be range-checked at all.
 func validateOutcomeTaskIndexes(n int, known bool, findings []OutcomeFindingArg, ms []OutcomeMeasurementArg, models []OutcomeImplementerModelArg) string {

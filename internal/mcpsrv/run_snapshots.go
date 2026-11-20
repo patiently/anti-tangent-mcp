@@ -85,7 +85,9 @@ func (h *handlers) onPlanRunHeader(runID string, call planrun.ToolCall, tasksCar
 // recordSessionRow applies update to the row of a session with no plan run
 // and, once the row carries a post verdict, writes its run lines: a header on
 // the first and the task line on every one. A session that never reaches
-// validate_completion writes nothing.
+// validate_completion writes nothing. When the header append fails, the claim
+// is released and no task line is written: a task line with no header reads
+// as a plan run.
 func (h *handlers) recordSessionRow(sessionID string, update func(*planrun.TaskRow)) {
 	row, firstWrite, ok := h.deps.Sessions.UpdateRow(sessionID, update)
 	if !ok {
@@ -96,7 +98,7 @@ func (h *handlers) recordSessionRow(sessionID string, update func(*planrun.TaskR
 	}
 	hash := h.deps.Stats.SessionRunHash(sessionID)
 	if firstWrite {
-		h.deps.Stats.RecordRunLine(scorecard.RunLine{
+		err := h.deps.Stats.RecordRunLine(scorecard.RunLine{
 			Ts:               time.Now().UTC(),
 			RunHash:          hash,
 			ServerVersion:    Version,
@@ -105,6 +107,10 @@ func (h *handlers) recordSessionRow(sessionID string, update func(*planrun.TaskR
 			TaskCount:        1,
 			ConfiguredModels: h.configuredModels(),
 		})
+		if err != nil {
+			h.deps.Sessions.ReleaseRunHeader(sessionID)
+			return
+		}
 	}
 	h.deps.Stats.RecordRunLine(scorecard.RunLine{
 		Ts:            time.Now().UTC(),

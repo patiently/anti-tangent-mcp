@@ -71,22 +71,43 @@ var testDeclRules = []struct {
 	{regexp.MustCompile(`\.go$`), regexp.MustCompile(`^func Test(\w*)\(`), "Main"},
 	{regexp.MustCompile(`\.(kt|kts|java)$`), regexp.MustCompile(`^\s*@(Test|ParameterizedTest|TestFactory)\b`), ""},
 	{regexp.MustCompile(`\.py$`), regexp.MustCompile(`^\s*(async\s+)?def test_\w*\(`), ""},
-	{regexp.MustCompile(`\.[cm]?[jt]sx?$`), regexp.MustCompile(`^\s*(it|test)(\.each\b.*)?\s*[(\x60]`), ""},
+	{regexp.MustCompile(`\.[cm]?[jt]sx?$`), regexp.MustCompile(`^\s*(it|test)(\.(each|only|skip)\b.*)?\s*[(\x60]`), ""},
 }
 
 // countAddedTests counts the test declarations a unified diff adds. Table rows
 // and parametrised cases are not counted, so one table-driven test counts once.
 // known is false when an added line sits in a file that may declare tests in a
 // language with no declaration rule: such a task has no comparable count.
+// Lines are read only inside hunks, which end when the line counts their
+// header declares are used up, so an added line whose text begins with "++ "
+// is not taken for the next file's "+++ " header.
 func countAddedTests(diff string) (added int, known bool) {
 	var path string
+	oldLeft, newLeft := 0, 0
 	for _, line := range strings.Split(diff, "\n") {
-		if p, ok := strings.CutPrefix(line, "+++ "); ok {
-			path = strings.TrimPrefix(p, "b/")
+		if oldLeft <= 0 && newLeft <= 0 {
+			if o, n, ok := hunkSpan(line); ok {
+				oldLeft, newLeft = o, n
+			} else if p, ok := strings.CutPrefix(line, "+++ "); ok {
+				path = strings.TrimPrefix(p, "b/")
+			}
 			continue
 		}
 		body, isAdd := strings.CutPrefix(line, "+")
-		if !isAdd || !mayDeclareTests(path) {
+		switch {
+		case isAdd:
+			newLeft--
+		case strings.HasPrefix(line, "-"):
+			oldLeft--
+			continue
+		case strings.HasPrefix(line, "\\"):
+			continue
+		default:
+			oldLeft--
+			newLeft--
+			continue
+		}
+		if !mayDeclareTests(path) {
 			continue
 		}
 		isTest, ruled := declaresTest(path, body)
@@ -147,6 +168,13 @@ func ledgerValues(ledger []TestLedgerEntryArg, declined []TestDeclinedArg) []led
 	return out
 }
 
+// forgesLedgerLine reports whether r could break a ledger value out of its one
+// line in the reviewer prompt: a C0 or C1 control (U+0085 is a line break), a
+// Unicode line or paragraph separator, or a format character.
+func forgesLedgerLine(r rune) bool {
+	return unicode.IsControl(r) || forgesPromptStructure(r)
+}
+
 // validateTestLedger bounds the two caller-attested lists.
 func validateTestLedger(ledger []TestLedgerEntryArg, declined []TestDeclinedArg) error {
 	if len(ledger) > maxLedgerEntries {
@@ -158,8 +186,8 @@ func validateTestLedger(ledger []TestLedgerEntryArg, declined []TestDeclinedArg)
 	total := 0
 	for _, v := range ledgerValues(ledger, declined) {
 		total += len(v.text)
-		if utf8.RuneCountInString(v.text) > maxLedgerRunes || strings.IndexFunc(v.text, unicode.IsControl) >= 0 {
-			return fmt.Errorf("%s[%d]: each value must be at most %d characters with no control character", v.field, v.index, maxLedgerRunes)
+		if utf8.RuneCountInString(v.text) > maxLedgerRunes || strings.IndexFunc(v.text, forgesLedgerLine) >= 0 {
+			return fmt.Errorf("%s[%d]: each value must be at most %d characters with no control, format or line-separator character", v.field, v.index, maxLedgerRunes)
 		}
 	}
 	if total > maxLedgerBytes {

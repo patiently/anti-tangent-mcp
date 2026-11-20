@@ -180,6 +180,14 @@ func TestHashRunIDPinned(t *testing.T) {
 	}
 }
 
+func TestHashSessionRunIDNeverMatchesARunID(t *testing.T) {
+	for _, runID := range []string{"session:abc", "abc", ":session-run:abc"} {
+		if HashRunID("s", runID) == HashSessionRunID("s", "abc") {
+			t.Fatalf("plan_run_id %q hashes to session abc's run key", runID)
+		}
+	}
+}
+
 func TestNormalizeCategory(t *testing.T) {
 	if got := NormalizeCategory("  Correctness "); got != "correctness" {
 		t.Fatalf("got %q", got)

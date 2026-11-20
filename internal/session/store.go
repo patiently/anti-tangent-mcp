@@ -97,6 +97,17 @@ func (s *Store) UpdateRow(id string, fn func(*planrun.TaskRow)) (row planrun.Tas
 	return planrun.CloneRow(sess.Row), firstWrite, true
 }
 
+// ReleaseRunHeader undoes the claim UpdateRow made with firstWrite, so the
+// next update that leaves a post verdict claims the header again. A caller
+// whose header append failed calls it.
+func (s *Store) ReleaseRunHeader(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sess, ok := s.sessions[id]; ok {
+		sess.RunHeaderWritten = false
+	}
+}
+
 func (s *Store) SetImplementerModel(id, model string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

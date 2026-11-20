@@ -54,6 +54,8 @@ func TestCountAddedTests(t *testing.T) {
 		{"java under src/test counted", diffAdding("src/test/java/x/FooHelper.java", "@Test", "void a() {}"), 1, true},
 		{"resource under src/test ignored", diffAdding("src/test/resources/app.properties", "a=1"), 0, true},
 		{"kotest spec makes count unknown", diffAdding("FooSpec.kt", `"adds" {`, "1 + 1 shouldBe 2"), 0, false},
+		{"js only and skip counted", diffAdding("a.test.ts", "it.only('a', () => {", "test.skip('b', () => {"), 2, true},
+		{"added line starting with ++ keeps its file", diffAdding("x_test.go", "++ counter note", "func TestA(t *testing.T) {"), 1, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -82,6 +84,9 @@ func TestLedgerValidation(t *testing.T) {
 		{"300-rune value accepted", []TestLedgerEntryArg{entry(strings.Repeat("é", 300))}, nil, ""},
 		{"control character in declined", nil, []TestDeclinedArg{{Test: "t", Reason: "a\x07b"}}, "tests_declined[0]"},
 		{"newline in ledger", []TestLedgerEntryArg{entry("a\nb")}, nil, "test_ledger[0]"},
+		{"line separator in ledger", []TestLedgerEntryArg{entry("a\u2028b")}, nil, "test_ledger[0]"},
+		{"paragraph separator in declined", nil, []TestDeclinedArg{{Test: "t", Reason: "a\u2029b"}}, "tests_declined[0]"},
+		{"format character in ledger", []TestLedgerEntryArg{entry("a\u202eb")}, nil, "test_ledger[0]"},
 		{"over 16 KB total", func() []TestLedgerEntryArg {
 			out := make([]TestLedgerEntryArg, 40)
 			for i := range out {
