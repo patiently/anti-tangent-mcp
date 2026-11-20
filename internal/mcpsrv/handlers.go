@@ -276,7 +276,6 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		h.deps.Sessions.SetPreFindings(sess.ID, append([]verdict.Finding(nil), env.Findings[:len(result.Findings)]...))
 		if model := strings.TrimSpace(args.ImplementerModel); model != "" {
 			h.deps.Sessions.SetImplementerModel(sess.ID, model)
-			sess.ImplementerModel = model
 		}
 		h.deps.Sessions.RecordIssuedIDs(sess.ID, envelopeIDs(env))
 		// Re-fetch so LastAccessed reflects the final mutation.
@@ -287,21 +286,8 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		env = h.withSessionTTL(env, sess)
 	}
 
-	if planRunID != "" && env.SessionID != "" {
-		// Best-effort: an unknown or expired run must not fail the review.
-		if row, ok := h.deps.PlanRuns.Attach(planRunID, env.SessionID, taskRef, env.Verdict); ok {
-			call := callFromEnvelope("validate_task_spec", env)
-			if logged, ok := h.deps.PlanRuns.UpdateRow(planRunID, env.SessionID, func(r *planrun.TaskRow) { r.AppendCall(call) }); ok {
-				row = logged
-			}
-			h.appendPlanLedger(planRunID, row)
-		} else {
-			slog.Warn("plan run attach failed; run unknown or expired",
-				"plan_run_id", planRunID, "session_id", env.SessionID)
-			if attachedByTitle {
-				withdrawAttachedByTitle(&env, planRunID)
-			}
-		}
+	if env.SessionID != "" {
+		h.recordTaskSpecRow(&env, planRunID, taskRef, attachedByTitle)
 	}
 
 	h.recordStat(statParams{

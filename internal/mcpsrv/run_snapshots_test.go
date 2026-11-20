@@ -350,6 +350,11 @@ func TestRunSnapshots_StandaloneSessionIsOneTaskRun(t *testing.T) {
 		require.NotNil(t, l.Task)
 		assert.Equal(t, 1, l.Task.Index)
 		assert.Equal(t, "claude-sonnet-5-5[1m]", l.Task.ImplementerModel)
+		assert.Equal(t, "pass", l.Task.PreVerdict)
+		assert.Equal(t, 1, l.Task.Attempts)
+		require.NotEmpty(t, l.Task.Calls)
+		assert.Equal(t, "validate_task_spec", l.Task.Calls[0].Tool)
+		assert.Equal(t, "pass", l.Task.Calls[0].Verdict)
 	}
 	assert.Equal(t, 1, headers)
 	assert.Equal(t, 2, tasks)

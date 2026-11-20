@@ -5,7 +5,6 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
-	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
@@ -87,15 +86,15 @@ func (h *handlers) onPlanRunHeader(runID string, call planrun.ToolCall, tasksCar
 // and, once the row carries a post verdict, writes its run lines: a header on
 // the first and the task line on every one. A session that never reaches
 // validate_completion writes nothing.
-func (h *handlers) recordSessionRow(sess *session.Session, update func(*planrun.TaskRow)) {
-	row, firstWrite, ok := h.deps.Sessions.UpdateRow(sess.ID, update)
+func (h *handlers) recordSessionRow(sessionID string, update func(*planrun.TaskRow)) {
+	row, firstWrite, ok := h.deps.Sessions.UpdateRow(sessionID, update)
 	if !ok {
 		return
 	}
 	if h.deps.Stats == nil || row.PostVerdict == "" {
 		return
 	}
-	hash := h.deps.Stats.SessionRunHash(sess.ID)
+	hash := h.deps.Stats.SessionRunHash(sessionID)
 	if firstWrite {
 		h.deps.Stats.RecordRunLine(scorecard.RunLine{
 			Ts:               time.Now().UTC(),

@@ -257,7 +257,7 @@ func countOverBuildingRuled(update func(*planrun.TaskRow), ruled bool) func(*pla
 // changes the result. A session with no plan run updates its own row.
 func (h *handlers) recordCheckpointRow(sess *session.Session, env Envelope) {
 	if sess.PlanRunID == "" {
-		h.recordSessionRow(sess, func(row *planrun.TaskRow) {
+		h.recordSessionRow(sess.ID, func(row *planrun.TaskRow) {
 			row.Checkpoints++
 			row.AppendCall(callFromEnvelope("check_progress", env))
 		})
@@ -289,7 +289,7 @@ func (h *handlers) recordCompletionRow(sess *session.Session, env Envelope, cs *
 		}
 	}
 	if sess.PlanRunID == "" {
-		h.recordSessionRow(sess, update)
+		h.recordSessionRow(sess.ID, update)
 		return
 	}
 	if row, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, update); ok {
@@ -360,4 +360,34 @@ func withRateDigest(update func(*planrun.TaskRow), rd *ratedigest.Digest) func(*
 		update(row)
 		row.RateDigest = rd.ForRecord()
 	}
+}
+
+// recordTaskSpecRow records a validate_task_spec review on the row of the
+// session it created: the plan run's row when the call named a run, else the
+// session's own row. Both count one attempt and log the call, so the two kinds
+// of run are counted alike.
+func (h *handlers) recordTaskSpecRow(env *Envelope, planRunID string, taskRef planrun.TaskRef, attachedByTitle bool) {
+	call := callFromEnvelope("validate_task_spec", *env)
+	if planRunID == "" {
+		h.recordSessionRow(env.SessionID, func(row *planrun.TaskRow) {
+			row.PreVerdict = env.Verdict
+			row.Attempts++
+			row.AppendCall(call)
+		})
+		return
+	}
+	// Best-effort: an unknown or expired run must not fail the review.
+	row, ok := h.deps.PlanRuns.Attach(planRunID, env.SessionID, taskRef, env.Verdict)
+	if !ok {
+		slog.Warn("plan run attach failed; run unknown or expired",
+			"plan_run_id", planRunID, "session_id", env.SessionID)
+		if attachedByTitle {
+			withdrawAttachedByTitle(env, planRunID)
+		}
+		return
+	}
+	if logged, ok := h.deps.PlanRuns.UpdateRow(planRunID, env.SessionID, func(r *planrun.TaskRow) { r.AppendCall(call) }); ok {
+		row = logged
+	}
+	h.appendPlanLedger(planRunID, row)
 }
