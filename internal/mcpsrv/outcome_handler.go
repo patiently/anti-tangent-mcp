@@ -93,6 +93,9 @@ func (h *handlers) recordReviewOutcome(args RecordReviewOutcomeArgs) RecordRevie
 	}
 	runID := strings.TrimSpace(args.PlanRunID)
 	sessionID := strings.TrimSpace(args.SessionID)
+	if sessionID != "" {
+		args = sessionOutcomeArgs(args)
+	}
 	if reason := validateOutcomeArgs(runID, sessionID, args); reason != "" {
 		res.Reason = reason
 		return res
@@ -100,14 +103,13 @@ func (h *handlers) recordReviewOutcome(args RecordReviewOutcomeArgs) RecordRevie
 	runHash := h.deps.Stats.RunHash(runID)
 	if sessionID != "" {
 		runHash = h.deps.Stats.SessionRunHash(sessionID)
-		args = sessionOutcomeArgs(args)
 	}
 	lines, err := h.deps.Stats.RunLines(runHash)
 	if err != nil {
 		slog.Warn("record_review_outcome: reading run snapshots failed", "err", err)
 	}
 	n, known := h.outcomeTaskCount(runID, sessionID, lines)
-	if reason := validateOutcomeTaskIndexes(n, known, args.Findings, args.Measurements); reason != "" {
+	if reason := validateOutcomeTaskIndexes(n, known, args.Findings, args.Measurements, args.ImplementerModels); reason != "" {
 		res.Reason = reason
 		return res
 	}
@@ -129,17 +131,29 @@ func (h *handlers) recordReviewOutcome(args RecordReviewOutcomeArgs) RecordRevie
 }
 
 // sessionOutcomeArgs reads task_index 0 as 1, since a session run has exactly
-// one task, on a copy so the caller's slices are untouched.
+// one task, on copies so the caller's slices are untouched. Negative indexes
+// are left for validation to reject.
 func sessionOutcomeArgs(args RecordReviewOutcomeArgs) RecordReviewOutcomeArgs {
 	args.Findings = append([]OutcomeFindingArg(nil), args.Findings...)
 	for i := range args.Findings {
-		args.Findings[i].TaskIndex = max(args.Findings[i].TaskIndex, 1)
+		args.Findings[i].TaskIndex = zeroToOne(args.Findings[i].TaskIndex)
 	}
 	args.Measurements = append([]OutcomeMeasurementArg(nil), args.Measurements...)
 	for i := range args.Measurements {
-		args.Measurements[i].TaskIndex = max(args.Measurements[i].TaskIndex, 1)
+		args.Measurements[i].TaskIndex = zeroToOne(args.Measurements[i].TaskIndex)
+	}
+	args.ImplementerModels = append([]OutcomeImplementerModelArg(nil), args.ImplementerModels...)
+	for i := range args.ImplementerModels {
+		args.ImplementerModels[i].TaskIndex = zeroToOne(args.ImplementerModels[i].TaskIndex)
 	}
 	return args
+}
+
+func zeroToOne(i int) int {
+	if i == 0 {
+		return 1
+	}
+	return i
 }
 
 func (h *handlers) outcomeRunLive(runID, sessionID string) bool {
@@ -261,7 +275,7 @@ func validateOutcomeImplementerModels(models []OutcomeImplementerModelArg) strin
 // task_index against the run's task count n. It returns "" both when every
 // index is in range and when the run itself is unknown, since an unknown
 // run's indexes cannot be range-checked at all.
-func validateOutcomeTaskIndexes(n int, known bool, findings []OutcomeFindingArg, ms []OutcomeMeasurementArg) string {
+func validateOutcomeTaskIndexes(n int, known bool, findings []OutcomeFindingArg, ms []OutcomeMeasurementArg, models []OutcomeImplementerModelArg) string {
 	if !known {
 		return ""
 	}
@@ -278,6 +292,13 @@ func validateOutcomeTaskIndexes(n int, known bool, findings []OutcomeFindingArg,
 	}
 	if i := firstAbove(mi, n); i >= 0 {
 		return fmt.Sprintf("measurements[%d].task_index %d exceeds the run's %d tasks", i, mi[i], n)
+	}
+	di := make([]int, len(models))
+	for i, m := range models {
+		di[i] = m.TaskIndex
+	}
+	if i := firstAbove(di, n); i >= 0 {
+		return fmt.Sprintf("implementer_models[%d].task_index %d exceeds the run's %d tasks", i, di[i], n)
 	}
 	return ""
 }

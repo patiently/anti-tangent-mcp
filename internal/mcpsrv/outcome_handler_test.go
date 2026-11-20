@@ -302,6 +302,22 @@ func TestRecordReviewOutcome_SessionRuns(t *testing.T) {
 			args: func(s, _ string) RecordReviewOutcomeArgs {
 				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Findings: finding(2)}
 			}},
+		{name: "implementer model index 0 stored as 1", wantIndex: 1,
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", ImplementerModels: []OutcomeImplementerModelArg{{TaskIndex: 0, Model: "m"}}}
+			}},
+		{name: "implementer model index above 1 rejected", wantReason: []string{"implementer_models"},
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", ImplementerModels: []OutcomeImplementerModelArg{{TaskIndex: 2, Model: "m"}}}
+			}},
+		{name: "measurement index 0 stored as 1", wantIndex: 1,
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Measurements: []OutcomeMeasurementArg{{TaskIndex: 0, Metric: "m"}}}
+			}},
+		{name: "measurement index above 1 rejected", wantReason: []string{"measurements"},
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Measurements: []OutcomeMeasurementArg{{TaskIndex: 2, Metric: "m"}}}
+			}},
 		{name: "both ids rejected", wantReason: []string{"plan_run_id", "session_id"},
 			args: func(s, p string) RecordReviewOutcomeArgs {
 				return RecordReviewOutcomeArgs{SessionID: s, PlanRunID: p, Source: "final_review"}
@@ -336,8 +352,20 @@ func TestRecordReviewOutcome_SessionRuns(t *testing.T) {
 			rows := strings.Split(strings.TrimSpace(string(raw)), "\n")
 			require.NoError(t, json.Unmarshal([]byte(rows[len(rows)-1]), &last))
 			assert.Equal(t, rec.SessionRunHash(sess.ID), last.RunHash)
-			require.NotEmpty(t, last.Findings)
-			assert.Equal(t, tc.wantIndex, last.Findings[0].TaskIndex)
+			var got []int
+			for _, f := range last.Findings {
+				got = append(got, f.TaskIndex)
+			}
+			for _, m := range last.ImplementerModels {
+				got = append(got, m.TaskIndex)
+			}
+			for _, m := range last.Measurements {
+				got = append(got, m.TaskIndex)
+			}
+			require.NotEmpty(t, got)
+			for _, idx := range got {
+				assert.Equal(t, tc.wantIndex, idx)
+			}
 		})
 	}
 }
