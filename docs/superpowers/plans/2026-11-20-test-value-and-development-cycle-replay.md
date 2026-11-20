@@ -1,0 +1,89 @@
+# 0.31.0 test-value replay: results
+
+Task 8 of `2026-11-20-test-value-and-development-cycle.md`, measured against the replay table in spec §10.
+
+- **Model:** `openai:gpt-5.6-terra` for pre and post (`ANTI_TANGENT_PRE_MODEL`, `ANTI_TANGENT_POST_MODEL`), `ANTI_TANGENT_REPLAY_RUNS=1`, stats off.
+- **Server replayed:** `version/0.31.0` at `6f412e1`; comparison point `v0.30.1` (`1d8d6bc`).
+- **Date:** 2026-11-20.
+- **Paid reviewer calls:** 260 out of an approved budget of 260. That breaks down as 100 fixtures × (pre + post) at head, plus the 30 lean fixtures × 2 at `v0.30.1`. No reviewer response was truncated, so the harness made no retries.
+- **Fixtures:** 100 fixtures, kept outside the repo in `anti-tangent-replay/0.31.0/` (see its `MANIFEST.md`). Their diffs are real `anti-tangent-mcp` commits. The gamed, under-tested and loosened variants are hand edits of real commits, and each one compiles. **Each fixture's task spec (Goal and ACs) was written for this replay from the commit message and test names. Its `test_evidence` is invented pass output, not captured output.**
+- **Scoring:** every finding's criterion, severity and evidence text was read. Keyword tallies were not used.
+
+## Results
+
+| Set | n | Bar | k at head | Result |
+|---|---|---|---|---|
+| over-tested (real superpowers-era diffs) | 10 | `test_value` major ≥ 7 | 0 (2 minor) | **miss** |
+| lean, well-tested | 30 | no `test_value` major ≥ 28 | 30 | pass |
+| legitimate look-alikes | 30 | no `test_value` / `test_weakened` major ≥ 28 | 30 | pass |
+| gamed (near-identical subtests; padded ledgers) | 10 | `test_value` major ≥ 7 | 3 | **miss** |
+| under-tested (AC with no test; vacuous test) | 10 | `test_adequacy` major ≥ 8 | 7 | **miss** |
+| loosened assertions | 10 | `test_weakened` ≥ 7 | 9 (all major) | pass |
+| lean `test_adequacy` vs 0.30.1, pre + post | 30 | ≥ 50% fewer | 4 vs 6 (−33%) | **miss** |
+
+### `test_adequacy` on the lean set, head vs 0.30.1
+
+| | pre | post | total |
+|---|---|---|---|
+| `v0.30.1` | 2 minor (deprecation-cache, plan-reuse-context) | 4: 2 major (lite-leaves-session-row, withdraw-attached), 2 minor (line-anchor-lists, plan-cap-roots) | 6 |
+| head | 0 | 4: 1 major (lite-leaves-session-row), 3 minor (diff-header-lines, line-anchor-lists, plan-cap-roots) | 4 |
+
+The pre-side recalibration did its job: both spec-time `test_adequacy` findings are gone. The post side did not change. Three of the four head findings are accurate `minor` boundary gaps: an anchored Windows/URL case, a negative cap value, and the separator variant. The rule keeps all three on purpose. The one major (lite-leaves-session-row) is over-graded. The test asserts the verdict, lite flag, digest and advisory criterion, and misses only the advisory's severity. That is a missing assertion on a tested criterion, which should be minor, not "asserts nothing about the behaviour".
+
+## Per-miss judgement
+
+No template was changed. All 260 approved calls went to the initial run, so any rerun would have exceeded the budget. The wording below is proposed and has not been measured.
+
+### Over-tested: 0/10 major. Fixture and template both contribute.
+
+The template only calls a `consolidate:` instance heavy when at least 3 tests could go AND they are at least half of the tests the change adds. Read against that rule, these real diffs split:
+
+| Fixture | Removable / added (by the rule) | Correct severity | Reviewer |
+|---|---|---|---|
+| attach-by-task | ≈6/11 | major | minor (one `trivia:`) |
+| attach-by-title | ≈4/7 | major | none |
+| rate-digest | ≈7/14 | major | none |
+| bulk-read | ≈5/10 | major (borderline) | none |
+| lightweight-flag | ≈3/6 | major (borderline) | minor (2-test merge) |
+| test-evidence-path | ≈3/10 | minor | none |
+| context-paths-resolve | ≈4/9 | minor | none |
+| codescene-in-band | ≈3/10 | minor | none |
+| plan-run-report | ≈3/9 | minor | none |
+| ledger-prune | ≈4/9 | minor | `test_adequacy` major on a no-op test |
+
+- **Fixture side:** 5 of the 10 real diffs are correctly *minor* under the half-of-added threshold. With a perfect reviewer this set would score about 5/10, so the ≥ 7 bar cannot be reached with these fixtures as the rule now stands. Either the bar is mismatched to the threshold, or the threshold is too strict for real superpowers-era diffs. That is a spec decision, not a wording fix.
+- **Template side:** recall is the bigger problem. 6 of 10 fixtures drew no test-value finding at all, not even a minor one, and the 5 that should be heavy produced no major. In three fixtures the reviewer spent its test attention on `test_adequacy` instead. ledger-prune is the clearest case: a no-op test that duplicates others was reported as `test_adequacy` "asserts nothing" major, when the rule makes it a `test_value` `trivia:`/`consolidate:` instance.
+
+### Gamed: 3/10 major. Mostly template.
+
+- Near-identical subtests: 3/5 major (correctness-rates, criterion-counts, elapsed-time).
+  - plan-kind (14 near-identical rows) drew only a `test_adequacy` minor for a dropped fence case.
+  - revise-rounds (11 near-identical subtests) drew `test_adequacy` major for the rows it never asserts.
+  - Both clearly meet the heavy bar, so these are template misses: `test_adequacy` crowds out `test_value`.
+- Padded ledgers: 0/5. Fixture and template both contribute.
+  - The underlying diffs are the same kind of real diff as the over-tested set, mostly light under the half-of-added threshold.
+  - The padding gave generic `failed_when` text ("would fail if X regressed") to the catalog and helper tests. The rule exempts any test with a `failed_when` from `trivia:`. So by the letter of the rule, the padding worked. That is a template gap: a `failed_when` that names no observed failure should not exempt anything.
+
+### Under-tested: 7/10 major. Template.
+
+- deprecation-gap and heading-lookup: the reviewer saw a diff with no test for a behaviour AC and reported it as `insufficient_evidence` major, not `test_adequacy`. post.tmpl's "Do not use this category for evidence that is merely absent: that is `insufficient_evidence`" reads as covering this case.
+- agent-network-final: the reviewer reported only the narrow `go test` command as `insufficient_evidence`.
+
+All three are category routing, not missed defects. The failing behaviour was flagged major in two of them under the wrong criterion.
+
+### Loosened: passed at 9/10.
+
+implementation-guidance was missed (`assert.Equal` on `ModelUsed` relaxed to `NotEmpty`). This is single-run variance on a subtle relaxation, and no action is needed.
+
+## Proposed wording (not applied, not measured)
+
+All of these changes are in `post.tmpl`, plus the pre/plan sentence noted below. None of them touches `test_value.tmpl`.
+
+1. **Test value, heavy threshold.** Only if the spec owner wants real over-tested diffs to read as major: "Heavy when at least 3 tests or cases could go, or they are at least a third of those the change adds; otherwise light." This changes the spec's definition of heavy, so it needs that decision first.
+2. **Test value, recall.** Add before the tag list: "Do this before writing any `test_adequacy` finding: group the tests this change adds by the criterion they run, and compare each group's count with the failure and boundary cases that criterion names. A group larger than that is a `consolidate:` instance even when another test finding applies to the same tests."
+3. **Test value, routing.** Add to `trivia:`: "A test whose only assertion is that a call does not panic or is a no-op, where another test already runs that path, is `trivia:` here, not `test_adequacy`."
+4. **Ledger.** Change "not an instance when the ledger gives `failed_when` for it" to: "not an instance when the ledger's `failed_when` names a specific change to the code under test that made the test fail; a `failed_when` that only restates that the test would fail on a regression exempts nothing."
+5. **Test adequacy, absence.** Replace "Do not use this category for evidence that is merely absent: that is `insufficient_evidence`" with: "When a diff is present and adds no test that would catch a behaviour criterion's breakage, that is this category, not `insufficient_evidence`; `insufficient_evidence` is for test output or files that were not submitted."
+6. **Test adequacy, severity.** Add: "A test that runs the behaviour and asserts most of it, missing one property, is `minor`; `major` is for a criterion no test would catch, or a test that asserts nothing about the behaviour."
+
+Re-measuring the four missed rows means rerunning the over-tested, gamed, under-tested and head lean sets: 60 fixtures × 2 = 120 calls, reusing `reports/v0.30.1-lean.json` for the comparison. Because of single-run variance, a pass on the lean false-positive and look-alike bars should be re-confirmed after any wording change. That adds 60 calls for the look-alike set.
