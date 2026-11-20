@@ -56,6 +56,8 @@ func TestCountAddedTests(t *testing.T) {
 		{"kotest spec makes count unknown", diffAdding("FooSpec.kt", `"adds" {`, "1 + 1 shouldBe 2"), 0, false},
 		{"js only and skip counted", diffAdding("a.test.ts", "it.only('a', () => {", "test.skip('b', () => {"), 2, true},
 		{"added line starting with ++ keeps its file", diffAdding("x_test.go", "++ counter note", "func TestA(t *testing.T) {"), 1, true},
+		{"git-quoted non-ASCII test path", "diff --git \"a/caf\\303\\251_test.go\" \"b/caf\\303\\251_test.go\"\n--- /dev/null\n" +
+			"+++ \"b/caf\\303\\251_test.go\"\n@@ -0,0 +1,2 @@\n+func TestA(t *testing.T) {\n+func TestB(t *testing.T) {\n", 2, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -153,5 +155,18 @@ func TestLedgerAbsentFindingAndSummaryLine(t *testing.T) {
 			}
 			assert.Contains(t, env.SummaryBlock, "  "+c.wantLine+"\n")
 		})
+	}
+}
+
+func TestUnquoteDiffPathName(t *testing.T) {
+	cases := map[string]string{
+		`"b/caf\303\251_test.go"`: "b/café_test.go",
+		`"b/say \"hi\"_test.go"`:  `b/say "hi"_test.go`,
+		`"b/my file.py"`:          "b/my file.py",
+		`b/plain.go`:              "b/plain.go",
+		`"b/bad\q.go"`:            `b/bad\q.go`,
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, unquoteDiffPathName(in), in)
 	}
 }

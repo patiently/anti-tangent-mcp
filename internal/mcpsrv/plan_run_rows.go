@@ -263,6 +263,8 @@ func (h *handlers) recordCheckpointRow(sess *session.Session, env Envelope) {
 		})
 		return
 	}
+	h.rowMu.Lock()
+	defer h.rowMu.Unlock()
 	row, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
 		row.Checkpoints++
 		row.AppendCall(callFromEnvelope("check_progress", env))
@@ -292,6 +294,8 @@ func (h *handlers) recordCompletionRow(sess *session.Session, env Envelope, cs *
 		h.recordSessionRow(sess.ID, update)
 		return
 	}
+	h.rowMu.Lock()
+	defer h.rowMu.Unlock()
 	if row, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, update); ok {
 		h.appendPlanLedger(sess.PlanRunID, row)
 	} else {
@@ -311,6 +315,8 @@ func (h *handlers) recordLightweightCompletionRow(args ValidateCompletionArgs, e
 	}
 	ref := planrun.TaskRef{Index: args.TaskIndex, Title: args.TaskTitle}
 	update := withIssuedIDs(withRateDigest(countOverBuildingRuled(completionRowUpdate(env, args.Codescene, args.FinalDiff), overBuildingRuled), rd), envelopeIDs(env))
+	h.rowMu.Lock()
+	defer h.rowMu.Unlock()
 	row, res := h.deps.PlanRuns.UpsertLite(args.PlanRunID, ref, update)
 	switch res {
 	case planrun.UpsertApplied:
@@ -377,6 +383,8 @@ func (h *handlers) recordTaskSpecRow(env *Envelope, planRunID string, taskRef pl
 		return
 	}
 	// Best-effort: an unknown or expired run must not fail the review.
+	h.rowMu.Lock()
+	defer h.rowMu.Unlock()
 	row, ok := h.deps.PlanRuns.Attach(planRunID, env.SessionID, taskRef, env.Verdict)
 	if !ok {
 		slog.Warn("plan run attach failed; run unknown or expired",

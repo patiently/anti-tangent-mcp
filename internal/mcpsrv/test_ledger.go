@@ -89,7 +89,7 @@ func countAddedTests(diff string) (added int, known bool) {
 			if o, n, ok := hunkSpan(line); ok {
 				oldLeft, newLeft = o, n
 			} else if p, ok := strings.CutPrefix(line, "+++ "); ok {
-				path = strings.TrimPrefix(p, "b/")
+				path = strings.TrimPrefix(unquoteDiffPathName(p), "b/")
 			}
 			continue
 		}

@@ -89,6 +89,8 @@ func (h *handlers) onPlanRunHeader(runID string, call planrun.ToolCall, tasksCar
 // is released and no task line is written: a task line with no header reads
 // as a plan run.
 func (h *handlers) recordSessionRow(sessionID string, update func(*planrun.TaskRow)) {
+	h.rowMu.Lock()
+	defer h.rowMu.Unlock()
 	row, firstWrite, ok := h.deps.Sessions.UpdateRow(sessionID, update)
 	if !ok {
 		return

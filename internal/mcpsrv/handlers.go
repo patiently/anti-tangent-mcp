@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -126,6 +127,11 @@ type ValidateTaskSpecArgs struct {
 type handlers struct {
 	deps          Deps
 	planCacheOnce sync.Once
+	// rowMu holds a task row's mutation together with the run line and plan
+	// ledger line that record it. Without it two concurrent updates to one
+	// row can append their lines in the opposite order, and the scorecard,
+	// which keeps a task's latest-timestamped line, would keep the older row.
+	rowMu sync.Mutex
 }
 
 func (h *handlers) planCache() *planPassCache {
@@ -1377,16 +1383,17 @@ func diffEllipsisPlaceholderOffset(finalDiff string) int {
 	return -1
 }
 
-// unquoteDiffPathName strips one pair of surrounding double quotes from a
-// `+++`/`---` diff header's path, which git adds when the name contains a
-// space or a non-ASCII byte (e.g. `"b/my file.py"`), so a caller trimming a
-// `b/`/`a/` prefix afterward sees the bare filename either way.
+// unquoteDiffPathName decodes a `+++`/`---` diff header's path that git
+// C-quoted because the name holds a control character, a quote, a backslash
+// or a non-ASCII byte (e.g. `"b/caf\303\251.py"`), so a caller trimming a
+// `b/`/`a/` prefix afterward sees the bare filename either way. A quoted name
+// that does not decode only loses its quotes.
 func unquoteDiffPathName(name string) string {
-	if !strings.HasPrefix(name, `"`) || !strings.HasSuffix(name, `"`) {
+	if len(name) < 2 || !strings.HasPrefix(name, `"`) || !strings.HasSuffix(name, `"`) {
 		return name
 	}
-	if len(name) < 2 {
-		return name
+	if s, err := strconv.Unquote(name); err == nil {
+		return s
 	}
 	return name[1 : len(name)-1]
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -407,4 +408,63 @@ func TestRunSnapshots_SessionHeaderRetriedAfterFailedAppend(t *testing.T) {
 	require.NotEmpty(t, lines)
 	assert.True(t, lines[0].Header, "the first line written for the session must be its header")
 	assert.Equal(t, scorecard.KindSession, lines[0].Kind)
+}
+
+// TestRunSnapshots_TaskLinesFollowRowMutationOrder covers concurrent updates
+// to one row: the scorecard keeps a task's latest-timestamped line, so every
+// task line must carry a timestamp no earlier than the line written for the
+// mutation before it, and be appended after it. Both the session row and the
+// plan-run row paths are checked.
+func TestRunSnapshots_TaskLinesFollowRowMutationOrder(t *testing.T) {
+	const updates = 64
+	assertOrdered := func(t *testing.T, lines []scorecard.RunLine) {
+		t.Helper()
+		var tasks []scorecard.RunLine
+		for _, l := range lines {
+			if l.Task != nil {
+				tasks = append(tasks, l)
+			}
+		}
+		require.Len(t, tasks, updates)
+		for i := 1; i < len(tasks); i++ {
+			prev, cur := tasks[i-1], tasks[i]
+			require.Greater(t, cur.Task.Checkpoints, prev.Task.Checkpoints, "line %d was appended after a newer row", i)
+			require.False(t, cur.Ts.Before(prev.Ts), "line %d is stamped before the line for an older row", i)
+		}
+	}
+	hammer := func(update func()) {
+		var wg sync.WaitGroup
+		for range updates {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				update()
+			}()
+		}
+		wg.Wait()
+	}
+	env := Envelope{Verdict: "pass"}
+
+	t.Run("session", func(t *testing.T) {
+		h, rec, _ := outcomeHandlers(t)
+		sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t"}, "")
+		_, _, ok := h.deps.Sessions.UpdateRow(sess.ID, func(r *planrun.TaskRow) { r.PostVerdict = "pass" })
+		require.True(t, ok)
+		hammer(func() { h.recordCheckpointRow(sess, env) })
+		lines, err := rec.RunLines(rec.SessionRunHash(sess.ID))
+		require.NoError(t, err)
+		assertOrdered(t, lines)
+	})
+
+	t.Run("plan", func(t *testing.T) {
+		h, rec, _ := outcomeHandlers(t)
+		run := h.deps.PlanRuns.Create("pass", "rigorous", 1)
+		_, ok := h.deps.PlanRuns.Attach(run.ID, "s1", planrun.TaskRef{Index: 1}, "pass")
+		require.True(t, ok)
+		sess := &session.Session{ID: "s1", PlanRunID: run.ID}
+		hammer(func() { h.recordCheckpointRow(sess, env) })
+		lines, err := rec.RunLines(rec.RunHash(run.ID))
+		require.NoError(t, err)
+		assertOrdered(t, lines)
+	})
 }
