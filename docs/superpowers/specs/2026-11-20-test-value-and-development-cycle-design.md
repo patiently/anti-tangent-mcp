@@ -135,7 +135,7 @@ and `tests_declined`, and reads the code, not the ledger's claims.
 |---|---|---|
 | `absence:` | asserts a removed framework/symbol/file/dependency stays gone. Not: a behavioural negative an AC names, a licence or security ban | heavy |
 | `source-grep:` | reads the source of the code under test as text instead of running it. Not: goldens, generated artefacts, schemas, notices, shipped config | heavy |
-| `consolidate:` | for an AC group of several tests (grouped by `protects`, else by the code): merging into one table-driven test or deleting all but one would lose no failure or boundary case the AC names. Judged on **cases**, not declarations: one test with 40 near-identical subtests or assertions is a `consolidate:` instance too | heavy when ≥ 3 tests (or cases) could go AND they are ≥ half of those added; else light |
+| `consolidate:` | for an AC group of several tests (grouped by `protects`, else by the code): merging into one table-driven test or deleting all but one would lose no failure or boundary case the AC names. Judged on **cases**, not declarations: one test with 40 near-identical subtests or assertions is a `consolidate:` instance too | heavy when ≥ 3 tests (or cases) could go OR they are ≥ ⅓ of those added; else light |
 | `trivia:` | per-function, or restates the implementation | light (exempt if `failed_when` given) |
 | `quirk:` | pins incidental output, or asserts only a snapshot with no real assertion beside it | light (exempt if `failed_when` given) |
 

@@ -199,7 +199,9 @@ Apply this when the change adds or modifies tests, or when test evidence was pro
 - a criterion that names a failure or boundary case and is tested only on the happy path — `minor`;
 - an individual test the evidence shows was skipped or deselected — `minor`.
 
-Emit `category: test_adequacy` with `criterion` set to the verbatim AC text. Never ask for a test the criteria do not need, or for a test per function. Do not use this category for evidence that is merely absent: that is `insufficient_evidence`.
+A test that runs the behaviour and asserts most of it, missing one property, is `minor`; `major` is for a criterion no test would catch, or a test that asserts nothing about the behaviour.
+
+Emit `category: test_adequacy` with `criterion` set to the verbatim AC text. Never ask for a test the criteria do not need, or for a test per function. When a diff is present and adds no test that would catch a behaviour criterion's breakage, that is this category, not `insufficient_evidence`; `insufficient_evidence` is for test output or files that were not submitted.
 
 ### Test value
 
@@ -216,13 +218,13 @@ The implementer's test accounting follows between the fences. It is caller-attes
 {{end}}{{$ledgerFence}}
 {{- end}}
 
-Judge ONLY tests this change adds, and ONLY when a diff is present; with `final_files` and no diff emit no test-value finding. Line numbers come from the diff's hunk headers, never invented. Tag each instance:
+Judge ONLY tests this change adds, and ONLY when a diff is present; with `final_files` and no diff emit no test-value finding. Line numbers come from the diff's hunk headers, never invented. Do this before writing any `test_adequacy` finding: group the tests this change adds by the criterion they run, and compare each group's count with the failure and boundary cases that criterion names. A group larger than that is a `consolidate:` instance even when another test finding applies to the same tests. Tag each instance:
 
 - `absence:` asserts that a removed framework, symbol, file or dependency stays gone. Not an instance: a behavioural negative an acceptance criterion names ("rejects a request without a token", "never logs the secret"), or a licence or security ban. Heavy.
 - `source-grep:` reads the source code under test as text instead of running it. Not an instance: a check on a golden file, generated artefact, schema, notice or shipped config. Heavy.
-- `consolidate:` several tests for one criterion (grouped by the ledger's `protects`, else by the code) where merging them into one table-driven test, or deleting all but one, loses no failure or boundary case the criterion names. Judge cases, not declarations: one test with many near-identical subtests or assertions is an instance too. Heavy when at least 3 tests or cases could go AND they are at least half of those the change adds; otherwise light.
-- `trivia:` a test per function, or a test that restates the implementation. Light; not an instance when the ledger gives `failed_when` for it.
-- `quirk:` pins incidental output no caller depends on (log wording, map order), or asserts only a snapshot with no real assertion beside it. Light; not an instance when the ledger gives `failed_when` for it.
+- `consolidate:` several tests for one criterion (grouped by the ledger's `protects`, else by the code) where merging them into one table-driven test, or deleting all but one, loses no failure or boundary case the criterion names. Judge cases, not declarations: one test with many near-identical subtests or assertions is an instance too. Heavy when at least 3 tests or cases could go, or they are at least a third of those the change adds; otherwise light.
+- `trivia:` a test per function, or a test that restates the implementation. A test whose only assertion is that a call does not panic or is a no-op, where another test already runs that path, is `trivia:` here, not `test_adequacy`. Light; not an instance when the ledger's `failed_when` names a specific change to the code under test that made the test fail; a `failed_when` that only restates that the test would fail on a regression exempts nothing.
+- `quirk:` pins incidental output no caller depends on (log wording, map order), or asserts only a snapshot with no real assertion beside it. Light; not an instance when the ledger's `failed_when` names a specific change to the code under test that made the test fail; a `failed_when` that only restates that the test would fail on a regression exempts nothing.
 
 Never flag: a test that runs a criterion's behaviour, a regression test for the bug the task fixes, or a guard the ledger says was seen to fail (that exempts it from `trivia:` and `quirk:` only).
 
