@@ -425,7 +425,7 @@ func summaryFormatterCases() []summaryFormatterCase {
 			newIn: func() any {
 				return &outcomeSummaryInput{
 					Args: RecordReviewOutcomeArgs{
-						PlanRunID: "run-1",
+						SessionID: "sess-1",
 						Source:    "final_review",
 					},
 					Res: RecordReviewOutcomeResult{

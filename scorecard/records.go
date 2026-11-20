@@ -18,12 +18,15 @@ import (
 const (
 	SourceFinalReview = "final_review"
 	SourceReviewNow   = "review_now"
+	SourceFinishup    = "finishup"
 )
 
 // Sources lists every outcome source in display order.
-var Sources = []string{SourceFinalReview, SourceReviewNow}
+var Sources = []string{SourceFinalReview, SourceReviewNow, SourceFinishup}
 
-func ValidSource(s string) bool { return s == SourceFinalReview || s == SourceReviewNow }
+func ValidSource(s string) bool {
+	return s == SourceFinalReview || s == SourceReviewNow || s == SourceFinishup
+}
 
 func ValidSeverity(s string) bool { return s == "critical" || s == "major" || s == "minor" }
 

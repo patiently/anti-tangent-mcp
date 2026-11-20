@@ -39,8 +39,9 @@ type OutcomeMeasurementArg struct {
 }
 
 type RecordReviewOutcomeArgs struct {
-	PlanRunID         string                       `json:"plan_run_id" jsonschema:"The plan_run_id returned by validate_plan for the run the review covered."`
-	Source            string                       `json:"source" jsonschema:"final_review for the controller's whole-plan review, review_now for a human-adjudicated PR review."`
+	PlanRunID         string                       `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id returned by validate_plan for the run the review covered. Pass this or session_id, not both."`
+	SessionID         string                       `json:"session_id,omitempty" jsonschema:"For a task run without a plan: the session_id its validate_task_spec returned. Pass this or plan_run_id, not both. The session need not be live."`
+	Source            string                       `json:"source" jsonschema:"final_review for the controller's whole-plan review, review_now for a human-adjudicated PR review, or finishup for an automated fix-to-convergence run."`
 	ReviewerModel     string                       `json:"reviewer_model,omitempty" jsonschema:"provider:model that performed the review, when known. At most 100 characters, no control character."`
 	ImplementerModels []OutcomeImplementerModelArg `json:"implementer_models,omitempty" jsonschema:"The model each task was dispatched on, one entry per dispatched task. The controller knows this; the server cannot see it. For final_review, tasks left out are listed in missing_implementer_models and scored in an unknown cohort."`
 	Findings          []OutcomeFindingArg          `json:"findings" jsonschema:"Every finding the review kept, attributed to a task. An empty array means the review found nothing, which is itself recorded."`
@@ -91,20 +92,22 @@ func (h *handlers) recordReviewOutcome(args RecordReviewOutcomeArgs) RecordRevie
 		return res
 	}
 	runID := strings.TrimSpace(args.PlanRunID)
-	if reason := validateOutcomeArgs(runID, args); reason != "" {
+	sessionID := strings.TrimSpace(args.SessionID)
+	if reason := validateOutcomeArgs(runID, sessionID, args); reason != "" {
 		res.Reason = reason
 		return res
 	}
 	runHash := h.deps.Stats.RunHash(runID)
+	if sessionID != "" {
+		runHash = h.deps.Stats.SessionRunHash(sessionID)
+		args = sessionOutcomeArgs(args)
+	}
 	lines, err := h.deps.Stats.RunLines(runHash)
 	if err != nil {
 		slog.Warn("record_review_outcome: reading run snapshots failed", "err", err)
 	}
-	if reason := h.validateOutcomeTaskIndexes(runID, args.Findings, lines); reason != "" {
-		res.Reason = reason
-		return res
-	}
-	if reason := h.validateOutcomeMeasurementIndexes(runID, args.Measurements, lines); reason != "" {
+	n, known := h.outcomeTaskCount(runID, sessionID, lines)
+	if reason := validateOutcomeTaskIndexes(n, known, args.Findings, args.Measurements); reason != "" {
 		res.Reason = reason
 		return res
 	}
@@ -121,9 +124,31 @@ func (h *handlers) recordReviewOutcome(args RecordReviewOutcomeArgs) RecordRevie
 	}
 	// A run minted before stats were enabled is live but has no snapshot
 	// lines; it is still a run this server knows.
-	_, live := h.deps.PlanRuns.PlanTaskCount(runID)
-	res.RunKnown = snapshotted || live
+	res.RunKnown = snapshotted || h.outcomeRunLive(runID, sessionID)
 	return res
+}
+
+// sessionOutcomeArgs reads task_index 0 as 1, since a session run has exactly
+// one task, on a copy so the caller's slices are untouched.
+func sessionOutcomeArgs(args RecordReviewOutcomeArgs) RecordReviewOutcomeArgs {
+	args.Findings = append([]OutcomeFindingArg(nil), args.Findings...)
+	for i := range args.Findings {
+		args.Findings[i].TaskIndex = max(args.Findings[i].TaskIndex, 1)
+	}
+	args.Measurements = append([]OutcomeMeasurementArg(nil), args.Measurements...)
+	for i := range args.Measurements {
+		args.Measurements[i].TaskIndex = max(args.Measurements[i].TaskIndex, 1)
+	}
+	return args
+}
+
+func (h *handlers) outcomeRunLive(runID, sessionID string) bool {
+	if sessionID != "" {
+		_, live := h.deps.Sessions.Get(sessionID)
+		return live
+	}
+	_, live := h.deps.PlanRuns.PlanTaskCount(runID)
+	return live
 }
 
 // outcomeLineFromArgs converts the tool's wire args into the content-free
@@ -167,12 +192,12 @@ func missingImplementerModels(tasks []int, models []OutcomeImplementerModelArg) 
 	return out
 }
 
-func validateOutcomeArgs(runID string, args RecordReviewOutcomeArgs) string {
+func validateOutcomeArgs(runID, sessionID string, args RecordReviewOutcomeArgs) string {
 	switch {
-	case runID == "":
-		return "plan_run_id is required"
+	case (runID == "") == (sessionID == ""):
+		return "exactly one of plan_run_id and session_id is required"
 	case !scorecard.ValidSource(args.Source):
-		return `source must be "final_review" or "review_now"`
+		return `source must be "final_review", "review_now" or "finishup"`
 	case len(args.Findings) > maxOutcomeFindings:
 		return fmt.Sprintf("findings has %d entries; at most %d are accepted", len(args.Findings), maxOutcomeFindings)
 	case len(args.Measurements) > maxOutcomeMeasurements:
@@ -232,43 +257,50 @@ func validateOutcomeImplementerModels(models []OutcomeImplementerModelArg) strin
 	return ""
 }
 
-// validateOutcomeTaskIndexes range-checks every finding's task_index against
-// the run's task count. It returns "" both when every index is in range and
-// when the run itself is unknown, since an unknown run's indexes cannot be
-// range-checked at all.
-func (h *handlers) validateOutcomeTaskIndexes(runID string, findings []OutcomeFindingArg, lines []scorecard.RunLine) string {
-	n, known := h.outcomeTaskCount(runID, lines)
+// validateOutcomeTaskIndexes range-checks every finding's and measurement's
+// task_index against the run's task count n. It returns "" both when every
+// index is in range and when the run itself is unknown, since an unknown
+// run's indexes cannot be range-checked at all.
+func validateOutcomeTaskIndexes(n int, known bool, findings []OutcomeFindingArg, ms []OutcomeMeasurementArg) string {
 	if !known {
 		return ""
 	}
+	fi := make([]int, len(findings))
 	for i, f := range findings {
-		if f.TaskIndex > n {
-			return fmt.Sprintf("findings[%d].task_index %d exceeds the run's %d tasks", i, f.TaskIndex, n)
-		}
+		fi[i] = f.TaskIndex
 	}
-	return ""
-}
-
-// validateOutcomeMeasurementIndexes range-checks measurements as
-// validateOutcomeTaskIndexes checks findings.
-func (h *handlers) validateOutcomeMeasurementIndexes(runID string, ms []OutcomeMeasurementArg, lines []scorecard.RunLine) string {
-	n, known := h.outcomeTaskCount(runID, lines)
-	if !known {
-		return ""
+	if i := firstAbove(fi, n); i >= 0 {
+		return fmt.Sprintf("findings[%d].task_index %d exceeds the run's %d tasks", i, fi[i], n)
 	}
+	mi := make([]int, len(ms))
 	for i, m := range ms {
-		if m.TaskIndex > n {
-			return fmt.Sprintf("measurements[%d].task_index %d exceeds the run's %d tasks", i, m.TaskIndex, n)
-		}
+		mi[i] = m.TaskIndex
+	}
+	if i := firstAbove(mi, n); i >= 0 {
+		return fmt.Sprintf("measurements[%d].task_index %d exceeds the run's %d tasks", i, mi[i], n)
 	}
 	return ""
 }
 
-// outcomeTaskCount is the run's task count from the live store, else from
-// its snapshot header. known is false only when neither has the run; then
-// task indexes cannot be range-checked. A known run with zero tasks is still
-// known, so every positive task_index is rejected for it.
-func (h *handlers) outcomeTaskCount(runID string, lines []scorecard.RunLine) (n int, known bool) {
+// firstAbove returns the position of the first value greater than n, or -1.
+func firstAbove(values []int, n int) int {
+	for i, v := range values {
+		if v > n {
+			return i
+		}
+	}
+	return -1
+}
+
+// outcomeTaskCount is the run's task count: always 1 for a session run, else
+// from the live plan store, else from the run's snapshot header. known is
+// false only when none has the run; then task indexes cannot be
+// range-checked. A known run with zero tasks is still known, so every
+// positive task_index is rejected for it.
+func (h *handlers) outcomeTaskCount(runID, sessionID string, lines []scorecard.RunLine) (n int, known bool) {
+	if sessionID != "" {
+		return 1, true
+	}
 	if n, ok := h.deps.PlanRuns.PlanTaskCount(runID); ok {
 		return n, true
 	}
@@ -280,7 +312,7 @@ func (h *handlers) outcomeTaskCount(runID string, lines []scorecard.RunLine) (n 
 	return 0, false
 }
 
-// formatOutcomeSummary's Source, PlanRunID, Reason and Escape fields are all
+// formatOutcomeSummary's Source, PlanRunID, SessionID, Reason and Escape fields are all
 // caller- or reviewer-attested plain strings the schema does not shape-check
 // beyond non-emptiness, so each goes through escapeBlockValue: see that
 // function's doc comment for why every such value in every formatter here
@@ -288,7 +320,7 @@ func (h *handlers) outcomeTaskCount(runID string, lines []scorecard.RunLine) (n 
 // them.
 func formatOutcomeSummary(args RecordReviewOutcomeArgs, res RecordReviewOutcomeResult) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "record_review_outcome · source: %s · run: %s\n", escapeBlockValue(args.Source), escapeBlockValue(strings.TrimSpace(args.PlanRunID)))
+	fmt.Fprintf(&b, "record_review_outcome · source: %s · %s\n", escapeBlockValue(args.Source), outcomeRunLabel(args))
 	if !res.Recorded {
 		fmt.Fprintf(&b, "recorded: no — %s\n", escapeBlockValue(res.Reason))
 		return b.String()
@@ -312,4 +344,12 @@ func formatOutcomeSummary(args RecordReviewOutcomeArgs, res RecordReviewOutcomeR
 		fmt.Fprintf(&b, "implementer model missing for tasks: %s — call again with implementer_models for every task\n", strings.Join(idx, ", "))
 	}
 	return b.String()
+}
+
+// outcomeRunLabel names the run the call used, with the caller's id escaped.
+func outcomeRunLabel(args RecordReviewOutcomeArgs) string {
+	if sid := strings.TrimSpace(args.SessionID); sid != "" {
+		return "session_id: " + escapeBlockValue(sid)
+	}
+	return "run: " + escapeBlockValue(strings.TrimSpace(args.PlanRunID))
 }

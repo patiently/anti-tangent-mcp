@@ -25,6 +25,12 @@ held up.
 }
 ```
 
+**A run without a plan.** For a task run from a spec with no `validate_plan`, pass `session_id` (the
+implementer's `validate_task_spec` session) instead of `plan_run_id`; the session need not still be
+live. `task_index` is `1` (0 is read as 1). Use `source: "finishup"` for an automated
+fix-to-convergence run, `review_now` for a human-adjudicated review. The PR-body line is
+`anti-tangent-session: <session_id>`.
+
 **Attributing a finding to a task.** Use the file it points at: the task whose `**Files:**` list
 (or `plan_run_report` row) owns that file is its task. When a finding genuinely spans tasks, or
 names no file, use `task_index: 0`. It is then counted for the run, never for a task.

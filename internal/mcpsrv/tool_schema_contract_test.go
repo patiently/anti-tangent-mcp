@@ -169,7 +169,7 @@ func TestToolInputSchemas_RequiredSetsUnchanged(t *testing.T) {
 		"plan_run_report":                                                {"plan_run_id"},
 		"prime_project_knowledge":                                        {"acceptance_criteria", "goal", "task_title"},
 		"prime_project_knowledge.kb_index[]":                             {"permalink", "summary", "title", "type"},
-		"record_review_outcome":                                          {"findings", "plan_run_id", "source"},
+		"record_review_outcome":                                          {"findings", "source"},
 		"record_review_outcome.findings[]":                               {"category", "severity", "task_index"},
 		"record_review_outcome.implementer_models[]":                     {"model", "task_index"},
 		"record_review_outcome.measurements[]":                           {"after", "before", "metric", "task_index"},

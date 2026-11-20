@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `test_weakened` (major, `quality`): an existing test loosened, skipped or deleted with no acceptance criterion changing its behaviour or naming it as the thing to fix.
 - `validate_task_spec` accepts `implementer_model`, the implementer's own model ID. Run snapshots and stats events carry it, along with tests added, acceptance-criterion count, ledger and declined counts, and per-criterion finding counts (server sentinels only; ledger text is never stored).
 - A task run without a plan (a session with no `plan_run_id`) is now a one-task run in `runs.jsonl` (`kind: session`), so the scorecard covers spec-driven work. Cohorts are keyed by run kind and never compared across kinds, and implementer models are matched with any `provider:` prefix and `[...]` suffix removed.
+- `record_review_outcome` records against a task run without a plan by `session_id` (the session need not be live; task index 1), and accepts `source: finishup` for automated fix-to-convergence reviews.
 
 ### Changed
 
