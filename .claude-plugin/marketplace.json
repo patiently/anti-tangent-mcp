@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "anti-tangent-mcp",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "Anti-tangent MCP server companions: the anti-tangent-protocol on-demand protocol plugin, the bm-scribe Basic Memory note-writing plugin, and I/O-delegation hooks (anti-tangent-shunt for bulk reads, anti-tangent-guard for task-session and completion enforcement and comment hygiene, which also refuses a dispatched implementer's edits before validate_task_spec (and, opted in, any session's) and Edit/Write calls that add comments carrying change history).",
   "owner": {
     "name": "Patrick Gilmore",
@@ -10,8 +10,8 @@
   "plugins": [
     {
       "name": "anti-tangent-protocol",
-      "description": "On-demand loader for the anti-tangent-mcp drift-protection protocol. A description-triggered skill that loads only the role-scoped protocol part a task needs, and only when a task with acceptance criteria appears, from a plan or a spec — keeping the always-loaded footprint to one line.",
-      "version": "0.5.0",
+      "description": "On-demand loader for the anti-tangent-mcp drift-protection protocol. A description-triggered skill that loads only the role-scoped protocol part a task needs, and only when a task with acceptance criteria appears, from a plan or a spec — keeping the always-loaded footprint to one line. Also ships the investigate skill, which turns a reported error or production incident into an approved bug-fix brief, and the test-value and debugging rules under rules/ for review tooling to read.",
+      "version": "0.6.0",
       "source": "./plugin/anti-tangent-protocol",
       "category": "productivity",
       "homepage": "https://github.com/patiently/anti-tangent-mcp"

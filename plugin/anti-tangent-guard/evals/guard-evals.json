@@ -4115,6 +4115,25 @@
         ]
       },
       "reason": "the payload cwd follows a Bash cd, so after `cd src` a write to a sibling directory must still be judged against CLAUDE_PROJECT_DIR and gated"
+    },
+    {
+      "id": 242,
+      "name": "close-tests-line-completion-passes",
+      "input": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "status": "completed",
+          "taskId": "1"
+        },
+        "transcript_path": "{{TRANSCRIPT}}"
+      },
+      "transcript_raw_lines": [
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"TaskUpdate\", \"input\": {\"taskId\": \"1\", \"status\": \"in_progress\"}}]}}",
+        "{\"type\": \"assistant\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Agent\", \"input\": {\"prompt\": \"Implement Task 3: add the flag.\\n\\n## Drift-protection protocol (anti-tangent-mcp)\\n\\nAt task start and before DONE, you must use validate_task_spec and validate_completion.\"}}]}}",
+        "{\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"tool_result\", \"content\": [{\"type\": \"text\", \"text\": \"anti-tangent envelope\\n  tool:          validate_completion\\n  session_id:    sess-1\\n  verdict:       pass\\n  model_used:    m\\n  review_ms:     0\\n  tests:         +3 for 2 ACs (declined 0)\\n\"}]}]}}"
+      ],
+      "expected_exit": 0,
+      "reason": "a block carrying the tests: line after review_ms: must still qualify on the unchanged tool: and verdict: regexes and pass the close; a parser change that stopped matching a block because of an extra header key would block every real completion this hook ships against"
     }
   ]
 }

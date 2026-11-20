@@ -144,9 +144,10 @@ func Runs(lines []scorecard.RunLine, outcomes []scorecard.OutcomeLine) []RunSumm
 			latestOutcome[k][o.Source] = o
 		}
 	}
+	reported := map[key]map[int]bool{}
 	for k, bySource := range latestOutcome {
 		s := get(k)
-		seen := map[string]bool{}
+		reported[k] = map[int]bool{}
 		for _, src := range scorecard.Sources {
 			o, ok := bySource[src]
 			if !ok {
@@ -156,13 +157,29 @@ func Runs(lines []scorecard.RunLine, outcomes []scorecard.OutcomeLine) []RunSumm
 			esc, _, _ := scorecard.RunEscapes(perRun[k], o)
 			s.Escapes[src] = len(esc)
 			for _, m := range o.ImplementerModels {
-				if !seen[m.Model] {
-					seen[m.Model] = true
-					s.ImplementerModels = append(s.ImplementerModels, m.Model)
+				model := scorecard.NormalizeImplementerModel(m.Model)
+				if model == "" {
+					continue
 				}
+				reported[k][m.TaskIndex] = true
+				s.ImplementerModels = append(s.ImplementerModels, model)
 			}
 		}
-		sort.Strings(s.ImplementerModels)
+	}
+	// A task no outcome names a model for falls back to the model its
+	// implementer reported for itself in the task's latest snapshot, the same
+	// order the scorecard uses; a session run has no final review, so this is
+	// its only source.
+	for k, s := range byKey {
+		for index, snap := range latestTaskSnapshots(perRun[k]) {
+			if reported[k][index] {
+				continue
+			}
+			if m := scorecard.NormalizeImplementerModel(snap.ImplementerModel); m != "" {
+				s.ImplementerModels = append(s.ImplementerModels, m)
+			}
+		}
+		s.ImplementerModels = dedupSorted(s.ImplementerModels)
 	}
 	out := make([]RunSummary, 0, len(byKey))
 	for _, s := range byKey {
@@ -174,6 +191,37 @@ func Runs(lines []scorecard.RunLine, outcomes []scorecard.OutcomeLine) []RunSumm
 		}
 		return out[i].RunHash < out[j].RunHash
 	})
+	return out
+}
+
+// latestTaskSnapshots returns each task's newest snapshot, a later line
+// winning a timestamp tie, as the scorecard resolves them.
+func latestTaskSnapshots(lines []scorecard.RunLine) map[int]scorecard.TaskSnapshot {
+	snaps := map[int]scorecard.TaskSnapshot{}
+	ts := map[int]time.Time{}
+	for _, l := range lines {
+		if l.Header || l.Task == nil {
+			continue
+		}
+		if prev, ok := ts[l.Task.Index]; ok && l.Ts.Before(prev) {
+			continue
+		}
+		snaps[l.Task.Index], ts[l.Task.Index] = *l.Task, l.Ts
+	}
+	return snaps
+}
+
+func dedupSorted(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	sort.Strings(in)
+	out := in[:1]
+	for _, v := range in[1:] {
+		if v != out[len(out)-1] {
+			out = append(out, v)
+		}
+	}
 	return out
 }
 

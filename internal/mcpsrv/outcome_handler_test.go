@@ -2,6 +2,7 @@ package mcpsrv
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/patiently/anti-tangent-mcp/internal/planrun"
+	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
 	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
@@ -275,4 +277,114 @@ func TestRecordReviewOutcome_ReviewNowDoesNotListMissingModels(t *testing.T) {
 	assert.Equal(t, []int{}, res.MissingImplementerModels)
 	assert.NotContains(t, res.SummaryBlock, "implementer model missing")
 	waitForScorecard(t, dir)
+}
+
+// owningRun is the plan run a test session is created in: runID when the case
+// puts the session in a plan run, else none.
+func owningRun(inPlanRun bool, runID string) string {
+	if inPlanRun {
+		return runID
+	}
+	return ""
+}
+
+type sessionOutcomeCase struct {
+	name       string
+	evict      bool
+	inPlanRun  bool
+	args       func(sessionID, planRunID string) RecordReviewOutcomeArgs
+	wantReason []string
+	wantIndex  int
+}
+
+func sessionOutcomeCases() []sessionOutcomeCase {
+	finding := func(idx int) []OutcomeFindingArg {
+		return []OutcomeFindingArg{{TaskIndex: idx, Severity: "major", Category: "correctness"}}
+	}
+	return []sessionOutcomeCase{
+		{name: "live session, index 0 stored as 1", wantIndex: 1,
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Findings: finding(0)}
+			}},
+		{name: "evicted session is still recorded", evict: true, wantIndex: 1,
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Findings: finding(0)}
+			}},
+		{name: "index above 1 rejected", wantReason: []string{"task_index"},
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Findings: finding(2)}
+			}},
+		{name: "implementer model index 0 stored as 1", wantIndex: 1,
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", ImplementerModels: []OutcomeImplementerModelArg{{TaskIndex: 0, Model: "m"}}}
+			}},
+		{name: "implementer model index above 1 rejected", wantReason: []string{"implementer_models"},
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", ImplementerModels: []OutcomeImplementerModelArg{{TaskIndex: 2, Model: "m"}}}
+			}},
+		{name: "measurement index 0 stored as 1", wantIndex: 1,
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Measurements: []OutcomeMeasurementArg{{TaskIndex: 0, Metric: "m"}}}
+			}},
+		{name: "measurement index above 1 rejected", wantReason: []string{"measurements"},
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Measurements: []OutcomeMeasurementArg{{TaskIndex: 2, Metric: "m"}}}
+			}},
+		{name: "both ids rejected", wantReason: []string{"plan_run_id", "session_id"},
+			args: func(s, p string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, PlanRunID: p, Source: "final_review"}
+			}},
+		{name: "neither id rejected", wantReason: []string{"plan_run_id", "session_id"},
+			args: func(string, string) RecordReviewOutcomeArgs { return RecordReviewOutcomeArgs{Source: "final_review"} }},
+		{name: "session of a plan run rejected", inPlanRun: true, wantReason: []string{"plan run", "plan_run_id"},
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "final_review", Findings: finding(1)}
+			}},
+		{name: "finishup source accepted", wantIndex: 1,
+			args: func(s, _ string) RecordReviewOutcomeArgs {
+				return RecordReviewOutcomeArgs{SessionID: s, Source: "finishup", Findings: finding(1)}
+			}},
+	}
+}
+
+func TestRecordReviewOutcome_SessionRuns(t *testing.T) {
+	for _, tc := range sessionOutcomeCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			h, rec, dir := outcomeHandlers(t)
+			run := h.deps.PlanRuns.Create("pass", "rigorous", 2)
+			sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, owningRun(tc.inPlanRun, run.ID))
+			if tc.evict {
+				h.deps.Sessions.EvictExpired(time.Now().Add(24 * time.Hour))
+			}
+			res := recordOutcome(t, h, tc.args(sess.ID, run.ID))
+			assert.Equal(t, len(tc.wantReason) == 0, res.Recorded, res.Reason)
+			for _, w := range tc.wantReason {
+				assert.Contains(t, res.Reason, w)
+			}
+			if !res.Recorded {
+				return
+			}
+			waitForScorecard(t, dir)
+			raw, err := os.ReadFile(filepath.Join(dir, "outcomes.jsonl"))
+			require.NoError(t, err)
+			var last scorecard.OutcomeLine
+			rows := strings.Split(strings.TrimSpace(string(raw)), "\n")
+			require.NoError(t, json.Unmarshal([]byte(rows[len(rows)-1]), &last))
+			assert.Equal(t, rec.SessionRunHash(sess.ID), last.RunHash)
+			var got []int
+			for _, f := range last.Findings {
+				got = append(got, f.TaskIndex)
+			}
+			for _, m := range last.ImplementerModels {
+				got = append(got, m.TaskIndex)
+			}
+			for _, m := range last.Measurements {
+				got = append(got, m.TaskIndex)
+			}
+			require.NotEmpty(t, got)
+			for _, idx := range got {
+				assert.Equal(t, tc.wantIndex, idx)
+			}
+		})
+	}
 }

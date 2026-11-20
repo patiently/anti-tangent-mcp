@@ -189,7 +189,7 @@ func diffLineCounts(diff string) (added, removed int) {
 // completionRowUpdate is the plan-run row write for one validate_completion
 // result. finalDiff is the diff the call submitted, or "" when it sent none.
 func completionRowUpdate(env Envelope, cs *codescene.Digest, finalDiff string) func(*planrun.TaskRow) {
-	sev, cats, _, _ := stats.CountFindings(env.Findings)
+	sev, cats, crit, _ := stats.CountFindings(env.Findings)
 	added, removed := diffLineCounts(finalDiff)
 	state := planrun.StateMissing
 	if cs != nil {
@@ -204,12 +204,9 @@ func completionRowUpdate(env Envelope, cs *codescene.Digest, finalDiff string) f
 	return func(row *planrun.TaskRow) {
 		row.PostVerdict = env.Verdict
 		row.Severity = sev
-		for c, n := range cats {
-			if row.Categories == nil {
-				row.Categories = map[string]int{}
-			}
-			row.Categories[c] += n
-		}
+		row.Categories = addCounts(row.Categories, cats)
+		row.Criteria = addCounts(row.Criteria, crit)
+		applyTestTally(row, env.Tests)
 		if finalDiff != "" {
 			row.LinesAdded, row.LinesRemoved = added, removed
 		}
@@ -221,6 +218,25 @@ func completionRowUpdate(env Envelope, cs *codescene.Digest, finalDiff string) f
 		row.Escalated = row.Escalated || env.Escalate
 		row.AppendCall(call)
 	}
+}
+
+// addCounts adds src into dst, allocating dst on first use.
+func addCounts(dst, src map[string]int) map[string]int {
+	for k, n := range src {
+		if dst == nil {
+			dst = map[string]int{}
+		}
+		dst[k] += n
+	}
+	return dst
+}
+
+// applyTestTally copies the latest validate_completion test counts onto row.
+func applyTestTally(row *planrun.TaskRow, t *TestTally) {
+	if t == nil {
+		return
+	}
+	row.TestsAdded, row.ACCount, row.LedgerEntries, row.TestsDeclined = t.Added, t.ACs, t.Ledger, t.Declined
 }
 
 // countOverBuildingRuled wraps a row update so it also counts a call whose
@@ -238,11 +254,17 @@ func countOverBuildingRuled(update func(*planrun.TaskRow), ruled bool) func(*pla
 // recordCheckpointRow increments the plan-run row's checkpoint count for a
 // session-backed check_progress call and writes the updated row to the plan
 // ledger. Best effort: an unknown run or row logs a warning and never
-// changes the result. A no-op when sess carries no plan run.
+// changes the result. A session with no plan run updates its own row.
 func (h *handlers) recordCheckpointRow(sess *session.Session, env Envelope) {
 	if sess.PlanRunID == "" {
+		h.recordSessionRow(sess.ID, func(row *planrun.TaskRow) {
+			row.Checkpoints++
+			row.AppendCall(callFromEnvelope("check_progress", env))
+		})
 		return
 	}
+	h.rowMu.Lock()
+	defer h.rowMu.Unlock()
 	row, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, func(row *planrun.TaskRow) {
 		row.Checkpoints++
 		row.AppendCall(callFromEnvelope("check_progress", env))
@@ -258,12 +280,22 @@ func (h *handlers) recordCheckpointRow(sess *session.Session, env Envelope) {
 // recordCompletionRow updates the plan-run row for a session-backed
 // validate_completion call and writes the updated row to the plan ledger.
 // Best effort: an unknown run or row logs a warning and never changes the
-// result. A no-op when sess carries no plan run.
+// result. A session with no plan run updates its own row.
 func (h *handlers) recordCompletionRow(sess *session.Session, env Envelope, cs *codescene.Digest, finalDiff string, overBuildingRuled bool, rd *ratedigest.Digest) {
+	update := withRateDigest(countOverBuildingRuled(completionRowUpdate(env, cs, finalDiff), overBuildingRuled), rd)
+	base := update
+	update = func(row *planrun.TaskRow) {
+		base(row)
+		if sess.ImplementerModel != "" {
+			row.ImplementerModel = sess.ImplementerModel
+		}
+	}
 	if sess.PlanRunID == "" {
+		h.recordSessionRow(sess.ID, update)
 		return
 	}
-	update := withRateDigest(countOverBuildingRuled(completionRowUpdate(env, cs, finalDiff), overBuildingRuled), rd)
+	h.rowMu.Lock()
+	defer h.rowMu.Unlock()
 	if row, ok := h.deps.PlanRuns.UpdateRow(sess.PlanRunID, sess.ID, update); ok {
 		h.appendPlanLedger(sess.PlanRunID, row)
 	} else {
@@ -283,6 +315,8 @@ func (h *handlers) recordLightweightCompletionRow(args ValidateCompletionArgs, e
 	}
 	ref := planrun.TaskRef{Index: args.TaskIndex, Title: args.TaskTitle}
 	update := withIssuedIDs(withRateDigest(countOverBuildingRuled(completionRowUpdate(env, args.Codescene, args.FinalDiff), overBuildingRuled), rd), envelopeIDs(env))
+	h.rowMu.Lock()
+	defer h.rowMu.Unlock()
 	row, res := h.deps.PlanRuns.UpsertLite(args.PlanRunID, ref, update)
 	switch res {
 	case planrun.UpsertApplied:
@@ -332,4 +366,36 @@ func withRateDigest(update func(*planrun.TaskRow), rd *ratedigest.Digest) func(*
 		update(row)
 		row.RateDigest = rd.ForRecord()
 	}
+}
+
+// recordTaskSpecRow records a validate_task_spec review on the row of the
+// session it created: the plan run's row when the call named a run, else the
+// session's own row. Both count one attempt and log the call, so the two kinds
+// of run are counted alike.
+func (h *handlers) recordTaskSpecRow(env *Envelope, planRunID string, taskRef planrun.TaskRef, attachedByTitle bool) {
+	call := callFromEnvelope("validate_task_spec", *env)
+	if planRunID == "" {
+		h.recordSessionRow(env.SessionID, func(row *planrun.TaskRow) {
+			row.PreVerdict = env.Verdict
+			row.Attempts++
+			row.AppendCall(call)
+		})
+		return
+	}
+	// Best-effort: an unknown or expired run must not fail the review.
+	h.rowMu.Lock()
+	defer h.rowMu.Unlock()
+	row, ok := h.deps.PlanRuns.Attach(planRunID, env.SessionID, taskRef, env.Verdict)
+	if !ok {
+		slog.Warn("plan run attach failed; run unknown or expired",
+			"plan_run_id", planRunID, "session_id", env.SessionID)
+		if attachedByTitle {
+			withdrawAttachedByTitle(env, planRunID)
+		}
+		return
+	}
+	if logged, ok := h.deps.PlanRuns.UpdateRow(planRunID, env.SessionID, func(r *planrun.TaskRow) { r.AppendCall(call) }); ok {
+		row = logged
+	}
+	h.appendPlanLedger(planRunID, row)
 }

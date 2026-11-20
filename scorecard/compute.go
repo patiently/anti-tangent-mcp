@@ -1,6 +1,7 @@
 package scorecard
 
 import (
+	"cmp"
 	"sort"
 	"time"
 )
@@ -15,6 +16,7 @@ const (
 )
 
 type CohortKey struct {
+	Kind             string `json:"kind,omitempty"`
 	ReviewModel      string `json:"review_model"`
 	ServerVersion    string `json:"server_version,omitempty"`
 	ImplementerModel string `json:"implementer_model,omitempty"`
@@ -63,12 +65,12 @@ func Compute(lines []RunLine, outcomes []OutcomeLine, opts Options) Scorecard {
 		opts.MinRuns = DefaultMinRuns
 	}
 	runs := assemble(lines, outcomes, opts.Publisher)
-	byReview := func(_ *run, t *task) CohortKey { return CohortKey{ReviewModel: t.reviewModel()} }
+	byReview := func(r *run, t *task) CohortKey { return CohortKey{Kind: r.kind(), ReviewModel: t.reviewModel()} }
 	sc := Scorecard{
 		GeneratedAt: opts.Now,
 		MinRuns:     opts.MinRuns,
 		Cohorts: groupTasks(runs, func(r *run, t *task) CohortKey {
-			return CohortKey{t.reviewModel(), t.serverVersion(), r.implementerModel(t.snap.Index)}
+			return CohortKey{r.kind(), t.reviewModel(), t.serverVersion(), r.implementerModel(t.snap.Index)}
 		}, false, opts.MinRuns),
 		ByReviewModel: groupTasks(runs, byReview, false, opts.MinRuns),
 		ByToolModel:   toolModelRows(runs, false),
@@ -120,41 +122,45 @@ func groupTasks(runs map[runKey]*run, keyOf func(*run, *task) CohortKey, byPubli
 	for id, a := range accs {
 		groups = append(groups, Group{Key: id.key, Publisher: id.publisher, Metrics: a.metrics(), first: a.first, last: a.last})
 	}
-	sort.Slice(groups, func(i, j int) bool {
-		a, b := groups[i], groups[j]
-		if a.Source != b.Source {
-			return a.Source < b.Source
-		}
-		if a.Publisher != b.Publisher {
-			return a.Publisher < b.Publisher
-		}
-		if a.Key.ReviewModel != b.Key.ReviewModel {
-			return a.Key.ReviewModel < b.Key.ReviewModel
-		}
-		if a.Key.ServerVersion != b.Key.ServerVersion {
-			return a.Key.ServerVersion < b.Key.ServerVersion
-		}
-		return a.Key.ImplementerModel < b.Key.ImplementerModel
-	})
+	sort.Slice(groups, func(i, j int) bool { return groupLess(groups[i], groups[j]) })
 	assignRegression(groups, minRuns)
 	return groups
 }
 
+// groupLess orders groups by source, publisher, run kind, review model,
+// server version and implementer model.
+func groupLess(a, b Group) bool {
+	return cmp.Or(
+		cmp.Compare(a.Source, b.Source),
+		cmp.Compare(a.Publisher, b.Publisher),
+		cmp.Compare(a.Key.Kind, b.Key.Kind),
+		cmp.Compare(a.Key.ReviewModel, b.Key.ReviewModel),
+		cmp.Compare(a.Key.ServerVersion, b.Key.ServerVersion),
+		cmp.Compare(a.Key.ImplementerModel, b.Key.ImplementerModel),
+	) < 0
+}
+
+// comparableGroups reports whether c may serve as a baseline for g: same
+// source, publisher and run kind, and wholly earlier.
+func comparableGroups(g, c *Group) bool {
+	return c.Source == g.Source && c.Publisher == g.Publisher && c.Key.Kind == g.Key.Kind && c.last.Before(g.first)
+}
+
 // assignRegression compares each group with its baseline. Candidates are the
-// groups of the same source and publisher whose last scored task came before
-// this group's first. Among them, the most recent one reviewed and implemented
-// by the same models is the baseline, so a release is measured against the
-// same models on the release before; when no candidate shares both models,
-// the most recent candidate of any key is used. groups arrives sorted, and the
-// strict After below keeps the first-sorted group on a tie. Only a disjoint
-// interval counts as a regression, and only once both sides have minRuns runs.
+// groups comparableGroups admits. Among them, the most recent one reviewed and
+// implemented by the same models is the baseline, so a release is measured
+// against the same models on the release before; when no candidate shares both
+// models, the most recent candidate of any key is used. groups arrives sorted,
+// and the strict After below keeps the first-sorted group on a tie. Only a
+// disjoint interval counts as a regression, and only once both sides have
+// minRuns runs.
 func assignRegression(groups []Group, minRuns int) {
 	for i := range groups {
 		g := &groups[i]
 		var base, sameModels *Group
 		for j := range groups {
 			c := &groups[j]
-			if j == i || c.Source != g.Source || c.Publisher != g.Publisher || !c.last.Before(g.first) {
+			if j == i || !comparableGroups(g, c) {
 				continue
 			}
 			if base == nil || c.last.After(base.last) {

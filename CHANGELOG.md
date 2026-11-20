@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] - 2026-11-20
+
+### Added
+
+- `validate_task_spec`'s `implementation_guidance` adds working practice after the lean build ruleset: test first per acceptance criterion, the test-value rule (which tests to write and which not to), and debugging guidance (reproduce first, one change per attempt, never weaken a test to get green, stop and report after two failed attempts on the same failure).
+- `anti-tangent-protocol` ships the test-value and debugging rules as `rules/test-value.md` and `rules/debugging.md`, byte-identical to the text the server uses, for review tooling to read.
+- `validate_completion` accepts `test_ledger` (each test beyond the first for an acceptance criterion: what it protects, and optionally how it was seen to fail) and `tests_declined`. The server counts the test declarations a diff adds (Go, Kotlin/Java, Python, JS/TS; table rows and parametrised cases count once), raises a minor `test_ledger_absent` when a task adds more tests than it has acceptance criteria without a ledger, and prints `tests: +N for M ACs (declined K)` in the summary block (`n/a` when not comparable: a diff that adds lines to a Kotest spec or to a Rust, Ruby, C#, Swift, Scala, PHP or C/C++ source file, or to a test file in another language with no counting rule; fixtures and snapshots under a test path are ignored).
+- `validate_completion`'s reviewer judges the tests a change adds against the test-value rule and reports them in one `quality` / `test_value` finding: major for absence guards, tests that read the source under test as text, or over-testing (at least three tests or cases that could go, or at least a third of those added); minor for per-function trivia and incidental-output pins. A test an acceptance criterion mandates is reported as a minor `test_value_mandated` addressed to the spec author. Test value alone never fails the verdict.
+- `test_weakened` (major, `quality`): an existing test loosened, skipped or deleted with no acceptance criterion changing its behaviour or naming it as the thing to fix.
+- `validate_task_spec` accepts `implementer_model`, the implementer's own model ID. Run snapshots and stats events carry it, along with tests added, acceptance-criterion count, ledger and declined counts, and per-criterion finding counts (server sentinels only; ledger text is never stored).
+- A task run without a plan (a session with no `plan_run_id`) is now a one-task run in `runs.jsonl` (`kind: session`), so the scorecard covers spec-driven work. Cohorts, the review-model and tool-model views and their per-publisher forms are keyed by run kind (`by_tool_model` rows carry `kind`) and never compared across kinds, and implementer models are matched with any `provider:` prefix, `[...]` suffix and trailing `:N` version (as in Bedrock IDs) removed. A scorecard reader older than 0.31.0 — the server after a rollback that keeps its stats directory, or a released gnome-topbar daemon reading a 0.31.0 publisher's shared notes — has no notion of kind and counts a `kind: session` run as a one-task plan run with a blank plan verdict.
+- `record_review_outcome` records against a task run without a plan by `session_id` (the session need not be live; task index 1; a session that belongs to a plan run is rejected, since its outcome is filed by `plan_run_id`), and accepts `source: finishup` for automated fix-to-convergence reviews. Every `implementer_models[].task_index` is now range-checked against the run's task count, for a plan run as well as a session run: one index past the last task rejects the whole call (`recorded: false`), as an out-of-range finding or measurement index already did.
+- `anti-tangent-protocol` 0.6.0: protocol part `cycle.md` (§7), the development cycle from brainstorm or reported error to merge — stages and their gates, when to run implementers in parallel, roles with capability tiers and the escalation test, and when to revisit the guidance.
+- `anti-tangent-protocol` 0.6.0: the `investigate` skill turns a reported error or production incident into an approved bug-fix brief without changing the project tree; production reads need the user's go-ahead once per incident, writes per action, and quoted logs are redacted.
+
+### Changed
+
+- `test_adequacy` no longer raises a minor finding whenever a criterion lacks a test the task did not ask for, in `validate_completion`, `validate_task_spec` or `validate_plan`. It still raises a major for a behaviour criterion with no test when tests are called for, and for a test that asserts nothing about the behaviour.
+- In `validate_completion`, over-testing is heavy at three removable tests or cases or at a third of those added. A no-op or does-not-panic test duplicating another path is `test_value` trivia, not `test_adequacy`. A ledger `failed_when` exempts a test only when it names a concrete change that made it fail. A diff that adds no test for a behaviour criterion is `test_adequacy`, not `insufficient_evidence`, and a test missing one property of a criterion it otherwise asserts is minor.
+
+### Fixed
+
+- Concurrent updates to one task's row no longer write their run snapshot lines out of order. The scorecard keeps a task's latest-timestamped line, so an out-of-order pair could leave it scoring an older row that lacked the newer checkpoint or call. This applies to plan-run rows and to rows of sessions with no plan run, and to the plan ledger line each update writes.
+- A diff header whose path git quoted (a non-ASCII, quote or backslash character in the name) is decoded before the path is classified, so tests added in such a file are counted for the test ledger and the ellipsis exemption reads the real file extension.
+
 ## [0.30.1] - 2026-11-17
 
 ### Fixed

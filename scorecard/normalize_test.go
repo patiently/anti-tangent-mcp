@@ -22,6 +22,23 @@ func TestNormalizeModel(t *testing.T) {
 	}
 }
 
+func TestNormalizeImplementerModel(t *testing.T) {
+	cases := map[string]string{
+		"anthropic:claude-sonnet-5-5":                          "claude-sonnet-5-5",
+		"claude-sonnet-5-5[1m]":                                "claude-sonnet-5-5",
+		"Anthropic:Claude-Haiku-4-5-20251001":                  "claude-haiku-4-5",
+		"openai:gpt-5.6-terra":                                 "gpt-5.6-terra",
+		"us.anthropic.claude-sonnet-4-5-20250929-v1:0":         "us.anthropic.claude-sonnet-4-5-20250929-v1",
+		"bedrock:us.anthropic.claude-sonnet-4-5-20250929-v1:0": "us.anthropic.claude-sonnet-4-5-20250929-v1",
+		"": "",
+	}
+	for in, want := range cases {
+		if got := NormalizeImplementerModel(in); got != want {
+			t.Errorf("NormalizeImplementerModel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestCohortsMergeDatedAndUndatedImplementerModel(t *testing.T) {
 	lines := []RunLine{
 		taskLine("r1", t0, 1, "pass", completion("m", "pass")),
@@ -32,7 +49,7 @@ func TestCohortsMergeDatedAndUndatedImplementerModel(t *testing.T) {
 	o2 := outcome("r2", SourceFinalReview, t0.Add(time.Hour))
 	o2.ImplementerModels = []ImplementerModel{{TaskIndex: 1, Model: "anthropic:claude-haiku-4-5-20251001"}}
 	g := only(t, Compute(lines, []OutcomeLine{o1, o2}, Options{}).Cohorts, SourceFinalReview)
-	if g.Runs != 2 || g.Key.ImplementerModel != "anthropic:claude-haiku-4-5" {
+	if g.Runs != 2 || g.Key.ImplementerModel != "claude-haiku-4-5" {
 		t.Fatalf("cohort = %+v runs=%d", g.Key, g.Runs)
 	}
 }

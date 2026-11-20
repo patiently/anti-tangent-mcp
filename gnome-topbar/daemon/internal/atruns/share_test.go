@@ -219,3 +219,27 @@ func TestNoteBodyLeavesOutMeasurements(t *testing.T) {
 		t.Fatal("NoteBody must not mutate its input")
 	}
 }
+
+func TestNoteBodyBoundsTaskImplementerModelAndCriteria(t *testing.T) {
+	long := strings.Repeat("m", 150) + "\nsecret finding text"
+	added := 3
+	task := &scorecard.TaskSnapshot{Index: 1, ImplementerModel: long, TestsAdded: &added,
+		Criteria: map[string]int{"test_value": 2, "secret acceptance criterion text": 1}}
+	body, err := NoteBody("alice", []scorecard.RunLine{{RunHash: "r_1", Task: task}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, "secret finding text") || strings.Contains(body, strings.Repeat("m", 101)) {
+		t.Fatalf("an unbounded implementer model was published:\n%s", body)
+	}
+	if strings.Contains(body, "secret acceptance criterion text") || !strings.Contains(body, `"test_value": 2`) {
+		t.Fatalf("criteria not limited to counted sentinels:\n%s", body)
+	}
+	out := clampTaskCalls(task)
+	if out.TestsAdded == task.TestsAdded {
+		t.Fatal("clampTaskCalls shares the TestsAdded pointer with its input")
+	}
+	if task.ImplementerModel != long || len(task.Criteria) != 2 {
+		t.Fatal("NoteBody mutated its input task")
+	}
+}

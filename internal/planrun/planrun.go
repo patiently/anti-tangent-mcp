@@ -85,6 +85,17 @@ type TaskRow struct {
 	// RateDigest is the counts of the most recent rate_digest a
 	// validate_completion call on the task sent, without its eval path.
 	RateDigest *ratedigest.Digest `json:"rate_digest,omitempty"`
+	// ImplementerModel is the model the implementer reported on
+	// validate_task_spec, raw; cohorts normalise it when read.
+	ImplementerModel string `json:"implementer_model,omitempty"`
+	// TestsAdded is nil when the count is unknown.
+	TestsAdded    *int `json:"tests_added,omitempty"`
+	ACCount       int  `json:"ac_count,omitempty"`
+	LedgerEntries int  `json:"ledger_entries,omitempty"`
+	TestsDeclined int  `json:"tests_declined,omitempty"`
+	// Criteria sums, over the task's validate_completion calls, the findings
+	// per server-recognised criterion sentinel; never free text.
+	Criteria map[string]int `json:"criteria,omitempty"`
 	// IssuedIDs is the finding IDs lightweight validate_completion calls on
 	// this task returned, oldest first, capped at maxIssuedIDs. A lightweight
 	// call's controller_rulings may name only these. In memory only.
@@ -470,7 +481,7 @@ func (s *Store) Get(id string) (*Run, bool) {
 // the lock is released. Use it for any read that walks Rows; Get returns the
 // live run and is for callers that only need identity or metadata.
 //
-// Rows are deep-copied via cloneRow: TaskRow.Codescene (pointer) and
+// Rows are deep-copied via CloneRow: TaskRow.Codescene (pointer) and
 // TaskRow.Severity (map) would otherwise still alias the live row's values.
 func (s *Store) Snapshot(id string) (*Run, bool) {
 	s.mu.Lock()
@@ -492,7 +503,7 @@ func (r *Run) snapshot() *Run {
 	cp.review = nil
 	cp.Rows = make([]TaskRow, len(r.Rows))
 	for i, row := range r.Rows {
-		cp.Rows[i] = cloneRow(row)
+		cp.Rows[i] = CloneRow(row)
 	}
 	cp.ConfiguredModels = cloneStringMap(r.ConfiguredModels)
 	cp.PlanCall = cloneCall(r.PlanCall)
@@ -500,11 +511,16 @@ func (r *Run) snapshot() *Run {
 	return &cp
 }
 
-// cloneRow deep-copies row: Severity, Categories and Codescene would
-// otherwise still alias the live row's maps and digest.
-func cloneRow(row TaskRow) TaskRow {
+// CloneRow deep-copies row: every map, slice and pointer field would
+// otherwise still alias the live row.
+func CloneRow(row TaskRow) TaskRow {
 	row.Severity = cloneIntMap(row.Severity)
 	row.Categories = cloneIntMap(row.Categories)
+	row.Criteria = cloneIntMap(row.Criteria)
+	if row.TestsAdded != nil {
+		n := *row.TestsAdded
+		row.TestsAdded = &n
+	}
 	row.Codescene = cloneDigest(row.Codescene)
 	row.RateDigest = row.RateDigest.ForRecord()
 	row.Calls = append([]ToolCall(nil), row.Calls...)
@@ -665,7 +681,7 @@ func (s *Store) Attach(runID, sessionID string, ref TaskRef, preVerdict string) 
 	}
 	r.sessions[sessionID] = sessionRef{index: row.Index, heading: r.taskTitle(task)}
 	r.LastAccessed = time.Now()
-	return cloneRow(*row), true
+	return CloneRow(*row), true
 }
 
 // UpdateRow applies mutate to the row sessionID is attached to and returns a
@@ -688,7 +704,7 @@ func (s *Store) UpdateRow(runID, sessionID string, mutate func(*TaskRow)) (TaskR
 	}
 	mutate(&r.Rows[pos])
 	r.LastAccessed = time.Now()
-	return cloneRow(r.Rows[pos]), true
+	return CloneRow(r.Rows[pos]), true
 }
 
 // UpsertResult is what UpsertLite did.
@@ -718,11 +734,11 @@ func (s *Store) UpsertLite(runID string, ref TaskRef, mutate func(*TaskRow)) (Ta
 	}
 	pos, _ := r.rowFor(ref, true)
 	if r.Rows[pos].SessionID != "" {
-		return cloneRow(r.Rows[pos]), UpsertSessionOwned
+		return CloneRow(r.Rows[pos]), UpsertSessionOwned
 	}
 	mutate(&r.Rows[pos])
 	r.LastAccessed = time.Now()
-	return cloneRow(r.Rows[pos]), UpsertApplied
+	return CloneRow(r.Rows[pos]), UpsertApplied
 }
 
 // LiteState is what a lightweight validate_completion needs to know about the

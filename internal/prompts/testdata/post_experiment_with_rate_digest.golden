@@ -65,7 +65,7 @@ suite: 42 evals, 0 regressions
 
 anti-tangent independently flags test evidence whose own text states that no test executed; do not emit a separate finding solely restating that. Cross-check the evidence against the AC list as described above.
 
-When the provided evidence addresses every AC and the implementer's narrative is internally consistent with it, prefer `verdict: pass` with a `category: quality` finding for nit-level concerns over `verdict: fail`. Reserve `severity: critical` and `severity: major` for evidence that affirmatively contradicts an AC, OR for an AC that is left unaddressed by any of the provided evidence, OR for a `correctness` or `test_adequacy` finding that meets the severity bar in its own section below. The bias toward `pass` applies only when every AC has been addressed — not when evidence is absent for an AC, and not when the evidence shows a defect.
+When the provided evidence addresses every AC and the implementer's narrative is internally consistent with it, prefer `verdict: pass` with a `category: quality` finding for nit-level concerns over `verdict: fail`. Reserve `severity: critical` and `severity: major` for evidence that affirmatively contradicts an AC, OR for an AC that is left unaddressed by any of the provided evidence, OR for a `correctness`, `test_adequacy`, `test_value` or `test_weakened` finding that meets the severity bar in its own section below. The bias toward `pass` applies only when every AC has been addressed — not when evidence is absent for an AC, and not when the evidence shows a defect.
 
 If you would emit a finding with `category: ambiguous_spec` AND `severity: major`, but a normative test body (provided in the `Normative test bodies` section above) explicitly pins the value or assertion that the AC's prose leaves ambiguous, downgrade the severity to `minor` and append `(resolved-by-normative-body: <short citation of which body resolves it, max 80 chars>)` to the `suggestion` field. The `criterion` and `evidence` fields stay as you would have written them.
 
@@ -88,11 +88,73 @@ Emit each defect as its own finding with `category: correctness`. Set `criterion
 
 Apply this when the change adds or modifies tests, or when test evidence was provided. For each acceptance criterion that describes behaviour, ask whether a test in the evidence would fail if that behaviour were broken. Flag:
 
-- a test that asserts nothing about the behaviour: it only checks that nothing was thrown, only checks a mock it configured itself, or restates the implementation;
-- a criterion that names a failure or boundary case and is tested only on the happy path;
-- an individual test the evidence shows was skipped or deselected.
+- a criterion that describes behaviour with no test that would catch its breakage — `major` when the task's acceptance criteria or Verification call for tests, or the brief carries the clause "tests only where an acceptance criterion needs one" (a behaviour criterion under that clause needs one); otherwise do not flag it;
+- a test that asserts nothing about the behaviour: it only checks that nothing was thrown, only checks a mock it configured itself, or restates the implementation — `major`;
+- a criterion that names a failure or boundary case and is tested only on the happy path — `minor`;
+- an individual test the evidence shows was skipped or deselected — `minor`.
 
-Emit `category: test_adequacy` with `criterion` set to the verbatim AC text. Severity: `major` when a criterion has no test that would catch its breakage and the task's acceptance criteria or Verification call for tests; `minor` otherwise. Do not flag tests the task does not call for, and do not use this category for evidence that is merely absent: that is `insufficient_evidence`.
+A test that runs the behaviour and asserts most of it, missing one property, is `minor`; `major` is for a criterion no test would catch, or a test that asserts nothing about the behaviour.
+
+Emit `category: test_adequacy` with `criterion` set to the verbatim AC text. Never ask for a test the criteria do not need, or for a test per function. When a diff is present and adds no test that would catch a behaviour criterion's breakage, that is this category, not `insufficient_evidence`; `insufficient_evidence` is for test output or files that were not submitted.
+
+### Test value
+
+The implementer was handed this rule when the task started:
+
+### Tests (apply before writing each one)
+
+A test earns its place by failing when behaviour someone depends on breaks.
+Before writing a test, name the acceptance criterion or caller-visible
+behaviour it protects. If you cannot, do not write it.
+
+Start from one test per acceptance criterion. Add another only for a failure
+or boundary case the criterion names, and write several inputs to one
+behaviour as one table-driven or parametrised test, not as separate tests.
+Test each criterion once, at the cheapest layer that observes it, not through
+each of its helpers. Each test beyond the first for a criterion
+gets a `test_ledger` entry saying what it protects that the others cannot;
+each test you considered and did not write goes in `tests_declined`.
+
+Write:
+- tests that run the behaviour an acceptance criterion describes, including
+  the failure and boundary cases it names — "rejects a request without a
+  token" or "never logs the secret" is behaviour, not an absence guard;
+- a regression test for the bug this task fixes, written first and seen to
+  fail (say how in `failed_when`);
+- a guard for a property that matters, after seeing it fail with the property
+  broken (say how in `failed_when`).
+
+Do not write:
+- absence guards: assertions that a removed framework, symbol, file or
+  dependency stays removed (git and review catch a return);
+- one test per function, or a test that restates the implementation;
+- a second test for behaviour another test already asserts;
+- tests that read the source code under test as text instead of running it
+  (checking a generated artefact, golden file, schema or config the product
+  ships is fine);
+- tests pinning incidental output no caller depends on (log wording, map
+  order), or asserting only a snapshot (a snapshot beside a real assertion is
+  fine).
+
+Existing tests are out of scope: do not delete or rewrite tests the task did
+not ask you to touch.
+
+
+Judge ONLY tests this change adds, and ONLY when a diff is present; with `final_files` and no diff emit no test-value finding. Line numbers come from the diff's hunk headers, never invented. Tag each instance:
+
+- `absence:` asserts that a removed framework, symbol, file or dependency stays gone. Not an instance: a behavioural negative an acceptance criterion names ("rejects a request without a token", "never logs the secret"), or a licence or security ban. Heavy.
+- `source-grep:` reads the source code under test as text instead of running it. Not an instance: a check on a golden file, generated artefact, schema, notice or shipped config. Heavy.
+- `consolidate:` several tests for one criterion (grouped by the ledger's `protects`, else by the code) where merging them into one table-driven test, or deleting all but one, loses no failure or boundary case the criterion names. Judge cases, not declarations: one test with many near-identical subtests or assertions is an instance too. Heavy when at least 3 tests or cases could go, or they are at least a third of those the change adds; otherwise light.
+- `trivia:` a test per function, or a test that restates the implementation. A test whose only assertion is that a call does not panic or is a no-op, where another test already runs that path, is `trivia:` here, not `test_adequacy`. Light; not an instance when the ledger's `failed_when` names a specific change to the code under test that made the test fail; a `failed_when` that only restates that the test would fail on a regression exempts nothing.
+- `quirk:` pins incidental output no caller depends on (log wording, map order), or asserts only a snapshot with no real assertion beside it. Light; not an instance when the ledger's `failed_when` names a specific change to the code under test that made the test fail; a `failed_when` that only restates that the test would fail on a regression exempts nothing.
+
+Never flag: a test that runs a criterion's behaviour, a regression test for the bug the task fixes, or a guard the ledger says was seen to fail (that exempts it from `trivia:` and `quirk:` only).
+
+Report every instance in ONE finding: `category: quality`, `criterion: test_value`; `severity: major` when any instance is heavy, else `minor`. `evidence` lists each instance as `path:line: <tag>: <what>`, each criterion group as `<criterion> → N tests → M needed`, and ends with `net: -K tests`. `suggestion` names the tests to delete or merge. A test an acceptance criterion itself mandates is reported separately: `category: quality`, `criterion: test_value_mandated`, `severity: minor`, addressed to the spec author. If nothing qualifies, emit no test-value finding.
+
+### Weakened tests
+
+Only when a diff is present. Flag a hunk that removes or relaxes an assertion in, skips, or deletes a test that existed before this change, when the task's Goal and acceptance criteria neither change the behaviour it asserted nor name that test as the thing to correct. Not an instance: a moved or renamed test; a test deleted together with the private helper it alone tested; replacing a sleep or timing bound with a wait on a condition. Report every instance in ONE finding: `category: quality`, `criterion: test_weakened`, `severity: major`, quoting each hunk in `evidence`.
 
 ### Rates as evidence
 
@@ -183,7 +245,7 @@ that prevents data loss, security measures, accessibility basics, the tests
 the task calls for, or anything explicitly requested.
 
 The reviewer checks your changes against this ruleset at check_progress and
-validate_completion and reports departures as quality / over_building, minor.
+validate_completion and reports departures from this build ruleset as quality / over_building, minor. Tests are judged separately, against the working practice.
 
 
 Check the change against it. Judge ONLY what this change adds, and ONLY when a diff is present: with `final_files` and no diff you cannot tell a new interface from one that was already there, and the summary is not evidence — emit no over-building finding at all. Tag each instance:

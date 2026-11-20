@@ -443,6 +443,33 @@ func summaryFormatterCases() []summaryFormatterCase {
 			},
 		},
 		{
+			// The same producer seeded with a session_id, so the header label
+			// that replaces the plan run line is driven by forged payloads too.
+			// The registry is keyed by producer name, so this entry reuses it.
+			name:        "mcpsrv.formatOutcomeSummary",
+			wantHeaders: 0,
+			wantMarkers: 0,
+			newIn: func() any {
+				return &outcomeSummaryInput{
+					Args: RecordReviewOutcomeArgs{
+						SessionID: "sess-1",
+						Source:    "final_review",
+					},
+					Res: RecordReviewOutcomeResult{
+						Recorded:    true,
+						Reason:      "unused on the recorded branch",
+						RunKnown:    true,
+						TasksScored: 2,
+						Escapes:     []scorecard.Escape{{TaskIndex: 1, AntiTangentVerdict: "pass", OutcomeSeverity: "major"}},
+					},
+				}
+			},
+			render: func(in any) string {
+				v := in.(*outcomeSummaryInput)
+				return formatOutcomeSummary(v.Args, v.Res)
+			},
+		},
+		{
 			// plan_run_report's success path. Same reason as above, plus the
 			// row table: TaskTitle (truncated to 40 runes, which does NOT make
 			// a forgery infeasible), the CodeScene skip reason, the quality
