@@ -176,17 +176,26 @@ const (
 	KindSession = "session"
 )
 
-var modelBracketSuffix = regexp.MustCompile(`\[[^\]]*\]$`)
+var (
+	modelBracketSuffix = regexp.MustCompile(`\[[^\]]*\]$`)
+	modelVersionSuffix = regexp.MustCompile(`:\d+$`)
+	modelProvider      = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+)
 
 // NormalizeImplementerModel is NormalizeModel for an implementer's model,
 // which arrives either as provider:model from a controller or as the bare,
-// sometimes bracket-suffixed ID a model reports for itself.
+// sometimes bracket-suffixed ID a model reports for itself. A Bedrock ID ends
+// in a :N version and contains dots and colons of its own, so only a trailing
+// :N is dropped and only a provider-shaped prefix before the first colon is
+// stripped; anything else is kept, never reduced to its last segment.
 func NormalizeImplementerModel(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.LastIndex(s, ":"); i >= 0 {
-		s = s[i+1:]
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = modelBracketSuffix.ReplaceAllString(s, "")
+	s = modelVersionSuffix.ReplaceAllString(s, "")
+	if prefix, rest, ok := strings.Cut(s, ":"); ok && modelProvider.MatchString(prefix) {
+		s = rest
 	}
-	return NormalizeModel(modelBracketSuffix.ReplaceAllString(s, ""))
+	return NormalizeModel(s)
 }
 
 // MaxModelRunes bounds ReviewerModel and ImplementerModel.Model: both are

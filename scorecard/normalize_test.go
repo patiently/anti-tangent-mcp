@@ -22,6 +22,23 @@ func TestNormalizeModel(t *testing.T) {
 	}
 }
 
+func TestNormalizeImplementerModel(t *testing.T) {
+	cases := map[string]string{
+		"anthropic:claude-sonnet-5-5":                          "claude-sonnet-5-5",
+		"claude-sonnet-5-5[1m]":                                "claude-sonnet-5-5",
+		"Anthropic:Claude-Haiku-4-5-20251001":                  "claude-haiku-4-5",
+		"openai:gpt-5.6-terra":                                 "gpt-5.6-terra",
+		"us.anthropic.claude-sonnet-4-5-20250929-v1:0":         "us.anthropic.claude-sonnet-4-5-20250929-v1",
+		"bedrock:us.anthropic.claude-sonnet-4-5-20250929-v1:0": "us.anthropic.claude-sonnet-4-5-20250929-v1",
+		"": "",
+	}
+	for in, want := range cases {
+		if got := NormalizeImplementerModel(in); got != want {
+			t.Errorf("NormalizeImplementerModel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestCohortsMergeDatedAndUndatedImplementerModel(t *testing.T) {
 	lines := []RunLine{
 		taskLine("r1", t0, 1, "pass", completion("m", "pass")),
