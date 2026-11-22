@@ -129,8 +129,16 @@ func (h *handlers) recordReviewOutcome(args RecordReviewOutcomeArgs) RecordRevie
 	// A run minted before stats were enabled is live but has no snapshot
 	// lines; it is still a run this server knows.
 	res.RunKnown = snapshotted || h.outcomeRunLive(runID, sessionID)
+	if sessionID != "" && len(lines) == 0 && !res.RunKnown {
+		res.Reason = unknownSessionRunReason
+	}
 	return res
 }
+
+// unknownSessionRunReason explains a recorded outcome whose session_id is
+// neither live nor has run lines. An evicted session that belonged to a plan
+// run cannot be refused, so its outcome lands under a hash no run uses.
+const unknownSessionRunReason = "recorded, but no session run is known for this session_id; if the session belonged to a plan run, file the outcome by that run's plan_run_id instead"
 
 // sessionOutcomeArgs reads task_index 0 as 1, since a session run has exactly
 // one task, on copies so the caller's slices are untouched. Negative indexes
@@ -373,6 +381,9 @@ func formatOutcomeSummary(args RecordReviewOutcomeArgs, res RecordReviewOutcomeR
 		known = "no (no snapshot for this run yet; it is scored once one exists)"
 	}
 	fmt.Fprintf(&b, "recorded: yes · run known: %s · tasks scored: %d · escapes: %d\n", known, res.TasksScored, len(res.Escapes))
+	if res.Reason != "" {
+		fmt.Fprintf(&b, "note: %s\n", escapeBlockValue(res.Reason))
+	}
 	if len(args.Measurements) > 0 {
 		fmt.Fprintf(&b, "measurements: %d stored, not scored\n", len(args.Measurements))
 	}

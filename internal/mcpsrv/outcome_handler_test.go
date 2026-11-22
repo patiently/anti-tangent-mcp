@@ -3,6 +3,7 @@ package mcpsrv
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -385,6 +386,29 @@ func TestRecordReviewOutcome_SessionRuns(t *testing.T) {
 			for _, idx := range got {
 				assert.Equal(t, tc.wantIndex, idx)
 			}
+		})
+	}
+}
+
+func TestRecordReviewOutcome_UnknownSessionRunReason(t *testing.T) {
+	for _, evict := range []bool{false, true} {
+		t.Run(fmt.Sprintf("evicted=%v", evict), func(t *testing.T) {
+			h, _, dir := outcomeHandlers(t)
+			sess := h.deps.Sessions.Create(session.TaskSpec{Title: "t", Goal: "g"}, "")
+			if evict {
+				h.deps.Sessions.EvictExpired(time.Now().Add(24 * time.Hour))
+			}
+			res := recordOutcome(t, h, RecordReviewOutcomeArgs{SessionID: sess.ID, Source: "final_review", Findings: []OutcomeFindingArg{}})
+			require.True(t, res.Recorded, res.Reason)
+			waitForScorecard(t, dir)
+			if !evict {
+				assert.Empty(t, res.Reason)
+				assert.NotContains(t, res.SummaryBlock, "note:")
+				return
+			}
+			assert.Contains(t, res.Reason, "no session run is known")
+			assert.Contains(t, res.Reason, "plan_run_id")
+			assert.Contains(t, res.SummaryBlock, "note: "+res.Reason)
 		})
 	}
 }
