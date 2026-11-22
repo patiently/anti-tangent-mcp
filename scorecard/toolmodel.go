@@ -20,6 +20,7 @@ type ToolModelOutcome struct {
 // is a slice, not a causal attribution.
 type ToolModelRow struct {
 	Tool            string             `json:"tool"`
+	Kind            string             `json:"kind"`
 	Model           string             `json:"model"`
 	Publisher       string             `json:"publisher,omitempty"`
 	Calls           int                `json:"calls"`
@@ -38,7 +39,7 @@ type ModelSet struct {
 	Runs   int               `json:"runs"`
 }
 
-type tmKey struct{ tool, model, publisher string }
+type tmKey struct{ tool, kind, model, publisher string }
 
 type tmAcc struct {
 	calls, findings, partial int
@@ -49,7 +50,7 @@ type tmAcc struct {
 	out                      map[string]*[4]int // source -> passN, escNum, flagN, unconfNum
 }
 
-// toolModelRows builds one ToolModelRow per (tool, model[, publisher]) seen
+// toolModelRows builds one ToolModelRow per (tool, run kind, model[, publisher]) seen
 // across runs: an operational pass over every call, then an outcome pass
 // scoring each finished task against every source that reviewed its run.
 func toolModelRows(runs map[runKey]*run, byPublisher bool) []ToolModelRow {
@@ -74,13 +75,14 @@ type tmCtx struct {
 	r           *run
 }
 
-// acc returns c.r's accumulator for (tool, model), creating it on first use.
+// acc returns c.r's accumulator for (tool, run kind, model), creating it on
+// first use.
 // The publisher is folded into the key only in per-publisher views, so the
 // pooled view's accumulators merge every publisher's calls for the same tool
 // and model.
 func (c *tmCtx) acc(tool, model string) *tmAcc {
 	model = NormalizeModel(model)
-	k := tmKey{tool: tool, model: model}
+	k := tmKey{tool: tool, kind: c.r.kind(), model: model}
 	if c.byPublisher {
 		k.publisher = c.r.key.publisher
 	}
@@ -254,7 +256,7 @@ func toolModelOutcomes(a *tmAcc) []ToolModelOutcome {
 // buildToolModelRow renders one accumulator into its row.
 func buildToolModelRow(k tmKey, a *tmAcc, runs map[runKey]*run) ToolModelRow {
 	row := ToolModelRow{
-		Tool: k.tool, Model: k.model, Publisher: k.publisher,
+		Tool: k.tool, Kind: k.kind, Model: k.model, Publisher: k.publisher,
 		Calls: a.calls, Runs: len(a.runs), Tasks: len(a.tasks),
 		VerdictCounts: a.verdicts,
 		MSP50:         percentile(a.ms, 50), MSP95: percentile(a.ms, 95),
@@ -270,7 +272,7 @@ func buildToolModelRow(k tmKey, a *tmAcc, runs map[runKey]*run) ToolModelRow {
 	return row
 }
 
-// sortToolModelRows orders rows by ToolOrder, then model, then publisher.
+// sortToolModelRows orders rows by ToolOrder, then run kind, model and publisher.
 func sortToolModelRows(rows []ToolModelRow) {
 	rank := map[string]int{}
 	for i, t := range ToolOrder {
@@ -280,6 +282,9 @@ func sortToolModelRows(rows []ToolModelRow) {
 		a, b := rows[i], rows[j]
 		if rank[a.Tool] != rank[b.Tool] {
 			return rank[a.Tool] < rank[b.Tool]
+		}
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
 		}
 		if a.Model != b.Model {
 			return a.Model < b.Model

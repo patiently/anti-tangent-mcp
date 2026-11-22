@@ -104,18 +104,38 @@ func (t *task) serverVersion() string {
 	return t.version
 }
 
+func reportedImplementerModel(o OutcomeLine, index int) string {
+	for _, m := range o.ImplementerModels {
+		if m.TaskIndex != index {
+			continue
+		}
+		if model := NormalizeImplementerModel(m.Model); model != "" {
+			return model
+		}
+	}
+	return ""
+}
+
+// kind is the run's kind; a run with no header, or a header from before kinds
+// were recorded, is a plan run.
+func (r *run) kind() string {
+	if r.header != nil && r.header.Kind != "" {
+		return r.header.Kind
+	}
+	return KindPlan
+}
+
 // implementerModel prefers the final review's report, because the controller
-// that files it is the one that dispatched each task.
+// that files it is the one that dispatched each task; the model the
+// implementer reported for itself is the fallback.
 func (r *run) implementerModel(index int) string {
 	for _, src := range Sources {
-		for _, m := range r.outcomes[src].ImplementerModels {
-			if m.TaskIndex != index {
-				continue
-			}
-			if model := NormalizeModel(m.Model); model != "" {
-				return model
-			}
+		if model := reportedImplementerModel(r.outcomes[src], index); model != "" {
+			return model
 		}
+	}
+	if t, ok := r.tasks[index]; ok && NormalizeImplementerModel(t.snap.ImplementerModel) != "" {
+		return NormalizeImplementerModel(t.snap.ImplementerModel)
 	}
 	return "unknown"
 }

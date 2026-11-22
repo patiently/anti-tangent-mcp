@@ -16,6 +16,8 @@ When you cite a code symbol's signature, an example sibling key, or an adjacent 
 
 When the plan asserts something about the codebase that you cannot verify from the plan text alone — a field name, function signature, file path, insertion point in a graph, existing convention in adjacent code, or a type-system fact — DO emit a finding with `category: unverifiable_codebase_claim`. Severity should be `minor` (the claim might be true; you just can't check). `evidence` quotes the claim verbatim from the plan. `suggestion` says "verify against the actual code before dispatching." Do this instead of silently passing or fabricating a critique. The human will see the checklist and grep the codebase. A path a task lists under its own `**Files:**` section says where that task works, not what the codebase holds: do not emit this finding for the path itself.
 
+Raise `test_adequacy` at spec time only when an acceptance criterion that describes behaviour cannot be tested as written — never to ask for tests the criteria do not need, or for a test per function.
+
 ## Project knowledge (caller-supplied context from the team's KB)
 
 Module mcpsrv invariant: stdout reserved for MCP stdio.

@@ -19,7 +19,7 @@ not on disk; it is deprecated and will be removed in 1.0.0.
 
 **Procedure:**
 
-1. Call `validate_plan`, passing `plan_path` when the plan is on disk, otherwise `plan_text`. Capture the `PlanResult`.
+1. Call `validate_plan`, passing `plan_path` when the plan is on disk, otherwise `plan_text`.
 2. **Surface results to the user.** Show `plan_verdict`, plan-level findings, and per-task verdicts/findings. For any task whose `suggested_header_block` is non-empty, show the proposed header and ask the human to adopt or revise. If task results include `lightweight_eligible` / `lightweight_reason`, treat them as advisory hints.
 3. **Apply the proposed header blocks** (apply automatically when verdicts are `pass`/`warn` and the human approves; defer to the human for `fail`).
 4. If anything material changed, call `validate_plan` again with the last round's `plan_run_id`: only changed tasks are re-reviewed, the rest carry, the id stays. Repeat until `plan_verdict: "pass"` (or every `warn` is explicitly justified). Each round, pass `controller_verified_references` for references you grepped and `controller_rulings` (§5.9) for findings you decided.
@@ -42,7 +42,7 @@ The implementing subagent still calls `validate_task_spec` in its own session (�
 
 ### 5.2 Dispatch addendum (paste the §4.2 clause into every implementer prompt)
 
-For each task you dispatch to an implementing subagent, paste the §4.2 clause verbatim into that subagent's prompt — subagents do not inherit your CLAUDE.md or any harness-level system prompt. Append it right before the "Report Format" section of your existing dispatch template. Apply only to subagents that will implement a task with acceptance criteria; skip for read-only research subagents per §1.
+For each task you dispatch to an implementing subagent, paste the §4.2 clause verbatim into that subagent's prompt — subagents do not inherit your CLAUDE.md or any harness-level system prompt. Append it before your dispatch template's "Report Format" section. Apply only to subagents that will implement a task with acceptance criteria, not read-only research subagents (§1). Tell the implementer to pass its exact model ID as `implementer_model` on `validate_task_spec`.
 
 ### Which tier a review earns
 

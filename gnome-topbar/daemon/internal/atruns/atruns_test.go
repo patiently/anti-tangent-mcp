@@ -57,3 +57,45 @@ func TestRunsSummaries(t *testing.T) {
 		t.Fatalf("runs: %+v", rs)
 	}
 }
+
+func TestRunsFallsBackToTaskImplementerModel(t *testing.T) {
+	t0 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	lines := []scorecard.RunLine{
+		{Ts: t0, RunHash: "r_sess", Header: true, Kind: scorecard.KindSession, TaskCount: 1},
+		{Ts: t0.Add(time.Minute), RunHash: "r_sess", Task: &scorecard.TaskSnapshot{Index: 1, ImplementerModel: "claude-sonnet-4-5"}},
+		{Ts: t0, RunHash: "r_plan", Header: true, TaskCount: 2},
+		{Ts: t0.Add(time.Minute), RunHash: "r_plan", Task: &scorecard.TaskSnapshot{Index: 1, ImplementerModel: "self-reported"}},
+		{Ts: t0.Add(2 * time.Minute), RunHash: "r_plan", Task: &scorecard.TaskSnapshot{Index: 2, ImplementerModel: "haiku"}},
+	}
+	outs := []scorecard.OutcomeLine{{Ts: t0.Add(time.Hour), RunHash: "r_plan", Source: "final_review",
+		ImplementerModels: []scorecard.ImplementerModel{{TaskIndex: 1, Model: "sonnet"}}}}
+	got := map[string][]string{}
+	for _, r := range Runs(lines, outs) {
+		got[r.RunHash] = r.ImplementerModels
+	}
+	if m := got["r_sess"]; len(m) != 1 || m[0] != "claude-sonnet-4-5" {
+		t.Fatalf("session run models: %v", m)
+	}
+	if m := got["r_plan"]; len(m) != 2 || m[0] != "haiku" || m[1] != "sonnet" {
+		t.Fatalf("plan run models: %v", m)
+	}
+}
+
+func TestRunsResolvesOneModelPerTask(t *testing.T) {
+	t0 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	lines := []scorecard.RunLine{
+		{Ts: t0, RunHash: "r", Header: true, TaskCount: 3},
+		{Ts: t0.Add(time.Minute), RunHash: "r", Task: &scorecard.TaskSnapshot{Index: 2, ImplementerModel: "claude-sonnet-5-5"}},
+		{Ts: t0.Add(time.Minute), RunHash: "r", Task: &scorecard.TaskSnapshot{Index: 3, ImplementerModel: "model-a"}},
+		{Ts: t0.Add(2 * time.Minute), RunHash: "r", Task: &scorecard.TaskSnapshot{Index: 3, ImplementerModel: "model-b"}},
+	}
+	outs := []scorecard.OutcomeLine{{Ts: t0.Add(time.Hour), RunHash: "r", Source: "final_review",
+		ImplementerModels: []scorecard.ImplementerModel{{TaskIndex: 1, Model: "anthropic:claude-sonnet-5-5"}}}}
+	rs := Runs(lines, outs)
+	if len(rs) != 1 {
+		t.Fatalf("runs: %+v", rs)
+	}
+	if m := rs[0].ImplementerModels; len(m) != 2 || m[0] != "claude-sonnet-5-5" || m[1] != "model-b" {
+		t.Fatalf("models: %v", m)
+	}
+}

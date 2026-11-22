@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/internal/session"
 	"github.com/patiently/anti-tangent-mcp/internal/stats"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
+	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
 // Envelope is the JSON returned to the subagent for every hook.
@@ -74,9 +76,13 @@ type Envelope struct {
 	// review on any host. formatEnvelopeSummary prints it as a
 	// `mode: lightweight` header line.
 	Lightweight bool `json:"lightweight,omitempty"`
-	// ImplementationGuidance is the build ruleset the implementer applies
-	// while working: lean.tmpl, which mid.tmpl and post.tmpl also include as
-	// the reviewer's definition of over-building. Only validate_task_spec sets
+	// Tests is the test count a validate_completion diff adds against the
+	// task's acceptance criteria. Only validate_completion sets it.
+	Tests *TestTally `json:"tests,omitempty"`
+	// ImplementationGuidance is what the implementer applies while working:
+	// the lean build ruleset (lean.tmpl, which mid.tmpl and post.tmpl also
+	// include as the reviewer's definition of over-building) followed by the
+	// working practice (practice.tmpl). Only validate_task_spec sets
 	// it, because only implementers call that tool; it is not part of the
 	// summary block, which is what gets pasted into DONE reports.
 	ImplementationGuidance string `json:"implementation_guidance,omitempty"`
@@ -108,18 +114,24 @@ type ValidateTaskSpecArgs struct {
 	MaxTokensOverride            int                               `json:"max_tokens_override,omitempty" jsonschema:"Reviewer output-token budget for this call only. 0 uses the configured default; a value above ANTI_TANGENT_MAX_TOKENS_CEILING is clamped with a minor finding; a negative value is rejected."`
 	// PlanRunID ties this task to a plan run minted by validate_plan. Best
 	// effort: an unknown or expired id must not fail the review.
-	PlanRunID     string   `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call. Left out, the task is attached only when this server holds exactly one live plan run and task_title matches exactly one of its headings."`
-	ContextPaths  []string `json:"context_paths,omitempty" jsonschema:"Absolute paths to files the implementer was told to work from, such as its dispatch brief: the server reads them and shows the reviewer their whole contents, so a term or step they define is not reported as missing from the spec. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the task-spec payload cap. A file the secret gate refuses (ANTI_TANGENT_SECRET_GATE) fails the call."`
-	TaskIndex     int      `json:"task_index,omitempty" jsonschema:"The task's 1-based position in the plan, from the controller's dispatch. With plan_run_id it names the plan task this call belongs to; without it the task is found by matching task_title against the plan's headings. Validating the same task again updates its plan_run_report row instead of adding one."`
-	TaskKind      string   `json:"task_kind,omitempty" jsonschema:"experiment or build, the default: validate_plan's task_kind for this task. An experiment is reviewed as a measured, keep-or-revert change and can never close lightweight. When this call attaches to a plan run, the run's value wins and a different one draws a minor kind_conflict finding."`
-	Rung          string   `json:"rung,omitempty" jsonschema:"The task's fix-ladder rung, validate_plan's rung for this task: oracle, variance, facts, tool, commitment, prompt or owner. An experiment without one draws a minor rung_missing finding. The plan run's value wins, as for task_kind."`
-	PlanKind      string   `json:"plan_kind,omitempty" jsonschema:"agent-network when the plan is agent-network work: validate_plan's plan_kind. The plan run's value wins, as for task_kind."`
-	BoundaryRules []string `json:"boundary_rules,omitempty" jsonschema:"Your project's rules for what code may do with reply and user text. A spec, and later a change, that does what a rule forbids draws boundary_violation. Left out on a call that attaches to a plan run, the run's rules apply. Stored on the session for check_progress and validate_completion. At most 20 entries of at most 1000 characters each."`
+	PlanRunID        string   `json:"plan_run_id,omitempty" jsonschema:"The plan_run_id from the controller's final passing validate_plan call. It attaches this task to that plan run so plan_run_report can include it; an unknown or expired id does not fail the call. Left out, the task is attached only when this server holds exactly one live plan run and task_title matches exactly one of its headings."`
+	ContextPaths     []string `json:"context_paths,omitempty" jsonschema:"Absolute paths to files the implementer was told to work from, such as its dispatch brief: the server reads them and shows the reviewer their whole contents, so a term or step they define is not reported as missing from the spec. With ANTI_TANGENT_PLAN_ROOTS set each path must be under one of those roots. At most 50 files, each within ANTI_TANGENT_CONTEXT_MAX_FILE_BYTES and together within ANTI_TANGENT_CONTEXT_MAX_PAYLOAD_BYTES; they do not count toward the task-spec payload cap. A file the secret gate refuses (ANTI_TANGENT_SECRET_GATE) fails the call."`
+	TaskIndex        int      `json:"task_index,omitempty" jsonschema:"The task's 1-based position in the plan, from the controller's dispatch. With plan_run_id it names the plan task this call belongs to; without it the task is found by matching task_title against the plan's headings. Validating the same task again updates its plan_run_report row instead of adding one."`
+	TaskKind         string   `json:"task_kind,omitempty" jsonschema:"experiment or build, the default: validate_plan's task_kind for this task. An experiment is reviewed as a measured, keep-or-revert change and can never close lightweight. When this call attaches to a plan run, the run's value wins and a different one draws a minor kind_conflict finding."`
+	Rung             string   `json:"rung,omitempty" jsonschema:"The task's fix-ladder rung, validate_plan's rung for this task: oracle, variance, facts, tool, commitment, prompt or owner. An experiment without one draws a minor rung_missing finding. The plan run's value wins, as for task_kind."`
+	PlanKind         string   `json:"plan_kind,omitempty" jsonschema:"agent-network when the plan is agent-network work: validate_plan's plan_kind. The plan run's value wins, as for task_kind."`
+	BoundaryRules    []string `json:"boundary_rules,omitempty" jsonschema:"Your project's rules for what code may do with reply and user text. A spec, and later a change, that does what a rule forbids draws boundary_violation. Left out on a call that attaches to a plan run, the run's rules apply. Stored on the session for check_progress and validate_completion. At most 20 entries of at most 1000 characters each."`
+	ImplementerModel string   `json:"implementer_model,omitempty" jsonschema:"Your exact model ID, as the host reports it (for example claude-sonnet-5-5). Used only to group statistics by implementer model. At most 100 characters, no control character."`
 }
 
 type handlers struct {
 	deps          Deps
 	planCacheOnce sync.Once
+	// rowMu holds a task row's mutation together with the run line and plan
+	// ledger line that record it. Without it two concurrent updates to one
+	// row can append their lines in the opposite order, and the scorecard,
+	// which keeps a task's latest-timestamped line, would keep the older row.
+	rowMu sync.Mutex
 }
 
 func (h *handlers) planCache() *planPassCache {
@@ -144,6 +156,9 @@ func validateTaskSpecTool() *mcp.Tool {
 func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest, args ValidateTaskSpecArgs) (*mcp.CallToolResult, Envelope, error) {
 	if args.TaskTitle == "" || args.Goal == "" {
 		return nil, Envelope{}, errors.New("task_title and goal are required")
+	}
+	if !scorecard.ValidModelString(strings.TrimSpace(args.ImplementerModel)) {
+		return nil, Envelope{}, errors.New("implementer_model must be at most 100 characters with no control character")
 	}
 
 	inputs, err := normalizeTaskSpecInputs(args, h.deps.Cfg.MaxPayloadBytes)
@@ -236,9 +251,9 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		CodebaseReferenceChecklist: checklist,
 	}
 
-	guidance, err := prompts.LeanGuidance()
+	guidance, err := prompts.ImplementationGuidance()
 	if err != nil {
-		return nil, Envelope{}, fmt.Errorf("render lean guidance: %w", err)
+		return nil, Envelope{}, fmt.Errorf("render implementation guidance: %w", err)
 	}
 	env.ImplementationGuidance = guidance
 	env.NextAction = strings.TrimRight(env.NextAction, " \t\r\n") + " Read `implementation_guidance` before writing code."
@@ -265,6 +280,9 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		// The plan_run_id advisory describes this call's arguments, not the
 		// spec, so later prompts must not show it as a pre-task finding.
 		h.deps.Sessions.SetPreFindings(sess.ID, append([]verdict.Finding(nil), env.Findings[:len(result.Findings)]...))
+		if model := strings.TrimSpace(args.ImplementerModel); model != "" {
+			h.deps.Sessions.SetImplementerModel(sess.ID, model)
+		}
 		h.deps.Sessions.RecordIssuedIDs(sess.ID, envelopeIDs(env))
 		// Re-fetch so LastAccessed reflects the final mutation.
 		if refreshed, ok := h.deps.Sessions.Get(sess.ID); ok {
@@ -274,21 +292,8 @@ func (h *handlers) ValidateTaskSpec(ctx context.Context, _ *mcp.CallToolRequest,
 		env = h.withSessionTTL(env, sess)
 	}
 
-	if planRunID != "" && env.SessionID != "" {
-		// Best-effort: an unknown or expired run must not fail the review.
-		if row, ok := h.deps.PlanRuns.Attach(planRunID, env.SessionID, taskRef, env.Verdict); ok {
-			call := callFromEnvelope("validate_task_spec", env)
-			if logged, ok := h.deps.PlanRuns.UpdateRow(planRunID, env.SessionID, func(r *planrun.TaskRow) { r.AppendCall(call) }); ok {
-				row = logged
-			}
-			h.appendPlanLedger(planRunID, row)
-		} else {
-			slog.Warn("plan run attach failed; run unknown or expired",
-				"plan_run_id", planRunID, "session_id", env.SessionID)
-			if attachedByTitle {
-				withdrawAttachedByTitle(&env, planRunID)
-			}
-		}
+	if env.SessionID != "" {
+		h.recordTaskSpecRow(&env, planRunID, taskRef, attachedByTitle)
 	}
 
 	h.recordStat(statParams{
@@ -415,6 +420,9 @@ type statParams struct {
 	// checklistItems is how many codebase_reference_checklist entries the
 	// call returned.
 	checklistItems int
+	// implementerModel and tests are set only on validate_completion events.
+	implementerModel string
+	tests            *TestTally
 }
 
 // recordStat maps a statParams into a stats.Event and records it.
@@ -425,7 +433,7 @@ func (h *handlers) recordStat(p statParams) {
 		return
 	}
 	sev, cat, crit, total := stats.CountFindings(p.findings)
-	h.deps.Stats.Record(stats.Event{
+	ev := stats.Event{
 		Ts:              time.Now().UTC().Truncate(time.Second),
 		Tool:            p.tool,
 		Verdict:         p.verdict,
@@ -443,7 +451,16 @@ func (h *handlers) recordStat(p statParams) {
 		TasksWithHeader: p.tasksWithHeader,
 		ChecklistItems:  p.checklistItems,
 		TasksCarried:    p.tasksCarried,
-	})
+
+		ImplementerModel: p.implementerModel,
+	}
+	if p.tests != nil {
+		ev.TestsAdded = p.tests.Added
+		ev.ACCount = p.tests.ACs
+		ev.LedgerEntries = p.tests.Ledger
+		ev.TestsDeclined = p.tests.Declined
+	}
+	h.deps.Stats.Record(ev)
 }
 
 // planFindings aggregates plan-level and per-task findings from a PlanResult
@@ -1245,6 +1262,8 @@ type ValidateCompletionArgs struct {
 	Rung                  string                `json:"rung,omitempty" jsonschema:"Lightweight calls only: the task's fix-ladder rung, as for validate_task_spec. Ignored when session_id is set."`
 	PlanKind              string                `json:"plan_kind,omitempty" jsonschema:"Lightweight calls only: agent-network or empty, as for validate_task_spec. Ignored when session_id is set."`
 	BoundaryRules         []string              `json:"boundary_rules,omitempty" jsonschema:"Lightweight calls only: boundary rules, as for validate_task_spec. With boundary rules, a call that sends final_files and no diff is rejected with diff_required. Ignored when session_id is set. At most 20 entries of at most 1000 characters each."`
+	TestLedger            []TestLedgerEntryArg  `json:"test_ledger,omitempty" jsonschema:"One entry per test you added beyond the first for an acceptance criterion: the test, what it protects that the others cannot, and optionally how you saw it fail. At most 40 entries, each value at most 300 characters, 16 KB in total with tests_declined. Caller-attested and not verified."`
+	TestsDeclined         []TestDeclinedArg     `json:"tests_declined,omitempty" jsonschema:"Tests you considered and did not write, with why. At most 40 entries, same bounds as test_ledger."`
 }
 
 // ValidatePlanArgs is the input schema for the plan-level reviewer.
@@ -1364,16 +1383,17 @@ func diffEllipsisPlaceholderOffset(finalDiff string) int {
 	return -1
 }
 
-// unquoteDiffPathName strips one pair of surrounding double quotes from a
-// `+++`/`---` diff header's path, which git adds when the name contains a
-// space or a non-ASCII byte (e.g. `"b/my file.py"`), so a caller trimming a
-// `b/`/`a/` prefix afterward sees the bare filename either way.
+// unquoteDiffPathName decodes a `+++`/`---` diff header's path that git
+// C-quoted because the name holds a control character, a quote, a backslash
+// or a non-ASCII byte (e.g. `"b/caf\303\251.py"`), so a caller trimming a
+// `b/`/`a/` prefix afterward sees the bare filename either way. A quoted name
+// that does not decode only loses its quotes.
 func unquoteDiffPathName(name string) string {
-	if !strings.HasPrefix(name, `"`) || !strings.HasSuffix(name, `"`) {
+	if len(name) < 2 || !strings.HasPrefix(name, `"`) || !strings.HasSuffix(name, `"`) {
 		return name
 	}
-	if len(name) < 2 {
-		return name
+	if s, err := strconv.Unquote(name); err == nil {
+		return s
 	}
 	return name[1 : len(name)-1]
 }
@@ -1985,6 +2005,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	if err != nil {
 		return nil, Envelope{}, err
 	}
+	if err := validateTestLedger(args.TestLedger, args.TestsDeclined); err != nil {
+		return nil, Envelope{}, err
+	}
 
 	// 6. evidence-shape guard. Runs BEFORE session lookup so a broken payload
 	// rejects fast regardless of session state. Cache hit → return the same
@@ -2115,6 +2138,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 				Codescene:                      args.Codescene,
 				RateDigest:                     rateDigest,
 				StaleComments:                  staleComments,
+				TestLedger:                     toPromptTestLedger(args.TestLedger),
+				TestsDeclined:                  toPromptTestsDeclined(args.TestsDeclined),
 				ContextFiles:                   toPromptContextFiles(relatedFiles),
 			})
 		},
@@ -2136,6 +2161,8 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 	// the block the session keeps as this call's prior findings.
 	var head []verdict.Finding
 	head = append(head, testEvidenceFindings(args.TestEvidence)...)
+	tally := testTally(args.FinalDiff, len(spec.AcceptanceCriteria), len(args.TestLedger), len(args.TestsDeclined))
+	head = append(head, ledgerAbsentFindings(tally)...)
 	// An evidenced skip's finding asks for nothing, so a session returns it
 	// once. A lightweight call has no session to remember it in and returns it
 	// every time.
@@ -2191,6 +2218,7 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		WaivedFindings:    waived,
 		ControllerRulings: appliedRulings(review.rulings),
 		Lightweight:       lightweight,
+		Tests:             &tally,
 	}
 	env.Findings = append(env.Findings, review.advisories...)
 	env.Findings = append(env.Findings, repoRootAdvisories...)
@@ -2291,6 +2319,9 @@ func (h *handlers) ValidateCompletion(ctx context.Context, _ *mcp.CallToolReques
 		partial:      env.Partial,
 		sessionID:    env.SessionID,
 		payloadBytes: totalCompletionBytes(resolvedFiles, args.FinalDiff),
+
+		implementerModel: sessionImplementerModel(sess),
+		tests:            env.Tests,
 	})
 	return envelopeResult(env)
 }
@@ -3561,4 +3592,13 @@ func planRunReportResult(res PlanRunReportResult) (*mcp.CallToolResult, PlanRunR
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
 	}, res, nil
+}
+
+// sessionImplementerModel is the model the session's implementer reported, or
+// "" for a lightweight call, which has no session.
+func sessionImplementerModel(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	return sess.ImplementerModel
 }

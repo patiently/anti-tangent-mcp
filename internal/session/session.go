@@ -7,6 +7,7 @@ import (
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
 	"github.com/patiently/anti-tangent-mcp/internal/planparser"
+	"github.com/patiently/anti-tangent-mcp/internal/planrun"
 	"github.com/patiently/anti-tangent-mcp/internal/verdict"
 )
 
@@ -117,6 +118,14 @@ type Session struct {
 	// check_progress and validate_completion can update the right planrun row
 	// without new arguments. Empty for tasks not dispatched under a plan run.
 	PlanRunID string
+	// Row is the task row of a session with no plan run; plan-run tasks keep
+	// theirs in the plan-run store.
+	Row planrun.TaskRow
+	// RunHeaderWritten is set once the session's run header line is written.
+	RunHeaderWritten bool
+	// ImplementerModel is the implementer's self-reported model ID, stored as
+	// sent; empty when it reported none.
+	ImplementerModel string
 	// IssuedIDs is every finding ID a response on this session carried, from
 	// any of its tools. A controller ruling must name one of them.
 	IssuedIDs map[string]bool

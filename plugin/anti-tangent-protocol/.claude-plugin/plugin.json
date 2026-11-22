@@ -1,7 +1,7 @@
 {
   "name": "anti-tangent-protocol",
-  "description": "On-demand loader for the anti-tangent-mcp drift-protection protocol. A description-triggered skill that loads only the role-scoped part of the protocol an agent actually needs — keeping the always-loaded footprint to one line, and the on-demand read to roughly half of what a single combined document would cost.",
-  "version": "0.5.0",
+  "description": "On-demand loader for the anti-tangent-mcp drift-protection protocol. A description-triggered skill that loads only the role-scoped part of the protocol an agent actually needs — keeping the always-loaded footprint to one line, and the on-demand read to roughly half of what a single combined document would cost. Also ships the investigate skill, which turns a reported error or production incident into an approved bug-fix brief, and the test-value and debugging rules under rules/ for review tooling to read.",
+  "version": "0.6.0",
   "author": {
     "name": "Patrick Gilmore",
     "email": "p@patiently.io"

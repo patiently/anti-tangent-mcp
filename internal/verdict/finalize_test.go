@@ -25,6 +25,7 @@ func TestFinalizeVerdict_Ladder(t *testing.T) {
 		{"four minor → warn + noise_cluster", []Finding{mk(SeverityMinor), mk(SeverityMinor), mk(SeverityMinor), mk(SeverityMinor)}, VerdictWarn, true, 5},
 		{"single major → warn (no noise_cluster)", []Finding{mk(SeverityMajor)}, VerdictWarn, false, 1},
 		{"major + three minor → warn (no noise_cluster — major present)", []Finding{mk(SeverityMajor), mk(SeverityMinor), mk(SeverityMinor), mk(SeverityMinor)}, VerdictWarn, false, 4},
+		{"single major test_value → warn", []Finding{{Severity: SeverityMajor, Category: CategoryQuality, Criterion: "test_value", Evidence: "y", Suggestion: "z"}}, VerdictWarn, false, 1},
 		{"two major → fail", []Finding{mk(SeverityMajor), mk(SeverityMajor)}, VerdictFail, false, 2},
 		{"single critical → fail", []Finding{mk(SeverityCritical)}, VerdictFail, false, 1},
 		{"critical + three minor → fail (no noise_cluster)", []Finding{mk(SeverityCritical), mk(SeverityMinor), mk(SeverityMinor), mk(SeverityMinor)}, VerdictFail, false, 4},

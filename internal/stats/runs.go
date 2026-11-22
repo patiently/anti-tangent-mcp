@@ -17,16 +17,29 @@ func (r *Recorder) RunHash(planRunID string) string {
 	return scorecard.HashRunID(r.state.Salt, planRunID)
 }
 
-// RecordRunLine appends one content-free run snapshot. Best-effort.
-func (r *Recorder) RecordRunLine(l scorecard.RunLine) {
+// SessionRunHash returns the salted digest of a standalone session's id, in a
+// hash domain of its own so it never equals the digest of any plan_run_id.
+func (r *Recorder) SessionRunHash(sessionID string) string {
+	if r == nil || sessionID == "" {
+		return ""
+	}
+	return scorecard.HashSessionRunID(r.state.Salt, sessionID)
+}
+
+// RecordRunLine appends one content-free run snapshot. A failure is logged
+// and returned; callers that only snapshot may ignore it, but a caller that
+// writes a run header must not go on to write that run's task lines.
+func (r *Recorder) RecordRunLine(l scorecard.RunLine) error {
 	if r == nil {
-		return
+		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := appendJSONL(r.dir, runsFile, l); err != nil {
+	err := appendJSONL(r.dir, runsFile, l)
+	if err != nil {
 		r.logger.Warn("stats run snapshot append failed", "err", err)
 	}
+	return err
 }
 
 // RecordOutcome appends one outcome and schedules a scorecard refresh, so the
