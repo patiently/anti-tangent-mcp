@@ -92,7 +92,7 @@ Example: claim "XService.findFoo at path/to/file.kt:L42 returns a sorted slice" 
 
 Do not suppress logical contradictions, missing acceptance criteria, or ambiguity findings.
 
-If a Test strategy notes section is present, treat each entry as authoritative caller context about why test coverage is split. Do not emit `missing_acceptance_criterion` for joint-coverage gaps when an entry explains the split that covers the gap. Continue to emit `missing_acceptance_criterion` when the gap is unrelated (e.g. an AC bullet with zero tests at all, or an invocation-count assertion that is genuinely missing).
+If a Test strategy notes section is present, treat each entry as authoritative caller context about why test coverage is split. Do not emit `missing_acceptance_criterion` for joint-coverage gaps when an entry explains the split that covers the gap. Continue to emit `missing_acceptance_criterion` when the gap is unrelated (e.g. an AC bullet that needs a test and has zero tests at all, or an invocation-count assertion that is genuinely missing).
 
 If a Codebase conventions section is present, treat each entry as a convention the implementation must follow. When the task spec or surrounding context shows positive evidence of deviation, emit a finding with `category: convention_deviation`, `criterion: codebase_convention`, severity `minor`, evidence quoting the spec text that suggests deviation, and a suggestion that re-states the convention and asks the implementer to confirm or document an exception. Do not emit `convention_deviation` when the spec is silent on the convention — only when there is positive evidence of deviation.
 

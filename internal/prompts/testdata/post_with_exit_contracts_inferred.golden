@@ -86,7 +86,7 @@ Emit each defect as its own finding with `category: correctness`. Set `criterion
 Apply this when the change adds or modifies tests, or when test evidence was provided. For each acceptance criterion that describes behaviour, ask whether a test in the evidence would fail if that behaviour were broken. Flag:
 
 - a criterion that describes behaviour with no test that would catch its breakage — `major` when the task's acceptance criteria or Verification call for tests, or the brief carries the clause "tests only where an acceptance criterion needs one" (a behaviour criterion under that clause needs one); otherwise do not flag it;
-- a test that asserts nothing about the behaviour: it only checks that nothing was thrown, only checks a mock it configured itself, or restates the implementation — `major`;
+- a test that asserts nothing about the behaviour: it only checks that nothing was thrown (unless not throwing or not panicking is itself the behaviour the criterion names), only checks a mock it configured itself, or restates the implementation — `major`;
 - a criterion that names a failure or boundary case and is tested only on the happy path — `minor`;
 - an individual test the evidence shows was skipped or deselected — `minor`.
 
@@ -145,7 +145,7 @@ Judge ONLY tests this change adds, and ONLY when a diff is present; with `final_
 - `trivia:` a test per function, or a test that restates the implementation. A test whose only assertion is that a call does not panic or is a no-op, where another test already runs that path, is `trivia:` here, not `test_adequacy`. Light; not an instance when the ledger's `failed_when` names a specific change to the code under test that made the test fail; a `failed_when` that only restates that the test would fail on a regression exempts nothing.
 - `quirk:` pins incidental output no caller depends on (log wording, map order), or asserts only a snapshot with no real assertion beside it. Light; not an instance when the ledger's `failed_when` names a specific change to the code under test that made the test fail; a `failed_when` that only restates that the test would fail on a regression exempts nothing.
 
-Never flag: a test that runs a criterion's behaviour, a regression test for the bug the task fixes, or a guard the ledger says was seen to fail (that exempts it from `trivia:` and `quirk:` only).
+Never flag: the first test that runs a criterion's behaviour (further tests for it still count under `consolidate:`), a regression test for the bug the task fixes, or a guard the ledger says was seen to fail (that exempts it from `trivia:` and `quirk:` only).
 
 Report every instance in ONE finding: `category: quality`, `criterion: test_value`; `severity: major` when any instance is heavy, else `minor`. `evidence` lists each instance as `path:line: <tag>: <what>`, each criterion group as `<criterion> → N tests → M needed`, and ends with `net: -K tests`. `suggestion` names the tests to delete or merge. A test an acceptance criterion itself mandates is reported separately: `category: quality`, `criterion: test_value_mandated`, `severity: minor`, addressed to the spec author. If nothing qualifies, emit no test-value finding.
 
