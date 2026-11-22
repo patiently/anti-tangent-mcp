@@ -22,7 +22,8 @@ Read `../../rules/debugging.md` first; it is the debugging practice this skill a
    through Bash. When no remaining probe would tell the candidate causes apart, report what you
    ruled out and ask. If it cannot be reproduced locally, say so: the brief's first acceptance
    criterion becomes the instrumentation that would capture it.
-4. **Write the bug-fix brief:** symptom; cause with evidence; Goal; acceptance criterion "a test
+4. **Write the bug-fix brief:** symptom; cause with evidence, or, for a bug that does not
+   reproduce and whose cause is unknown, the candidate causes and what ruled others out; Goal; acceptance criterion "a test
    reproduces the bug and fails before the fix", or for a bug that does not reproduce, the
    instrumentation criterion from step 3; Non-goals; Files; exact verify commands. Quote the
    fewest log or trace lines that show the problem, fenced, with credentials, tokens and personal

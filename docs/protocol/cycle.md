@@ -10,7 +10,7 @@ arrives in `validate_task_spec`'s `implementation_guidance`.
 
 | # | Stage | Owner | Exit gate |
 |---|---|---|---|
-| 1 | Brainstorm, or Investigate (§7.5) for a reported error | human + controller | Spec approved and committed. Last section is the brief: Goal, ACs, Non-goals, Context, Files, exact verify commands, and the scope/test clause "tests only where an acceptance criterion needs one; scratch verification outside the repository". No implementation steps or code. A bug-fix brief states the symptom, the cause with evidence, and an AC "a test reproduces the bug and fails before the fix" when the bug reproduces, else an AC for instrumentation that captures the failure. |
+| 1 | Brainstorm, or Investigate (§7.5) for a reported error | human + controller | Spec approved and committed. Last section is the brief: Goal, ACs, Non-goals, Context, Files, exact verify commands, and the scope/test clause "tests only where an acceptance criterion needs one; scratch verification outside the repository". No implementation steps or code. A bug-fix brief states the symptom, the cause with evidence, and an AC "a test reproduces the bug and fails before the fix" when the bug reproduces; else the candidate causes with what ruled others out, and an AC for instrumentation that captures the failure. |
 | 2 | Brief check | controller | Split on independence, not size: one goal, one reviewable PR, no AC waiting on an unmade decision; else sequential briefs, each its own 3–5. Grep the names the brief cites. |
 | 3 | Dispatch | controller | One implementer in a fresh context: spec path, Goal and ACs verbatim, §4.2 clause. Model per §7.3. The controller writes no project code. |
 | 4 | Implement | implementer | `validate_task_spec` → work per `implementation_guidance` → `validate_completion`. `check_progress` on long tasks or when the guard asks. |
@@ -81,7 +81,8 @@ When no remaining probe would tell the candidate causes apart, report what was r
 cannot be reproduced locally, say so: the brief's first AC becomes the instrumentation that would
 capture it.
 
-**Write the bug-fix brief.** Symptom, cause with evidence, Goal, AC "a test reproduces the bug and
+**Write the bug-fix brief.** Symptom, cause with evidence (for a bug that does not reproduce and whose
+cause is unknown, the candidate causes and what ruled others out), Goal, AC "a test reproduces the bug and
 fails before the fix" (for a bug that does not reproduce, the instrumentation AC instead), Non-goals, Files, exact verify commands. Quote the minimum log or trace lines,
 fenced, with credentials, tokens and personal data replaced by `***`: the brief is committed and sent to
 a third-party reviewer. The human approves it; it enters the cycle at stage 2.
