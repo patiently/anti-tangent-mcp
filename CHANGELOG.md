@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `test_adequacy` no longer raises a minor finding whenever a criterion lacks a test the task did not ask for, in `validate_completion`, `validate_task_spec` or `validate_plan`. It still raises a major for a behaviour criterion with no test when tests are called for, and for a test that asserts nothing about the behaviour.
 - In `validate_completion`, over-testing is heavy at three removable tests or cases or at a third of those added. A no-op or does-not-panic test duplicating another path is `test_value` trivia, not `test_adequacy`. A ledger `failed_when` exempts a test only when it names a concrete change that made it fail. A diff that adds no test for a behaviour criterion is `test_adequacy`, not `insufficient_evidence`, and a test missing one property of a criterion it otherwise asserts is minor.
+- Only the first test that runs a criterion's behaviour is exempt from the over-testing count; further tests for the same criterion count under `consolidate:`. A test that only checks nothing was thrown is no longer a `test_adequacy` major when not throwing is the behaviour the criterion names, and `validate_task_spec` reports an acceptance criterion with no tests only when it needs one. These three wordings postdate the calibration replay and are unmeasured.
 
 ### Fixed
 
