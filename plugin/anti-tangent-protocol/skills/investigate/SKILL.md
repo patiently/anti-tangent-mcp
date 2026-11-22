@@ -23,7 +23,8 @@ Read `../../rules/debugging.md` first; it is the debugging practice this skill a
    ruled out and ask. If it cannot be reproduced locally, say so: the brief's first acceptance
    criterion becomes the instrumentation that would capture it.
 4. **Write the bug-fix brief:** symptom; cause with evidence; Goal; acceptance criterion "a test
-   reproduces the bug and fails before the fix"; Non-goals; Files; exact verify commands. Quote the
+   reproduces the bug and fails before the fix", or for a bug that does not reproduce, the
+   instrumentation criterion from step 3; Non-goals; Files; exact verify commands. Quote the
    fewest log or trace lines that show the problem, fenced, with credentials, tokens and personal
    data replaced by `***` — the brief is committed and sent to a third-party reviewer. Ask the user
    to approve it; it then enters the cycle at stage 2.

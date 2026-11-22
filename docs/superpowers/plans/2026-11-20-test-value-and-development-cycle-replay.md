@@ -125,3 +125,13 @@ All of these changes are in `post.tmpl`, plus the pre/plan sentence noted below.
 4. **Ledger.** Change "not an instance when the ledger gives `failed_when` for it" to: "not an instance when the ledger's `failed_when` names a specific change to the code under test that made the test fail; a `failed_when` that only restates that the test would fail on a regression exempts nothing."
 5. **Test adequacy, absence.** Replace "Do not use this category for evidence that is merely absent: that is `insufficient_evidence`" with: "When a diff is present and adds no test that would catch a behaviour criterion's breakage, that is this category, not `insufficient_evidence`; `insufficient_evidence` is for test output or files that were not submitted."
 6. **Test adequacy, severity.** Add: "A test that runs the behaviour and asserts most of it, missing one property, is `minor`; `major` is for a criterion no test would catch, or a test that asserts nothing about the behaviour."
+
+### After the replay
+
+Three reviewer wordings changed after round 3. None of them is measured.
+
+- `post.tmpl`'s "Never flag" line now exempts only the first test that runs a criterion's behaviour, so redundant tests for one criterion stay countable under `consolidate:`.
+- The `test_adequacy` flag for a test that only checks nothing was thrown no longer applies when not throwing or not panicking is the behaviour the criterion names.
+- `pre.tmpl`'s unrelated-gap clause now names an AC bullet that needs a test and has zero tests.
+
+Measuring the over-tested bar needs heavy fixtures, with real per-function or restating duplicates. That is follow-up work.
