@@ -142,8 +142,17 @@ func findOutcome(outs []scorecard.ToolModelOutcome, src string) (escRate, unconf
 	return scorecard.Rate{}, scorecard.Rate{}
 }
 
+// runKind is the kind a row or cohort displays: an empty kind comes from a
+// record written before kinds existed, which the scorecard reads as a plan run.
+func runKind(kind string) string {
+	if kind == "" {
+		return scorecard.KindPlan
+	}
+	return kind
+}
+
 func toolModelHeaders() []string {
-	headers := []string{"Model", "Calls", "Runs", "Verdicts", "Findings/call", "p50 ms", "p95 ms", "Partial"}
+	headers := []string{"Model", "Kind", "Calls", "Runs", "Verdicts", "Findings/call", "p50 ms", "p95 ms", "Partial"}
 	for _, src := range scorecard.Sources {
 		headers = append(headers, src+" escape", src+" unconfirmed")
 	}
@@ -153,6 +162,7 @@ func toolModelHeaders() []string {
 func toolModelRowCells(r scorecard.ToolModelRow) []string {
 	row := []string{
 		r.Model,
+		runKind(r.Kind),
 		strconv.Itoa(r.Calls),
 		strconv.Itoa(r.Runs),
 		verdictMix(r.VerdictCounts),
@@ -235,16 +245,17 @@ func byUserOverview(rows []scorecard.ToolModelRow) string {
 
 // reviewModelTable renders the regression-by-review-model cohorts.
 func reviewModelTable(groups []scorecard.Group) string {
-	headers := []string{"Source", "Review model", "Runs", "Tasks", "Escape", "Minor escape", "Unconfirmed", "Waive", "Caught & fixed", "Regression", "Baseline"}
+	headers := []string{"Source", "Review model", "Kind", "Runs", "Tasks", "Escape", "Minor escape", "Unconfirmed", "Waive", "Caught & fixed", "Regression", "Baseline"}
 	rows := make([][]string, 0, len(groups))
 	for _, g := range groups {
 		baseline := "—"
 		if g.Baseline != nil {
-			baseline = orDash(g.Baseline.ReviewModel)
+			baseline = orDash(g.Baseline.ReviewModel) + " (" + runKind(g.Baseline.Kind) + ")"
 		}
 		rows = append(rows, []string{
 			g.Source,
 			g.Key.ReviewModel,
+			runKind(g.Key.Kind),
 			strconv.Itoa(g.Runs),
 			strconv.Itoa(g.Tasks),
 			fmtRate(g.EscapeRate),

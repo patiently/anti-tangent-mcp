@@ -218,3 +218,36 @@ func TestRunsHandlerCallsRunsViewWithScope(t *testing.T) {
 		t.Errorf("RunsView called with scope %q, want team", fp.gotScope)
 	}
 }
+
+func TestRenderRunsPageKindColumn(t *testing.T) {
+	session := sampleToolModelRow("sonnet")
+	session.Kind = scorecard.KindSession
+	legacy := sampleToolModelRow("opus")
+	v := RunsView{
+		Scope:   "mine",
+		Present: true,
+		Scorecard: scorecard.Scorecard{
+			MinRuns:     10,
+			ByToolModel: []scorecard.ToolModelRow{session, legacy},
+			ByReviewModel: []scorecard.Group{
+				{Key: scorecard.CohortKey{Kind: scorecard.KindSession, ReviewModel: "terra"}, Baseline: &scorecard.CohortKey{Kind: scorecard.KindSession, ReviewModel: "sol"}},
+				{Key: scorecard.CohortKey{ReviewModel: "luna"}, Baseline: &scorecard.CohortKey{ReviewModel: "sol"}},
+			},
+		},
+	}
+	out := renderRunsPage(v)
+	for _, want := range []string{
+		"<th>Model</th><th>Kind</th>",
+		"<td>sonnet</td><td>session</td>",
+		"<td>opus</td><td>plan</td>",
+		"<th>Review model</th><th>Kind</th>",
+		"<td>terra</td><td>session</td>",
+		"<td>luna</td><td>plan</td>",
+		"<td>sol (session)</td>",
+		"<td>sol (plan)</td>",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
