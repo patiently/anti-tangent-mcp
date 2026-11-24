@@ -149,7 +149,8 @@ func TestRevisitNeverComparesKinds(t *testing.T) {
 func TestRevisitIgnoresPre031Lines(t *testing.T) {
 	var lines []RunLine
 	for i := 0; i < 20; i++ {
-		lines = append(lines, rvTask(fmt.Sprintf("b%d", i), rvBase, 1, "claude-sonnet-5-5", "openai:gpt-x", "0.30.0", nil))
+		lines = append(lines, rvTask(fmt.Sprintf("b%d", i), rvBase, 1, "claude-sonnet-5-5", "openai:gpt-x", "0.30.0",
+			func(s *TaskSnapshot) { s.Categories = map[string]int{"test_adequacy": 1} }))
 	}
 	for i := 0; i < 20; i++ {
 		on := i < 15
@@ -167,6 +168,9 @@ func TestRevisitIgnoresPre031Lines(t *testing.T) {
 	}
 	if g := gatedOfKind(res, RevisitTestValue); len(g) != 1 || g[0].BaselineN != 0 {
 		t.Fatalf("gated = %+v", g)
+	}
+	if g := gatedOfKind(res, RevisitTestAdequacy); len(g) != 1 || g[0].BaselineN != 0 || g[0].RecentN != 20 {
+		t.Fatalf("adequacy gated = %+v", g)
 	}
 }
 
@@ -327,5 +331,32 @@ func TestCohortModels(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestRevisitGatedSeparatesSourcesDeterministically(t *testing.T) {
+	var lines []RunLine
+	var outs []OutcomeLine
+	for i := 0; i < 4; i++ {
+		h := fmt.Sprintf("r%d", i)
+		lines = append(lines, rvTask(h, rvRecent, 1, "claude-sonnet-5-5", "openai:gpt-x", "0.31.0",
+			func(s *TaskSnapshot) { s.PostVerdict = "warn" }))
+		src := SourceFinalReview
+		if i%2 == 1 {
+			src = SourceReviewNow
+		}
+		outs = append(outs, outcome(h, src, rvRecent))
+	}
+	var first []Gated
+	for call := 0; call < 20; call++ {
+		got := gatedOfKind(Revisit(lines, outs, nil, RevisitOptions{Now: rvNow}), RevisitUnconfirmed)
+		if len(got) != 2 || got[0].Source != SourceFinalReview || got[1].Source != SourceReviewNow {
+			t.Fatalf("gated = %+v", got)
+		}
+		if first == nil {
+			first = got
+		} else if !slices.Equal(first, got) {
+			t.Fatalf("order changed: %+v vs %+v", first, got)
+		}
 	}
 }

@@ -37,6 +37,7 @@ type Signal struct {
 type Gated struct {
 	Kind         string    `json:"kind"`
 	Cohort       CohortKey `json:"cohort"`
+	Source       string    `json:"source,omitempty"`
 	RecentN      int       `json:"recent_n"`
 	BaselineN    int       `json:"baseline_n"`
 	RecentRuns   int       `json:"recent_runs"`
@@ -113,8 +114,8 @@ func Revisit(lines []RunLine, outcomes []OutcomeLine, firstSeen map[string]time.
 	res := RevisitResult{Signals: []Signal{}, Gated: []Gated{}}
 	for id, s := range tallyRevisit(notAfter(lines, opts.Now), outcomes, cut) {
 		base, rec := s[0], s[1]
-		if base.n < opts.MinRuns || rec.n < opts.MinRuns || len(base.runs) < 2 || len(rec.runs) < 2 {
-			res.Gated = append(res.Gated, Gated{Kind: id.kind, Cohort: id.key, RecentN: rec.n, BaselineN: base.n,
+		if !base.enough(opts.MinRuns) || !rec.enough(opts.MinRuns) {
+			res.Gated = append(res.Gated, Gated{Kind: id.kind, Cohort: id.key, Source: id.source, RecentN: rec.n, BaselineN: base.n,
 				RecentRuns: len(rec.runs), BaselineRuns: len(base.runs)})
 			continue
 		}
@@ -170,6 +171,9 @@ func tallyRevisit(lines []RunLine, outcomes []OutcomeLine, cut time.Time) map[re
 	return sides
 }
 
+// enough reports whether a side has the tasks and the distinct runs to be compared.
+func (s revisitSide) enough(minRuns int) bool { return s.n >= minRuns && len(s.runs) >= 2 }
+
 func (s *revisitSide) add(k runKey, hit bool) {
 	s.n++
 	s.runs[k] = true
@@ -211,8 +215,8 @@ func scoringSource(r *run) string {
 }
 
 func gatedLess(a, b Gated) bool {
-	x := []string{a.Kind, a.Cohort.Kind, a.Cohort.ImplementerModel, a.Cohort.ReviewModel}
-	y := []string{b.Kind, b.Cohort.Kind, b.Cohort.ImplementerModel, b.Cohort.ReviewModel}
+	x := []string{a.Kind, a.Cohort.Kind, a.Cohort.ImplementerModel, a.Cohort.ReviewModel, a.Source}
+	y := []string{b.Kind, b.Cohort.Kind, b.Cohort.ImplementerModel, b.Cohort.ReviewModel, b.Source}
 	for i := range x {
 		if x[i] != y[i] {
 			return x[i] < y[i]
