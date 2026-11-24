@@ -55,12 +55,29 @@ type RevisitOptions struct {
     Now     time.Time
 }
 
+// Gated is one (signal kind, cohort) comparison the gate refused: the
+// evidence that a quiet tray means "too small to judge", not "no change".
+type Gated struct {
+    Kind         string    `json:"kind"`
+    Cohort       CohortKey `json:"cohort"`
+    RecentN      int       `json:"recent_n"`
+    BaselineN    int       `json:"baseline_n"`
+    RecentRuns   int       `json:"recent_runs"`
+    BaselineRuns int       `json:"baseline_runs"`
+}
+
+type RevisitResult struct {
+    Signals []Signal
+    Gated   []Gated
+}
+
 // Revisit is pure. firstSeen maps a normalised model name to when it was first
 // seen; the caller owns persisting it (§4.2).
-func Revisit(lines []RunLine, outcomes []OutcomeLine, firstSeen map[string]time.Time, opts RevisitOptions) []Signal
+func Revisit(lines []RunLine, outcomes []OutcomeLine, firstSeen map[string]time.Time, opts RevisitOptions) RevisitResult
 ```
 
-Output is sorted by `ID` so the array is stable across recomputes.
+`Signals` is sorted by `ID` and `Gated` by (kind, cohort), so both arrays are stable across
+recomputes.
 
 ### 3.1 Cohorts and windows
 
@@ -79,8 +96,10 @@ Output is sorted by `ID` so the array is stable across recomputes.
   from ≥ 2 distinct runs. The gate counts **tasks**, unlike the regression gate, which counts runs:
   gating plan cohorts on 10 runs per side would mean they never fire, and the distinct-run floor stops
   one ten-task plan from firing a signal on its own. `MinRuns` is the existing
-  `ANTI_TANGENT_SCORECARD_MIN_RUNS` (default 10). If either side fails the gate: no signal, and no
-  record of the miss.
+  `ANTI_TANGENT_SCORECARD_MIN_RUNS` (default 10). If either side fails the gate, there is no signal,
+  and the comparison is listed in `Gated` with its counts. The exception is a comparison with no
+  eligible task on either side, which is not listed, so the list stays bounded by the cohorts that
+  actually ran.
 - Retention of 14 days or less leaves no baseline, so no drift signal can fire; the README says so.
 
 ### 3.2 Drift rule
@@ -89,10 +108,31 @@ For a proportion kind, compute `wilson(num, n)` (the existing 90% helper, `score
 on each side. Fire when the intervals are disjoint: `recent.Lo > baseline.Hi` → `up`,
 `recent.Hi < baseline.Lo` → `down`. Both directions fire.
 
-Expected behaviour at the stated volumes (exact binomial, per comparison): under no change, about 2%
-fire. A 20%→50% shift fires with ~19% power at n = 10 per side, ~37% at n = 20, ~71% at n = 40. With
-about a dozen gated comparisons and two independent looks a month, that is around 0.5 false signals
-a month, each acked once. Mostly silent at first is the intended behaviour.
+**Power** (exact binomial, per comparison, n tasks per side):
+
+| Test | n | False fire | 20%→40% | 20%→50% |
+|------|---|------------|---------|---------|
+| disjoint 90% Wilson (this spec) | 10 / 20 / 40 | ~2% | 9% / 18% / 36% | 19% / 37% / 71% |
+| Fisher exact, α = 0.05 | 10 / 20 / 40 | 1–3% | 6% / 19% / 41% | 13% / 41% / 75% |
+| two-proportion z, α = 0.05 | 10 / 20 / 40 | 3–6% | 13% / 29% / 50% | 25% / 53% / 82% |
+
+At a matched false-fire rate the test barely matters. The z-test's extra power is bought with more
+than twice the false fires. **The lever is tasks per comparison, not the test.**
+
+Measured on the local stats directory (2026-10-25 → 2026-11-23, post-verdicted tasks per 14-day side,
+terra reviewer):
+
+- plan · sonnet: ~200–240 per side;
+- plan · haiku: ~85–95;
+- plan · opus: ~20–25;
+- session: 0 so far, and at ~111 whole-spec tasks a month spread over 2–3 models, about 10–25 per
+  side.
+
+So the Sonnet and Haiku plan cohorts are well powered, while Opus plan cohorts and every session
+cohort are not. That is why the gated comparisons are published (§3.1, §4.1, §5.3): a quiet tray must
+read as "too small to judge" where that is the truth. With about a dozen gated comparisons and two
+independent looks a month, expect around 0.5 false signals a month, each acked once. The test-value
+kinds cannot fire before both windows hold 0.31+ data (§3.3), so not before about mid-December 2026.
 
 ### 3.3 Kinds
 
@@ -137,15 +177,17 @@ IDs contain only normalised model names and fixed kind words; no free text.
 
 ### 4.1 `scorecard.json`
 
-`Scorecard` gains `Revisit *[]Signal \`json:"revisit,omitempty"\``. `Compute` is unchanged.
+`Scorecard` gains `Revisit *[]Signal \`json:"revisit,omitempty"\`` and
+`RevisitCoverage *[]Gated \`json:"revisit_coverage,omitempty"\``, which carry `RevisitResult`'s two
+lists. `Compute` is unchanged.
 `Recorder.WriteScorecard` (`internal/stats/runs.go:96`) calls `Revisit` after `Compute`, with the same
-lines and outcomes, `r.minRuns` and `r.clock()`, and sets `sc.Revisit` before writing. It runs where
+lines and outcomes, `r.minRuns` and `r.clock()`, and sets both fields before writing. It runs where
 the scorecard already runs: on every recorded outcome and at compaction.
 
-- **When the reads succeed,** `sc.Revisit` points at a slice, `[]` when nothing fires, so the key is
+- **When the reads succeed,** both fields point at slices, `[]` when empty, so both keys are
   present.
 - **When reading `runs.jsonl` or `outcomes.jsonl` failed** (`runs.go:101-103` logs and continues),
-  `sc.Revisit` stays nil and the key is **absent**. An absent key tells the daemon "no answer", not
+  both fields stay nil and both keys are **absent**. An absent key tells the daemon "no answer", not
   "nothing live" (§5.2), so a transient read failure never forgets acks. The same holds for a file
   written by a pre-0.32 server.
 
@@ -216,7 +258,8 @@ No new env vars, no MCP tool changes, `rollup.json` untouched, nothing blocks.
 
 - `docs/protocol/cycle.md` §7.4: one sentence naming the `revisit` array, the summary lead and the tray
   line as the trigger. Resync `plugin/anti-tangent-protocol/protocol/` in the same commit.
-- README stats section: the `revisit` array, `first-seen.json`, the 14-day windows, the gate, that
+- README stats section: the `revisit` and `revisit_coverage` arrays, the power table's message (a quiet
+  tray with a "too small to judge" count is not an all-clear), `first-seen.json`, the 14-day windows, the gate, that
   retention ≤ 14 days disables drift signals, and that the summary lead appears only when a summary is
   written.
 - CHANGELOG `## [0.32.0]`: `### Added` for signals, the lead, session titles, the tray line.
@@ -226,8 +269,9 @@ No new env vars, no MCP tool changes, `rollup.json` untouched, nothing blocks.
 ### 5.1 Read
 
 `atruns.Read` already decodes `scorecard.json` for `min_runs` (`readMinRuns`). Replace that with one
-decode of `{min_runs, revisit *[]Signal}`, filling `Data.MinRuns` and
-`Data.Revisit []scorecard.Signal`, plus `Data.RevisitKnown bool`. `RevisitKnown` is true **only when
+decode of `{min_runs, revisit *[]Signal, revisit_coverage *[]Gated}`, filling `Data.MinRuns`,
+`Data.Revisit []scorecard.Signal` and `Data.RevisitGated []scorecard.Gated`, plus
+`Data.RevisitKnown bool`. `RevisitKnown` is true **only when
 the file parsed and the `revisit` key was present**.
 
 - A missing, unparsable or pre-0.32 file, or a file the server wrote after a failed read (§4.1),
@@ -260,8 +304,14 @@ The existing `state.Store` (`seen.json`) holds acks under the id prefix `revisit
 
 ### 5.3 Tray
 
-- A submenu `🔁 Cycle review due (n)`, hidden when n = 0, built from a fixed pool in the style of
-  `makeDonePool`.
+- A submenu built from a fixed pool in the style of `makeDonePool`. With n unacked signals and g
+  gated comparisons, its title is:
+  - `🔁 Cycle review due (n)` when g = 0;
+  - `🔁 Cycle review due (n) · g too small to judge` when g > 0;
+  - `🔁 Cycle review: none due · g too small to judge` when n = 0 and g > 0.
+
+  It is hidden when n = 0 and g = 0, and whenever `RevisitKnown` is false. Gated comparisons are a
+  count only: they need no ack, and the runs page holds the cohort numbers.
 - One item per unacked signal. A pure `revisitLabel(Signal) string` builds the label:
   - drift: `<kind> <↑|↓> <cohort.kind> · <impl> / <review> — <recent%> vs <baseline%>` (with
     `· <source>` for `unconfirmed_flags_drift`);
@@ -269,7 +319,7 @@ The existing `state.Store` (`seen.json`) holds acks under the id prefix `revisit
 - Clicking an item calls `Actions.AckRevisit(id)`, which runs `store.MarkSeen([]string{"revisit:"+id})`,
   takes `p.mu`, calls `recompute`, and re-renders.
 - A final item, `Open runs page`, opens `/ui/runs`.
-- The tooltip's "need attention" count adds n.
+- The tooltip's "need attention" count adds n, not g.
 - **No desktop notification.** The existing event path acks on delivery, which would hide the signal
   as it is shown. Revisit acks are explicit clicks only.
 - **Logging:** one warning when `Retain` or an ack's `MarkSeen` fails to persist, never one per
@@ -341,7 +391,9 @@ Behaviour, not one test per function.
   - `unconfirmed_flags_drift` counting a run that has two outcome sources once, under the first in
     `Sources` order;
   - `new_model` firing within 14 days and clearing after, with zero-time entries never firing;
-  - `CohortModels` matching the cohort keys `Compute` produces for the same input.
+  - `CohortModels` matching the cohort keys `Compute` produces for the same input;
+  - `Gated` listing a comparison gated out on either side (by count and by the single-run floor), and
+    leaving out a comparison with no eligible task on either side.
 
   Plus one assertion that output order and IDs are stable across two calls.
 - **`internal/stats`:**
@@ -359,6 +411,7 @@ Behaviour, not one test per function.
   - `Store.Retain` forgets only cleared `revisit:` ids and leaves other ids alone;
   - acks are kept when `revisit` is absent;
   - `ComputeRevisit` filters acked signals and stale `new_model` ones;
+  - the submenu title for each n/g combination, and the menu hidden when `RevisitKnown` is false;
   - `revisitLabel` for a drift and a new-model signal.
 
   All through the existing pure seams; no systray in tests.
