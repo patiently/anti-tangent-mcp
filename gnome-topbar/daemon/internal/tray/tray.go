@@ -245,26 +245,11 @@ func (t *Tray) makeClickPool(n int, parent *systray.MenuItem) ([]*systray.MenuIt
 // makeDonePool creates n hidden clickable items under parent; clicking one calls
 // Actions.MarkDone with the raw todo line backing that slot, then re-renders.
 func (t *Tray) makeDonePool(n int, parent *systray.MenuItem) ([]*systray.MenuItem, []string) {
-	pool := make([]*systray.MenuItem, n)
-	raw := make([]string, n)
-	for i := 0; i < n; i++ {
-		mi := t.addItem(parent)
-		mi.Hide()
-		pool[i] = mi
-		idx := i
-		go func() {
-			for range mi.ClickedCh {
-				t.mu.Lock()
-				line := raw[idx]
-				t.mu.Unlock()
-				if line != "" && t.act.MarkDone != nil {
-					t.act.MarkDone(line)
-					t.render()
-				}
-			}
-		}()
-	}
-	return pool, raw
+	return t.makeActionPool(n, parent, func(line string) {
+		if t.act.MarkDone != nil {
+			t.act.MarkDone(line)
+		}
+	})
 }
 
 // renderRevisit applies the cycle-review menu model; the caller holds t.mu.
@@ -291,8 +276,19 @@ func (t *Tray) renderRevisit(snap state.Snapshot) {
 // makeAckPool creates n hidden clickable items under parent; clicking one calls
 // Actions.AckRevisit with the signal id backing that slot, then re-renders.
 func (t *Tray) makeAckPool(n int, parent *systray.MenuItem) ([]*systray.MenuItem, []string) {
+	return t.makeActionPool(n, parent, func(id string) {
+		if t.act.AckRevisit != nil {
+			t.act.AckRevisit(id)
+		}
+	})
+}
+
+// makeActionPool creates n hidden clickable items under parent and returns them
+// with the slot-to-value slice the caller fills on each render. Clicking an
+// item whose slot holds a non-empty value calls act with it, then re-renders.
+func (t *Tray) makeActionPool(n int, parent *systray.MenuItem, act func(string)) ([]*systray.MenuItem, []string) {
 	pool := make([]*systray.MenuItem, n)
-	ids := make([]string, n)
+	vals := make([]string, n)
 	for i := 0; i < n; i++ {
 		mi := t.addItem(parent)
 		mi.Hide()
@@ -301,16 +297,16 @@ func (t *Tray) makeAckPool(n int, parent *systray.MenuItem) ([]*systray.MenuItem
 		go func() {
 			for range mi.ClickedCh {
 				t.mu.Lock()
-				id := ids[idx]
+				v := vals[idx]
 				t.mu.Unlock()
-				if id != "" && t.act.AckRevisit != nil {
-					t.act.AckRevisit(id)
+				if v != "" {
+					act(v)
 					t.render()
 				}
 			}
 		}()
 	}
-	return pool, ids
+	return pool, vals
 }
 
 // makeDisabledPool creates n hidden, non-clickable display-only items.

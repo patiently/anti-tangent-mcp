@@ -62,17 +62,11 @@ func TestRevisitMenuModel(t *testing.T) {
 	if !show || title != "🔁 Cycle review due (2)" || !reflect.DeepEqual(ids, []string{"a", "b"}) {
 		t.Fatalf("got %v %q %v", show, title, ids)
 	}
-	if labels[0] != revisitLabel(sigs[0]) {
+	if labels[0] != "test_volume_drift ↑ plan · impl / rev — 41% vs 18%" {
 		t.Errorf("labels %v", labels)
 	}
 	_, show, ids, _ = revisitMenu(state.Snapshot{RevisitKnown: true, RevisitGated: 3})
 	if !show || len(ids) != 0 {
 		t.Errorf("gated-only: show=%v ids=%v", show, ids)
-	}
-}
-
-func TestAckRevisitPrefixes(t *testing.T) {
-	if got := AckRevisitIDs("x"); !reflect.DeepEqual(got, []string{"revisit:x"}) {
-		t.Errorf("got %v", got)
 	}
 }

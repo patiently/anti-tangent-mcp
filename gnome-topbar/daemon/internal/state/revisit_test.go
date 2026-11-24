@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -60,13 +61,20 @@ func TestComputeRevisitFiltersAckedAndStaleNewModel(t *testing.T) {
 	}
 	now := time.Now()
 	old := now.Add(-20 * 24 * time.Hour)
+	recent := now.Add(-3 * 24 * time.Hour)
 	sigs := []scorecard.Signal{
 		{ID: "a", Kind: scorecard.RevisitTestVolume},
 		{ID: "b", Kind: scorecard.RevisitTestVolume},
 		{ID: "new_model:c", Kind: scorecard.RevisitNewModel, Since: &old},
+		{ID: "new_model:d", Kind: scorecard.RevisitNewModel, Since: &recent},
+		{ID: "new_model:e", Kind: scorecard.RevisitNewModel},
 	}
 	got := ComputeRevisit(sigs, store, now)
-	if len(got) != 1 || got[0].ID != "a" {
-		t.Fatalf("got %+v, want only a", got)
+	var ids []string
+	for _, s := range got {
+		ids = append(ids, s.ID)
+	}
+	if want := []string{"a", "new_model:d", "new_model:e"}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("got %v, want %v", ids, want)
 	}
 }
