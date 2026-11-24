@@ -53,6 +53,9 @@ type ledgerLine struct {
 	// one, or an older binary sharing the same ledger file) never mistakes a
 	// header line for a row.
 	HeaderPlanRunID string `json:"header_plan_run_id,omitempty"`
+	// SessionRunHash marks a session run's title line. Its plan_run_id is
+	// empty, so no reader matching task rows on plan_run_id ever sees it.
+	SessionRunHash string `json:"session_run_hash,omitempty"`
 	// CreatedAt is set on header lines only. Prune keys a task row on
 	// Row.CompletedAt, or WrittenAt when it has not completed; a header has
 	// no row to key on.
@@ -131,6 +134,32 @@ func (l *Ledger) Append(run *Run, row TaskRow) error {
 		PlanQuality: run.PlanQuality, TaskCount: run.TaskCount, Row: row,
 		WrittenAt: time.Now().UTC(),
 	})
+	if err != nil {
+		return err
+	}
+	return l.appendLine(b)
+}
+
+type sessionTitleLine struct {
+	PlanRunID      string          `json:"plan_run_id"`
+	SessionRunHash string          `json:"session_run_hash"`
+	Row            sessionTitleRow `json:"row"`
+	WrittenAt      time.Time       `json:"written_at"`
+}
+
+type sessionTitleRow struct {
+	Index     int    `json:"index"`
+	TaskTitle string `json:"task_title"`
+}
+
+// AppendSessionTitle records a session run's title under its salted run hash,
+// so the daemon can name the run without the raw session id reaching disk.
+func (l *Ledger) AppendSessionTitle(runHash, title string, at time.Time) error {
+	if l == nil || l.Dir == "" || runHash == "" || title == "" {
+		return nil
+	}
+	b, err := json.Marshal(sessionTitleLine{SessionRunHash: runHash,
+		Row: sessionTitleRow{Index: 1, TaskTitle: title}, WrittenAt: at.UTC()})
 	if err != nil {
 		return err
 	}

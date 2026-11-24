@@ -1,6 +1,7 @@
 package mcpsrv
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/patiently/anti-tangent-mcp/internal/config"
@@ -112,6 +113,9 @@ func (h *handlers) recordSessionRow(sessionID string, update func(*planrun.TaskR
 		if err != nil {
 			h.deps.Sessions.ReleaseRunHeader(sessionID)
 			return
+		}
+		if err := h.deps.PlanLedger.AppendSessionTitle(hash, row.TaskTitle, time.Now()); err != nil {
+			slog.Warn("plan ledger session title append failed", "err", err)
 		}
 	}
 	h.deps.Stats.RecordRunLine(scorecard.RunLine{

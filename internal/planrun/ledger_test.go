@@ -520,3 +520,49 @@ func TestLedger_LoadTakesTheLatestRoundsHeaderWhenItIsWrittenFirst(t *testing.T)
 	require.Len(t, got.Tasks, 2)
 	assert.Equal(t, "Task 2: B", got.Tasks[1].Title)
 }
+
+func TestAppendSessionTitleShapeAndInvisibility(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+	at := time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, l.AppendSessionTitle("r_x", "T", at))
+	b, err := os.ReadFile(filepath.Join(dir, "plan-runs.jsonl"))
+	require.NoError(t, err)
+	assert.Equal(t, `{"plan_run_id":"","session_run_hash":"r_x","row":{"index":1,"task_title":"T"},"written_at":"2026-11-24T00:00:00Z"}`+"\n", string(b))
+	_, ok := l.Load("r_any")
+	assert.False(t, ok)
+}
+
+func TestAppendSessionTitleNoOps(t *testing.T) {
+	at := time.Now()
+	for name, tc := range map[string]struct {
+		l           *Ledger
+		hash, title string
+	}{
+		"nil ledger": {nil, "r_x", "T"},
+		"empty dir":  {&Ledger{}, "r_x", "T"},
+		"no hash":    {&Ledger{Dir: t.TempDir()}, "", "T"},
+		"no title":   {&Ledger{Dir: t.TempDir()}, "r_x", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, tc.l.AppendSessionTitle(tc.hash, tc.title, at))
+			if tc.l != nil && tc.l.Dir != "" {
+				_, err := os.Stat(filepath.Join(tc.l.Dir, "plan-runs.jsonl"))
+				assert.True(t, os.IsNotExist(err))
+			}
+		})
+	}
+}
+
+func TestPruneDropsSessionTitleByWrittenAt(t *testing.T) {
+	dir := t.TempDir()
+	l := &Ledger{Dir: dir}
+	now := time.Now().UTC()
+	require.NoError(t, l.AppendSessionTitle("r_old", "Old", now.Add(-40*24*time.Hour)))
+	require.NoError(t, l.AppendSessionTitle("r_new", "New", now.Add(-24*time.Hour)))
+	require.NoError(t, l.Prune(now.Add(-30*24*time.Hour)))
+	b, err := os.ReadFile(filepath.Join(dir, "plan-runs.jsonl"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "r_old")
+	assert.Contains(t, string(b), "r_new")
+}

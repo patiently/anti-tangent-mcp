@@ -88,6 +88,9 @@ func (s *Store) UpdateRow(id string, fn func(*planrun.TaskRow)) (row planrun.Tas
 		return planrun.TaskRow{}, false, false
 	}
 	fn(&sess.Row)
+	if sess.Row.TaskTitle == "" {
+		sess.Row.TaskTitle = sess.Spec.Title
+	}
 	sess.Row.Index = 1
 	sess.LastAccessed = time.Now()
 	if sess.Row.PostVerdict != "" && !sess.RunHeaderWritten {
