@@ -250,23 +250,41 @@ func TestWriteScorecardConcurrent(t *testing.T) {
 	mustSeeded(t, r.dir, 2)
 }
 
+// The stats dir is made read-only so the atomic writer cannot create its temp
+// file while first-seen.json itself stays readable; a directory at the target
+// path would fail the read too and test reseeding instead of a write failure.
+// writeFileAtomic picks a random temp name, so no single temp path can be
+// blocked in advance.
 func TestFirstSeenWriteFailureStillSignals(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
 	r, now := fixedClockRecorder(t)
 	recordTask(t, r, "r1", now.Add(-time.Hour), "claude-sonnet-5-5")
 	r.WriteScorecard()
+	recordTask(t, r, "r2", now.Add(-time.Minute), "claude-haiku-5-5")
 	path := filepath.Join(r.dir, firstSeenFile)
-	if err := os.Remove(path); err != nil {
+	before, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(path, 0o700); err != nil {
+	if err := os.Chmod(r.dir, 0o500); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = os.Chmod(r.dir, 0o700) })
 	var buf bytes.Buffer
 	r.logger = slog.New(slog.NewTextHandler(&buf, nil))
-	recordTask(t, r, "r2", now.Add(-time.Minute), "claude-haiku-5-5")
 	sc := r.WriteScorecard()
-	if sc.Revisit == nil {
-		t.Fatal("signals dropped on a first-seen write failure")
-	}
 	assertWarnings(t, &buf, "first_seen write failed", 1)
+	assertWarnings(t, &buf, "first_seen unreadable", 0)
+	if ids := signalIDs(sc); !slices.Contains(ids, "new_model:claude-haiku-5-5") {
+		t.Fatalf("want new_model for haiku despite the write failure, got %v", ids)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("first-seen.json changed:\nbefore %s\nafter  %s", before, after)
+	}
 }
