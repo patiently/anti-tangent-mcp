@@ -338,7 +338,7 @@ The existing `state.Store` (`seen.json`) holds acks under the id prefix `revisit
   `internal/mcpsrv/server.go:28`):
 
   ```json
-  {"plan_run_id":"","session_run_hash":"r_…","row":{"index":1,"task_title":"…","written_at":"…"}}
+  {"plan_run_id":"","session_run_hash":"r_…","row":{"index":1,"task_title":"…"},"written_at":"…"}
   ```
 
 - **The line is minimal.** It is not the whole `TaskRow`, and it carries **the salted run hash, not the
