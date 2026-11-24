@@ -143,6 +143,44 @@ func TestWriteScorecardSeedsThenStampsNewModel(t *testing.T) {
 	assertRevisitKeys(t, r.dir, true)
 }
 
+// A real clock advances between reads, so a stamp taken from a second reading
+// would land after the instant Revisit judges against and be ignored.
+func TestNewModelSignalledOnStampingCallWithAdvancingClock(t *testing.T) {
+	r := newTestRecorder(t, 1000)
+	t0 := time.Date(2026, 12, 20, 12, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	var reads []time.Time
+	r.clock = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		next := t0.Add(time.Duration(len(reads)) * time.Millisecond)
+		reads = append(reads, next)
+		return next
+	}
+	recordTask(t, r, "r1", t0.Add(-time.Hour), "claude-sonnet-5-5")
+	r.WriteScorecard()
+	recordTask(t, r, "r2", t0.Add(-time.Minute), "claude-haiku-5-5")
+	before := len(reads)
+	sc := r.WriteScorecard()
+	if got := len(reads) - before; got != 1 {
+		t.Fatalf("WriteScorecard read the clock %d times, want 1", got)
+	}
+	now := reads[before]
+	var sig *scorecard.Signal
+	for i, s := range *sc.Revisit {
+		if s.ID == "new_model:claude-haiku-5-5" {
+			sig = &(*sc.Revisit)[i]
+		}
+	}
+	if sig == nil {
+		t.Fatalf("stamping call did not signal haiku: %v", signalIDs(sc))
+	}
+	fs, _ := readFirstSeen(r.dir)
+	if !fs.Models["claude-haiku-5-5"].Equal(now) || !sig.Since.Equal(now) {
+		t.Fatalf("stamp %v / since %v, want the call's now %v", fs.Models["claude-haiku-5-5"], sig.Since, now)
+	}
+}
+
 func TestWriteScorecardReadFailureSkipsRevisit(t *testing.T) {
 	r, _ := fixedClockRecorder(t)
 	if err := os.Mkdir(filepath.Join(r.dir, runsFile), 0o700); err != nil {

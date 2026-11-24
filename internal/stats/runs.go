@@ -105,7 +105,7 @@ func (r *Recorder) WriteScorecard() scorecard.Scorecard {
 	sc := scorecard.Compute(runs, outs, scorecard.Options{MinRuns: r.minRuns, Now: now})
 	sc.SkippedLines = skipR + skipO
 	if errR == nil && errO == nil {
-		fs := r.updateFirstSeen(scorecard.CohortModels(runs, outs, now))
+		fs := r.updateFirstSeen(scorecard.CohortModels(runs, outs, now), now)
 		res := scorecard.Revisit(runs, outs, fs, scorecard.RevisitOptions{MinRuns: r.minRuns, Now: now})
 		sc.Revisit, sc.RevisitCoverage = &res.Signals, &res.Gated
 	}

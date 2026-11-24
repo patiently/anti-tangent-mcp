@@ -66,14 +66,14 @@ func mergeFirstSeen(a, b firstSeen) firstSeen {
 // call. The merge keeps a seeded zero over any stamp, so that race can delay a
 // new_model signal but never invent one. Behaviour across processes is
 // therefore convergent, not locked.
-func (r *Recorder) updateFirstSeen(models []string) map[string]time.Time {
+func (r *Recorder) updateFirstSeen(models []string, now time.Time) map[string]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cur, err := readFirstSeen(r.dir)
 	if err != nil {
 		r.logger.Warn("stats first_seen unreadable, reseeding", "err", err)
 	}
-	next, changed := addModels(cur, models, r.clock)
+	next, changed := addModels(cur, models, now)
 	if changed {
 		next = r.persistFirstSeen(next)
 	}
@@ -85,13 +85,16 @@ func (r *Recorder) updateFirstSeen(models []string) map[string]time.Time {
 }
 
 // addModels returns a copy of cur with every missing model added: at the zero
-// time while unseeded, else at clock(). changed reports whether a write is due.
-func addModels(cur firstSeen, models []string, clock func() time.Time) (firstSeen, bool) {
+// time while unseeded, else at now. now must be the same instant the caller
+// passes to Revisit, which ignores first-seen times after it; a later clock
+// reading would hide a model's new_model signal on the call that stamps it.
+// changed reports whether a write is due.
+func addModels(cur firstSeen, models []string, now time.Time) (firstSeen, bool) {
 	next := mergeFirstSeen(cur, firstSeen{})
 	changed := !next.Seeded
 	stamp := time.Time{}
 	if next.Seeded {
-		stamp = clock()
+		stamp = now
 	}
 	for _, m := range models {
 		if _, ok := next.Models[m]; !ok {
