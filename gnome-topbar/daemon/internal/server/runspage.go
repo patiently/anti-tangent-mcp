@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/atruns"
 	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
@@ -344,7 +345,11 @@ func runsList(v RunsView) string {
 		} else {
 			b.WriteString(`<td><a href="` + href + `">` + esc(r.Latest.Format("Jan 2 15:04")) + `</a></td>`)
 		}
-		b.WriteString(`<td>` + esc(orDash(r.PlanVerdict)) + `</td>`)
+		plan := orDash(r.PlanVerdict)
+		if t := sessionTitle(v, r); t != "" {
+			plan = t
+		}
+		b.WriteString(`<td>` + esc(plan) + `</td>`)
 		b.WriteString(`<td>` + strconv.Itoa(r.TaskCount) + `</td>`)
 		b.WriteString(`<td>` + esc(compactModels(r.ConfiguredModels)) + `</td>`)
 		b.WriteString(`<td>` + esc(orDash(strings.Join(r.ImplementerModels, ", "))) + `</td>`)
@@ -736,4 +741,17 @@ func renderRunDetail(v RunsView, hash, publisher string) string {
 	b.WriteString(unattributedSection(bySource))
 
 	return pageShell("Run detail", b.String())
+}
+
+// sessionTitle is a session run's local title for the runs list, cut to 80
+// runes; a one-task run is found by its title, not its hash.
+func sessionTitle(v RunsView, r atruns.RunSummary) string {
+	if v.Scope != "mine" || r.Kind != "session" {
+		return ""
+	}
+	t := []rune(v.Data.Titles[r.RunHash][1])
+	if len(t) > 80 {
+		return string(t[:79]) + "…"
+	}
+	return string(t)
 }

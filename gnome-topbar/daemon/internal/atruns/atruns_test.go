@@ -99,3 +99,54 @@ func TestRunsResolvesOneModelPerTask(t *testing.T) {
 		t.Fatalf("models: %v", m)
 	}
 }
+
+func TestReadRevisitKnownOnlyWithKey(t *testing.T) {
+	cases := []struct {
+		name, body string
+		noFile     bool
+		known      bool
+		nRev, nGat int
+	}{
+		{name: "no key", body: `{"min_runs":10}`},
+		{name: "empty", body: `{"min_runs":10,"revisit":[]}`, known: true},
+		{name: "full", body: `{"revisit":[{"id":"new_model:x","kind":"new_model","model":"x"}],"revisit_coverage":[{"kind":"test_volume_drift","cohort":{"kind":"session","review_model":"r"},"recent_n":3,"baseline_n":0,"recent_runs":3,"baseline_runs":0}]}`, known: true, nRev: 1, nGat: 1},
+		{name: "broken", body: `{`},
+		{name: "no file", noFile: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, dir, "runs.jsonl", "{}\n")
+			write(t, dir, "state.json", `{"salt":"s"}`)
+			if !c.noFile {
+				write(t, dir, "scorecard.json", c.body)
+			}
+			d, err := Read(dir)
+			if err != nil || d.RevisitKnown != c.known || len(d.Revisit) != c.nRev || len(d.RevisitGated) != c.nGat {
+				t.Fatalf("%+v %v", d, err)
+			}
+			if c.name == "no key" && d.MinRuns != 10 {
+				t.Fatalf("min runs: %d", d.MinRuns)
+			}
+		})
+	}
+}
+
+func TestReadTitlesSessionRunHash(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "runs.jsonl", "{}\n")
+	write(t, dir, "plan-runs.jsonl", `{"plan_run_id":"","session_run_hash":"r_abc","row":{"index":1,"task_title":"Fix X"},"written_at":"2026-11-24T00:00:00Z"}`+"\n")
+	d, err := Read(dir)
+	if err != nil || d.Titles["r_abc"][1] != "Fix X" {
+		t.Fatalf("%+v %v", d.Titles, err)
+	}
+}
+
+func TestRunsKindFromHeader(t *testing.T) {
+	lines := []scorecard.RunLine{{RunHash: "h", Header: true, Kind: "session", Ts: time.Now()}, {RunHash: "g", Header: true, Ts: time.Now()}}
+	for _, s := range Runs(lines, nil) {
+		if (s.RunHash == "h") != (s.Kind == "session") {
+			t.Fatalf("%+v", s)
+		}
+	}
+}

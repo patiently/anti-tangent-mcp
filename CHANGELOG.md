@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scorecard.json` gains `revisit` (signals) and `revisit_coverage` (comparisons too small to judge); both keys are omitted when the scorecard's run or outcome read failed. First-seen models are kept in a new `first-seen.json` in the stats directory; the first 0.32 run records every model already in use without flagging it as new.
 - `summary.md` opens with a `Cycle review due:` line naming up to three revisit signals when any are live. The line is written by the server, not the model, and is kept out of `summaries.jsonl`. With no reviewer configured, or when the summary call fails, no summary is written and the signals are in `scorecard.json` and the gnome-topbar tray only.
 - With `ANTI_TANGENT_PLAN_LEDGER=1`, a task run without a plan writes one line to `plan-runs.jsonl` carrying its salted run hash and task title (never the session id), so gnome-topbar can name session runs. Without the ledger opt-in, session runs keep showing by hash.
+- gnome-topbar: `/ui/runs` names session runs by their task title (local `mine` scope, with the plan ledger on) in the runs list and on the run page.
 
 ## [0.31.0] - 2026-11-20
 
