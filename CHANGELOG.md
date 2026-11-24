@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-11-24
+
+### Added
+
+- Revisit signals: `scorecard.Revisit` compares each (run kind, implementer model, review model) cohort's last 14 days with its own earlier retained tasks and reports `test_value_drift`, `test_volume_drift`, `test_adequacy_share` and `unconfirmed_flags_drift` when the two 90% Wilson intervals are disjoint (each side >= `ANTI_TANGENT_SCORECARD_MIN_RUNS` eligible tasks from >= 2 runs), plus `new_model` for a model first seen in the last 14 days. Comparisons the sample gate refuses are listed too, so a quiet result can be told apart from "too small to judge".
+
 ## [0.31.0] - 2026-11-20
 
 ### Added
