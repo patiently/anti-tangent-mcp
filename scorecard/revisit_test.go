@@ -360,3 +360,32 @@ func TestRevisitGatedSeparatesSourcesDeterministically(t *testing.T) {
 		}
 	}
 }
+
+func TestRevisitIDsKeepSlashedModelsApart(t *testing.T) {
+	base, rec := revisitSide{num: 0, n: 20}, revisitSide{num: 20, n: 20}
+	id := func(impl, review string) string {
+		t.Helper()
+		sig, ok := driftSignal(revisitID{kind: RevisitTestVolume, key: CohortKey{Kind: KindPlan, ImplementerModel: impl, ReviewModel: review}}, base, rec)
+		if !ok {
+			t.Fatal("no signal")
+		}
+		return sig.ID
+	}
+	a, b := id("a/b", "c"), id("a", "b/c")
+	if a == b {
+		t.Fatalf("distinct cohorts share id %q", a)
+	}
+	if want := "test_volume_drift:plan/a%2Fb/c"; a != want {
+		t.Fatalf("id = %q, want %q", a, want)
+	}
+	if got := id("50%", "x"); got != "test_volume_drift:plan/50%25/x" {
+		t.Fatalf("percent not escaped: %q", got)
+	}
+	if got := id("claude-sonnet-5-5", "gpt-5.6-terra"); got != "test_volume_drift:plan/claude-sonnet-5-5/gpt-5.6-terra" {
+		t.Fatalf("ordinary id changed: %q", got)
+	}
+	res := Revisit(nil, nil, map[string]time.Time{"org/m": rvNow.Add(-time.Hour)}, RevisitOptions{Now: rvNow})
+	if len(res.Signals) != 1 || res.Signals[0].ID != "new_model:org%2Fm" || res.Signals[0].Model != "org/m" {
+		t.Fatalf("new_model signal = %+v", res.Signals)
+	}
+}

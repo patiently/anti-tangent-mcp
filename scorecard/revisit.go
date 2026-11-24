@@ -128,7 +128,7 @@ func Revisit(lines []RunLine, outcomes []OutcomeLine, firstSeen map[string]time.
 			continue
 		}
 		since := seen
-		res.Signals = append(res.Signals, Signal{ID: RevisitNewModel + ":" + m, Kind: RevisitNewModel, Model: m, Since: &since})
+		res.Signals = append(res.Signals, Signal{ID: RevisitNewModel + ":" + idPart(m), Kind: RevisitNewModel, Model: m, Since: &since})
 	}
 	sort.Slice(res.Signals, func(i, j int) bool { return res.Signals[i].ID < res.Signals[j].ID })
 	sort.Slice(res.Gated, func(i, j int) bool { return gatedLess(res.Gated[i], res.Gated[j]) })
@@ -196,12 +196,20 @@ func driftSignal(id revisitID, base, rec revisitSide) (Signal, bool) {
 	}
 	key := id.key
 	sig := Signal{Kind: id.kind, Cohort: &key, Direction: dir, Recent: &rc, Baseline: &b, Source: id.source,
-		ID: fmt.Sprintf("%s:%s/%s/%s", id.kind, key.Kind, key.ImplementerModel, key.ReviewModel)}
+		ID: fmt.Sprintf("%s:%s/%s/%s", id.kind, idPart(key.Kind), idPart(key.ImplementerModel), idPart(key.ReviewModel))}
 	if id.source != "" {
-		sig.ID += "/" + id.source
+		sig.ID += "/" + idPart(id.source)
 	}
 	return sig, true
 }
+
+// idEscaper percent-encodes the two characters that would let distinct
+// cohorts share an id: "/" joins id components and "%" starts an escape.
+// Every other character passes through, so ordinary model names keep the same
+// id and existing acks still match.
+var idEscaper = strings.NewReplacer("%", "%25", "/", "%2F")
+
+func idPart(s string) string { return idEscaper.Replace(s) }
 
 // scoringSource is the one outcome source a run's unconfirmed-flag share is
 // scored against, so a run with two outcomes is counted once.
