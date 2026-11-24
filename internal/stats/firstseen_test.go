@@ -181,6 +181,22 @@ func TestNewModelSignalledOnStampingCallWithAdvancingClock(t *testing.T) {
 	}
 }
 
+func TestAddModelsLowersStampAfterNow(t *testing.T) {
+	now := time.Date(2026, 12, 20, 12, 0, 0, 0, time.UTC)
+	later := now.Add(time.Second)
+	cur := firstSeen{Seeded: true, Models: map[string]time.Time{"a": later, "b": now.Add(-time.Hour), "z": {}}}
+	got, changed := addModels(cur, []string{"a", "b", "z"}, now)
+	if !changed {
+		t.Fatal("changed = false, want a write for the lowered stamp")
+	}
+	if !got.Models["a"].Equal(now) {
+		t.Errorf("a = %v, want lowered to %v", got.Models["a"], now)
+	}
+	if !got.Models["b"].Equal(now.Add(-time.Hour)) || !got.Models["z"].IsZero() {
+		t.Errorf("earlier stamp or seeded zero changed: %+v", got.Models)
+	}
+}
+
 func TestWriteScorecardReadFailureSkipsRevisit(t *testing.T) {
 	r, _ := fixedClockRecorder(t)
 	if err := os.Mkdir(filepath.Join(r.dir, runsFile), 0o700); err != nil {

@@ -183,38 +183,35 @@ func TestCompactWithoutSignalsWritesLLMTextOnly(t *testing.T) {
 	}
 }
 
-func TestRevisitLeadCapsAtThree(t *testing.T) {
-	var sigs []scorecard.Signal
+func TestRevisitLead(t *testing.T) {
+	var five []scorecard.Signal
 	for i := 0; i < 5; i++ {
-		sigs = append(sigs, scorecard.Signal{Kind: scorecard.RevisitNewModel, Model: "m"})
+		five = append(five, scorecard.Signal{Kind: scorecard.RevisitNewModel, Model: "m"})
 	}
-	got := revisitLead(sigs)
-	if !strings.HasSuffix(got, "; +2 more") {
-		t.Errorf("revisitLead = %q, want suffix %q", got, "; +2 more")
+	cohort := &scorecard.CohortKey{Kind: "session", ImplementerModel: "i", ReviewModel: "r"}
+	tests := []struct {
+		name string
+		got  string
+		want func(string) bool
+		desc string
+	}{
+		{"caps at three", revisitLead(five), func(g string) bool {
+			return strings.HasSuffix(g, "; +2 more") && strings.Count(g, "new model m") == 3
+		}, "three items then +2 more"},
+		{"no cohort falls back to kind", revisitItem(scorecard.Signal{Kind: scorecard.RevisitUnconfirmed}), func(g string) bool {
+			return g == scorecard.RevisitUnconfirmed
+		}, scorecard.RevisitUnconfirmed},
+		{"unconfirmed source", revisitItem(scorecard.Signal{Kind: scorecard.RevisitUnconfirmed, Direction: "down", Source: "codescene", Cohort: cohort}), func(g string) bool {
+			return g == "unconfirmed_flags_drift down (session · i / r · codescene)"
+		}, "unconfirmed_flags_drift down (session · i / r · codescene)"},
+		{"empty", revisitLead(nil), func(g string) bool { return g == "" }, "empty"},
 	}
-	if n := strings.Count(got, "new model m"); n != 3 {
-		t.Errorf("rendered %d items, want 3: %q", n, got)
-	}
-}
-
-func TestRevisitItemWithoutCohortFallsBackToKind(t *testing.T) {
-	if got := revisitItem(scorecard.Signal{Kind: scorecard.RevisitUnconfirmed}); got != string(scorecard.RevisitUnconfirmed) {
-		t.Errorf("revisitItem = %q", got)
-	}
-}
-
-func TestRevisitLeadUnconfirmedSource(t *testing.T) {
-	got := revisitItem(scorecard.Signal{Kind: scorecard.RevisitUnconfirmed, Direction: "down", Source: "codescene",
-		Cohort: &scorecard.CohortKey{Kind: "session", ImplementerModel: "i", ReviewModel: "r"}})
-	want := "unconfirmed_flags_drift down (session · i / r · codescene)"
-	if got != want {
-		t.Errorf("revisitItem = %q, want %q", got, want)
-	}
-}
-
-func TestRevisitLeadEmpty(t *testing.T) {
-	if got := revisitLead(nil); got != "" {
-		t.Errorf("revisitLead(nil) = %q, want empty", got)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.want(tc.got) {
+				t.Errorf("got %q, want %s", tc.got, tc.desc)
+			}
+		})
 	}
 }
 

@@ -64,13 +64,13 @@ func mergeFirstSeen(a, b firstSeen) firstSeen {
 // updateFirstSeen seeds or stamps models and persists the result, returning a
 // copy the caller may use without the lock. A file that exists but cannot be
 // read is left untouched and yields nil, so the caller computes no new_model
-// signal for that call; a file that fails to parse is reseeded. r.mu orders calls in this process
-// only; across processes the write is last-rename-wins, so a model another
-// process added in the same instant can be lost from disk and is re-stamped on
-// the next call that sees it, delaying its new_model signal by at most one
-// call. The merge keeps a seeded zero over any stamp, so that race can delay a
-// new_model signal but never invent one. Behaviour across processes is
-// therefore convergent, not locked.
+// signal for that call; a file that fails to parse is reseeded. r.mu orders
+// calls in this process only; across processes the write is last-rename-wins,
+// so a model another process added in the same instant can be lost from disk
+// and is re-stamped on the next call that sees it, delaying its new_model
+// signal by at most one call. The merge keeps a seeded zero over any stamp, so
+// that race can delay a new_model signal but never invent one. Behaviour
+// across processes is therefore convergent, not locked.
 func (r *Recorder) updateFirstSeen(models []string, now time.Time) map[string]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -97,7 +97,10 @@ func (r *Recorder) updateFirstSeen(models []string, now time.Time) map[string]ti
 // time while unseeded, else at now. now must be the same instant the caller
 // passes to Revisit, which ignores first-seen times after it; a later clock
 // reading would hide a model's new_model signal on the call that stamps it.
-// changed reports whether a write is due.
+// now is read before the lock is taken, so a call clocked earlier can run
+// after one clocked later; a stamp after now is therefore lowered to now, which
+// keeps the earliest-wins merge convergent. changed reports whether a write is
+// due.
 func addModels(cur firstSeen, models []string, now time.Time) (firstSeen, bool) {
 	next := mergeFirstSeen(cur, firstSeen{})
 	changed := !next.Seeded
@@ -106,7 +109,8 @@ func addModels(cur firstSeen, models []string, now time.Time) (firstSeen, bool) 
 		stamp = now
 	}
 	for _, m := range models {
-		if _, ok := next.Models[m]; !ok {
+		t, ok := next.Models[m]
+		if !ok || (next.Seeded && !t.IsZero() && t.After(now)) {
 			next.Models[m] = stamp
 			changed = true
 		}

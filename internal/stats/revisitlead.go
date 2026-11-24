@@ -36,7 +36,7 @@ func revisitItem(s scorecard.Signal) string {
 		return "new model " + s.Model
 	}
 	if s.Cohort == nil {
-		return fmt.Sprint(s.Kind)
+		return s.Kind
 	}
 	c := fmt.Sprintf("%s · %s / %s", s.Cohort.Kind, s.Cohort.ImplementerModel, s.Cohort.ReviewModel)
 	if s.Source != "" {

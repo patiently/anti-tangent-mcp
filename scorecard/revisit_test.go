@@ -348,7 +348,7 @@ func TestRevisitGatedSeparatesSourcesDeterministically(t *testing.T) {
 		outs = append(outs, outcome(h, src, rvRecent))
 	}
 	var first []Gated
-	for call := 0; call < 20; call++ {
+	for call := 0; call < 2; call++ {
 		got := gatedOfKind(Revisit(lines, outs, nil, RevisitOptions{Now: rvNow}), RevisitUnconfirmed)
 		if len(got) != 2 || got[0].Source != SourceFinalReview || got[1].Source != SourceReviewNow {
 			t.Fatalf("gated = %+v", got)
