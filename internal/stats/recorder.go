@@ -64,6 +64,12 @@ type Recorder struct {
 	// runCompaction is launched (async, single-flight) when due. Defaults to
 	// r.compact; tests override it.
 	runCompaction func(now time.Time)
+	// firstSeenLockWait bounds how long a first-seen write waits for another
+	// process's lock; zero means defaultFirstSeenLockWait.
+	firstSeenLockWait time.Duration
+	// firstSeenHook, when set, is called at named points of the first-seen
+	// write so tests can interleave two recorders deterministically.
+	firstSeenHook func(stage string)
 }
 
 // New creates the stats dir (if needed), verifies it is writable, and loads or

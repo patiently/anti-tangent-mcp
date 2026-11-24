@@ -63,14 +63,12 @@ func mergeFirstSeen(a, b firstSeen) firstSeen {
 
 // updateFirstSeen seeds or stamps models and persists the result, returning a
 // copy the caller may use without the lock. A file that exists but cannot be
-// read is left untouched and yields nil, so the caller computes no new_model
-// signal for that call; a file that fails to parse is reseeded. r.mu orders
-// calls in this process only; across processes the write is last-rename-wins,
-// so a model another process added in the same instant can be lost from disk
-// and is re-stamped on the next call that sees it, delaying its new_model
-// signal by at most one call. The merge keeps a seeded zero over any stamp, so
-// that race can delay a new_model signal but never invent one. Behaviour
-// across processes is therefore convergent, not locked.
+// read is left untouched and yields nil, so the caller publishes no revisit
+// data for that call; a file that fails to parse is reseeded. r.mu orders
+// calls in this process; persistFirstSeen orders the write against other
+// processes sharing the directory. The first read here is unlocked and may be
+// stale, which is harmless: the locked reread merges in whatever another
+// process wrote since.
 func (r *Recorder) updateFirstSeen(models []string, now time.Time) map[string]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -121,17 +119,32 @@ func addModels(cur firstSeen, models []string, now time.Time) (firstSeen, bool) 
 
 // persistFirstSeen merges next with whatever is on disk, writes the result and
 // returns it, so the caller's signals use the merged view even when the write
-// fails. A failure is logged once; the next call retries.
+// fails. The reread, merge and rename run under first-seen.json.lock, so this
+// write keeps every entry another process wrote before it. If the lock cannot
+// be taken in time the write goes ahead unlocked: that write can drop an entry
+// a concurrent writer added, and a dropped seeded model would be stamped and
+// reported as new on a later call. Each call logs at most one warning, for a
+// failed write or else for a missed lock; the next call retries.
 func (r *Recorder) persistFirstSeen(next firstSeen) firstSeen {
+	unlock, lockErr := acquireDirLock(filepath.Join(r.dir, firstSeenFile+".lock"), r.firstSeenLockWait, firstSeenLockStale, r.firstSeenHook)
+	if lockErr == nil {
+		defer unlock()
+	}
 	if disk, err := readFirstSeen(r.dir); err == nil {
 		next = mergeFirstSeen(next, disk)
+	}
+	if r.firstSeenHook != nil {
+		r.firstSeenHook("reread")
 	}
 	b, err := json.Marshal(next)
 	if err == nil {
 		err = writeFileAtomic(filepath.Join(r.dir, firstSeenFile), b, 0o644)
 	}
-	if err != nil {
-		r.logger.Warn("stats first_seen write failed", "err", err)
+	switch {
+	case err != nil:
+		r.logger.Warn("stats first_seen write failed", "err", err, "lock_err", lockErr)
+	case lockErr != nil:
+		r.logger.Warn("stats first_seen lock unavailable, wrote unlocked", "err", lockErr)
 	}
 	return next
 }

@@ -289,8 +289,8 @@ func TestFirstSeenReadErrorKeepsFileAndSkipsStep(t *testing.T) {
 	r.logger = slog.New(slog.NewTextHandler(&buf, nil))
 	recordTask(t, r, "r2", now.Add(-time.Minute), "claude-haiku-5-5")
 	sc := r.WriteScorecard()
-	if sc.Revisit == nil {
-		t.Fatal("revisit key missing")
+	if sc.Revisit != nil || sc.RevisitCoverage != nil {
+		t.Fatalf("revisit published without first-seen data: %+v %+v", sc.Revisit, sc.RevisitCoverage)
 	}
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
@@ -368,6 +368,7 @@ func TestFirstSeenWriteFailureStillSignals(t *testing.T) {
 	sc := r.WriteScorecard()
 	assertWarnings(t, &buf, "first_seen write failed", 1)
 	assertWarnings(t, &buf, "first_seen unreadable", 0)
+	assertWarnings(t, &buf, "first_seen lock unavailable", 0)
 	if ids := signalIDs(sc); !slices.Contains(ids, "new_model:claude-haiku-5-5") {
 		t.Fatalf("want new_model for haiku despite the write failure, got %v", ids)
 	}
