@@ -103,6 +103,12 @@ func (r *Recorder) WriteScorecard() scorecard.Scorecard {
 	}
 	sc := scorecard.Compute(runs, outs, scorecard.Options{MinRuns: r.minRuns, Now: r.clock()})
 	sc.SkippedLines = skipR + skipO
+	if errR == nil && errO == nil {
+		now := r.clock()
+		fs := r.updateFirstSeen(scorecard.CohortModels(runs, outs, now))
+		res := scorecard.Revisit(runs, outs, fs, scorecard.RevisitOptions{MinRuns: r.minRuns, Now: now})
+		sc.Revisit, sc.RevisitCoverage = &res.Signals, &res.Gated
+	}
 	if err := writeJSON(r.dir, scorecardFile, sc); err != nil {
 		r.logger.Warn("stats scorecard write failed", "err", err)
 	}
