@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -50,10 +51,10 @@ func TestFirstSeenWritersAcrossProcessesKeepEveryEntry(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() { defer wg.Done(); a.persistFirstSeen(seededWith("m")) }()
+	go func() { defer wg.Done(); _, _ = a.persistFirstSeen(seededWith("m")) }()
 	<-aReread
 	bDone := make(chan struct{})
-	go func() { defer close(bDone); b.persistFirstSeen(seededWith("n")) }()
+	go func() { defer close(bDone); _, _ = b.persistFirstSeen(seededWith("n")) }()
 	select {
 	case <-bBusy:
 	case <-bDone:
@@ -72,45 +73,52 @@ func TestFirstSeenWritersAcrossProcessesKeepEveryEntry(t *testing.T) {
 	}
 }
 
-func TestFirstSeenHeldLockFallsBackWithOneWarning(t *testing.T) {
-	r := newTestRecorder(t, 1000)
+// The test holds the lock through its own open of the lock file, standing in
+// for another process mid-write: the call must leave first-seen.json alone,
+// still signal from what it read, and warn once; the call after release writes.
+func TestFirstSeenHeldLockSkipsWriteThenRetries(t *testing.T) {
+	r, now := fixedClockRecorder(t)
+	recordTask(t, r, "r1", now.Add(-time.Hour), "claude-sonnet-5-5")
+	r.WriteScorecard()
+	path := filepath.Join(r.dir, firstSeenFile)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := path + ".lock"
+	release, err := acquireFileLock(lock, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var buf bytes.Buffer
 	r.logger = slog.New(slog.NewTextHandler(&buf, nil))
 	r.firstSeenLockWait = 50 * time.Millisecond
-	lock := filepath.Join(r.dir, firstSeenFile+".lock")
-	if err := os.WriteFile(lock, nil, 0o644); err != nil {
+	recordTask(t, r, "r2", now.Add(-time.Minute), "claude-haiku-5-5")
+	sc := r.WriteScorecard()
+	release()
+	if ids := signalIDs(sc); !slices.Contains(ids, "new_model:claude-haiku-5-5") {
+		t.Fatalf("want new_model for haiku from the read view, got %v", ids)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	r.persistFirstSeen(seededWith("m"))
+	if !bytes.Equal(before, after) {
+		t.Fatalf("first-seen.json written without the lock:\nbefore %s\nafter  %s", before, after)
+	}
+	assertWarnings(t, &buf, "first_seen lock unavailable, write skipped", 1)
+	assertWarnings(t, &buf, "level=WARN", 1)
+	if _, err := os.Stat(lock); err != nil {
+		t.Fatalf("lock file removed on release: %v", err)
+	}
+	buf.Reset()
+	r.WriteScorecard()
 	fs, err := readFirstSeen(r.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := fs.Models["m"]; !ok {
-		t.Fatalf("fallback did not write: %+v", fs.Models)
+	if !fs.Models["claude-haiku-5-5"].Equal(now) {
+		t.Fatalf("retry did not write haiku: %+v", fs.Models)
 	}
-	assertWarnings(t, &buf, "first_seen lock unavailable", 1)
-	if _, err := os.Stat(lock); err != nil {
-		t.Fatalf("another holder's lock was removed: %v", err)
-	}
-}
-
-func TestFirstSeenStaleLockIsTakenOver(t *testing.T) {
-	r := newTestRecorder(t, 1000)
-	var buf bytes.Buffer
-	r.logger = slog.New(slog.NewTextHandler(&buf, nil))
-	r.firstSeenLockWait = 50 * time.Millisecond
-	lock := filepath.Join(r.dir, firstSeenFile+".lock")
-	if err := os.WriteFile(lock, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-2 * firstSeenLockStale)
-	if err := os.Chtimes(lock, old, old); err != nil {
-		t.Fatal(err)
-	}
-	r.persistFirstSeen(seededWith("m"))
-	assertWarnings(t, &buf, "first_seen lock unavailable", 0)
-	if _, err := os.Stat(lock); !os.IsNotExist(err) {
-		t.Fatalf("lock left behind: %v", err)
-	}
+	assertWarnings(t, &buf, "level=WARN", 0)
 }

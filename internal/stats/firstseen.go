@@ -68,21 +68,28 @@ func mergeFirstSeen(a, b firstSeen) firstSeen {
 // calls in this process; persistFirstSeen orders the write against other
 // processes sharing the directory. The first read here is unlocked and may be
 // stale, which is harmless: the locked reread merges in whatever another
-// process wrote since.
+// process wrote since. Each call logs at most one warning, naming every
+// first-seen problem it hit.
 func (r *Recorder) updateFirstSeen(models []string, now time.Time) map[string]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	cur, err := readFirstSeen(r.dir)
-	if err != nil {
-		if !errors.Is(err, errFirstSeenParse) {
-			r.logger.Warn("stats first_seen read failed", "err", err)
-			return nil
-		}
-		r.logger.Warn("stats first_seen unreadable, reseeding", "err", err)
+	cur, readErr := readFirstSeen(r.dir)
+	if readErr != nil && !errors.Is(readErr, errFirstSeenParse) {
+		r.logger.Warn("stats first_seen read failed", "err", readErr)
+		return nil
 	}
 	next, changed := addModels(cur, models, now)
+	var persistErr error
 	if changed {
-		next = r.persistFirstSeen(next)
+		next, persistErr = r.persistFirstSeen(next)
+	}
+	switch {
+	case errors.Is(persistErr, errFirstSeenLock):
+		r.logger.Warn("stats first_seen lock unavailable, write skipped", "err", persistErr, "parse_err", readErr)
+	case persistErr != nil:
+		r.logger.Warn("stats first_seen write failed", "err", persistErr, "parse_err", readErr)
+	case readErr != nil:
+		r.logger.Warn("stats first_seen unreadable, reseeding", "err", readErr)
 	}
 	out := make(map[string]time.Time, len(next.Models))
 	for m, t := range next.Models {
@@ -117,19 +124,24 @@ func addModels(cur firstSeen, models []string, now time.Time) (firstSeen, bool) 
 	return next, changed
 }
 
+var errFirstSeenLock = errors.New("first-seen.json lock unavailable")
+
 // persistFirstSeen merges next with whatever is on disk, writes the result and
 // returns it, so the caller's signals use the merged view even when the write
-// fails. The reread, merge and rename run under first-seen.json.lock, so this
-// write keeps every entry another process wrote before it. If the lock cannot
-// be taken in time the write goes ahead unlocked: that write can drop an entry
-// a concurrent writer added, and a dropped seeded model would be stamped and
-// reported as new on a later call. Each call logs at most one warning, for a
-// failed write or else for a missed lock; the next call retries.
-func (r *Recorder) persistFirstSeen(next firstSeen) firstSeen {
-	unlock, lockErr := acquireDirLock(filepath.Join(r.dir, firstSeenFile+".lock"), r.firstSeenLockWait, firstSeenLockStale, r.firstSeenHook)
-	if lockErr == nil {
-		defer unlock()
+// fails. The reread, merge and rename run under an OS lock on
+// first-seen.json.lock, so this write keeps every entry another process wrote
+// before it. If the lock cannot be taken in time nothing is written and next
+// comes back unmerged with an error wrapping errFirstSeenLock; the file keeps
+// every entry it had. A skipped write therefore never makes a model look new
+// that the file already holds: it only leaves this call's additions unsaved,
+// so the next call that writes stamps them with its own, later time, and a
+// skipped seeding leaves the file unseeded until a later call seeds it.
+func (r *Recorder) persistFirstSeen(next firstSeen) (firstSeen, error) {
+	unlock, err := acquireFileLock(filepath.Join(r.dir, firstSeenFile+".lock"), r.firstSeenLockWait, r.firstSeenHook)
+	if err != nil {
+		return next, errors.Join(errFirstSeenLock, err)
 	}
+	defer unlock()
 	if disk, err := readFirstSeen(r.dir); err == nil {
 		next = mergeFirstSeen(next, disk)
 	}
@@ -140,11 +152,5 @@ func (r *Recorder) persistFirstSeen(next firstSeen) firstSeen {
 	if err == nil {
 		err = writeFileAtomic(filepath.Join(r.dir, firstSeenFile), b, 0o644)
 	}
-	switch {
-	case err != nil:
-		r.logger.Warn("stats first_seen write failed", "err", err, "lock_err", lockErr)
-	case lockErr != nil:
-		r.logger.Warn("stats first_seen lock unavailable, wrote unlocked", "err", lockErr)
-	}
-	return next
+	return next, err
 }

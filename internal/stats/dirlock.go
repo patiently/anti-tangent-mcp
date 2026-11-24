@@ -4,57 +4,55 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"runtime"
 	"time"
 )
 
 const (
 	defaultFirstSeenLockWait = time.Second
-	// firstSeenLockStale is how old a lock file must be before it is taken to
-	// be left by a crashed process and removed. A holder keeps it only for one
-	// small read and atomic write, far below this.
-	firstSeenLockStale = 10 * time.Second
-	dirLockPoll        = 10 * time.Millisecond
+	fileLockPoll             = 10 * time.Millisecond
 )
 
-// acquireDirLock takes a cross-process lock by creating path with O_EXCL,
-// which is atomic on every platform the server ships for, and returns the
-// function that releases it. It polls until wait elapses (zero means
-// defaultFirstSeenLockWait) and never blocks longer. A lock file older than
-// stale is removed and retaken; two waiters can both judge the same file
-// stale, so in that window two holders are possible, which costs only the
-// unlocked behaviour the lock otherwise prevents. hook, when non-nil, is
-// called with "busy" each time the lock is found held.
-func acquireDirLock(path string, wait, stale time.Duration, hook func(string)) (func(), error) {
+// errLockHeld is what tryLockFile returns when another open file holds the
+// lock, as opposed to a failure that waiting will not fix.
+var errLockHeld = errors.New("file lock held")
+
+// acquireFileLock takes an exclusive OS advisory lock on path, creating the
+// file if it is missing, and returns the function that releases it. The kernel
+// drops the lock when its holder exits, so a crashed process never leaves it
+// held and there is no staleness to judge. The file is never removed: a
+// process that had already opened the old path would lock a different file
+// from one that opened the new one. The lock belongs to the open file, so two
+// opens in one process exclude each other too. It polls until wait elapses
+// (zero means defaultFirstSeenLockWait) and never blocks longer. hook, when
+// non-nil, is called with "busy" each time the lock is found held.
+func acquireFileLock(path string, wait time.Duration, hook func(string)) (func(), error) {
 	if wait <= 0 {
 		wait = defaultFirstSeenLockWait
 	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
 	deadline := time.Now().Add(wait)
 	for {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+		err := tryLockFile(f)
 		if err == nil {
+			return func() {
+				_ = unlockFile(f)
+				_ = f.Close()
+			}, nil
+		}
+		if !errors.Is(err, errLockHeld) {
 			_ = f.Close()
-			return func() { _ = os.Remove(path) }, nil
-		}
-		// Windows reports a lock file whose removal is still pending as
-		// access denied rather than as existing, so there both count as held.
-		// Elsewhere access denied means the directory is unwritable, which
-		// waiting will not fix.
-		held := errors.Is(err, os.ErrExist) || (runtime.GOOS == "windows" && errors.Is(err, os.ErrPermission))
-		if !held {
 			return nil, err
-		}
-		if fi, serr := os.Stat(path); serr == nil && time.Since(fi.ModTime()) > stale {
-			if os.Remove(path) == nil {
-				continue
-			}
 		}
 		if hook != nil {
 			hook("busy")
 		}
 		if time.Now().After(deadline) {
+			_ = f.Close()
 			return nil, fmt.Errorf("lock %s not acquired within %s: %w", path, wait, err)
 		}
-		time.Sleep(dirLockPoll)
+		time.Sleep(fileLockPoll)
 	}
 }
