@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `summary.md` opens with a `Cycle review due:` line naming up to three revisit signals when any are live. The line is written by the server, not the model, and is kept out of `summaries.jsonl`. With no reviewer configured, or when the summary call fails, no summary is written and the signals are in `scorecard.json` and the gnome-topbar tray only.
 - With `ANTI_TANGENT_PLAN_LEDGER=1`, a task run without a plan writes one line to `plan-runs.jsonl` carrying its salted run hash and task title (never the session id), so gnome-topbar can name session runs. Without the ledger opt-in, session runs keep showing by hash.
 - gnome-topbar: `/ui/runs` names session runs by their task title (local `mine` scope, with the plan ledger on) in the runs list and on the run page.
+- gnome-topbar: a `🔁 Cycle review due (n)` tray menu lists the server's revisit signals; clicking one acks it until the signal clears, and the title adds `· g too small to judge` when comparisons were too small to decide. A server older than 0.32.0, or a scorecard written after a failed read, shows no menu and keeps existing acks.
 
 ## [0.31.0] - 2026-11-20
 

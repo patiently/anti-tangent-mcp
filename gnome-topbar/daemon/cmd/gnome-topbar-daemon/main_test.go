@@ -15,6 +15,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/config"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/server"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/state"
+	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/tray"
 	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
@@ -267,5 +268,54 @@ func TestFilterPublisher(t *testing.T) {
 	}
 	if len(ocs) != 1 || ocs[0].Publisher != "alice" {
 		t.Errorf("outcomes = %+v", ocs)
+	}
+}
+
+func TestRefreshRunsRetainsAcksOnlyWhenKnown(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "scorecard.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "runs.jsonl"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.LoadStore(filepath.Join(t.TempDir(), "seen.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkSeen([]string{"revisit:a"}); err != nil {
+		t.Fatal(err)
+	}
+	p := newTestPoller()
+	p.cfg = config.Config{StatsDir: dir}
+	p.store = store
+
+	write(`{"revisit":[{"id":"a","kind":"test_volume_drift"},{"id":"b","kind":"test_volume_drift"}]}`)
+	p.refreshRuns(context.Background())
+	snap := p.Snapshot()
+	if len(snap.Revisit) != 1 || snap.Revisit[0].ID != "b" || !snap.RevisitKnown {
+		t.Fatalf("step 1: %+v known=%v", snap.Revisit, snap.RevisitKnown)
+	}
+
+	write(`{"min_runs":10}`)
+	p.refreshRuns(context.Background())
+	if p.Snapshot().RevisitKnown || store.IsNew("revisit:a") {
+		t.Fatal("step 2: unknown read must keep acks and report unknown")
+	}
+
+	write(`{"revisit":[]}`)
+	p.refreshRuns(context.Background())
+	if !store.IsNew("revisit:a") {
+		t.Fatal("step 3: cleared signal's ack must be forgotten")
+	}
+
+	write(`{"revisit":[{"id":"b","kind":"test_volume_drift"}]}`)
+	p.refreshRuns(context.Background())
+	p.Ack(tray.AckRevisitIDs("b"))
+	if got := p.Snapshot().Revisit; len(got) != 0 {
+		t.Fatalf("step 4: b still shown: %+v", got)
 	}
 }

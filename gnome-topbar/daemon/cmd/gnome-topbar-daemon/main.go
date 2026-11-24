@@ -135,6 +135,8 @@ func main() {
 		},
 		OpenStats:  func() { openLocal("/ui/stats") },
 		OpenClaude: func() { openLocal("/ui/claude") },
+		AckRevisit: func(id string) { p.Ack(tray.AckRevisitIDs(id)) },
+		OpenRuns:   func() { openLocal("/ui/runs") },
 	}
 	tr := tray.New(p, func(u string) {
 		if err := tray.OpenURIOnHost(u); err != nil {
@@ -321,6 +323,22 @@ func (p *Poller) refreshClaudeStats(ctx context.Context) {
 	p.mu.Unlock()
 }
 
+// retainRevisitAcks forgets acks of signals that have cleared. It does nothing
+// unless the server's revisit state was actually read: an unknown read carries
+// no signals and would otherwise forget every ack.
+func (p *Poller) retainRevisitAcks(d atruns.Data) {
+	if !d.RevisitKnown {
+		return
+	}
+	live := make([]string, len(d.Revisit))
+	for i, s := range d.Revisit {
+		live[i] = s.ID
+	}
+	if err := p.store.Retain("revisit:", live); err != nil {
+		p.log.Warn("revisit ack retain failed", "err", err)
+	}
+}
+
 // refreshRuns reads the local anti-tangent run/outcome records and, when
 // sharing is on, publishes them. The publish runs outside p.mu since it makes
 // a network call; a failure there is logged and never affects runsLocal.
@@ -330,8 +348,10 @@ func (p *Poller) refreshRuns(ctx context.Context) {
 		p.log.Warn("anti-tangent runs read failed", "err", err)
 		return
 	}
+	p.retainRevisitAcks(d)
 	p.mu.Lock()
 	p.runsLocal = d
+	p.recompute()
 	p.mu.Unlock()
 	if p.publisher != nil {
 		if _, err := p.publisher.Publish(ctx, d); err != nil {
@@ -388,6 +408,9 @@ func (p *Poller) pullTeam(ctx context.Context, full bool) {
 func (p *Poller) recompute() {
 	p.snap.GeneratedAt = time.Now()
 	p.snap.UnackedEvents = state.ComputeEvents(&p.snap, p.store)
+	p.snap.RevisitKnown = p.runsLocal.RevisitKnown
+	p.snap.RevisitGated = len(p.runsLocal.RevisitGated)
+	p.snap.Revisit = state.ComputeRevisit(p.runsLocal.Revisit, p.store, time.Now())
 }
 
 func staleStatus(errs ...error) state.SourceStatus {

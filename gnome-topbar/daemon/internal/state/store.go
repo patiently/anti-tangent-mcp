@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -94,4 +95,31 @@ func (s *Store) persistSet(set map[string]bool) error {
 		return err
 	}
 	return os.Rename(tmpName, s.path)
+}
+
+// Retain forgets every seen id with prefix that is not prefix+id for an id in
+// live, so an ack lasts only while its signal does. The caller must only pass
+// a live set it actually read: an empty set forgets every prefixed ack.
+func (s *Store) Retain(prefix string, live []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	keep := make(map[string]bool, len(live))
+	for _, id := range live {
+		keep[prefix+id] = true
+	}
+	next := make(map[string]bool, len(s.seen))
+	for id := range s.seen {
+		if strings.HasPrefix(id, prefix) && !keep[id] {
+			continue
+		}
+		next[id] = true
+	}
+	if len(next) == len(s.seen) {
+		return nil
+	}
+	if err := s.persistSet(next); err != nil {
+		return err
+	}
+	s.seen = next
+	return nil
 }

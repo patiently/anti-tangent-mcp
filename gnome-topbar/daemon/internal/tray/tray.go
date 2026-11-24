@@ -29,6 +29,8 @@ type Actions struct {
 	MarkDone    func(rawLine string) // tick a todo bullet in Basic Memory
 	OpenStats   func()               // open the /ui/stats detail page
 	OpenClaude  func()               // open the /ui/claude detail page
+	AckRevisit  func(id string)      // ack a revisit signal until it clears
+	OpenRuns    func()               // open the /ui/runs page
 }
 
 // Per-section item-pool caps. The systray menu is append-only, so we
@@ -37,6 +39,7 @@ const (
 	capReviewReq = 15
 	capMyPRs     = 40
 	capDue       = 15
+	capRevisit   = 10
 	capActive    = 40
 	capStat      = 3
 	capErr       = 4  // per-source error rows
@@ -73,6 +76,11 @@ type Tray struct {
 	activeParent *systray.MenuItem // collapsible submenu (hidden when empty)
 	activePool   []*systray.MenuItem
 	activeRaw    []string
+
+	revisitParent   *systray.MenuItem // collapsible submenu (hidden unless the server's revisit state is known)
+	revisitPool     []*systray.MenuItem
+	revisitIDs      []string
+	revisitRunsItem *systray.MenuItem
 
 	statsParent *systray.MenuItem // collapsible submenu (hidden when absent)
 	statPool    []*systray.MenuItem
@@ -152,6 +160,12 @@ func (t *Tray) onReady(ctx context.Context) {
 	t.statsDetailItem = systray.AddMenuItem("📊 Stats details…", "open the stats detail page")
 	t.statsDetailItem.Hide()
 	bindClick(t.statsDetailItem, t.act.OpenStats)
+
+	t.revisitParent = systray.AddMenuItem("🔁 Cycle review", "anti-tangent revisit signals")
+	t.revisitParent.Hide()
+	t.revisitPool, t.revisitIDs = t.makeAckPool(capRevisit, t.revisitParent)
+	t.revisitRunsItem = t.revisitParent.AddSubMenuItem("Open runs page", "open /ui/runs")
+	bindClick(t.revisitRunsItem, t.act.OpenRuns)
 
 	// Claude usage — inline per-account bar overview (shown only when present), a
 	// collapsed submenu with per-account detail, and a "details…" item (right after
@@ -253,6 +267,52 @@ func (t *Tray) makeDonePool(n int, parent *systray.MenuItem) ([]*systray.MenuIte
 	return pool, raw
 }
 
+// renderRevisit applies the cycle-review menu model; the caller holds t.mu.
+func (t *Tray) renderRevisit(snap state.Snapshot) {
+	title, show, ids, labels := revisitMenu(snap)
+	if !show {
+		t.revisitParent.Hide()
+		return
+	}
+	t.revisitParent.SetTitle(title)
+	for i, mi := range t.revisitPool {
+		if i >= len(ids) {
+			t.revisitIDs[i] = ""
+			mi.Hide()
+			continue
+		}
+		t.revisitIDs[i] = ids[i]
+		mi.SetTitle(labels[i])
+		mi.Show()
+	}
+	t.revisitParent.Show()
+}
+
+// makeAckPool creates n hidden clickable items under parent; clicking one calls
+// Actions.AckRevisit with the signal id backing that slot, then re-renders.
+func (t *Tray) makeAckPool(n int, parent *systray.MenuItem) ([]*systray.MenuItem, []string) {
+	pool := make([]*systray.MenuItem, n)
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		mi := t.addItem(parent)
+		mi.Hide()
+		pool[i] = mi
+		idx := i
+		go func() {
+			for range mi.ClickedCh {
+				t.mu.Lock()
+				id := ids[idx]
+				t.mu.Unlock()
+				if id != "" && t.act.AckRevisit != nil {
+					t.act.AckRevisit(id)
+					t.render()
+				}
+			}
+		}()
+	}
+	return pool, ids
+}
+
 // makeDisabledPool creates n hidden, non-clickable display-only items.
 func (t *Tray) makeDisabledPool(n int, parent *systray.MenuItem) []*systray.MenuItem {
 	pool := make([]*systray.MenuItem, n)
@@ -307,6 +367,8 @@ func (t *Tray) render() {
 	showIf(t.statsParent, len(stats) > 0)
 	showIf(t.statsDetailItem, snap.AntiTangent.Present)
 
+	t.renderRevisit(snap)
+
 	// Claude usage: inline per-account bar overview + per-account detail submenu.
 	fillLabelPool(t.claudePool, claudeOverviewLabels(snap.ClaudeStats, now))
 	fillLabelPool(t.claudeUsagePool, claudeUsageRows(snap.ClaudeStats, now))
@@ -324,7 +386,7 @@ func (t *Tray) render() {
 	toRaise := selectUnraised(t.raised, snap.UnackedEvents)
 	t.mu.Unlock()
 
-	if n := len(snap.PRs.ReviewRequested) + len(snap.Todos.Due); n > 0 {
+	if n := len(snap.PRs.ReviewRequested) + len(snap.Todos.Due) + len(snap.Revisit); n > 0 {
 		systray.SetTooltip("gnome-topbar · " + strconv.Itoa(n) + " need attention")
 	} else {
 		systray.SetTooltip("gnome-topbar")
