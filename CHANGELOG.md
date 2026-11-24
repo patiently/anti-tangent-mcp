@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Revisit signals: `scorecard.Revisit` compares each (run kind, implementer model, review model) cohort's last 14 days with its own earlier retained tasks and reports `test_value_drift`, `test_volume_drift`, `test_adequacy_share` and `unconfirmed_flags_drift` when the two 90% Wilson intervals are disjoint (each side >= `ANTI_TANGENT_SCORECARD_MIN_RUNS` eligible tasks from >= 2 runs), plus `new_model` for a model first seen in the last 14 days. Comparisons the sample gate refuses are listed too, so a quiet result can be told apart from "too small to judge".
 - `scorecard.json` gains `revisit` (signals) and `revisit_coverage` (comparisons too small to judge); both keys are omitted when the scorecard's run or outcome read failed. First-seen models are kept in a new `first-seen.json` in the stats directory; the first 0.32 run records every model already in use without flagging it as new.
+- `summary.md` opens with a `Cycle review due:` line naming up to three revisit signals when any are live. The line is written by the server, not the model, and is kept out of `summaries.jsonl`. With no reviewer configured, or when the summary call fails, no summary is written and the signals are in `scorecard.json` and the gnome-topbar tray only.
 
 ## [0.31.0] - 2026-11-20
 

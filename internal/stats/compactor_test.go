@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/patiently/anti-tangent-mcp/internal/codescene"
 	"github.com/patiently/anti-tangent-mcp/internal/providers"
+	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
 type fakeReviewer struct {
@@ -127,5 +129,109 @@ func TestCompactNilReviewerWritesRollupOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, summaryMDFile)); !os.IsNotExist(err) {
 		t.Errorf("summary.md should be absent with nil reviewer, stat err = %v", err)
+	}
+}
+
+func leadSignals() []scorecard.Signal {
+	return []scorecard.Signal{
+		{ID: "test_volume_drift:session/claude-sonnet-5-5/gpt-x", Kind: scorecard.RevisitTestVolume, Direction: "up",
+			Cohort: &scorecard.CohortKey{Kind: "session", ImplementerModel: "claude-sonnet-5-5", ReviewModel: "gpt-x"}},
+		{ID: "new_model:claude-haiku-5-5", Kind: scorecard.RevisitNewModel, Model: "claude-haiku-5-5"},
+	}
+}
+
+func TestCompactWritesRevisitLead(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Unix(1700000000, 0).UTC()
+	fr := &fakeReviewer{resp: providers.Response{RawJSON: []byte(`{"summary":"All green."}`)}}
+	c := &Compactor{dir: dir, reviewer: fr, model: "anthropic:m", maxTokens: 2048, timeout: 5 * time.Second, logger: slog.Default()}
+	sigs := leadSignals()
+	sc := &scorecard.Scorecard{Revisit: &sigs}
+	c.Compact(now, sampleEvents(now), nil, sc)
+
+	sb, err := os.ReadFile(filepath.Join(dir, summaryMDFile))
+	if err != nil {
+		t.Fatalf("summary.md: %v", err)
+	}
+	want := "Cycle review due: 2 signals — test_volume_drift up (session · claude-sonnet-5-5 / gpt-x); new model claude-haiku-5-5\n\nAll green."
+	if string(sb) != want {
+		t.Errorf("summary.md = %q\nwant %q", string(sb), want)
+	}
+	recs, err := readJSONL[summaryRecord](dir, summariesFile)
+	if err != nil || len(recs) != 1 {
+		t.Fatalf("summaries.jsonl: recs=%d err=%v", len(recs), err)
+	}
+	if recs[0].Text != "All green." {
+		t.Errorf("summaries.jsonl text = %q, want LLM text alone", recs[0].Text)
+	}
+}
+
+func TestCompactWithoutSignalsWritesLLMTextOnly(t *testing.T) {
+	for _, sc := range []*scorecard.Scorecard{nil, {}} {
+		dir := t.TempDir()
+		now := time.Unix(1700000000, 0).UTC()
+		fr := &fakeReviewer{resp: providers.Response{RawJSON: []byte(`{"summary":"All green."}`)}}
+		c := &Compactor{dir: dir, reviewer: fr, model: "anthropic:m", maxTokens: 2048, timeout: 5 * time.Second, logger: slog.Default()}
+		c.Compact(now, sampleEvents(now), nil, sc)
+		sb, err := os.ReadFile(filepath.Join(dir, summaryMDFile))
+		if err != nil {
+			t.Fatalf("summary.md: %v", err)
+		}
+		if string(sb) != "All green." {
+			t.Errorf("summary.md = %q, want exactly the LLM text", string(sb))
+		}
+	}
+}
+
+func TestRevisitLeadCapsAtThree(t *testing.T) {
+	var sigs []scorecard.Signal
+	for i := 0; i < 5; i++ {
+		sigs = append(sigs, scorecard.Signal{Kind: scorecard.RevisitNewModel, Model: "m"})
+	}
+	got := revisitLead(sigs)
+	if !strings.HasSuffix(got, "; +2 more") {
+		t.Errorf("revisitLead = %q, want suffix %q", got, "; +2 more")
+	}
+	if n := strings.Count(got, "new model m"); n != 3 {
+		t.Errorf("rendered %d items, want 3: %q", n, got)
+	}
+}
+
+func TestRevisitLeadUnconfirmedSource(t *testing.T) {
+	got := revisitItem(scorecard.Signal{Kind: scorecard.RevisitUnconfirmed, Direction: "down", Source: "codescene",
+		Cohort: &scorecard.CohortKey{Kind: "session", ImplementerModel: "i", ReviewModel: "r"}})
+	want := "unconfirmed_flags_drift down (session · i / r · codescene)"
+	if got != want {
+		t.Errorf("revisitItem = %q, want %q", got, want)
+	}
+}
+
+func TestRevisitLeadEmpty(t *testing.T) {
+	if got := revisitLead(nil); got != "" {
+		t.Errorf("revisitLead(nil) = %q, want empty", got)
+	}
+}
+
+func TestReadPrevSummaryStripsLead(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, summaryMDFile), []byte("Cycle review due: 1 signal — new model m\n\nAll green."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := &Compactor{dir: dir}
+	if got := c.readPrevSummary(); got != "All green." {
+		t.Errorf("readPrevSummary = %q, want %q", got, "All green.")
+	}
+}
+
+func TestSummaryPromptRevisitBlock(t *testing.T) {
+	r := computeRollup(sampleEvents(time.Unix(1700000000, 0).UTC()), time.Unix(1700000000, 0).UTC())
+	sigs := leadSignals()
+	withSigs := buildSummaryPrompt(r, "", &scorecard.Scorecard{Revisit: &sigs})
+	if !strings.Contains(withSigs, "Revisit signals") {
+		t.Errorf("prompt with signals lacks revisit block:\n%s", withSigs)
+	}
+	without := buildSummaryPrompt(r, "", &scorecard.Scorecard{})
+	if strings.Contains(without, "Revisit signals") {
+		t.Errorf("prompt without signals carries revisit block")
 	}
 }
