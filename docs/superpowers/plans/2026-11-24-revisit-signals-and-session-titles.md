@@ -22,7 +22,7 @@
 - No raw session id on disk. Session title lines carry `session_run_hash`.
 - Logging: structured `slog` to stderr. At most one warning per call per degraded surface, never one per item inside a loop.
 - Comments explain non-obvious behaviour only. No change history, no task, PR or version references (CLAUDE.md "Comments").
-- `go test -race ./...` passes at the repo root **and** in `gnome-topbar/daemon` after every task.
+- Verification has two levels. A task's own **Verify** command is its red/green check while working. Before that task's commit, run both full suites, `go test -race ./...` at the repo root **and** `(cd gnome-topbar/daemon && go test -race ./...)`, and both must pass. Every task's commit step includes them.
 - Each task adds its own bullet under `## [0.32.0] - 2026-11-24` in `CHANGELOG.md`, in the right subsection. Task 1 creates the block. Never bump `VERSION`.
 - **anti-tangent gating:** this plan changes anti-tangent's plan-run bookkeeping and stats. Per the project memory, implementers do **not** call `validate_task_spec` / `check_progress` / `validate_completion`; the SDD task reviews and the final whole-branch review are the gate. Keep `go test -race` and CodeScene `pre_commit_code_health_safeguard` in every task.
 
@@ -49,13 +49,13 @@
 - Modify: `CHANGELOG.md` (create the `## [0.32.0] - 2026-11-24` block)
 
 **Acceptance Criteria:**
-- [ ] `Revisit` fires each of `test_value_drift`, `test_volume_drift`, `test_adequacy_share` and `unconfirmed_flags_drift` in both directions on synthetic data, and fires nothing when either side is under `MinRuns` eligible tasks or under 2 distinct runs.
+- [ ] `Revisit` fires each of `test_value_drift`, `test_volume_drift`, `test_adequacy_share` and `unconfirmed_flags_drift` both `up` and `down` (one test case per kind and direction) on synthetic data, ignores task lines timestamped after `Now`, and fires nothing when either side is under `MinRuns` eligible tasks or under 2 distinct runs.
 - [ ] Plan and session cohorts are never compared. Pre-0.31 tasks (no `tests_added`, no `criteria`, `server_version` < 0.31.0) fire nothing.
-- [ ] `unconfirmed_flags_drift` scores each run once, against the first source in `Sources` order that the run has, and puts the source in `Signal.Source` and the ID.
+- [ ] `unconfirmed_flags_drift` counts each flagged task once, scored against a single outcome source per run (the first in `Sources` order that the run has; never once per source), and puts that source in `Signal.Source` and the ID. A run with several flagged tasks contributes each of them, as `UnconfirmedFlagRate` does.
 - [ ] `new_model` fires for a non-zero first-seen within 14 days of `Now`, never for a zero time, and not after 14 days.
-- [ ] `Gated` lists a refused comparison with its counts. A comparison with no eligible task on either side is not listed.
+- [ ] `Gated` lists every refused comparison with its counts, including one with tasks on only one side. A (kind, cohort) pair with no eligible task in either window never appears, because it has nothing to list.
 - [ ] Two calls on the same input give identical `Signals` and `Gated` (order and IDs). `Signals` and `Gated` are non-nil (possibly empty).
-- [ ] `CohortModels` returns the sorted, de-duplicated implementer and review models of post-verdicted tasks, without `"unknown"`.
+- [ ] `CohortModels(lines, outcomes, now)` returns the sorted, de-duplicated implementer and review models of post-verdicted tasks, without `"unknown"`, using the same `notAfter(now)` filter as `Revisit`, so a future-only task contributes no model.
 - [ ] `Scorecard` has `Revisit *[]Signal \`json:"revisit,omitempty"\`` and `RevisitCoverage *[]Gated \`json:"revisit_coverage,omitempty"\``, and `Compute` leaves both nil.
 
 **Verify:** `go test -race ./scorecard/...` → `ok`
@@ -136,18 +136,25 @@ func TestRevisitVolumeDriftUpAndDown(t *testing.T) {
     - baseline of 20 tasks at `ServerVersion "0.30.0"` with no `TestsAdded`, no `Criteria`, no `Categories`;
     - recent of 20 tasks at `"0.31.0"`, with `TestsAdded=intp(3)`, `Criteria{"test_value":1}` on 15 of them and `Categories{"test_adequacy":1}` on 0 of them.
     - Expect no `test_value_drift` and no `test_adequacy_share` signal.
-  - `TestRevisitTestValueAndAdequacyFire`: both sides at `"0.31.0"` with `TestsAdded=intp(2)`; baseline `Criteria{"test_value":1}` on 2/20 and recent on 15/20 → a `test_value_drift` `up` signal. The same pattern with `Categories{"test_adequacy":1}` → `test_adequacy_share` `up`.
+  - `TestRevisitTestValueAndAdequacyFire`: both sides at `"0.31.0"` with `TestsAdded=intp(2)`.
+    - Baseline `Criteria{"test_value":1}` on 2/20 and recent on 15/20 → a `test_value_drift` `up` signal; swap the sides → `down`.
+    - The same pattern with `Categories{"test_adequacy":1}` → `test_adequacy_share` `up`, then `down`.
+  - `TestRevisitIgnoresFutureLines`:
+    - 20 baseline tasks plus 20 tasks stamped `rvNow.Add(time.Hour)` that would otherwise fire `up` → no signal, and the `Gated` entry has `RecentN: 0`;
+    - a task with an eligible snapshot 2 days ago **and** a later snapshot of the same index at `rvNow.Add(time.Hour)` is counted from the earlier snapshot (its `RecentN` contribution is 1).
+  - `TestComputeLeavesRevisitNil`: `Compute(lines, nil, Options{})` returns `Revisit == nil && RevisitCoverage == nil`.
   - `TestRevisitUnconfirmedFlagsOneSourcePerRun`:
     - every task `PostVerdict:"warn"`;
     - each run has a `final_review` outcome **and** a `review_now` outcome (helper `outcome(hash, SourceFinalReview, ts)`, with or without an `OutcomeFinding{TaskIndex:1, Severity:"major"}`);
     - baseline: 18/20 runs with a major in `final_review` (so confirmed); recent: 2/20.
-    - Expect one `unconfirmed_flags_drift` `up` signal with `Source == SourceFinalReview`, an ID ending in `/final_review`, and `Recent.N == 20` (not 40).
+    - Expect one `unconfirmed_flags_drift` `up` signal with `Source == SourceFinalReview`, an ID ending in `/final_review`, and `Recent.N == 20` (not 40: the `review_now` outcome is not counted a second time).
+    - Swap the sides → `down`.
   - `TestRevisitNewModel`, with `firstSeen` holding:
     - `"a": rvNow.Add(-3*24*time.Hour)` → fires, `Since` set, ID `new_model:a`;
     - `"b": time.Time{}` → never fires;
     - `"c": rvNow.Add(-15*24*time.Hour)` → no longer fires.
   - `TestRevisitStableOutput`: call `Revisit` twice on a mixed input firing three signals; `slices.EqualFunc` on IDs and `Gated` kinds and cohorts in order. Also assert `res.Signals != nil && res.Gated != nil` for empty input.
-  - `TestCohortModels`: two tasks with impl `"claude-sonnet-5-5"` / `""` and reviewer `"openai:gpt-x"` → `["claude-sonnet-5-5", <normalised reviewer>]`, with no `"unknown"`.
+  - `TestCohortModels`: two tasks with impl `"claude-sonnet-5-5"` / `""` and reviewer `"openai:gpt-x"` → `["claude-sonnet-5-5", <normalised reviewer>]`, with no `"unknown"`. A third task stamped `rvNow.Add(time.Hour)` with impl `"claude-haiku-5-5"` is not returned at `rvNow`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -270,7 +277,7 @@ func Revisit(lines []RunLine, outcomes []OutcomeLine, firstSeen map[string]time.
 	}
 	cut := opts.Now.Add(-RevisitWindow)
 	sides := map[revisitID]*[2]revisitSide{}
-	for _, r := range assemble(lines, outcomes, "") {
+	for _, r := range assemble(notAfter(lines, opts.Now), outcomes, "") {
 		src := scoringSource(r)
 		for _, t := range r.tasks {
 			if t.snap.PostVerdict == "" {
@@ -363,11 +370,25 @@ func gatedLess(a, b Gated) bool {
 	return false
 }
 
-// CohortModels returns the models Revisit's cohorts are keyed by, so the
-// caller records first-seen times for exactly those values.
-func CohortModels(lines []RunLine, outcomes []OutcomeLine) []string {
+// notAfter drops lines stamped after now (clock skew between processes)
+// before assembly, so a future snapshot can neither displace a task's real
+// latest one nor introduce a model. Revisit and CohortModels share it so the
+// models recorded as first seen are exactly the ones Revisit scores.
+func notAfter(lines []RunLine, now time.Time) []RunLine {
+	out := make([]RunLine, 0, len(lines))
+	for _, l := range lines {
+		if !l.Ts.After(now) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// CohortModels returns the models Revisit's cohorts are keyed by at now, so
+// the caller records first-seen times for exactly those values.
+func CohortModels(lines []RunLine, outcomes []OutcomeLine, now time.Time) []string {
 	set := map[string]bool{}
-	for _, r := range assemble(lines, outcomes, "") {
+	for _, r := range assemble(notAfter(lines, now), outcomes, "") {
 		for _, t := range r.tasks {
 			if t.snap.PostVerdict == "" {
 				continue
@@ -453,7 +474,7 @@ git commit -m "feat(scorecard): revisit signals and gated comparisons"
 
 ### Task 2: `first-seen.json` and `WriteScorecard` wiring
 
-**Goal:** `WriteScorecard` maintains `first-seen.json` (seeded, merged, multi-process-safe) and writes `revisit` / `revisit_coverage` per spec §4.1–4.2.
+**Goal:** `WriteScorecard` maintains `first-seen.json` (seeded, merged, and convergent across processes) and writes `revisit` / `revisit_coverage` per spec §4.1–4.2.
 
 **Files:**
 - Create: `internal/stats/firstseen.go`
@@ -467,7 +488,8 @@ git commit -m "feat(scorecard): revisit signals and gated comparisons"
 - [ ] When `runs.jsonl` cannot be read (e.g. it is a directory), `first-seen.json` is not created or changed and `scorecard.json` has neither `revisit` nor `revisit_coverage`.
 - [ ] `mergeFirstSeen` keeps zero over any time, else the earlier time, and `seeded` is the OR. A corrupt `first-seen.json` logs one warning and is treated as unseeded.
 - [ ] Two goroutines calling `WriteScorecard` 20 times each pass under `-race`.
-- [ ] A failed `first-seen.json` write logs one warning and still returns the signals.
+- [ ] A failed `first-seen.json` write logs one warning and still returns the signals (tested by making `first-seen.json` a directory so the rename fails; the returned `sc.Revisit` is non-nil).
+- [ ] Cross-process behaviour is **convergent, not locked**. If two processes race, a model one of them added may be lost from disk, and it is re-stamped on the next `WriteScorecard` that sees it: its `new_model` signal starts at most one call later. A zero (seeded) entry can never be overwritten by a stamp. The `updateFirstSeen` doc comment says this.
 
 **Verify:** `go test -race ./internal/stats/...` → `ok`
 
@@ -499,8 +521,13 @@ func TestWriteScorecardSeedsThenStampsNewModel(t *testing.T) {
 		t.Fatalf("seeding must not signal: %+v", sc.Revisit)
 	}
 	fs, err := readFirstSeen(r.dir)
-	if err != nil || !fs.Seeded || !fs.Models["claude-sonnet-5-5"].IsZero() {
+	if err != nil || !fs.Seeded || len(fs.Models) != 2 {
 		t.Fatalf("seeded state: %+v %v", fs, err)
+	}
+	for _, m := range scorecard.CohortModels(mustRuns(t, r), nil, now) {
+		if seen, ok := fs.Models[m]; !ok || !seen.IsZero() {
+			t.Fatalf("model %q not seeded at zero: %+v", m, fs.Models)
+		}
 	}
 	recordTask(t, r, "r2", now.Add(-time.Minute), "claude-haiku-5-5")
 	sc = r.WriteScorecard()
@@ -517,13 +544,15 @@ func TestWriteScorecardSeedsThenStampsNewModel(t *testing.T) {
 }
 ```
 
-  `recordTask(t, r, hash, ts, impl)` is a small helper in the test file that calls `r.RecordRunLine`.
+  `recordTask(t, r, hash, ts, impl)` is a small helper in the test file that calls `r.RecordRunLine`. `mustRuns(t, r)` reads `runs.jsonl` back with `readJSONL[scorecard.RunLine](r.dir, runsFile)`. Both models (implementer and normalised reviewer) must be seeded.
 
   Also add:
   - `TestWriteScorecardReadFailureSkipsRevisit`: `os.Mkdir(filepath.Join(r.dir, runsFile), 0o700)` so the read fails, then `WriteScorecard` → `first-seen.json` does not exist and the `scorecard.json` map has no `revisit` / `revisit_coverage` key.
   - `TestMergeFirstSeen`: a table over (zero vs time → zero), (t1 vs t2 → min), (missing vs t → t), and `seeded` OR.
-  - `TestFirstSeenCorruptIsUnseeded`: write `{` to `first-seen.json` → `WriteScorecard` re-seeds (zero times), no `new_model`.
+  - `TestFirstSeenCorruptIsUnseeded`: write `{` to `first-seen.json` → `WriteScorecard` re-seeds (zero times), no `new_model`; with the logger captured as in the write-failure test, `first_seen unreadable` appears exactly once.
+  - `TestFutureLineNeitherSeedsNorSignals`: seed with one model, then record a task stamped `now.Add(time.Hour)` with a new implementer model → `first-seen.json` lacks that model and `revisit` has no `new_model` for it.
   - `TestWriteScorecardConcurrent`: two goroutines × 20 calls, `sync.WaitGroup`; run under `-race`.
+  - `TestFirstSeenWriteFailureStillSignals`: seed once, then `os.Remove` `first-seen.json` and `os.Mkdir` a directory at that path, record a new model, and call `WriteScorecard` → `sc.Revisit != nil`, and the call does not panic. Capture the logger with a `slog.New(slog.NewTextHandler(&buf, nil))` assigned to `r.logger`, and assert that `buf` contains `first_seen write failed` exactly once.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -594,7 +623,11 @@ func mergeFirstSeen(a, b firstSeen) firstSeen {
 }
 
 // updateFirstSeen seeds or stamps models and persists the result, returning a
-// copy the caller may use without the lock.
+// copy the caller may use without the lock. r.mu orders calls in this process
+// only; across processes the write is last-rename-wins, so a model another
+// process added in the same instant can be lost from disk and is re-stamped on
+// the next call that sees it. The merge keeps a seeded zero over any stamp, so
+// that race can delay a new_model signal but never invent one.
 func (r *Recorder) updateFirstSeen(models []string) map[string]time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -642,8 +675,9 @@ func (r *Recorder) updateFirstSeen(models []string) map[string]time.Time {
 
 ```go
 	if errR == nil && errO == nil {
-		fs := r.updateFirstSeen(scorecard.CohortModels(runs, outs))
-		res := scorecard.Revisit(runs, outs, fs, scorecard.RevisitOptions{MinRuns: r.minRuns, Now: r.clock()})
+		now := r.clock()
+		fs := r.updateFirstSeen(scorecard.CohortModels(runs, outs, now))
+		res := scorecard.Revisit(runs, outs, fs, scorecard.RevisitOptions{MinRuns: r.minRuns, Now: now})
 		sc.Revisit, sc.RevisitCoverage = &res.Signals, &res.Gated
 	}
 ```
@@ -827,7 +861,7 @@ git commit -m "feat(stats): deterministic cycle-review lead in the summary"
 
 **Files:**
 - Modify: `internal/planrun/ledger.go` (`ledgerLine` field, new `AppendSessionTitle`)
-- Modify: `internal/session/store.go:~91` (`UpdateRow` sets `TaskTitle`)
+- Modify: `internal/session/store.go` (`UpdateRow` sets `TaskTitle`)
 - Modify: `internal/mcpsrv/run_snapshots.go:91-121` (`recordSessionRow`)
 - Test: `internal/planrun/ledger_test.go`, `internal/mcpsrv/run_snapshots_test.go` (or the existing file that tests `recordSessionRow`; find it with `grep -rln recordSessionRow internal/mcpsrv/*_test.go`)
 - Modify: `CHANGELOG.md`
@@ -845,7 +879,8 @@ git commit -m "feat(stats): deterministic cycle-review lead in the summary"
 
 - [ ] **Step 1: Write the failing tests**
   - In `ledger_test.go`:
-    - `TestAppendSessionTitleShapeAndInvisibility`: append one, read the file, assert the exact JSON line (unmarshal into `map[string]any` and check `plan_run_id == ""`, `session_run_hash`, `row.index == 1`, `row.task_title`, and that `written_at` is present at the **top level**). `l.Load("r_any")` returns `ok == false`.
+    - `TestAppendSessionTitleShapeAndInvisibility`: append one with `at := time.Date(2026,11,24,0,0,0,0,time.UTC)`, read the file, and compare the raw line to the exact string `{"plan_run_id":"","session_run_hash":"r_x","row":{"index":1,"task_title":"T"},"written_at":"2026-11-24T00:00:00Z"}`. `l.Load("r_any")` returns `ok == false`.
+    - `TestAppendSessionTitleNoOps`: a table over a nil `*Ledger`, `&Ledger{}` (empty `Dir`), an empty hash and an empty title → each returns nil and leaves no `plan-runs.jsonl`.
     - `TestPruneDropsSessionTitleByWrittenAt`: two lines at `t-40d` and `t-1d`, then `Prune(t-30d)` keeps only the second.
   - In the mcpsrv test: drive a session through `validate_task_spec` + `validate_completion` with a temp stats dir and `PlanLedger: &planrun.Ledger{Dir: dir}`, the same way the existing session-run test does (find it with `grep -rn "KindSession" internal/mcpsrv/*_test.go`). Assert that `plan-runs.jsonl` has one line with `session_run_hash == deps.Stats.SessionRunHash(sessionID)` and `task_title` == the spec title, and that a second `validate_completion` adds no second title line.
 
@@ -941,7 +976,7 @@ git commit -m "feat(planrun): record session-run titles under the run hash"
 
 **Files:**
 - Modify: `gnome-topbar/daemon/internal/atruns/atruns.go` (`Data`, `readMinRuns` → `readScorecard`, `readTitles`, `RunSummary.Kind`)
-- Modify: `gnome-topbar/daemon/internal/server/runspage.go:~346` (the Plan cell in `runsList`)
+- Modify: `gnome-topbar/daemon/internal/server/runspage.go` (the Plan cell in `runsList`)
 - Test: `gnome-topbar/daemon/internal/atruns/atruns_test.go`, `gnome-topbar/daemon/internal/server/runspage_test.go`
 - Modify: `CHANGELOG.md`
 
@@ -960,7 +995,7 @@ git commit -m "feat(planrun): record session-run titles under the run hash"
   - `TestReadRevisitKnownOnlyWithKey`: a table of `{"min_runs":10}` → known false; `{"min_runs":10,"revisit":[]}` → known true, len 0; `{"revisit":[{"id":"new_model:x","kind":"new_model","model":"x"}],"revisit_coverage":[{"kind":"test_volume_drift","cohort":{"kind":"session","review_model":"r"},"recent_n":3,"baseline_n":0,"recent_runs":3,"baseline_runs":0}]}` → known true, one each; `{` → known false; no file → known false.
   - `TestReadTitlesSessionRunHash`: a `plan-runs.jsonl` line `{"plan_run_id":"","session_run_hash":"r_abc","row":{"index":1,"task_title":"Fix X"},"written_at":"2026-11-24T00:00:00Z"}` → `d.Titles["r_abc"][1] == "Fix X"`.
 
-  In `runspage_test.go`, `TestRunsListShowsSessionTitle`: a `RunsView{Scope:"mine", Runs: []atruns.RunSummary{{RunHash:"r_abc", Kind:"session", TaskCount:1}}, Data: atruns.Data{Titles: map[string]map[int]string{"r_abc":{1:"Fix <X>"}}}}` → output contains `Fix &lt;X&gt;`. The same view with `Scope:"team"` does not contain `Fix`.
+  In `runspage_test.go`, `TestRunsListShowsSessionTitle`: a `RunsView{Scope:"mine", Runs: []atruns.RunSummary{{RunHash:"r_abc", Kind:"session", TaskCount:1}}, Data: atruns.Data{Titles: map[string]map[int]string{"r_abc":{1:"Fix <X>"}}}}` → output contains `Fix &lt;X&gt;`. The same view with `Scope:"team"` does not contain `Fix`. A title of 100 `é` runes renders as 79 `é` plus `…` (80 runes).
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1085,7 +1120,7 @@ git commit -m "feat(gnome-topbar): read revisit signals; name session runs"
 - Create: `gnome-topbar/daemon/internal/tray/revisit.go` (`revisitLabel`, `revisitTitle`)
 - Modify: `gnome-topbar/daemon/internal/tray/tray.go` (`Actions.AckRevisit`, `Actions.OpenRuns`, pool, render, tooltip)
 - Modify: `gnome-topbar/daemon/cmd/gnome-topbar-daemon/main.go` (`refreshRuns`, `recompute`, actions)
-- Test: `gnome-topbar/daemon/internal/state/store_test.go`, `state_test.go`, `gnome-topbar/daemon/internal/tray/revisit_test.go`
+- Test: `gnome-topbar/daemon/internal/state/store_test.go`, `state_test.go`, `gnome-topbar/daemon/internal/tray/revisit_test.go`, `gnome-topbar/daemon/cmd/gnome-topbar-daemon/main_test.go`
 - Modify: `CHANGELOG.md`
 
 **Acceptance Criteria:**
@@ -1110,7 +1145,15 @@ git commit -m "feat(gnome-topbar): read revisit signals; name session runs"
     - `TestRetainForgetsOnlyClearedPrefixed`: seed `["pr:a#1","revisit:x","revisit:y"]`, `Retain("revisit:", []string{"x"})`, then reload from disk → `pr:a#1` and `revisit:x` seen, `revisit:y` new.
     - `TestRetainNoChangeNoWrite`: record the file's mtime, call `Retain` with every id live, assert the mtime is unchanged.
   - `state_test.go` `TestComputeRevisitFiltersAckedAndStaleNewModel`: three signals (`a` drift, `b` acked, `new_model:c` with `Since` 20 days ago) → only `a`.
-  - `tray/revisit_test.go`: table tests for `revisitTitle` and `revisitLabel` (a drift with `Recent{Value:.41}`, `Baseline{Value:.18}` → contains `41% vs 18%`).
+  - `tray/revisit_test.go`:
+    - table tests for `revisitTitle` and `revisitLabel` (a drift with `Recent{Value:.41}`, `Baseline{Value:.18}` → contains `41% vs 18%`);
+    - `TestRevisitMenuModel`: `revisitMenu(state.Snapshot{RevisitKnown:false, Revisit: two signals})` → `show == false`; with `RevisitKnown:true` → `show == true`, title `🔁 Cycle review due (2)`, `ids` equal to the two signal IDs, and `labels` from `revisitLabel`; with `RevisitKnown:true, RevisitGated:3` and no signals → `show == true`, empty ids.
+    - `TestAckRevisitPrefixes`: `AckRevisitIDs("x")` → `[]string{"revisit:x"}`.
+  - `cmd/gnome-topbar-daemon/main_test.go` `TestRefreshRunsRetainsAcksOnlyWhenKnown`, following `TestRefreshRunsReadsLocalAndPublishes` (`main_test.go:227`), with a `t.TempDir()` stats dir and `p.store` from `state.LoadStore`:
+    1. `scorecard.json` holds `{"revisit":[{"id":"a","kind":"test_volume_drift"},{"id":"b","kind":"test_volume_drift"}]}`, and `p.store` has `revisit:a` seen → after `refreshRuns`, `p.Snapshot().Revisit` has only `b`, and `RevisitKnown` is true.
+    2. Rewrite it as `{"min_runs":10}` (no key) → after `refreshRuns`, `revisit:a` is still seen and `RevisitKnown` is false.
+    3. Rewrite it as `{"revisit":[]}` → after `refreshRuns`, `revisit:a` is no longer seen.
+    4. `p.Ack(tray.AckRevisitIDs("b"))` with `b` live again → `b` is filtered from the snapshot.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1118,7 +1161,7 @@ Run: `cd gnome-topbar/daemon && go test ./internal/state/ ./internal/tray/ -run 
 Expected: FAIL
 
 - [ ] **Step 3: Implement**
-  - `store.go`:
+  - `store.go` (add `"strings"` to its import block):
 
 ```go
 // Retain forgets every seen id with prefix that is not prefix+id for an id in
@@ -1241,16 +1284,36 @@ func pct(v float64) int { return int(math.Round(v * 100)) }
 ```
 
     - `makeAckPool` mirrors `makeDonePool` exactly, but reads `ids[idx]` and calls `t.act.AckRevisit(id)` and then `t.render()`.
+    - Add the pure menu model to `tray/revisit.go` (it is what the tests exercise; `render` only applies it):
+
+```go
+// revisitMenu is the cycle-review submenu for a snapshot: shown only when the
+// server's revisit state is known and there is something to say.
+func revisitMenu(snap state.Snapshot) (title string, show bool, ids, labels []string) {
+	title = revisitTitle(len(snap.Revisit), snap.RevisitGated)
+	if !snap.RevisitKnown || title == "" {
+		return "", false, nil, nil
+	}
+	for _, s := range snap.Revisit {
+		ids = append(ids, s.ID)
+		labels = append(labels, revisitLabel(s))
+	}
+	return title, true, ids, labels
+}
+
+// AckRevisitIDs is the seen-store key a revisit ack is filed under.
+func AckRevisitIDs(id string) []string { return []string{"revisit:" + id} }
+```
+
     - In `render`, under `t.mu`, after the stats block:
 
 ```go
-	title := revisitTitle(len(snap.Revisit), snap.RevisitGated)
-	if snap.RevisitKnown && title != "" {
+	if title, show, ids, labels := revisitMenu(snap); show {
 		t.revisitParent.SetTitle(title)
 		for i, mi := range t.revisitPool {
-			if i < len(snap.Revisit) {
-				t.revisitIDs[i] = snap.Revisit[i].ID
-				mi.SetTitle(revisitLabel(snap.Revisit[i]))
+			if i < len(ids) {
+				t.revisitIDs[i] = ids[i]
+				mi.SetTitle(labels[i])
 				mi.Show()
 			} else {
 				t.revisitIDs[i] = ""
@@ -1288,7 +1351,7 @@ func pct(v float64) int { return int(math.Round(v * 100)) }
 	p.snap.Revisit = state.ComputeRevisit(p.runsLocal.Revisit, p.store, time.Now())
 ```
 
-    - `actions` gains `AckRevisit: func(id string) { p.Ack([]string{"revisit:" + id}) }` and `OpenRuns: func() { openLocal("/ui/runs") }`.
+    - `actions` gains `AckRevisit: func(id string) { p.Ack(tray.AckRevisitIDs(id)) }` and `OpenRuns: func() { openLocal("/ui/runs") }`.
 
 - [ ] **Step 4: Run the tests**
 
@@ -1371,4 +1434,4 @@ git commit -m "docs: revisit signals, cycle review menu and session titles"
 
 ## Dependencies
 
-Task 2 needs Task 1. Task 3 needs Task 1. Task 5 needs Task 1. Task 6 needs Task 5. Task 7 needs Tasks 1–6. Task 4 is independent.
+Task 2 needs Task 1. Task 3 needs Task 1. Task 4 needs Task 1, for the CHANGELOG block. Task 5 needs Task 1. Task 6 needs Task 5. Task 7 needs Tasks 1–6. Every task edits `CHANGELOG.md`, so tasks run **one at a time**, never in parallel.
