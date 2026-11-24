@@ -122,3 +122,33 @@ func TestFirstSeenHeldLockSkipsWriteThenRetries(t *testing.T) {
 	}
 	assertWarnings(t, &buf, "level=WARN", 0)
 }
+
+// Another process leaves first-seen.json unreadable (not corrupt) between this
+// call's first read and its locked reread. The write is skipped so entries the
+// unread file holds are not dropped, revisit is withheld, and the call warns once.
+func TestFirstSeenRereadFailureSkipsWriteAndWithholdsRevisit(t *testing.T) {
+	r, now := fixedClockRecorder(t)
+	recordTask(t, r, "r1", now.Add(-time.Hour), "claude-sonnet-5-5")
+	r.WriteScorecard()
+	path := filepath.Join(r.dir, firstSeenFile)
+	var buf bytes.Buffer
+	r.logger = slog.New(slog.NewTextHandler(&buf, nil))
+	r.firstSeenHook = func(stage string) {
+		if stage == "locked" {
+			if err := os.Remove(path); err != nil {
+				t.Error(err)
+			}
+			if err := os.Mkdir(path, 0o755); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	if got := r.updateFirstSeen([]string{"claude-haiku-5-5"}, now); got != nil {
+		t.Fatalf("want nil first-seen view, got %+v", got)
+	}
+	if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
+		t.Fatalf("first-seen.json was overwritten: %v", err)
+	}
+	assertWarnings(t, &buf, "reread failed, write skipped", 1)
+	assertWarnings(t, &buf, "level=WARN", 1)
+}

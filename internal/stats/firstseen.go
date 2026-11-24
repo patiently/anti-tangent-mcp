@@ -64,7 +64,8 @@ func mergeFirstSeen(a, b firstSeen) firstSeen {
 // updateFirstSeen seeds or stamps models and persists the result, returning a
 // copy the caller may use without the lock. A file that exists but cannot be
 // read is left untouched and yields nil, so the caller publishes no revisit
-// data for that call; a file that fails to parse is reseeded. r.mu orders
+// data for that call, as does a locked reread that fails for a reason other
+// than a parse error; a file that fails to parse is reseeded. r.mu orders
 // calls in this process; persistFirstSeen orders the write against other
 // processes sharing the directory. The first read here is unlocked and may be
 // stale, which is harmless: the locked reread merges in whatever another
@@ -84,6 +85,9 @@ func (r *Recorder) updateFirstSeen(models []string, now time.Time) map[string]ti
 		next, persistErr = r.persistFirstSeen(next)
 	}
 	switch {
+	case errors.Is(persistErr, errFirstSeenReread):
+		r.logger.Warn("stats first_seen reread failed, write skipped", "err", persistErr, "parse_err", readErr)
+		return nil
 	case errors.Is(persistErr, errFirstSeenLock):
 		r.logger.Warn("stats first_seen lock unavailable, write skipped", "err", persistErr, "parse_err", readErr)
 	case persistErr != nil:
@@ -124,7 +128,10 @@ func addModels(cur firstSeen, models []string, now time.Time) (firstSeen, bool) 
 	return next, changed
 }
 
-var errFirstSeenLock = errors.New("first-seen.json lock unavailable")
+var (
+	errFirstSeenLock   = errors.New("first-seen.json lock unavailable")
+	errFirstSeenReread = errors.New("first-seen.json unreadable under lock")
+)
 
 // persistFirstSeen merges next with whatever is on disk, writes the result and
 // returns it, so the caller's signals use the merged view even when the write
@@ -135,15 +142,25 @@ var errFirstSeenLock = errors.New("first-seen.json lock unavailable")
 // every entry it had. A skipped write therefore never makes a model look new
 // that the file already holds: it only leaves this call's additions unsaved,
 // so the next call that writes stamps them with its own, later time, and a
-// skipped seeding leaves the file unseeded until a later call seeds it.
+// skipped seeding leaves the file unseeded until a later call seeds it. If the
+// locked reread fails for a reason other than a parse error, nothing is
+// written, since the write could drop entries the unread file holds, and the
+// error wraps errFirstSeenReread; a file that fails to parse is overwritten.
 func (r *Recorder) persistFirstSeen(next firstSeen) (firstSeen, error) {
 	unlock, err := acquireFileLock(filepath.Join(r.dir, firstSeenFile+".lock"), r.firstSeenLockWait, r.firstSeenHook)
 	if err != nil {
 		return next, errors.Join(errFirstSeenLock, err)
 	}
 	defer unlock()
-	if disk, err := readFirstSeen(r.dir); err == nil {
+	if r.firstSeenHook != nil {
+		r.firstSeenHook("locked")
+	}
+	disk, err := readFirstSeen(r.dir)
+	switch {
+	case err == nil:
 		next = mergeFirstSeen(next, disk)
+	case !errors.Is(err, errFirstSeenParse):
+		return next, errors.Join(errFirstSeenReread, err)
 	}
 	if r.firstSeenHook != nil {
 		r.firstSeenHook("reread")
