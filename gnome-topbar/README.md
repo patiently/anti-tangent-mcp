@@ -31,17 +31,6 @@ table, and a list of runs you can drill into. Three scopes, switched via `?scope
 In the Mine scope, a session run is listed under its title when the server recorded one
 (`ANTI_TANGENT_PLAN_LEDGER=1`, see the root README); other scopes show no session titles.
 
-## Cycle review menu (revisit signals)
-
-When `scorecard.json` reports revisit signals, the tray shows a `🔁 Cycle review` submenu.
-Its title gives the count of signals due and, when the sample gate refused some comparisons,
-how many were `too small to judge`, for example `🔁 Cycle review due (2) · 1 too small to judge`.
-A title of `🔁 Cycle review: none due · n too small to judge` means nothing fired, but the
-gated comparisons were too small to say. That is not an all-clear. The submenu lists each
-signal and a click acknowledges it (ack-until-clears): an ack lasts only while its signal
-stays live, so a signal that clears and later fires again is shown again. The submenu ends
-with an `Open runs page` item. The tooltip counts only unacknowledged signals.
-
 Publishing (writing your own runs to Basic Memory) is gated by `ANTI_TANGENT_SHARE_STATS=1`
 (default `0`) and requires `bm_username` in the config; reading the Team scope needs only
 ordinary Basic Memory access (`bm_url` / `bm_bearer_token`) and pools whatever `share_project`
@@ -58,6 +47,18 @@ immediately after a restart and a pull reads only notes it has not seen. Basic M
 says nothing about which notes changed, so a run republished with a later outcome is picked up
 by the daily full pull, or at once with the **Refresh now** button on the Team and user scopes,
 which re-reads every note. The page shows when the team data was last pulled.
+
+## Cycle review menu (revisit signals)
+
+When `scorecard.json` reports revisit signals, the tray shows a `🔁 Cycle review` submenu.
+Its title gives the count of signals due and, when the sample gate refused some comparisons,
+how many were `too small to judge`, for example `🔁 Cycle review due (2) · 1 too small to judge`.
+A title of `🔁 Cycle review: none due · n too small to judge` means nothing fired, but the
+gated comparisons were too small to say. That is not an all-clear. The submenu lists each
+signal and a click acknowledges it (ack-until-clears): an ack lasts only while its signal
+stays live, so a signal that clears and later fires again is shown again. The submenu ends
+with an `Open runs page` item. The tooltip counts only unacknowledged signals. Revisit signals raise no desktop
+notification; they appear only in the menu and the tooltip.
 
 ## Prerequisites
 - GNOME Shell 45/46/47 (Wayland or X11)
