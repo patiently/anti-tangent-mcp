@@ -263,7 +263,9 @@ ANTI_TANGENT_STOP_GUARD=1                # 0 turns off the stop check alone
 #                            to validate_completion (server-written); aggregated
 #                            into rollup.json's `codescene` block
 #   plan-runs.jsonl        — one row per completed task plus one header line
-#                            per run validate_plan mints (no task title),
+#                            per run validate_plan mints (no task title), plus
+#                            a session-title line per task run without a plan
+#                            (keyed by run hash, pruned by written_at),
 #                            server-written, ONLY when ANTI_TANGENT_PLAN_LEDGER=1
 #                            is also set; the one file in this list that
 #                            carries task titles

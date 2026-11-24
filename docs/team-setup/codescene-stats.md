@@ -75,7 +75,9 @@ completed task to `plan-runs.jsonl`, so `plan_run_report` survives a server rest
 in-memory plan-run store is otherwise lost like every other session state. The ledger also holds
 a header line per run minted by `validate_plan` — run id, verdict, quality, task count, creation
 time and the plan's task headings — pruned by its creation time, so a run no task ever attached to
-is still known after a restart.
+is still known after a restart. A task run without a plan writes a session-title line instead,
+carrying the salted run hash and the task title (never the session id), pruned by its `written_at`
+time; gnome-topbar uses it to name session runs.
 
 **Privacy: this file is different from the others.** `events.jsonl` and
 `codescene-events.jsonl` are deliberately content-free — no titles, no paths, no code.
