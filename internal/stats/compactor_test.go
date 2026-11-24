@@ -197,6 +197,12 @@ func TestRevisitLeadCapsAtThree(t *testing.T) {
 	}
 }
 
+func TestRevisitItemWithoutCohortFallsBackToKind(t *testing.T) {
+	if got := revisitItem(scorecard.Signal{Kind: scorecard.RevisitUnconfirmed}); got != string(scorecard.RevisitUnconfirmed) {
+		t.Errorf("revisitItem = %q", got)
+	}
+}
+
 func TestRevisitLeadUnconfirmedSource(t *testing.T) {
 	got := revisitItem(scorecard.Signal{Kind: scorecard.RevisitUnconfirmed, Direction: "down", Source: "codescene",
 		Cohort: &scorecard.CohortKey{Kind: "session", ImplementerModel: "i", ReviewModel: "r"}})

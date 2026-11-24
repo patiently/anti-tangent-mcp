@@ -206,13 +206,14 @@ In `WriteScorecard`:
 1. **Read failure guard.** If `runs.jsonl` or `outcomes.jsonl` failed to read, skip the whole
    first-seen step and emit no `revisit` key (§4.1).
 2. Under `r.mu`: read `first-seen.json`. A missing file is `{seeded: false}`. A corrupt one logs one
-   warning and is treated as missing.
-3. `models := scorecard.CohortModels(lines, outcomes)`.
+   warning and is treated as missing; any other read error logs one `stats first_seen read failed`
+   warning, writes nothing and passes a nil map to `Revisit`, so no `new_model` fires that call.
+3. `models := scorecard.CohortModels(lines, outcomes, now)`.
 4. **Seeding:** if `!seeded`, set every model in `models` to the **zero time** and set `seeded: true`.
    A zero time never fires `new_model`, so upgrading does not flag every model in use as new. The
    marker is explicit: an empty map is still seeded, so a first call that saw no models does not make
    the next call stamp everything with `clock()`.
-5. Otherwise, merge: add each model missing from the map with `r.clock()`. Two processes merging
+5. Otherwise, merge: add each model missing from the map with the same `now` passed to `Revisit`, not a fresh `r.clock()`. Two processes merging
    concurrently converge by a **merge rule**: on write, re-read the file and keep, per model, zero if
    either side has zero, else the earlier time. Write atomically with the existing `writeFileAtomic`.
 6. Copy the merged map and release `r.mu`. Pass the **copy** to `Revisit`. `WriteScorecard` can run

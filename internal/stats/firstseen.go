@@ -18,8 +18,11 @@ type firstSeen struct {
 	Models map[string]time.Time `json:"models"`
 }
 
+var errFirstSeenParse = errors.New("first-seen.json does not parse")
+
 // readFirstSeen returns a missing file as unseeded with no error, and a
-// corrupt one as unseeded with the parse error.
+// corrupt one as unseeded with an error wrapping errFirstSeenParse. Any other
+// read error is returned as is.
 func readFirstSeen(dir string) (firstSeen, error) {
 	fs := firstSeen{Models: map[string]time.Time{}}
 	b, err := os.ReadFile(filepath.Join(dir, firstSeenFile))
@@ -30,7 +33,7 @@ func readFirstSeen(dir string) (firstSeen, error) {
 		return fs, err
 	}
 	if err := json.Unmarshal(b, &fs); err != nil {
-		return firstSeen{Models: map[string]time.Time{}}, err
+		return firstSeen{Models: map[string]time.Time{}}, errors.Join(errFirstSeenParse, err)
 	}
 	if fs.Models == nil {
 		fs.Models = map[string]time.Time{}
@@ -59,7 +62,9 @@ func mergeFirstSeen(a, b firstSeen) firstSeen {
 }
 
 // updateFirstSeen seeds or stamps models and persists the result, returning a
-// copy the caller may use without the lock. r.mu orders calls in this process
+// copy the caller may use without the lock. A file that exists but cannot be
+// read is left untouched and yields nil, so the caller computes no new_model
+// signal for that call; a file that fails to parse is reseeded. r.mu orders calls in this process
 // only; across processes the write is last-rename-wins, so a model another
 // process added in the same instant can be lost from disk and is re-stamped on
 // the next call that sees it, delaying its new_model signal by at most one
@@ -71,6 +76,10 @@ func (r *Recorder) updateFirstSeen(models []string, now time.Time) map[string]ti
 	defer r.mu.Unlock()
 	cur, err := readFirstSeen(r.dir)
 	if err != nil {
+		if !errors.Is(err, errFirstSeenParse) {
+			r.logger.Warn("stats first_seen read failed", "err", err)
+			return nil
+		}
 		r.logger.Warn("stats first_seen unreadable, reseeding", "err", err)
 	}
 	next, changed := addModels(cur, models, now)

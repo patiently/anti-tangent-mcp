@@ -253,6 +253,43 @@ func TestFirstSeenCorruptIsUnseeded(t *testing.T) {
 	assertWarnings(t, &buf, "first_seen unreadable", 1)
 }
 
+func TestFirstSeenReadErrorKeepsFileAndSkipsStep(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file modes")
+	}
+	r, now := fixedClockRecorder(t)
+	recordTask(t, r, "r1", now.Add(-time.Hour), "claude-sonnet-5-5")
+	r.WriteScorecard()
+	path := filepath.Join(r.dir, firstSeenFile)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+	var buf bytes.Buffer
+	r.logger = slog.New(slog.NewTextHandler(&buf, nil))
+	recordTask(t, r, "r2", now.Add(-time.Minute), "claude-haiku-5-5")
+	sc := r.WriteScorecard()
+	if sc.Revisit == nil {
+		t.Fatal("revisit key missing")
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("first-seen.json changed: %s -> %s", before, after)
+	}
+	assertWarnings(t, &buf, "first_seen read failed", 1)
+	assertWarnings(t, &buf, "unreadable, reseeding", 0)
+}
+
 func TestFutureLineNeitherSeedsNorSignals(t *testing.T) {
 	r, now := fixedClockRecorder(t)
 	recordTask(t, r, "r1", now.Add(-time.Hour), "claude-sonnet-5-5")
