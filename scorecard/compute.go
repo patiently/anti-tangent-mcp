@@ -51,6 +51,11 @@ type Scorecard struct {
 	Publishers    []string        `json:"publishers,omitempty"`
 	ByPublisher   *PublisherViews `json:"by_publisher,omitempty"`
 	ModelSets     []ModelSet      `json:"model_sets"`
+
+	// Revisit and RevisitCoverage are set by the server after Compute; both
+	// are nil, and their keys absent, when the run or outcome read failed.
+	Revisit         *[]Signal `json:"revisit,omitempty"`
+	RevisitCoverage *[]Gated  `json:"revisit_coverage,omitempty"`
 }
 
 // PublisherViews repeats the review-model and tool-model views with the

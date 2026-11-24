@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] - 2026-11-24
+
+### Added
+
+- Revisit signals: `scorecard.Revisit` compares each (run kind, implementer model, review model) cohort's last 14 days with its own earlier retained tasks and reports `test_value_drift`, `test_volume_drift`, `test_adequacy_share` and `unconfirmed_flags_drift` when the two 90% Wilson intervals are disjoint (each side >= `ANTI_TANGENT_SCORECARD_MIN_RUNS` eligible tasks from >= 2 runs), plus `new_model` for a model first seen in the last 14 days. Comparisons the sample gate refuses are listed too, so a quiet result can be told apart from "too small to judge".
+- `scorecard.json` gains `revisit` (signals) and `revisit_coverage` (comparisons too small to judge); both keys are omitted when the scorecard's run, outcome or `first-seen.json` read failed. First-seen models are kept in a new `first-seen.json` in the stats directory, written while holding an OS file lock on `first-seen.json.lock`, an empty file kept in the stats directory, so server processes sharing the directory do not drop each other's entries; a call that cannot take the lock within a second skips the write and logs one warning, and the next scorecard write retries; the first 0.32 run records every model already in use without flagging it as new.
+- `summary.md` opens with a `Cycle review due:` line naming up to three revisit signals when any are live. The line is written by the server, not the model, and is kept out of `summaries.jsonl`. With no reviewer configured, or when the summary call fails, no summary is written and the signals are in `scorecard.json` and the gnome-topbar tray only.
+- With `ANTI_TANGENT_PLAN_LEDGER=1`, a task run without a plan writes one line to `plan-runs.jsonl` carrying its salted run hash and task title (never the session id), so gnome-topbar can name session runs. Without the ledger opt-in, session runs keep showing by hash.
+- gnome-topbar: `/ui/runs` names session runs by their task title (local `mine` scope, with the plan ledger on) in the runs list and on the run page. This tray half ships with the next `gnome-topbar-v*` tag, not with this server release.
+- gnome-topbar: a `🔁 Cycle review due (n)` tray menu lists the server's revisit signals; clicking one acks it until the signal clears, and the title adds `· g too small to judge` when comparisons were too small to decide. A server older than 0.32.0, or a scorecard written after a failed read, shows no menu and keeps existing acks. This tray half ships with the next `gnome-topbar-v*` tag, not with this server release; a 0.31 server still running beside it publishes no revisit data, so the menu stays hidden.
+
 ## [0.31.0] - 2026-11-20
 
 ### Added

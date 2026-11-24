@@ -468,3 +468,54 @@ func TestRunSnapshots_TaskLinesFollowRowMutationOrder(t *testing.T) {
 		assertOrdered(t, lines)
 	})
 }
+
+func TestRunSnapshots_SessionTitleLedgerLine(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := stats.New(stats.Options{
+		Dir: dir, SummaryInterval: 24 * time.Hour, SummaryThreshold: 100000, RetentionDays: 30,
+		Logger: slog.Default(),
+	})
+	require.NoError(t, err)
+	cfg, err := config.Load(func(k string) string {
+		if k == "ANTHROPIC_API_KEY" {
+			return "k"
+		}
+		return ""
+	})
+	require.NoError(t, err)
+	rv := &scriptedRunReviewer{name: "anthropic", resps: []providers.Response{passResp("claude-sonnet-4-6")}}
+	h := &handlers{deps: Deps{
+		Cfg:        cfg,
+		Sessions:   session.NewStore(cfg.SessionTTL),
+		Reviews:    providers.Registry{"anthropic": rv},
+		Stats:      rec,
+		PlanLedger: &planrun.Ledger{Dir: dir},
+		planCache:  newPlanPassCache(),
+		PlanRuns:   planrun.NewStore(cfg.SessionTTL),
+	}}
+	ctx := context.Background()
+	_, done, err := h.ValidateTaskSpec(ctx, nil, ValidateTaskSpecArgs{TaskTitle: "Titled task", Goal: "g", AcceptanceCriteria: []string{"ac1"}})
+	require.NoError(t, err)
+	for range 2 {
+		_, _, err = h.ValidateCompletion(ctx, nil, completionCallArgs(done.SessionID))
+		require.NoError(t, err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "plan-runs.jsonl"))
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	require.Len(t, lines, 1)
+	var ln struct {
+		SessionRunHash string `json:"session_run_hash"`
+		Row            struct {
+			TaskTitle string `json:"task_title"`
+		} `json:"row"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &ln))
+	assert.Equal(t, rec.SessionRunHash(done.SessionID), ln.SessionRunHash)
+	assert.Equal(t, "Titled task", ln.Row.TaskTitle)
+	assert.NotContains(t, string(b), done.SessionID)
+
+	runs, err := os.ReadFile(filepath.Join(dir, "runs.jsonl"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(runs), "Titled task")
+}

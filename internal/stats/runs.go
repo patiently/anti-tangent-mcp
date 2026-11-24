@@ -101,8 +101,18 @@ func (r *Recorder) WriteScorecard() scorecard.Scorecard {
 	if errR != nil || errO != nil {
 		r.logger.Warn("stats scorecard read failed", "runs_err", errR, "outcomes_err", errO)
 	}
-	sc := scorecard.Compute(runs, outs, scorecard.Options{MinRuns: r.minRuns, Now: r.clock()})
+	now := r.clock()
+	sc := scorecard.Compute(runs, outs, scorecard.Options{MinRuns: r.minRuns, Now: now})
 	sc.SkippedLines = skipR + skipO
+	// Revisit keys are left out unless runs, outcomes and first-seen all read:
+	// the daemon drops acks of signals missing from a published revisit list,
+	// so publishing one computed without first-seen would forget new_model acks.
+	if errR == nil && errO == nil {
+		if fs := r.updateFirstSeen(scorecard.CohortModels(runs, outs, now), now); fs != nil {
+			res := scorecard.Revisit(runs, outs, fs, scorecard.RevisitOptions{MinRuns: r.minRuns, Now: now})
+			sc.Revisit, sc.RevisitCoverage = &res.Signals, &res.Gated
+		}
+	}
 	if err := writeJSON(r.dir, scorecardFile, sc); err != nil {
 		r.logger.Warn("stats scorecard write failed", "err", err)
 	}

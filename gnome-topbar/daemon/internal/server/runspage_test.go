@@ -251,3 +251,21 @@ func TestRenderRunsPageKindColumn(t *testing.T) {
 		}
 	}
 }
+
+func TestRunsListShowsSessionTitle(t *testing.T) {
+	mk := func(scope, title string) string {
+		return renderRunsPage(RunsView{Scope: scope, Present: true,
+			Runs: []atruns.RunSummary{{RunHash: "r_abc", Kind: "session", TaskCount: 1}},
+			Data: atruns.Data{Titles: map[string]map[int]string{"r_abc": {1: title}}}})
+	}
+	if out := mk("mine", "Fix <X>"); !strings.Contains(out, "Fix &lt;X&gt;") {
+		t.Fatalf("mine: %s", out)
+	}
+	if out := mk("team", "Fix <X>"); strings.Contains(out, "Fix") {
+		t.Fatalf("team shows title")
+	}
+	long := mk("mine", strings.Repeat("é", 100))
+	if !strings.Contains(long, strings.Repeat("é", 79)+"…") || strings.Contains(long, strings.Repeat("é", 80)) {
+		t.Fatalf("cut: %s", long)
+	}
+}

@@ -59,6 +59,8 @@ sweep and try removing one harness component at a time, watching escape rate; de
 implementation guidance, the test-value rule, the debugging rule, the brief format or §7.3 changes;
 record the decision in the CHANGELOG.
 
+A revisit trigger shows in three places: `scorecard.json`'s `revisit` array, a `Cycle review due:` first line in the stats summary, and gnome-topbar's `🔁 Cycle review` menu. A "too small to judge" count there means the cohort lacks the data to decide, not that nothing changed.
+
 ### 7.5 Investigate
 
 A second entry point into the cycle, for work that starts from a reported error: the `investigate`

@@ -263,7 +263,9 @@ ANTI_TANGENT_STOP_GUARD=1                # 0 turns off the stop check alone
 #                            to validate_completion (server-written); aggregated
 #                            into rollup.json's `codescene` block
 #   plan-runs.jsonl        — one row per completed task plus one header line
-#                            per run validate_plan mints (no task title),
+#                            per run validate_plan mints (no task title), plus
+#                            a session-title line per task run without a plan
+#                            (keyed by run hash, pruned by written_at),
 #                            server-written, ONLY when ANTI_TANGENT_PLAN_LEDGER=1
 #                            is also set; the one file in this list that
 #                            carries task titles
@@ -292,6 +294,10 @@ With `ANTI_TANGENT_STATS_DIR` set, the server also writes three content-free fil
 - `runs.jsonl`: one line per plan-run task change, carrying the task's verdicts, severity counts and its call log: the latest 32 anti-tangent calls made for the task, each with the model that answered it, plus `calls_dropped` counting any older calls the cap evicted, `categories` (findings per category, summed over the task's `validate_completion` calls), `lines_added` / `lines_removed` (the size of the most recent diff a call sent) and `over_building_ruled` (how many of those calls had an `over_building` finding settled by an answer or a ruling instead of a fix); and a header per run with the configured model per role.
 - `outcomes.jsonl`: one line per `record_review_outcome` call.
 - `scorecard.json`: escape rate (tasks anti-tangent passed that the independent review found a critical or major problem in), unconfirmed-flag rate, waive rate and cost, by review-model cohort and by anti-tangent tool × model, each rate with its n and 90% interval. `correctness_escape_rate` narrows the escape rate to `correctness` problems; `correctness_flag_recall` is, of the tasks with such a problem, the share where anti-tangent raised a `correctness` finding on any completion call (matched by task, so an upper bound); `lines_added_p50` is the median diff size. Model ids are compared lower-cased and without a trailing date stamp (`-YYYYMMDD` or `-YYYY-MM-DD`). Read `correctness_flag_recall` from `cohorts`, which are keyed by server version: `by_review_model` also counts tasks from versions that could not raise a `correctness` finding. `regression` compares a cohort with the most recent earlier cohort of the same review and implementer models (any earlier cohort when there is none), and stays `insufficient_data` until both have `ANTI_TANGENT_SCORECARD_MIN_RUNS` runs (default 10).
+
+`scorecard.json` also carries `revisit` and `revisit_coverage`. `revisit` lists the signals that fired: a cohort's test-value, test-volume, test-adequacy or unconfirmed-flag rate drifting between a recent 14-day window and the retained tasks before it, or a model first seen within the window. Each drift signal names its cohort, with an optional `source` for `unconfirmed_flags_drift`. `revisit_coverage` lists the comparisons the sample gate refused, so a quiet `revisit` is not read as an all-clear. A drift signal fires when the recent and baseline rates' 90% Wilson intervals do not overlap, and each side needs at least `ANTI_TANGENT_SCORECARD_MIN_RUNS` eligible tasks from two or more runs. Drift signals need baseline data older than the 14-day window, so an `ANTI_TANGENT_STATS_RETENTION_DAYS` of 14 or less disables them; new-model signals still fire. Each model's first-seen time is kept in `first-seen.json` in the stats directory, written apart from `state.json` so the two cannot overwrite each other, and only while holding an OS file lock on `first-seen.json.lock`, an empty file that stays in the stats directory, so processes sharing the directory keep each other's entries. A write that cannot take the lock within a second is skipped until the next scorecard write. The lead line `Cycle review due:` is the first line of `summary.md`, so it appears only once a summary is written.
+
+With `ANTI_TANGENT_PLAN_LEDGER=1`, each session run's title is also recorded in the plan ledger and shown on `/ui/runs`. Without that flag, session runs have no title.
 
 The gnome-topbar daemon renders these at `/ui/runs`.
 

@@ -81,7 +81,7 @@ func (c *Compactor) Compact(now time.Time, events []Event, csEvents []CodesceneE
 		c.logger.Warn("stats summary unparseable", "err", err)
 		return
 	}
-	if err := writeFileAtomic(filepath.Join(c.dir, summaryMDFile), []byte(sr.Summary), 0o644); err != nil {
+	if err := writeFileAtomic(filepath.Join(c.dir, summaryMDFile), []byte(summaryMarkdown(sr.Summary, sc)), 0o644); err != nil {
 		c.logger.Warn("stats summary.md write failed", "err", err)
 		return
 	}
@@ -97,7 +97,7 @@ func (c *Compactor) readPrevSummary() string {
 	if err != nil {
 		return ""
 	}
-	return string(b)
+	return stripRevisitLead(string(b))
 }
 
 func buildSummaryPrompt(r Rollup, prev string, sc *scorecard.Scorecard) string {
@@ -111,6 +111,10 @@ func buildSummaryPrompt(r Rollup, prev string, sc *scorecard.Scorecard) string {
 	if sc != nil && len(sc.ByReviewModel) > 0 {
 		b, _ := json.MarshalIndent(sc.ByReviewModel, "", "  ")
 		fmt.Fprintf(&sb, "\nScorecard by review model (JSON; escape rates are measured against an independent review):\n%s\n", string(b))
+	}
+	if sigs := scorecardSignals(sc); len(sigs) > 0 {
+		b, _ := json.MarshalIndent(sigs, "", "  ")
+		fmt.Fprintf(&sb, "\nRevisit signals (JSON). Each compares one cohort's last 14 days with its own earlier tasks; the operator already sees a \"Cycle review due\" line, so do not restate it, and do not read a signal as a verdict on quality:\n%s\n", string(b))
 	}
 	return sb.String()
 }

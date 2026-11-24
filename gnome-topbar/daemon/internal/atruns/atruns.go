@@ -27,6 +27,14 @@ type Data struct {
 	// MinRuns is the server's configured regression gate, taken from
 	// scorecard.json so the daemon's recomputed views gate the same way.
 	MinRuns int
+	// Revisit and RevisitGated are the server's revisit signals and the
+	// comparisons too small to judge. RevisitKnown is true only when
+	// scorecard.json parsed and carried the revisit key: an older server, or
+	// one whose own read failed, omits it, and that must not read as "no
+	// signals" or the tray would forget every ack.
+	Revisit      []scorecard.Signal
+	RevisitGated []scorecard.Gated
+	RevisitKnown bool
 }
 
 func Read(dir string) (Data, error) {
@@ -44,39 +52,47 @@ func Read(dir string) (Data, error) {
 	}
 	d.Present, d.Lines, d.Outcomes, d.Skipped = true, lines, outs, skipR+skipO
 	d.Titles = readTitles(dir)
-	d.MinRuns = readMinRuns(dir)
+	d.MinRuns, d.Revisit, d.RevisitGated, d.RevisitKnown = readScorecard(dir)
 	return d, nil
 }
 
-func readMinRuns(dir string) int {
+func readScorecard(dir string) (minRuns int, rev []scorecard.Signal, gated []scorecard.Gated, known bool) {
 	b, err := os.ReadFile(filepath.Join(dir, "scorecard.json"))
 	if err != nil {
-		return 0
+		return 0, nil, nil, false
 	}
 	var sc struct {
-		MinRuns int `json:"min_runs"`
+		MinRuns int                 `json:"min_runs"`
+		Revisit *[]scorecard.Signal `json:"revisit"`
+		Gated   *[]scorecard.Gated  `json:"revisit_coverage"`
 	}
 	if json.Unmarshal(b, &sc) != nil {
-		return 0
+		return 0, nil, nil, false
 	}
-	return sc.MinRuns
+	if sc.Revisit == nil {
+		return sc.MinRuns, nil, nil, false
+	}
+	if sc.Gated != nil {
+		gated = *sc.Gated
+	}
+	return sc.MinRuns, *sc.Revisit, gated, true
 }
 
 func readTitles(dir string) map[string]map[int]string {
 	out := map[string]map[int]string{}
-	b, err := os.ReadFile(filepath.Join(dir, "state.json"))
-	if err != nil {
-		return out
-	}
-	var st struct {
-		Salt string `json:"salt"`
-	}
-	if json.Unmarshal(b, &st) != nil || st.Salt == "" {
-		return out
+	var salt string
+	if b, err := os.ReadFile(filepath.Join(dir, "state.json")); err == nil {
+		var st struct {
+			Salt string `json:"salt"`
+		}
+		if json.Unmarshal(b, &st) == nil {
+			salt = st.Salt
+		}
 	}
 	type ledgerRow struct {
-		PlanRunID string `json:"plan_run_id"`
-		Row       struct {
+		PlanRunID      string `json:"plan_run_id"`
+		SessionRunHash string `json:"session_run_hash"`
+		Row            struct {
 			Index     int    `json:"index"`
 			TaskTitle string `json:"task_title"`
 		} `json:"row"`
@@ -86,10 +102,19 @@ func readTitles(dir string) map[string]map[int]string {
 		return out
 	}
 	for _, r := range rows {
-		if r.PlanRunID == "" || r.Row.Index == 0 || r.Row.TaskTitle == "" {
+		if r.SessionRunHash != "" {
+			if r.Row.TaskTitle != "" {
+				if out[r.SessionRunHash] == nil {
+					out[r.SessionRunHash] = map[int]string{}
+				}
+				out[r.SessionRunHash][1] = r.Row.TaskTitle
+			}
 			continue
 		}
-		h := scorecard.HashRunID(st.Salt, r.PlanRunID)
+		if salt == "" || r.PlanRunID == "" || r.Row.Index == 0 || r.Row.TaskTitle == "" {
+			continue
+		}
+		h := scorecard.HashRunID(salt, r.PlanRunID)
 		if out[h] == nil {
 			out[h] = map[int]string{}
 		}
@@ -103,6 +128,7 @@ type RunSummary struct {
 	RunHash           string
 	Latest            time.Time
 	PlanVerdict       string
+	Kind              string
 	TaskCount         int
 	ConfiguredModels  map[string]string
 	ImplementerModels []string
@@ -131,6 +157,7 @@ func Runs(lines []scorecard.RunLine, outcomes []scorecard.OutcomeLine) []RunSumm
 			s.Latest = l.Ts
 		}
 		if l.Header {
+			s.Kind = l.Kind
 			s.PlanVerdict, s.TaskCount, s.ConfiguredModels = l.PlanVerdict, l.TaskCount, l.ConfiguredModels
 		}
 	}

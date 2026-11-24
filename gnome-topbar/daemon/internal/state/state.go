@@ -10,6 +10,7 @@ import (
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/bm"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/claudestats"
 	"github.com/patiently/anti-tangent-mcp/gnome-topbar/daemon/internal/github"
+	"github.com/patiently/anti-tangent-mcp/scorecard"
 )
 
 type SourceStatus struct {
@@ -40,6 +41,9 @@ type Snapshot struct {
 	AntiTangent   atstats.Stats           `json:"anti_tangent"`
 	ClaudeStats   claudestats.Stats       `json:"claude_stats"`
 	UnackedEvents []Event                 `json:"unacked_events"`
+	Revisit       []scorecard.Signal      `json:"revisit"`
+	RevisitGated  int                     `json:"revisit_gated"`
+	RevisitKnown  bool                    `json:"revisit_known"`
 	GeneratedAt   time.Time               `json:"generated_at"`
 }
 
@@ -72,4 +76,23 @@ func todoID(td bm.TodoItem) string {
 	}
 	h := sha1.Sum([]byte(td.Text))
 	return "todo:" + d + ":" + hex.EncodeToString(h[:])[:8]
+}
+
+// newModelShown bounds how long a new_model signal shows, because a signal
+// only clears when the server recomputes and an idle server never does.
+const newModelShown = 14 * 24 * time.Hour
+
+// ComputeRevisit returns the signals not yet acked.
+func ComputeRevisit(sigs []scorecard.Signal, store *Store, now time.Time) []scorecard.Signal {
+	var out []scorecard.Signal
+	for _, s := range sigs {
+		if !store.IsNew("revisit:" + s.ID) {
+			continue
+		}
+		if s.Kind == scorecard.RevisitNewModel && s.Since != nil && now.Sub(*s.Since) > newModelShown {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
